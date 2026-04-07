@@ -22,11 +22,19 @@ export const router = createBrowserRouter([
       { path: 'control', element: <AGC /> },
       {
         path: 'alerts-logs',
-        element: <div style={{ color: '#aaa', fontSize: 16, padding: 40, textAlign: 'center' }}>鍛婅涓庢棩蹇?鈥?寮€鍙戜腑</div>,
+        element: (
+          <div style={{ color: '#aaa', fontSize: 16, padding: 40, textAlign: 'center' }}>
+            告警与日志功能开发中
+          </div>
+        ),
       },
       {
         path: 'debug-tools',
-        element: <div style={{ color: '#aaa', fontSize: 16, padding: 40, textAlign: 'center' }}>鑱旇皟宸ュ叿 鈥?寮€鍙戜腑</div>,
+        element: (
+          <div style={{ color: '#aaa', fontSize: 16, padding: 40, textAlign: 'center' }}>
+            联调工具功能开发中
+          </div>
+        ),
       },
     ],
   },

@@ -18,17 +18,17 @@ const menuItems = [
   {
     key: '/',
     icon: <DashboardOutlined />,
-    label: 'System Overview',
+    label: '系统总览',
   },
   {
     key: '/module-ops',
     icon: <AppstoreOutlined />,
-    label: 'Module Ops',
+    label: '模块运维',
   },
   {
     key: '/protocol',
     icon: <ApiOutlined />,
-    label: 'Protocol Access',
+    label: '协议接入',
     children: [
       { key: '/protocol/iec104', label: 'IEC104' },
       { key: '/protocol/modbus-rtu', label: 'Modbus RTU' },
@@ -38,22 +38,22 @@ const menuItems = [
   {
     key: '/alerts-logs',
     icon: <AlertOutlined />,
-    label: 'Alerts & Logs',
+    label: '告警日志',
   },
   {
     key: '/data-bus',
     icon: <NodeIndexOutlined />,
-    label: 'Data Bus',
+    label: '数据总线',
   },
   {
     key: '/control',
     icon: <ControlOutlined />,
-    label: 'Control',
+    label: '控制策略',
   },
   {
     key: '/debug-tools',
     icon: <ToolOutlined />,
-    label: 'Debug Tools',
+    label: '联调工具',
   },
 ];
 
@@ -90,7 +90,7 @@ const MainLayout: React.FC = () => {
             strong
             style={{ color: '#fff', fontSize: collapsed ? 14 : 16, whiteSpace: 'nowrap' }}
           >
-            {collapsed ? 'DSP' : 'MskDSP Console'}
+            {collapsed ? 'DSP' : 'MskDSP 控制台'}
           </Text>
         </div>
         <Menu
@@ -120,7 +120,7 @@ const MainLayout: React.FC = () => {
                 .find((c) => c.key === selectedKey)?.label ||
               'MskDSP'}
           </Text>
-          <Text style={{ color: '#aaa', fontSize: 13 }}>admin (Administrator)</Text>
+          <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
         </Header>
         <Content
           style={{
