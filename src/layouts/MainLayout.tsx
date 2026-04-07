@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Layout, Menu, Typography } from 'antd';
 import {
   DashboardOutlined,
+  AppstoreOutlined,
   AlertOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
@@ -14,17 +15,22 @@ const menuItems = [
   {
     key: '/',
     icon: <DashboardOutlined />,
-    label: '系统总览',
+    label: '绯荤粺鎬昏',
+  },
+  {
+    key: '/module-ops',
+    icon: <AppstoreOutlined />,
+    label: '妯″潡杩愮淮',
   },
   {
     key: '/alerts-logs',
     icon: <AlertOutlined />,
-    label: '告警与日志',
+    label: '鍛婅涓庢棩蹇?,
   },
   {
     key: '/debug-tools',
     icon: <ToolOutlined />,
-    label: '联调工具',
+    label: '鑱旇皟宸ュ叿',
   },
 ];
 
@@ -61,7 +67,7 @@ const MainLayout: React.FC = () => {
             strong
             style={{ color: '#fff', fontSize: collapsed ? 14 : 16, whiteSpace: 'nowrap' }}
           >
-            {collapsed ? 'DSP' : 'MskDSP 控制台'}
+            {collapsed ? 'DSP' : 'MskDSP 鎺у埗鍙?}
           </Text>
         </div>
         <Menu
@@ -91,7 +97,7 @@ const MainLayout: React.FC = () => {
                 .find((c) => c.key === selectedKey)?.label ||
               'MskDSP'}
           </Text>
-          <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
+          <Text style={{ color: '#aaa', fontSize: 13 }}>admin (绠＄悊鍛?</Text>
         </Header>
         <Content
           style={{
