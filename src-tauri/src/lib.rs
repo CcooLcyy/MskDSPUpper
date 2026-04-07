@@ -18,6 +18,15 @@ pub fn run() {
             commands::module_ops::get_running_module_info,
             commands::module_ops::start_module,
             commands::module_ops::stop_module,
+            commands::iec104::iec104_upsert_link,
+            commands::iec104::iec104_get_link,
+            commands::iec104::iec104_list_links,
+            commands::iec104::iec104_delete_link,
+            commands::iec104::iec104_start_link,
+            commands::iec104::iec104_stop_link,
+            commands::iec104::iec104_upsert_point_table,
+            commands::iec104::iec104_get_point_table,
+            commands::iec104::iec104_send_time_sync,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start MskDSP Upper");

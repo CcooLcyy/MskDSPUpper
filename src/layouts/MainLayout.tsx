@@ -3,6 +3,7 @@ import { Layout, Menu, Typography } from 'antd';
 import {
   DashboardOutlined,
   AppstoreOutlined,
+  ApiOutlined,
   AlertOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
@@ -21,6 +22,12 @@ const menuItems = [
     key: '/module-ops',
     icon: <AppstoreOutlined />,
     label: '妯″潡杩愮淮',
+  },
+  {
+    key: '/protocol',
+    icon: <ApiOutlined />,
+    label: '瑙勭害鎺ュ叆',
+    children: [{ key: '/protocol/iec104', label: 'IEC104' }],
   },
   {
     key: '/alerts-logs',
