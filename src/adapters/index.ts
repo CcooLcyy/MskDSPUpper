@@ -23,4 +23,14 @@ export type {
   ModbusSerialConfig,
   ModbusUpdateConfigResponse,
 } from './types';
+export type {
+  Dlt645Block,
+  Dlt645BlockItem,
+  Dlt645LinkConfig,
+  Dlt645LinkInfo,
+  Dlt645MqttConfig,
+  Dlt645Point,
+  Dlt645PointTable,
+  Dlt645UpdateConfigResponse,
+} from './types';
 export { api } from './tauri';

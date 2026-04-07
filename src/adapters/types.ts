@@ -153,3 +153,80 @@ export interface ModbusUpdateConfigResponse {
   ok: boolean;
   message: string;
 }
+
+export interface Dlt645MqttConfig {
+  host: string;
+  port: number;
+  client_id: string;
+  username: string;
+  password: string;
+  keepalive_sec: number;
+  clean_session: boolean;
+  connect_timeout_ms: number;
+}
+
+export interface Dlt645LinkConfig {
+  conn_name: string;
+  protocol_variant: number;
+  meter_addr: string;
+  device_no: string;
+  transport_type: number;
+  comm_mode: number;
+  poll_interval_ms: number;
+  poll_item_interval_ms: number;
+  request_timeout_ms: number;
+  serial_port: string;
+  serial_baud_rate: number;
+  serial_data_bits: number;
+  serial_parity: number;
+  serial_stop_bits: number;
+  serial_byte_timeout_ms: number;
+  serial_frame_timeout_ms: number;
+  serial_est_size: number;
+}
+
+export interface Dlt645LinkInfo {
+  config: Dlt645LinkConfig | null;
+  conn_id: number;
+  state: number;
+  last_error: string;
+}
+
+export interface Dlt645Point {
+  tag: string;
+  di: string;
+  data_len: number;
+  data_type: number;
+  access: number;
+  scale: number;
+  offset: number;
+  deadband: number;
+}
+
+export interface Dlt645BlockItem {
+  tag: string;
+  data_len: number;
+  data_type: number;
+  access: number;
+  scale: number;
+  offset: number;
+  deadband: number;
+  trim_right_space: boolean | null;
+}
+
+export interface Dlt645Block {
+  block_di: string;
+  block_data_len: number;
+  items: Dlt645BlockItem[];
+}
+
+export interface Dlt645PointTable {
+  conn_name: string;
+  points: Dlt645Point[];
+  blocks: Dlt645Block[];
+}
+
+export interface Dlt645UpdateConfigResponse {
+  ok: boolean;
+  message: string;
+}

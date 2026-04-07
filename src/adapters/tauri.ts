@@ -12,6 +12,13 @@ import type {
   ModbusPoint,
   ModbusPointTable,
   ModbusUpdateConfigResponse,
+  Dlt645LinkConfig,
+  Dlt645LinkInfo,
+  Dlt645MqttConfig,
+  Dlt645Point,
+  Dlt645Block,
+  Dlt645PointTable,
+  Dlt645UpdateConfigResponse,
 } from './types';
 
 export const api = {
@@ -56,4 +63,22 @@ export const api = {
     invoke<void>('modbus_rtu_upsert_point_table', { connName, points, replace }),
   modbusRtuGetPointTable: (connName: string) =>
     invoke<ModbusPointTable>('modbus_rtu_get_point_table', { connName }),
+
+  dlt645UpdateConfig: (mqtt: Dlt645MqttConfig) =>
+    invoke<Dlt645UpdateConfigResponse>('dlt645_update_config', { mqtt }),
+  dlt645UpsertLink: (config: Dlt645LinkConfig, createOnly: boolean) =>
+    invoke<Dlt645LinkInfo>('dlt645_upsert_link', { config, createOnly }),
+  dlt645GetLink: (connName: string) =>
+    invoke<Dlt645LinkInfo>('dlt645_get_link', { connName }),
+  dlt645ListLinks: () => invoke<Dlt645LinkInfo[]>('dlt645_list_links'),
+  dlt645DeleteLink: (connName: string) =>
+    invoke<void>('dlt645_delete_link', { connName }),
+  dlt645StartLink: (connName: string) =>
+    invoke<void>('dlt645_start_link', { connName }),
+  dlt645StopLink: (connName: string) =>
+    invoke<void>('dlt645_stop_link', { connName }),
+  dlt645UpsertPointTable: (connName: string, points: Dlt645Point[], blocks: Dlt645Block[], replace: boolean) =>
+    invoke<void>('dlt645_upsert_point_table', { connName, points, blocks, replace }),
+  dlt645GetPointTable: (connName: string) =>
+    invoke<Dlt645PointTable>('dlt645_get_point_table', { connName }),
 };

@@ -36,6 +36,15 @@ pub fn run() {
             commands::modbus_rtu::modbus_rtu_stop_link,
             commands::modbus_rtu::modbus_rtu_upsert_point_table,
             commands::modbus_rtu::modbus_rtu_get_point_table,
+            commands::dlt645::dlt645_update_config,
+            commands::dlt645::dlt645_upsert_link,
+            commands::dlt645::dlt645_get_link,
+            commands::dlt645::dlt645_list_links,
+            commands::dlt645::dlt645_delete_link,
+            commands::dlt645::dlt645_start_link,
+            commands::dlt645::dlt645_stop_link,
+            commands::dlt645::dlt645_upsert_point_table,
+            commands::dlt645::dlt645_get_point_table,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start MskDSP Upper");

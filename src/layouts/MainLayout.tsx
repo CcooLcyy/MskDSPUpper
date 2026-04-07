@@ -30,6 +30,7 @@ const menuItems = [
     children: [
       { key: '/protocol/iec104', label: 'IEC104' },
       { key: '/protocol/modbus-rtu', label: 'Modbus RTU' },
+      { key: '/protocol/dlt645', label: 'DLT645' },
     ],
   },
   {
