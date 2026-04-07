@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 src-tauri/target
+src-tauri/gen/
+src-tauri/src/proto_gen/
+src/App.css
+src/assets/
+public/icons.svg
 
 # Editor directories and files
 .vscode/*
