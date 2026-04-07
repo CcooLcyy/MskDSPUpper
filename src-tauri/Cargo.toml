@@ -1,0 +1,32 @@
+[package]
+name = "mskdsp-upper"
+version = "0.1.0"
+description = "MskDSP 上位机"
+authors = ["MskDSP Team"]
+edition = "2021"
+
+[lib]
+name = "mskdsp_upper_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "mskdsp-upper"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+tonic-build = "0.13"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tonic = "0.13"
+prost = "0.13"
+prost-types = "0.13"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+parking_lot = "0.12"
