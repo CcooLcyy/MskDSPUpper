@@ -1,5 +1,6 @@
 import { createBrowserRouter } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
+import Overview from './pages/Overview';
 import ModuleOps from './pages/ModuleOps';
 import IEC104 from './pages/IEC104';
 import ModbusRTU from './pages/ModbusRTU';
@@ -12,10 +13,7 @@ export const router = createBrowserRouter([
     path: '/',
     element: <MainLayout />,
     children: [
-      {
-        index: true,
-        element: <div style={{ color: '#aaa', fontSize: 16, padding: 40, textAlign: 'center' }}>Overview - In Progress</div>,
-      },
+      { index: true, element: <Overview /> },
       { path: 'module-ops', element: <ModuleOps /> },
       { path: 'protocol/iec104', element: <IEC104 /> },
       { path: 'protocol/modbus-rtu', element: <ModbusRTU /> },
