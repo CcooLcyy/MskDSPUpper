@@ -268,3 +268,53 @@ export interface DcPointUpdate {
   ts_ms: number;
   quality: number;
 }
+
+export interface AgcSignalSpec {
+  tag: string;
+  unit: string;
+  scale: number;
+  offset: number;
+}
+
+export interface AgcValueSpec {
+  signal: AgcSignalSpec | null;
+  mode: number;
+  delta_base: number;
+  base_tag: string;
+}
+
+export interface AgcStrategyConfig {
+  strategy_type: string;
+}
+
+export interface AgcMemberConfig {
+  member_name: string;
+  controllable: boolean;
+  capacity_kw: number;
+  weight: number;
+  min_kw: number;
+  max_kw: number;
+  p_meas: AgcSignalSpec | null;
+  p_set: AgcValueSpec | null;
+}
+
+export interface AgcDerivedOutputs {
+  p_total_meas: AgcSignalSpec | null;
+  p_total_target: AgcSignalSpec | null;
+  p_total_error: AgcSignalSpec | null;
+}
+
+export interface AgcGroupConfig {
+  group_name: string;
+  p_cmd: AgcValueSpec | null;
+  strategy: AgcStrategyConfig | null;
+  members: AgcMemberConfig[];
+  outputs: AgcDerivedOutputs | null;
+}
+
+export interface AgcGroupInfo {
+  config: AgcGroupConfig | null;
+  conn_id: number;
+  state: number;
+  last_error: string;
+}

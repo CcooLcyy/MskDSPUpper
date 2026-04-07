@@ -5,6 +5,7 @@ import {
   AppstoreOutlined,
   ApiOutlined,
   NodeIndexOutlined,
+  ControlOutlined,
   AlertOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
@@ -43,6 +44,11 @@ const menuItems = [
     key: '/data-bus',
     icon: <NodeIndexOutlined />,
     label: '鏁版嵁鎬荤嚎',
+  },
+  {
+    key: '/control',
+    icon: <ControlOutlined />,
+    label: '鎺у埗绛栫暐',
   },
   {
     key: '/debug-tools',

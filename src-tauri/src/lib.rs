@@ -51,6 +51,12 @@ pub fn run() {
             commands::data_center::dc_upsert_routes,
             commands::data_center::dc_delete_routes,
             commands::data_center::dc_get_latest,
+            commands::agc::agc_upsert_group,
+            commands::agc::agc_get_group,
+            commands::agc::agc_list_groups,
+            commands::agc::agc_delete_group,
+            commands::agc::agc_start_group,
+            commands::agc::agc_stop_group,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start MskDSP Upper");

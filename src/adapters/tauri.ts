@@ -23,6 +23,8 @@ import type {
   DcConnTags,
   DcRoute,
   DcPointUpdate,
+  AgcGroupConfig,
+  AgcGroupInfo,
 } from './types';
 
 export const api = {
@@ -97,4 +99,16 @@ export const api = {
     invoke<void>('dc_delete_routes', { routes }),
   dcGetLatest: (connId: number, tags: string[]) =>
     invoke<DcPointUpdate[]>('dc_get_latest', { connId, tags }),
+
+  agcUpsertGroup: (config: AgcGroupConfig, createOnly: boolean) =>
+    invoke<AgcGroupInfo>('agc_upsert_group', { config, createOnly }),
+  agcGetGroup: (groupName: string) =>
+    invoke<AgcGroupInfo>('agc_get_group', { groupName }),
+  agcListGroups: () => invoke<AgcGroupInfo[]>('agc_list_groups'),
+  agcDeleteGroup: (groupName: string) =>
+    invoke<void>('agc_delete_group', { groupName }),
+  agcStartGroup: (groupName: string) =>
+    invoke<void>('agc_start_group', { groupName }),
+  agcStopGroup: (groupName: string) =>
+    invoke<void>('agc_stop_group', { groupName }),
 };

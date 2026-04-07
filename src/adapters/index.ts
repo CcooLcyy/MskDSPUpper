@@ -41,4 +41,13 @@ export type {
   DcPointValue,
   DcRoute,
 } from './types';
+export type {
+  AgcDerivedOutputs,
+  AgcGroupConfig,
+  AgcGroupInfo,
+  AgcMemberConfig,
+  AgcSignalSpec,
+  AgcStrategyConfig,
+  AgcValueSpec,
+} from './types';
 export { api } from './tauri';
