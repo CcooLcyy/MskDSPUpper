@@ -33,4 +33,12 @@ export type {
   Dlt645PointTable,
   Dlt645UpdateConfigResponse,
 } from './types';
+export type {
+  DcConnTags,
+  DcConnectionInfo,
+  DcEndpoint,
+  DcPointUpdate,
+  DcPointValue,
+  DcRoute,
+} from './types';
 export { api } from './tauri';

@@ -4,6 +4,7 @@ import {
   DashboardOutlined,
   AppstoreOutlined,
   ApiOutlined,
+  NodeIndexOutlined,
   AlertOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
@@ -37,6 +38,11 @@ const menuItems = [
     key: '/alerts-logs',
     icon: <AlertOutlined />,
     label: '鍛婅涓庢棩蹇?,
+  },
+  {
+    key: '/data-bus',
+    icon: <NodeIndexOutlined />,
+    label: '鏁版嵁鎬荤嚎',
   },
   {
     key: '/debug-tools',

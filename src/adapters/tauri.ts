@@ -19,6 +19,10 @@ import type {
   Dlt645Block,
   Dlt645PointTable,
   Dlt645UpdateConfigResponse,
+  DcConnectionInfo,
+  DcConnTags,
+  DcRoute,
+  DcPointUpdate,
 } from './types';
 
 export const api = {
@@ -81,4 +85,16 @@ export const api = {
     invoke<void>('dlt645_upsert_point_table', { connName, points, blocks, replace }),
   dlt645GetPointTable: (connName: string) =>
     invoke<Dlt645PointTable>('dlt645_get_point_table', { connName }),
+
+  dcListConnections: () => invoke<DcConnectionInfo[]>('dc_list_connections'),
+  dcGetConnTags: (connId: number) =>
+    invoke<DcConnTags>('dc_get_conn_tags', { connId }),
+  dcListRoutes: (srcConnId: number, srcTag: string, dstConnId: number, dstTag: string) =>
+    invoke<DcRoute[]>('dc_list_routes', { srcConnId, srcTag, dstConnId, dstTag }),
+  dcUpsertRoutes: (routes: DcRoute[], replace: boolean) =>
+    invoke<void>('dc_upsert_routes', { routes, replace }),
+  dcDeleteRoutes: (routes: DcRoute[]) =>
+    invoke<void>('dc_delete_routes', { routes }),
+  dcGetLatest: (connId: number, tags: string[]) =>
+    invoke<DcPointUpdate[]>('dc_get_latest', { connId, tags }),
 };

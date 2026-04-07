@@ -230,3 +230,41 @@ export interface Dlt645UpdateConfigResponse {
   ok: boolean;
   message: string;
 }
+
+export interface DcConnectionInfo {
+  conn_id: number;
+  module_name: string;
+  conn_name: string;
+}
+
+export interface DcConnTags {
+  conn_id: number;
+  tags: string[];
+}
+
+export interface DcEndpoint {
+  conn_id: number;
+  tag: string;
+}
+
+export interface DcRoute {
+  src: DcEndpoint;
+  dst: DcEndpoint;
+}
+
+export type DcPointValue =
+  | { type: 'Bool'; value: boolean }
+  | { type: 'Int'; value: number }
+  | { type: 'Double'; value: number }
+  | { type: 'String'; value: string }
+  | { type: 'Bytes'; value: number[] };
+
+export interface DcPointUpdate {
+  src_conn_id: number;
+  src_tag: string;
+  dst_conn_id: number;
+  dst_tag: string;
+  value: DcPointValue | null;
+  ts_ms: number;
+  quality: number;
+}

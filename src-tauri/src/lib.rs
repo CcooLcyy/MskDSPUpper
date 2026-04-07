@@ -45,6 +45,12 @@ pub fn run() {
             commands::dlt645::dlt645_stop_link,
             commands::dlt645::dlt645_upsert_point_table,
             commands::dlt645::dlt645_get_point_table,
+            commands::data_center::dc_list_connections,
+            commands::data_center::dc_get_conn_tags,
+            commands::data_center::dc_list_routes,
+            commands::data_center::dc_upsert_routes,
+            commands::data_center::dc_delete_routes,
+            commands::data_center::dc_get_latest,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start MskDSP Upper");

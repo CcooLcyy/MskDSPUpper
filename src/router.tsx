@@ -4,6 +4,7 @@ import ModuleOps from './pages/ModuleOps';
 import IEC104 from './pages/IEC104';
 import ModbusRTU from './pages/ModbusRTU';
 import DLT645 from './pages/DLT645';
+import DataBus from './pages/DataBus';
 
 export const router = createBrowserRouter([
   {
@@ -18,6 +19,7 @@ export const router = createBrowserRouter([
       { path: 'protocol/iec104', element: <IEC104 /> },
       { path: 'protocol/modbus-rtu', element: <ModbusRTU /> },
       { path: 'protocol/dlt645', element: <DLT645 /> },
+      { path: 'data-bus', element: <DataBus /> },
       {
         path: 'alerts-logs',
         element: <div style={{ color: '#aaa', fontSize: 16, padding: 40, textAlign: 'center' }}>鍛婅涓庢棩蹇?鈥?寮€鍙戜腑</div>,
