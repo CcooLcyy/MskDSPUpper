@@ -27,7 +27,10 @@ const menuItems = [
     key: '/protocol',
     icon: <ApiOutlined />,
     label: '瑙勭害鎺ュ叆',
-    children: [{ key: '/protocol/iec104', label: 'IEC104' }],
+    children: [
+      { key: '/protocol/iec104', label: 'IEC104' },
+      { key: '/protocol/modbus-rtu', label: 'Modbus RTU' },
+    ],
   },
   {
     key: '/alerts-logs',

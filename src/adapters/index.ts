@@ -12,4 +12,15 @@ export type {
   Iec104Point,
   Iec104PointTable,
 } from './types';
+export type {
+  ModbusLinkConfig,
+  ModbusLinkInfo,
+  ModbusMqttConfig,
+  ModbusPoint,
+  ModbusPointTable,
+  ModbusReadBlock,
+  ModbusReadPlan,
+  ModbusSerialConfig,
+  ModbusUpdateConfigResponse,
+} from './types';
 export { api } from './tauri';

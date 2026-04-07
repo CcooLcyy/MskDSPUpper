@@ -6,6 +6,12 @@ import type {
   Iec104LinkInfo,
   Iec104Point,
   Iec104PointTable,
+  ModbusLinkConfig,
+  ModbusLinkInfo,
+  ModbusMqttConfig,
+  ModbusPoint,
+  ModbusPointTable,
+  ModbusUpdateConfigResponse,
 } from './types';
 
 export const api = {
@@ -32,4 +38,22 @@ export const api = {
     invoke<Iec104PointTable>('iec104_get_point_table', { connName }),
   iec104SendTimeSync: (connName: string, tsMs: number) =>
     invoke<void>('iec104_send_time_sync', { connName, tsMs }),
+
+  modbusRtuUpdateConfig: (mqtt: ModbusMqttConfig) =>
+    invoke<ModbusUpdateConfigResponse>('modbus_rtu_update_config', { mqtt }),
+  modbusRtuUpsertLink: (config: ModbusLinkConfig, createOnly: boolean) =>
+    invoke<ModbusLinkInfo>('modbus_rtu_upsert_link', { config, createOnly }),
+  modbusRtuGetLink: (connName: string) =>
+    invoke<ModbusLinkInfo>('modbus_rtu_get_link', { connName }),
+  modbusRtuListLinks: () => invoke<ModbusLinkInfo[]>('modbus_rtu_list_links'),
+  modbusRtuDeleteLink: (connName: string) =>
+    invoke<void>('modbus_rtu_delete_link', { connName }),
+  modbusRtuStartLink: (connName: string) =>
+    invoke<void>('modbus_rtu_start_link', { connName }),
+  modbusRtuStopLink: (connName: string) =>
+    invoke<void>('modbus_rtu_stop_link', { connName }),
+  modbusRtuUpsertPointTable: (connName: string, points: ModbusPoint[], replace: boolean) =>
+    invoke<void>('modbus_rtu_upsert_point_table', { connName, points, replace }),
+  modbusRtuGetPointTable: (connName: string) =>
+    invoke<ModbusPointTable>('modbus_rtu_get_point_table', { connName }),
 };

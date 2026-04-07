@@ -77,3 +77,79 @@ export interface Iec104PointTable {
   conn_name: string;
   points: Iec104Point[];
 }
+
+export interface ModbusSerialConfig {
+  device: string;
+  baud_rate: number;
+  data_bits: number;
+  parity: number;
+  stop_bits: number;
+  read_timeout_ms: number;
+}
+
+export interface ModbusMqttConfig {
+  host: string;
+  port: number;
+  client_id: string;
+  username: string;
+  password: string;
+  keepalive_sec: number;
+  clean_session: boolean;
+  connect_timeout_ms: number;
+}
+
+export interface ModbusReadBlock {
+  function: number;
+  start: number;
+  quantity: number;
+}
+
+export interface ModbusReadPlan {
+  mode: number;
+  blocks: ModbusReadBlock[];
+}
+
+export interface ModbusLinkConfig {
+  conn_name: string;
+  serial: ModbusSerialConfig | null;
+  device_id: number;
+  poll_interval_ms: number;
+  address_base: number;
+  read_plan: ModbusReadPlan | null;
+  transport_type: number;
+  serial_port: string;
+  request_timeout_ms: number;
+  serial_byte_timeout_ms: number;
+  serial_frame_timeout_ms: number;
+  serial_est_size: number;
+}
+
+export interface ModbusLinkInfo {
+  config: ModbusLinkConfig | null;
+  conn_id: number;
+  state: number;
+  last_error: string;
+}
+
+export interface ModbusPoint {
+  tag: string;
+  function: number;
+  address: number;
+  data_type: number;
+  scale: number;
+  offset: number;
+  deadband: number;
+  reg_count: number;
+  word_order: number;
+  byte_order: number;
+}
+
+export interface ModbusPointTable {
+  conn_name: string;
+  points: ModbusPoint[];
+}
+
+export interface ModbusUpdateConfigResponse {
+  ok: boolean;
+  message: string;
+}

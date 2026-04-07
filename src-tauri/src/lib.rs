@@ -27,6 +27,15 @@ pub fn run() {
             commands::iec104::iec104_upsert_point_table,
             commands::iec104::iec104_get_point_table,
             commands::iec104::iec104_send_time_sync,
+            commands::modbus_rtu::modbus_rtu_update_config,
+            commands::modbus_rtu::modbus_rtu_upsert_link,
+            commands::modbus_rtu::modbus_rtu_get_link,
+            commands::modbus_rtu::modbus_rtu_list_links,
+            commands::modbus_rtu::modbus_rtu_delete_link,
+            commands::modbus_rtu::modbus_rtu_start_link,
+            commands::modbus_rtu::modbus_rtu_stop_link,
+            commands::modbus_rtu::modbus_rtu_upsert_point_table,
+            commands::modbus_rtu::modbus_rtu_get_point_table,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start MskDSP Upper");
