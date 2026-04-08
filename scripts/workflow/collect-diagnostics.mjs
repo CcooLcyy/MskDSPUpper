@@ -54,6 +54,10 @@ if (pathExists(path.join(repoRoot, 'dist'))) {
   copyPath(path.join(repoRoot, 'dist'), path.join(diagnosticsDir, 'dist'));
 }
 
+if (pathExists(path.join(repoRoot, 'package', 'logs'))) {
+  copyPath(path.join(repoRoot, 'package', 'logs'), path.join(diagnosticsDir, 'logs'));
+}
+
 for (const candidate of [
   path.join('src-tauri', 'target', 'release', 'bundle'),
   path.join('src-tauri', 'target', 'x86_64-pc-windows-msvc', 'release', 'bundle'),
