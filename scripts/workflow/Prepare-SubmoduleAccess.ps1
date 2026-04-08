@@ -25,7 +25,7 @@ elseif ($env:SUBMODULE_SSH_KEY) {
     }
 
     ssh-add $privateKeyPath | Out-Null
-    git config --global url."git@$GitHubHost:".insteadOf "https://$GitHubHost/"
+    git config --global url."git@${GitHubHost}:".insteadOf "https://$GitHubHost/"
     $mode = "ssh"
 }
 
