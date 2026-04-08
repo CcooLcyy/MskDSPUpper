@@ -132,7 +132,7 @@ jobs:
       - name: Render debug tauri config
         shell: pwsh
         run: |
-          node scripts/workflow/render-tauri-config.mjs --output package/generated/tauri.beta.verify.conf.json --endpoint https://github.com/${{ github.repository }}/releases/latest/download/latest.json --updater-artifacts false
+          node scripts/workflow/render-tauri-config.mjs --output package/generated/tauri.beta.verify.conf.json --endpoint https://github.com/${{ github.repository }}/releases/download/beta-latest/latest.json --updater-artifacts false
 
       - name: Build debug validation bundle
         shell: pwsh
@@ -244,7 +244,7 @@ jobs:
       - name: Render beta tauri config
         shell: pwsh
         run: |
-          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/beta.json --output package/generated/tauri.beta.conf.json --endpoint https://github.com/${{ github.repository }}/releases/latest/download/latest.json --bundle-targets nsis --updater-artifacts auto
+          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/beta.json --output package/generated/tauri.beta.conf.json --endpoint https://github.com/${{ github.repository }}/releases/download/beta-latest/latest.json --bundle-targets nsis --updater-artifacts auto
 
       - name: Build beta package
         shell: pwsh
@@ -313,6 +313,29 @@ jobs:
             $args += @('--notes-start-tag', $stableTag)
           }
           gh @args
+
+      - name: Create or update rolling beta release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "beta-latest"
+          $title = "MskDSP Upper Beta Latest"
+          $notes = "Rolling beta channel for in-app updates.`nCurrent build: ${{ steps.metadata.outputs.release_tag }} (${{ steps.metadata.outputs.effective_version }})"
+          $files = Get-ChildItem -LiteralPath "${{ steps.bundle.outputs.output_dir }}" -File | ForEach-Object { $_.FullName }
+          if (gh release view $tag 2>$null) {
+            $existingAssets = gh release view $tag --json assets --jq '.assets[].name' 2>$null
+            foreach ($assetName in $existingAssets) {
+              if ($assetName) {
+                gh release delete-asset $tag $assetName --yes
+              }
+            }
+            gh release upload $tag $files --clobber
+            gh release edit $tag --title $title --prerelease --notes $notes
+          }
+          else {
+            gh release create $tag $files --title $title --prerelease --notes $notes
+          }
 
       - name: Restore manifests
         if: always()

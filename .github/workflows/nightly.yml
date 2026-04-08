@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   NODE_VERSION: '22'
@@ -126,7 +126,7 @@ jobs:
       - name: Render tauri config
         shell: pwsh
         run: |
-          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/nightly.json --output package/generated/tauri.nightly.conf.json --endpoint https://github.com/${{ github.repository }}/releases/latest/download/latest.json --bundle-targets nsis --updater-artifacts auto
+          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/nightly.json --output package/generated/tauri.nightly.conf.json --endpoint https://github.com/${{ github.repository }}/releases/download/nightly-latest/latest.json --bundle-targets nsis --updater-artifacts auto
 
       - name: Build nightly package
         shell: pwsh
@@ -181,3 +181,27 @@ jobs:
           name: ${{ steps.metadata.outputs.artifact_base_name }}
           path: ${{ steps.bundle.outputs.output_dir }}
           if-no-files-found: error
+
+      - name: Create or update rolling nightly release
+        if: success()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "nightly-latest"
+          $title = "MskDSP Upper Nightly Latest"
+          $notes = "Rolling nightly channel for in-app updates.`nCurrent build: ${{ steps.metadata.outputs.release_tag }} (${{ steps.metadata.outputs.effective_version }})"
+          $files = Get-ChildItem -LiteralPath "${{ steps.bundle.outputs.output_dir }}" -File | ForEach-Object { $_.FullName }
+          if (gh release view $tag 2>$null) {
+            $existingAssets = gh release view $tag --json assets --jq '.assets[].name' 2>$null
+            foreach ($assetName in $existingAssets) {
+              if ($assetName) {
+                gh release delete-asset $tag $assetName --yes
+              }
+            }
+            gh release upload $tag $files --clobber
+            gh release edit $tag --title $title --prerelease --notes $notes
+          }
+          else {
+            gh release create $tag $files --title $title --prerelease --notes $notes
+          }
