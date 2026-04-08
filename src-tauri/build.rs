@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 
 fn main() {
@@ -9,6 +10,7 @@ fn main() {
         env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not set"),
     );
     let proto_dir = manifest_dir.join("..").join("proto");
+    let proto_out_dir = manifest_dir.join("src").join("proto_gen");
 
     let marker = proto_dir.join("ModuleManager.proto");
     if !marker.is_file() {
@@ -34,10 +36,12 @@ fn main() {
         println!("cargo:rerun-if-changed={}", proto.display());
     }
 
+    fs::create_dir_all(&proto_out_dir).expect("Failed to create proto output directory");
+
     tonic_build::configure()
         .build_server(false)
         .build_client(true)
-        .out_dir("src/proto_gen")
+        .out_dir(&proto_out_dir)
         .compile_protos(&protos, &[&proto_dir])
         .expect("Failed to compile protobuf files");
 }
