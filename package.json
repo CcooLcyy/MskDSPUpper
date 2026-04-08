@@ -1,13 +1,23 @@
 {
   "name": "upper",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "lint": "eslint . --max-warnings 0",
+    "preview": "vite preview",
+    "test:workflow": "node --test tests/workflow/*.test.mjs",
+    "ci:debug": "npm run test:workflow && npm run lint && cargo test --locked --manifest-path src-tauri/Cargo.toml",
+    "workflow:metadata": "node scripts/workflow/emit-build-metadata.mjs",
+    "workflow:apply-version": "node scripts/workflow/apply-channel-version.mjs",
+    "workflow:restore-manifests": "node scripts/workflow/restore-manifests.mjs",
+    "workflow:render-tauri-config": "node scripts/workflow/render-tauri-config.mjs",
+    "workflow:stage": "node scripts/workflow/stage-release.mjs",
+    "workflow:bundle": "node scripts/workflow/create-delivery-bundle.mjs",
+    "workflow:checksums": "node scripts/workflow/write-sha256sums.mjs",
+    "workflow:diagnostics": "node scripts/workflow/collect-diagnostics.mjs"
   },
   "dependencies": {
     "@ant-design/cssinjs": "^2.1.2",

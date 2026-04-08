@@ -1,0 +1,335 @@
+name: Beta
+
+on:
+  push:
+    branches:
+      - beta/**
+  schedule:
+    - cron: '45 2 * * *'
+  workflow_dispatch:
+    inputs:
+      beta_ref:
+        description: '目标 beta 分支，例如 beta/0.1 或 beta/0.1.0'
+        required: false
+        type: string
+
+concurrency:
+  group: beta-${{ github.event.inputs.beta_ref || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '22'
+  RUST_TARGET: x86_64-pc-windows-msvc
+  PLATFORM_ID: windows-x64
+  SCCACHE_DIR: ${{ github.workspace }}\.sccache
+  RUSTC_WRAPPER: sccache
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  verify-beta:
+    runs-on: windows-latest
+    outputs:
+      beta_ref: ${{ steps.resolve_beta.outputs.beta_ref }}
+      beta_line: ${{ steps.resolve_beta.outputs.beta_line }}
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Resolve beta ref
+        id: resolve_beta
+        shell: pwsh
+        run: |
+          node scripts/workflow/resolve-beta-ref.mjs --beta-ref "${{ github.event.inputs.beta_ref }}" --current-ref "${{ github.ref_name }}"
+
+      - name: Checkout target beta branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+          ref: ${{ steps.resolve_beta.outputs.beta_ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.RUST_TARGET }}
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-${{ env.RUST_TARGET }}-${{ hashFiles('package.json', 'package-lock.json', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/tauri.conf.json', 'scripts/workflow/**', '.github/workflows/beta.yml') }}
+
+      - name: Prepare package/log directories
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package\logs -Force | Out-Null
+
+      - name: Prepare submodule access
+        shell: pwsh
+        env:
+          SUBMODULE_TOKEN: ${{ secrets.SUBMODULE_TOKEN }}
+          SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
+        run: .\scripts\workflow\Prepare-SubmoduleAccess.ps1
+
+      - name: Sync and update submodules
+        shell: pwsh
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          git submodule status | Tee-Object -FilePath package\logs\git-submodule-status.log
+
+      - name: Install Node dependencies
+        shell: pwsh
+        run: |
+          npm ci 2>&1 | Tee-Object -FilePath package\logs\npm-ci.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run workflow helper tests
+        shell: pwsh
+        run: |
+          npm run test:workflow 2>&1 | Tee-Object -FilePath package\logs\workflow-tests.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run lint
+        shell: pwsh
+        run: |
+          npm run lint 2>&1 | Tee-Object -FilePath package\logs\lint.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run cargo tests
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path src-tauri/Cargo.toml 2>&1 | Tee-Object -FilePath package\logs\cargo-test.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Render debug tauri config
+        shell: pwsh
+        run: |
+          node scripts/workflow/render-tauri-config.mjs --output package/generated/tauri.beta.verify.conf.json --endpoint https://github.com/${{ github.repository }}/releases/latest/download/latest.json --updater-artifacts false
+
+      - name: Build debug validation bundle
+        shell: pwsh
+        env:
+          MSKDSP_UPPER_SOURCEMAP: 'false'
+        run: |
+          npx tauri build --debug --no-bundle --target $env:RUST_TARGET --ci --config package/generated/tauri.beta.verify.conf.json 2>&1 | Tee-Object -FilePath package\logs\tauri-beta-debug-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Collect diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          node scripts/workflow/collect-diagnostics.mjs --channel beta --phase verify --build-log package/logs/tauri-beta-debug-build.log
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-verify-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package/diagnostics
+          if-no-files-found: ignore
+
+  publish-beta:
+    needs: verify-beta
+    runs-on: windows-latest
+    steps:
+      - name: Checkout target beta branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+          ref: ${{ needs.verify-beta.outputs.beta_ref }}
+
+      - name: Capture beta HEAD SHA
+        id: beta_head
+        shell: pwsh
+        run: |
+          "sha=$(git rev-parse HEAD)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.RUST_TARGET }}
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-${{ env.RUST_TARGET }}-${{ hashFiles('package.json', 'package-lock.json', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/tauri.conf.json', 'scripts/workflow/**', '.github/workflows/beta.yml') }}
+
+      - name: Prepare package/log directories
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package\logs -Force | Out-Null
+
+      - name: Prepare submodule access
+        shell: pwsh
+        env:
+          SUBMODULE_TOKEN: ${{ secrets.SUBMODULE_TOKEN }}
+          SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
+        run: .\scripts\workflow\Prepare-SubmoduleAccess.ps1
+
+      - name: Sync and update submodules
+        shell: pwsh
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          git submodule status | Tee-Object -FilePath package\logs\git-submodule-status.log
+
+      - name: Install Node dependencies
+        shell: pwsh
+        run: |
+          npm ci 2>&1 | Tee-Object -FilePath package\logs\npm-ci.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Emit build metadata
+        id: metadata
+        shell: pwsh
+        run: |
+          node scripts/workflow/emit-build-metadata.mjs --channel beta --repository ${{ github.repository }} --ref ${{ needs.verify-beta.outputs.beta_ref }} --beta-line ${{ needs.verify-beta.outputs.beta_line }} --sha ${{ steps.beta_head.outputs.sha }} --target-triple $env:RUST_TARGET --platform $env:PLATFORM_ID --output package/metadata/beta.json
+
+      - name: Apply channel version
+        shell: pwsh
+        run: |
+          node scripts/workflow/apply-channel-version.mjs --metadata-file package/metadata/beta.json --backup-dir package/.manifest-backup
+
+      - name: Render beta tauri config
+        shell: pwsh
+        run: |
+          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/beta.json --output package/generated/tauri.beta.conf.json --endpoint https://github.com/${{ github.repository }}/releases/latest/download/latest.json --bundle-targets nsis --updater-artifacts auto
+
+      - name: Build beta package
+        shell: pwsh
+        env:
+          MSKDSP_UPPER_SOURCEMAP: 'true'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npx tauri build --bundles nsis --target $env:RUST_TARGET --ci --config package/generated/tauri.beta.conf.json 2>&1 | Tee-Object -FilePath package\logs\tauri-beta-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stage artifacts
+        shell: pwsh
+        run: |
+          node scripts/workflow/stage-release.mjs --metadata-file package/metadata/beta.json --build-log package/logs/tauri-beta-build.log --submodule-status-file package/logs/git-submodule-status.log
+
+      - name: Create delivery bundle
+        id: bundle
+        shell: pwsh
+        run: |
+          node scripts/workflow/create-delivery-bundle.mjs --metadata-file package/metadata/beta.json
+
+      - name: Write SHA256 sums
+        shell: pwsh
+        run: |
+          node scripts/workflow/write-sha256sums.mjs --metadata-file package/metadata/beta.json --output-dir ${{ steps.bundle.outputs.output_dir }}
+
+      - name: Resolve latest stable tag
+        id: stable_tag
+        shell: pwsh
+        run: |
+          $stableTag = git tag --list 'v*' --sort=-version:refname | Select-Object -First 1
+          "tag=$stableTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload beta artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.metadata.outputs.artifact_base_name }}
+          path: ${{ steps.bundle.outputs.output_dir }}
+          if-no-files-found: error
+
+      - name: Cleanup stale prereleases on the same beta line
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $prefix = ("beta-${{ needs.verify-beta.outputs.beta_line }}").Replace('.', '-') + "-"
+          $currentTag = "${{ steps.metadata.outputs.release_tag }}"
+          $releases = gh release list --limit 100 --json tagName,isPrerelease,isDraft | ConvertFrom-Json
+          $stale = $releases | Where-Object { $_.isPrerelease -and -not $_.isDraft -and $_.tagName -like "$prefix*" -and $_.tagName -ne $currentTag }
+          foreach ($release in $stale) {
+            gh release delete $release.tagName --yes --cleanup-tag
+          }
+
+      - name: Create GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.metadata.outputs.release_tag }}"
+          $title = "${{ steps.metadata.outputs.release_title }}"
+          $stableTag = "${{ steps.stable_tag.outputs.tag }}"
+          $files = Get-ChildItem -LiteralPath "${{ steps.bundle.outputs.output_dir }}" -File | ForEach-Object { $_.FullName }
+          $args = @('release', 'create', $tag) + $files + @('--title', $title, '--prerelease', '--generate-notes')
+          if ($stableTag) {
+            $args += @('--notes-start-tag', $stableTag)
+          }
+          gh @args
+
+      - name: Restore manifests
+        if: always()
+        shell: pwsh
+        run: |
+          node scripts/workflow/restore-manifests.mjs --backup-dir package/.manifest-backup
+
+      - name: Collect diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          node scripts/workflow/collect-diagnostics.mjs --channel beta --phase publish --metadata-file package/metadata/beta.json --build-log package/logs/tauri-beta-build.log
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-publish-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package/diagnostics
+          if-no-files-found: ignore

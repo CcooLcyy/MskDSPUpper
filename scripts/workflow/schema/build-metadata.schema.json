@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mskdsp-upper.local/schema/build-metadata.schema.json",
+  "title": "MskDSP Upper Build Metadata",
+  "type": "object",
+  "required": [
+    "projectSlug",
+    "productName",
+    "binaryName",
+    "channel",
+    "channelLabel",
+    "baseVersion",
+    "effectiveVersion",
+    "releaseTag",
+    "releaseTitle",
+    "timestamp",
+    "shortSha",
+    "artifactBaseName",
+    "platform",
+    "deliveryArchiveName",
+    "symbolsArchiveName",
+    "checksumFileName"
+  ],
+  "properties": {
+    "projectSlug": { "type": "string" },
+    "productName": { "type": "string" },
+    "binaryName": { "type": "string" },
+    "channel": {
+      "type": "string",
+      "enum": ["ci", "nightly", "beta", "stable"]
+    },
+    "channelLabel": { "type": "string" },
+    "betaLine": { "type": ["string", "null"] },
+    "baseVersion": { "type": "string" },
+    "effectiveVersion": { "type": "string" },
+    "releaseTag": { "type": "string" },
+    "releaseTitle": { "type": "string" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{8}t[0-9]{6}z$"
+    },
+    "shortSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7}$"
+    },
+    "artifactBaseName": { "type": "string" },
+    "platform": { "type": "string" },
+    "targetTriple": { "type": "string" },
+    "repository": { "type": ["string", "null"] },
+    "deliveryArchiveName": { "type": "string" },
+    "symbolsArchiveName": { "type": "string" },
+    "checksumFileName": { "type": "string" }
+  },
+  "additionalProperties": true
+}

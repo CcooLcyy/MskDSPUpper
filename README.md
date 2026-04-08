@@ -52,6 +52,27 @@ npx tauri dev
 npm run build
 ```
 
+运行 workflow helper 测试：
+
+```bash
+npm run test:workflow
+```
+
+执行最小 CI Debug 校验链路：
+
+```bash
+npm run ci:debug
+```
+
+## 打包与发布
+
+- GitHub Actions / 发布渠道 / 命名约定：
+  - [doc/GitHub-Actions与发版策略.md](doc/GitHub-Actions与发版策略.md)
+- 本地打包 / 交付 / 安装 / 升级说明：
+  - [doc/打包与交付说明.md](doc/打包与交付说明.md)
+- 构建元数据契约：
+  - [scripts/workflow/schema/build-metadata.schema.json](scripts/workflow/schema/build-metadata.schema.json)
+
 ## 运行依赖
 
 - 默认连接 `ModuleManager` 地址：`127.0.0.1:7000`

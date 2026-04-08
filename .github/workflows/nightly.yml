@@ -1,0 +1,183 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '15 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.event.repository.default_branch }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+  RUST_TARGET: x86_64-pc-windows-msvc
+  PLATFORM_ID: windows-x64
+  SCCACHE_DIR: ${{ github.workspace }}\.sccache
+  RUSTC_WRAPPER: sccache
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  build-nightly:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.RUST_TARGET }}
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Capture default branch HEAD SHA
+        id: nightly_head
+        shell: pwsh
+        run: |
+          "sha=$(git rev-parse HEAD)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-${{ env.RUST_TARGET }}-${{ hashFiles('package.json', 'package-lock.json', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/tauri.conf.json', 'scripts/workflow/**', '.github/workflows/nightly.yml') }}
+
+      - name: Prepare package/log directories
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package\logs -Force | Out-Null
+
+      - name: Prepare submodule access
+        shell: pwsh
+        env:
+          SUBMODULE_TOKEN: ${{ secrets.SUBMODULE_TOKEN }}
+          SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
+        run: .\scripts\workflow\Prepare-SubmoduleAccess.ps1
+
+      - name: Sync and update submodules
+        shell: pwsh
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          git submodule status | Tee-Object -FilePath package\logs\git-submodule-status.log
+
+      - name: Install Node dependencies
+        shell: pwsh
+        run: |
+          npm ci 2>&1 | Tee-Object -FilePath package\logs\npm-ci.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run workflow helper tests
+        shell: pwsh
+        run: |
+          npm run test:workflow 2>&1 | Tee-Object -FilePath package\logs\workflow-tests.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run lint
+        shell: pwsh
+        run: |
+          npm run lint 2>&1 | Tee-Object -FilePath package\logs\lint.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run cargo tests
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path src-tauri/Cargo.toml 2>&1 | Tee-Object -FilePath package\logs\cargo-test.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Emit build metadata
+        id: metadata
+        shell: pwsh
+        run: |
+          node scripts/workflow/emit-build-metadata.mjs --channel nightly --repository ${{ github.repository }} --ref ${{ github.event.repository.default_branch }} --sha ${{ steps.nightly_head.outputs.sha }} --target-triple $env:RUST_TARGET --platform $env:PLATFORM_ID --output package/metadata/nightly.json
+
+      - name: Apply channel version
+        shell: pwsh
+        run: |
+          node scripts/workflow/apply-channel-version.mjs --metadata-file package/metadata/nightly.json --backup-dir package/.manifest-backup
+
+      - name: Render tauri config
+        shell: pwsh
+        run: |
+          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/nightly.json --output package/generated/tauri.nightly.conf.json --endpoint https://github.com/${{ github.repository }}/releases/latest/download/latest.json --bundle-targets nsis --updater-artifacts auto
+
+      - name: Build nightly package
+        shell: pwsh
+        env:
+          MSKDSP_UPPER_SOURCEMAP: 'true'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npx tauri build --bundles nsis --target $env:RUST_TARGET --ci --config package/generated/tauri.nightly.conf.json 2>&1 | Tee-Object -FilePath package\logs\tauri-nightly-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stage artifacts
+        shell: pwsh
+        run: |
+          node scripts/workflow/stage-release.mjs --metadata-file package/metadata/nightly.json --build-log package/logs/tauri-nightly-build.log --submodule-status-file package/logs/git-submodule-status.log
+
+      - name: Create delivery bundle
+        id: bundle
+        shell: pwsh
+        run: |
+          node scripts/workflow/create-delivery-bundle.mjs --metadata-file package/metadata/nightly.json
+
+      - name: Write SHA256 sums
+        shell: pwsh
+        run: |
+          node scripts/workflow/write-sha256sums.mjs --metadata-file package/metadata/nightly.json --output-dir ${{ steps.bundle.outputs.output_dir }}
+
+      - name: Restore manifests
+        if: always()
+        shell: pwsh
+        run: |
+          node scripts/workflow/restore-manifests.mjs --backup-dir package/.manifest-backup
+
+      - name: Collect diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          node scripts/workflow/collect-diagnostics.mjs --channel nightly --phase build --metadata-file package/metadata/nightly.json --build-log package/logs/tauri-nightly-build.log
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package/diagnostics
+          if-no-files-found: ignore
+
+      - name: Upload nightly artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.metadata.outputs.artifact_base_name }}
+          path: ${{ steps.bundle.outputs.output_dir }}
+          if-no-files-found: error
