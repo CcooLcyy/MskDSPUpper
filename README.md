@@ -66,6 +66,8 @@ npm run ci:debug
 
 ## 打包与发布
 
+- 首次 GitHub 发版验证清单：
+  - [RELEASING.md](RELEASING.md)
 - GitHub Actions / 发布渠道 / 命名约定：
   - [doc/GitHub-Actions与发版策略.md](doc/GitHub-Actions与发版策略.md)
 - 本地打包 / 交付 / 安装 / 升级说明：

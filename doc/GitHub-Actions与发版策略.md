@@ -61,6 +61,7 @@
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Tauri updater 私钥口令 | 空 |
 | `MSKDSP_UPPER_SOURCEMAP` | 是否产出前端 sourcemap | `false` |
 | `beta_ref` | Beta workflow 手动指定版本线 | 空 |
+| `threshold_hours` | Auto Promote workflow 的空窗阈值 | `72` |
 
 ## 统一实现约定
 
@@ -78,6 +79,7 @@
 - `Stable`
   - 固定基于 `v*` tag
   - 必须由 `beta/*` 版本线演进而来
+  - 默认支持“beta 分支 3 天无更新自动晋升 stable”
 
 ### 命名规则
 
@@ -164,6 +166,16 @@
   - 生成正式安装包、symbols 包、校验文件
   - 创建或更新 GitHub Release
 
+### Promote Stable
+
+- 触发：
+  - `schedule`
+  - `workflow_dispatch`
+- 行为：
+  - 扫描 `beta/*` 分支最近一次提交时间
+  - 若某条 beta 线 3 天无更新，且 `package.json` 版本与 beta 线匹配、对应 `v*` tag 尚不存在，则自动创建 stable tag
+  - stable tag 创建后由 `release.yml` 接手正式打包与发布
+
 ## 依赖缓存策略
 
 - Node 依赖缓存：
@@ -201,6 +213,13 @@
 - 若需要 hotfix，建议从最近 stable tag 切 `hotfix/x.y.z`。
 - 修复完成后先合回对应 `beta/*`，再打新的 stable tag。
 - 不建议直接绕过 beta 线打正式 tag。
+
+## Beta 自动晋升约束
+
+- 自动晋升窗口默认 3 天，可在手动触发时覆盖。
+- 只会晋升 `package.json` 为稳定三段式版本号的 beta 分支，例如 `0.1.0`。
+- `beta/0.1` 允许对应 `0.1.z`，`beta/0.1.0` 只允许对应精确的 `0.1.0`。
+- 若对应 `vX.Y.Z` 已存在，则不会重复打 tag。
 
 ## 验收标准
 

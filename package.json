@@ -17,7 +17,9 @@
     "workflow:stage": "node scripts/workflow/stage-release.mjs",
     "workflow:bundle": "node scripts/workflow/create-delivery-bundle.mjs",
     "workflow:checksums": "node scripts/workflow/write-sha256sums.mjs",
-    "workflow:diagnostics": "node scripts/workflow/collect-diagnostics.mjs"
+    "workflow:diagnostics": "node scripts/workflow/collect-diagnostics.mjs",
+    "workflow:promote:evaluate": "node scripts/workflow/evaluate-beta-promotion.mjs",
+    "workflow:promote:run": "node scripts/workflow/promote-beta-tags.mjs"
   },
   "dependencies": {
     "@ant-design/cssinjs": "^2.1.2",

@@ -1,0 +1,72 @@
+name: Promote Stable
+
+on:
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+    inputs:
+      beta_ref:
+        description: '只检查指定 beta 分支，例如 beta/0.1'
+        required: false
+        type: string
+      threshold_hours:
+        description: '空窗阈值，默认 72 小时'
+        required: false
+        default: '72'
+        type: string
+
+concurrency:
+  group: promote-stable
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote-stable:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Refresh beta refs and tags
+        run: |
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' --prune
+
+      - name: Run workflow helper tests
+        run: node --test tests/workflow/*.test.mjs
+
+      - name: Evaluate stale beta branches
+        id: evaluate
+        run: |
+          node scripts/workflow/evaluate-beta-promotion.mjs \
+            --beta-ref "${{ github.event.inputs.beta_ref }}" \
+            --threshold-hours "${{ github.event.inputs.threshold_hours || '72' }}" \
+            --output package/promotion/beta-promotion-candidates.json
+
+      - name: Configure git identity
+        if: steps.evaluate.outputs.has_candidates == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Promote beta branches to stable tags
+        if: steps.evaluate.outputs.has_candidates == 'true'
+        id: promote
+        run: |
+          node scripts/workflow/promote-beta-tags.mjs --input package/promotion/beta-promotion-candidates.json
+
+      - name: Upload promotion evaluation
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-promotion-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package/promotion
+          if-no-files-found: ignore
