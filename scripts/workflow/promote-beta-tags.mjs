@@ -69,3 +69,4 @@ logInfo('已完成 beta 自动晋升执行', {
 });
 
 setGithubOutput('promoted_count', String(promoted.length));
+setGithubOutput('promoted_tags_json', JSON.stringify(promoted.map((entry) => entry.stableTag)));

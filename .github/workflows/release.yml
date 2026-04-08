@@ -4,9 +4,15 @@ on:
   push:
     tags:
       - v*
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Stable tag to publish, for example v0.1.0'
+        required: true
+        type: string
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.inputs.release_tag || github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -29,6 +35,18 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false
+          ref: ${{ github.event.inputs.release_tag || github.ref }}
+
+      - name: Resolve release target
+        id: release_target
+        shell: pwsh
+        run: |
+          $tag = git describe --tags --exact-match HEAD
+          if (-not $tag) {
+            throw "Current checkout is not on a tag."
+          }
+          "release_tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "release_sha=$(git rev-parse HEAD)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -122,13 +140,13 @@ jobs:
         id: beta_lineage
         shell: pwsh
         run: |
-          node scripts/workflow/verify-beta-lineage.mjs --commit ${{ github.sha }}
+          node scripts/workflow/verify-beta-lineage.mjs --commit ${{ steps.release_target.outputs.release_sha }}
 
       - name: Emit build metadata
         id: metadata
         shell: pwsh
         run: |
-          node scripts/workflow/emit-build-metadata.mjs --channel stable --repository ${{ github.repository }} --tag ${{ github.ref_name }} --ref ${{ github.ref_name }} --sha ${{ github.sha }} --target-triple $env:RUST_TARGET --platform $env:PLATFORM_ID --output package/metadata/release.json
+          node scripts/workflow/emit-build-metadata.mjs --channel stable --repository ${{ github.repository }} --tag ${{ steps.release_target.outputs.release_tag }} --ref ${{ steps.release_target.outputs.release_tag }} --sha ${{ steps.release_target.outputs.release_sha }} --target-triple $env:RUST_TARGET --platform $env:PLATFORM_ID --output package/metadata/release.json
 
       - name: Apply stable version
         shell: pwsh
@@ -178,7 +196,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ steps.release_target.outputs.release_tag }}"
           $title = "${{ steps.metadata.outputs.release_title }}"
           $files = Get-ChildItem -LiteralPath "${{ steps.bundle.outputs.output_dir }}" -File | ForEach-Object { $_.FullName }
           if (gh release view $tag 2>$null) {
