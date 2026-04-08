@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Col, Form, Input, InputNumber, message, Modal, Radio, Row, Select } from 'antd';
+import { Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select } from 'antd';
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { api } from '../../adapters';
 import type { ModbusLinkConfig, ModbusLinkInfo, ModbusPoint, ModbusReadPlan, ModbusSerialConfig } from '../../adapters';
@@ -371,7 +371,7 @@ const ModbusRTU: React.FC = () => {
           </Col>
           <Col span={8}>
             <Form.Item label="传输类型" name="transport_type" rules={[{ required: true, message: '请选择传输类型' }]}>
-              <Radio.Group optionType="button" buttonStyle="solid" options={TRANSPORT_TYPE_OPTIONS} />
+              <Select options={TRANSPORT_TYPE_OPTIONS} placeholder="请选择传输类型" />
             </Form.Item>
           </Col>
           <Col span={8}>

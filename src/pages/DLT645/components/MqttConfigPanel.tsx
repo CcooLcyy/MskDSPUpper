@@ -3,6 +3,7 @@ import { Button, Card, Form, Input, InputNumber, Modal, Switch, Typography, mess
 import { EditOutlined } from '@ant-design/icons';
 import { api } from '../../../adapters';
 import type { Dlt645MqttConfig } from '../../../adapters';
+import { createDefaultMqttConfig } from '../../../utils/mqtt';
 
 const { Text } = Typography;
 
@@ -16,16 +17,11 @@ const MqttConfigPanel: React.FC = () => {
     if (mqttConfig) {
       form.setFieldsValue(mqttConfig);
     } else {
-      form.setFieldsValue({
-        host: '',
+      form.setFieldsValue(createDefaultMqttConfig({
         port: 1883,
-        client_id: '',
-        username: '',
-        password: '',
         keepalive_sec: 30,
-        clean_session: true,
         connect_timeout_ms: 3000,
-      });
+      }));
     }
     setModalOpen(true);
   };

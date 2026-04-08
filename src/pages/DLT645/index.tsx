@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Col, Form, Input, InputNumber, message, Modal, Radio, Row, Select, Switch } from 'antd';
+import { Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Switch } from 'antd';
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { api } from '../../adapters';
 import type { Dlt645LinkConfig, Dlt645LinkInfo, Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../adapters';
@@ -413,7 +413,7 @@ const DLT645: React.FC = () => {
           </Col>
           <Col span={8}>
             <Form.Item label="协议变体" name="protocol_variant" rules={[{ required: true, message: '请选择协议变体' }]}>
-              <Radio.Group optionType="button" buttonStyle="solid" options={PROTOCOL_VARIANT_OPTIONS} />
+              <Select options={PROTOCOL_VARIANT_OPTIONS} placeholder="请选择协议变体" />
             </Form.Item>
           </Col>
           <Col span={8}>
@@ -444,7 +444,7 @@ const DLT645: React.FC = () => {
         <Row gutter={16}>
           <Col span={8}>
             <Form.Item label="通信方式" name="comm_mode" rules={[{ required: true, message: '请选择通信方式' }]}>
-              <Radio.Group optionType="button" buttonStyle="solid" options={COMM_MODE_OPTIONS} />
+              <Select options={COMM_MODE_OPTIONS} placeholder="请选择通信方式" />
             </Form.Item>
           </Col>
           <Col span={8}>

@@ -42,7 +42,17 @@ const { Text } = Typography;
 
 // ── Constants ──
 
-const ROLE_LABELS: Record<number, string> = { 0: 'MASTER', 1: 'SLAVE' };
+const ROLE_LABELS: Record<number, string> = {
+  0: 'UNSPECIFIED',
+  1: 'SERVER',
+  2: 'CLIENT',
+};
+
+const STATION_ROLE_LABELS: Record<number, string> = {
+  0: 'UNSPECIFIED (按 role 默认)',
+  1: 'MASTER (控制站)',
+  2: 'SLAVE (被控站)',
+};
 
 const STATE_MAP: Record<number, { label: string; color: string }> = {
   0: { label: 'IDLE', color: 'default' },
@@ -128,8 +138,8 @@ const IEC104: React.FC = () => {
     setEditingLink(null);
     linkForm.resetFields();
     linkForm.setFieldsValue({
-      role: 0,
-      station_role: 0,
+      role: 2,
+      station_role: 1,
       ca: 1,
       oa: 0,
       k: 12,
@@ -142,7 +152,7 @@ const IEC104: React.FC = () => {
       point_max_asdu_bytes: 249,
       point_use_standard_limit: true,
       point_dedupe: null,
-      point_with_time: true,
+      point_with_time: false,
       time_sync_tag: 'sys_time',
     });
     setLinkModalOpen(true);
@@ -201,7 +211,7 @@ const IEC104: React.FC = () => {
         point_max_asdu_bytes: values.point_max_asdu_bytes ?? 249,
         point_use_standard_limit: values.point_use_standard_limit ?? true,
         point_dedupe: values.point_dedupe ?? null,
-        point_with_time: values.point_with_time ?? true,
+        point_with_time: values.point_with_time ?? false,
         time_sync_tag: values.time_sync_tag ?? 'sys_time',
       };
       const createOnly = !editingLink;
@@ -504,8 +514,11 @@ const IEC104: React.FC = () => {
         >
           {selectedLink?.config ? (
             <Descriptions size="small" column={2}>
-              <Descriptions.Item label="角色 (role)">
+              <Descriptions.Item label="传输角色 (role)">
                 {ROLE_LABELS[selectedLink.config.role] ?? selectedLink.config.role}
+              </Descriptions.Item>
+              <Descriptions.Item label="站点角色 (station_role)">
+                {STATION_ROLE_LABELS[selectedLink.config.station_role] ?? selectedLink.config.station_role}
               </Descriptions.Item>
               <Descriptions.Item label="公共地址 (ca)">
                 {selectedLink.config.ca}
@@ -662,21 +675,23 @@ const IEC104: React.FC = () => {
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="role" label="角色 (role)">
+              <Form.Item name="role" label="传输角色 (role)">
                 <Select
                   options={[
-                    { value: 0, label: 'MASTER' },
-                    { value: 1, label: 'SLAVE' },
+                    { value: 0, label: 'UNSPECIFIED' },
+                    { value: 1, label: 'SERVER' },
+                    { value: 2, label: 'CLIENT' },
                   ]}
                 />
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="station_role" label="站角色">
+              <Form.Item name="station_role" label="站点角色 (station_role)">
                 <Select
                   options={[
-                    { value: 0, label: '控制站' },
-                    { value: 1, label: '被控站' },
+                    { value: 0, label: 'UNSPECIFIED (按 role 默认)' },
+                    { value: 1, label: 'MASTER (控制站)' },
+                    { value: 2, label: 'SLAVE (被控站)' },
                   ]}
                 />
               </Form.Item>
