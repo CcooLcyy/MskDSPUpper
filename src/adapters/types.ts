@@ -26,6 +26,33 @@ export interface ModuleRunningInfo {
   outer_grpc_server: string;
 }
 
+export interface AppUpdateInfo {
+  currentVersion: string;
+  version: string;
+  date?: string;
+  body?: string;
+  rawJson: Record<string, unknown>;
+}
+
+export type AppUpdateDownloadEvent =
+  | { event: 'Started'; data: { contentLength?: number } }
+  | { event: 'Progress'; data: { chunkLength: number } }
+  | { event: 'Finished' };
+
+export type AppUpdateStatusKind =
+  | 'idle'
+  | 'checking'
+  | 'up-to-date'
+  | 'available'
+  | 'installing'
+  | 'ready-to-restart'
+  | 'error';
+
+export interface AppUpdateStatus {
+  kind: AppUpdateStatusKind;
+  message: string;
+}
+
 export interface Iec104Endpoint {
   ip: string;
   port: number;

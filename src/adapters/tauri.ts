@@ -1,7 +1,23 @@
+import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { check } from '@tauri-apps/plugin-updater';
 import type {
-  ModuleInfo,
-  ModuleRunningInfo,
+  AgcGroupConfig,
+  AgcGroupInfo,
+  AppUpdateDownloadEvent,
+  AppUpdateInfo,
+  DcConnTags,
+  DcConnectionInfo,
+  DcPointUpdate,
+  DcRoute,
+  Dlt645Block,
+  Dlt645LinkConfig,
+  Dlt645LinkInfo,
+  Dlt645MqttConfig,
+  Dlt645Point,
+  Dlt645PointTable,
+  Dlt645UpdateConfigResponse,
   Iec104LinkConfig,
   Iec104LinkInfo,
   Iec104Point,
@@ -12,20 +28,38 @@ import type {
   ModbusPoint,
   ModbusPointTable,
   ModbusUpdateConfigResponse,
-  Dlt645LinkConfig,
-  Dlt645LinkInfo,
-  Dlt645MqttConfig,
-  Dlt645Point,
-  Dlt645Block,
-  Dlt645PointTable,
-  Dlt645UpdateConfigResponse,
-  DcConnectionInfo,
-  DcConnTags,
-  DcRoute,
-  DcPointUpdate,
-  AgcGroupConfig,
-  AgcGroupInfo,
+  ModuleInfo,
+  ModuleRunningInfo,
 } from './types';
+
+type PendingAppUpdate = Awaited<ReturnType<typeof check>>;
+
+let pendingAppUpdate: PendingAppUpdate = null;
+
+async function disposePendingAppUpdate() {
+  if (!pendingAppUpdate) {
+    return;
+  }
+
+  const update = pendingAppUpdate;
+  pendingAppUpdate = null;
+
+  try {
+    await update.close();
+  } catch {
+    // Best-effort resource cleanup for repeated checks.
+  }
+}
+
+function toAppUpdateInfo(update: NonNullable<PendingAppUpdate>): AppUpdateInfo {
+  return {
+    currentVersion: update.currentVersion,
+    version: update.version,
+    date: update.date,
+    body: update.body,
+    rawJson: update.rawJson as Record<string, unknown>,
+  };
+}
 
 export const api = {
   setManagerAddr: (addr: string) => invoke<void>('set_manager_addr', { addr }),
@@ -33,6 +67,47 @@ export const api = {
   getRunningModuleInfo: () => invoke<ModuleRunningInfo[]>('get_running_module_info'),
   startModule: (moduleInfo: ModuleInfo) => invoke<void>('start_module', { moduleInfo }),
   stopModule: (moduleInfo: ModuleInfo) => invoke<void>('stop_module', { moduleInfo }),
+
+  getAppVersion: () => getVersion(),
+  checkAppUpdate: async (): Promise<AppUpdateInfo | null> => {
+    await disposePendingAppUpdate();
+
+    const update = await check();
+    pendingAppUpdate = update;
+
+    return update ? toAppUpdateInfo(update) : null;
+  },
+  downloadAndInstallAppUpdate: async (
+    onEvent?: (event: AppUpdateDownloadEvent) => void,
+  ): Promise<AppUpdateInfo> => {
+    const update = pendingAppUpdate ?? (await check());
+
+    if (!update) {
+      throw new Error('No update available');
+    }
+
+    pendingAppUpdate = update;
+
+    try {
+      await update.downloadAndInstall((event) => {
+        onEvent?.(event as AppUpdateDownloadEvent);
+      });
+
+      return toAppUpdateInfo(update);
+    } finally {
+      if (pendingAppUpdate === update) {
+        pendingAppUpdate = null;
+      }
+
+      try {
+        await update.close();
+      } catch {
+        // Windows install may terminate the app mid-flow, so cleanup is best-effort.
+      }
+    }
+  },
+  relaunchApp: () => relaunch(),
+  disposePendingAppUpdate,
 
   iec104UpsertLink: (config: Iec104LinkConfig, createOnly: boolean) =>
     invoke<Iec104LinkInfo>('iec104_upsert_link', { config, createOnly }),
@@ -83,8 +158,12 @@ export const api = {
     invoke<void>('dlt645_start_link', { connName }),
   dlt645StopLink: (connName: string) =>
     invoke<void>('dlt645_stop_link', { connName }),
-  dlt645UpsertPointTable: (connName: string, points: Dlt645Point[], blocks: Dlt645Block[], replace: boolean) =>
-    invoke<void>('dlt645_upsert_point_table', { connName, points, blocks, replace }),
+  dlt645UpsertPointTable: (
+    connName: string,
+    points: Dlt645Point[],
+    blocks: Dlt645Block[],
+    replace: boolean,
+  ) => invoke<void>('dlt645_upsert_point_table', { connName, points, blocks, replace }),
   dlt645GetPointTable: (connName: string) =>
     invoke<Dlt645PointTable>('dlt645_get_point_table', { connName }),
 

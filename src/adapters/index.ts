@@ -1,4 +1,8 @@
 export type {
+  AppUpdateDownloadEvent,
+  AppUpdateInfo,
+  AppUpdateStatus,
+  AppUpdateStatusKind,
   ModuleDependency,
   ModuleInfo,
   ModuleRunningInfo,
