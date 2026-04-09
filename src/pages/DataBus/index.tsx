@@ -30,17 +30,17 @@ const { Text } = Typography;
 // ── Constants ──
 
 const QUALITY_MAP: Record<number, { label: string; color: string }> = {
-  0: { label: 'UNSPECIFIED', color: 'default' },
-  1: { label: 'GOOD', color: 'green' },
-  2: { label: 'BAD', color: 'red' },
-  3: { label: 'UNCERTAIN', color: 'orange' },
+  0: { label: '未指定', color: 'default' },
+  1: { label: '正常', color: 'green' },
+  2: { label: '异常', color: 'red' },
+  3: { label: '不确定', color: 'orange' },
 };
 
 // ── Helpers ──
 
 const resolveConnName = (connId: number, conns: DcConnectionInfo[]): string => {
   const c = conns.find((item) => item.conn_id === connId);
-  return c ? c.conn_name : `conn_${connId}`;
+  return c ? c.conn_name : `连接_${connId}`;
 };
 
 const formatTimestamp = (tsMs: number): string => {
@@ -57,14 +57,14 @@ const formatPointValue = (pv: DcPointUpdate['value']): string => {
   if (!pv) return '-';
   switch (pv.type) {
     case 'Bool':
-      return pv.value ? 'true' : 'false';
+      return pv.value ? '是' : '否';
     case 'Int':
     case 'Double':
       return String(pv.value);
     case 'String':
       return pv.value;
     case 'Bytes':
-      return `[${pv.value.length} bytes]`;
+      return `[${pv.value.length} 字节]`;
     default:
       return '-';
   }
@@ -101,7 +101,7 @@ const RouteCard: React.FC<{
         }}
       >
         <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-          源 (Source)
+          源端
         </Text>
         <Text style={{ color: '#fff' }}>
           {srcName} : {route.src.tag}
@@ -144,7 +144,7 @@ const RouteCard: React.FC<{
         }}
       >
         <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-          目标 (Destination)
+          目标端
         </Text>
         <Text style={{ color: '#fff' }}>
           {dstName} : {route.dst.tag}
@@ -335,27 +335,29 @@ const DataBus: React.FC = () => {
 
   const connTagColumns: ColumnsType<{ tag: string; key: number }> = [
     {
-      title: '标签 (Tag)',
+      title: '标签',
       dataIndex: 'tag',
       key: 'tag',
-      width: 180,
+      width: 140,
+      ellipsis: true,
       render: (v: string) => <Text strong>{v}</Text>,
     },
     {
-      title: '数据类型 (Type)',
+      title: '数据类型',
       key: 'data_type',
-      width: 140,
+      width: 110,
       render: () => <Text type="secondary">-</Text>,
     },
     {
-      title: '读写属性 (Access)',
+      title: '读写属性',
       key: 'access',
-      width: 150,
+      width: 120,
       render: () => <Text type="secondary">-</Text>,
     },
     {
       title: '描述',
       key: 'description',
+      width: 100,
       render: () => <Text type="secondary">-</Text>,
     },
   ];
@@ -369,7 +371,7 @@ const DataBus: React.FC = () => {
 
   const realtimeColumns: ColumnsType<DcPointUpdate & { key: string }> = [
     {
-      title: '连接 ID : 标签',
+      title: '连接编号 : 标签',
       key: 'endpoint',
       width: 240,
       render: (_, record) => (
@@ -379,13 +381,13 @@ const DataBus: React.FC = () => {
       ),
     },
     {
-      title: '当前值 (Value)',
+      title: '当前值',
       key: 'value',
       width: 120,
       render: (_, record) => formatPointValue(record.value),
     },
     {
-      title: '时间戳 (Timestamp)',
+      title: '时间戳',
       key: 'ts',
       width: 160,
       render: (_, record) => (
@@ -430,171 +432,194 @@ const DataBus: React.FC = () => {
     >
       {contextHolder}
 
-      {/* ─── Top row: 连接注册表 (left, fixed width) | 连接标签注册表 (right, flex) ─── */}
-      <div style={{ display: 'flex', gap: 16, flex: '1 1 0', minHeight: 0 }}>
-        {/* Panel 1: 连接注册表 */}
-        <Card
-          title="连接注册表"
-          size="small"
-          bordered
-          style={{ width: 380, flexShrink: 0, display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
-          styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', padding: '8px 0' } }}
-          extra={
-            <Button
-              type="text"
-              size="small"
-              icon={<ReloadOutlined />}
-              loading={loading}
-              onClick={() => void refreshConnections()}
-            />
-          }
+      <div
+        style={{
+          display: 'flex',
+          gap: 16,
+          flex: 1,
+          minHeight: 0,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+            flex: '1 1 min(100%, 320px)',
+            minWidth: 0,
+            minHeight: 0,
+          }}
         >
-          <div style={{ flex: 1, overflow: 'auto' }}>
-            <List
-              dataSource={connections}
-              locale={{ emptyText: '暂无连接' }}
-              renderItem={(item) => {
-                const isActive = item.conn_id === selectedConnId;
-                return (
-                  <List.Item
-                    onClick={() => setSelectedConnId(item.conn_id)}
-                    style={{
-                      cursor: 'pointer',
-                      padding: '8px 16px',
-                      background: isActive ? '#37373d' : 'transparent',
-                    }}
-                  >
-                    <div
+          <Card
+            title="连接注册表"
+            size="small"
+            bordered
+            style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', minHeight: 0 }}
+            styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '8px 0' } }}
+            extra={
+              <Button
+                type="text"
+                size="small"
+                icon={<ReloadOutlined />}
+                loading={loading}
+                onClick={() => void refreshConnections()}
+              />
+            }
+          >
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <List
+                dataSource={connections}
+                locale={{ emptyText: '暂无连接' }}
+                renderItem={(item) => {
+                  const isActive = item.conn_id === selectedConnId;
+                  return (
+                    <List.Item
+                      onClick={() => setSelectedConnId(item.conn_id)}
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        width: '100%',
-                        gap: 12,
+                        cursor: 'pointer',
+                        padding: '8px 16px',
+                        background: isActive ? '#37373d' : 'transparent',
                       }}
                     >
-                      <Text style={{ color: '#fff', flex: 1 }}>
-                        {item.conn_name}
-                      </Text>
-                      <Text type="secondary" style={{ fontSize: 12, minWidth: 80 }}>
-                        {item.module_name}
-                      </Text>
-                    </div>
-                  </List.Item>
-                );
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          width: '100%',
+                          gap: 12,
+                        }}
+                      >
+                        <Text style={{ color: '#fff', flex: 1 }}>
+                          {item.conn_name}
+                        </Text>
+                        <Text type="secondary" style={{ fontSize: 12, minWidth: 80 }}>
+                          {item.module_name}
+                        </Text>
+                      </div>
+                    </List.Item>
+                  );
+                }}
+              />
+            </div>
+          </Card>
+
+          <Card
+            title={
+              <Space>
+                <span>连接标签注册表</span>
+                {selectedConn && (
+                  <Text type="secondary" style={{ fontSize: 13, fontWeight: 'normal' }}>
+                    当前选中: {selectedConn.conn_name}
+                  </Text>
+                )}
+              </Space>
+            }
+            size="small"
+            bordered
+            style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', minHeight: 0 }}
+            styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 } }}
+          >
+            <Table
+              rowKey="key"
+              columns={connTagColumns}
+              dataSource={connTagData}
+              pagination={false}
+              size="small"
+              tableLayout="fixed"
+              scroll={{ x: 480, y: 'calc(50vh - 260px)' }}
+              locale={{
+                emptyText: selectedConnId
+                  ? '该连接暂无标签'
+                  : '请先在上方选择连接',
               }}
             />
-          </div>
-        </Card>
+            <div style={{ marginTop: 'auto', paddingTop: 12 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                提示: 连接标签是数据中心视角的抽象标签，与底层协议点表中的具体地址定义解耦。
+              </Text>
+            </div>
+          </Card>
+        </div>
 
-        {/* Panel 2: 连接标签注册表 */}
-        <Card
-          title={
-            <Space>
-              <span>连接标签注册表 (ConnTags)</span>
-              {selectedConn && (
-                <Text type="secondary" style={{ fontSize: 13, fontWeight: 'normal' }}>
-                  当前选中: {selectedConn.conn_name}
-                </Text>
-              )}
-            </Space>
-          }
-          size="small"
-          bordered
-          style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
-          styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column' } }}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+            flex: '2 1 min(100%, 640px)',
+            minWidth: 0,
+            minHeight: 0,
+          }}
         >
-          <Table
-            rowKey="key"
-            columns={connTagColumns}
-            dataSource={connTagData}
-            pagination={false}
+          <Card
+            title="路由管理"
             size="small"
-            scroll={{ y: 'calc(50vh - 260px)' }}
-            locale={{
-              emptyText: selectedConnId
-                ? '该连接暂无标签'
-                : '请先在左侧选择连接',
-            }}
-          />
-          <div style={{ marginTop: 'auto', paddingTop: 12 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              提示: ConnTags 是 DataCenter 视角的抽象标签，与底层协议点表 (如 Modbus 寄存器地址) 解耦。
-            </Text>
-          </div>
-        </Card>
-      </div>
+            bordered
+            style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', minHeight: 0 }}
+            styles={{ body: { flex: 1, padding: 0, display: 'flex', flexDirection: 'column', minHeight: 0 } }}
+            extra={
+              <Button
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={openCreateRoute}
+              >
+                新增路由
+              </Button>
+            }
+          >
+            {routes.length === 0 ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flex: 1,
+                  color: '#666',
+                }}
+              >
+                暂无路由配置
+              </div>
+            ) : (
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '0 16px' }}>
+                {routes.map((route, index) => (
+                  <RouteCard
+                    key={`${route.src.conn_id}:${route.src.tag}->${route.dst.conn_id}:${route.dst.tag}-${index}`}
+                    route={route}
+                    conns={connections}
+                    onDelete={() => void handleDeleteRoute(route)}
+                  />
+                ))}
+              </div>
+            )}
+          </Card>
 
-      {/* ─── Bottom row: 路由管理 (left) | 实时值监控 (right) ─── */}
-      <div style={{ display: 'flex', gap: 16, flex: '1 1 0', minHeight: 0 }}>
-        {/* Panel 3: 路由管理 */}
-        <Card
-          title="路由管理 (Routes)"
-          size="small"
-          bordered
-          style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
-          styles={{ body: { flex: 1, padding: 0, display: 'flex', flexDirection: 'column' } }}
-          extra={
-            <Button
+          <Card
+            title="实时值监控"
+            size="small"
+            bordered
+            style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', minHeight: 0 }}
+            styles={{ body: { flex: 1, minHeight: 0 } }}
+            extra={
+              <Button
+                type="text"
+                size="small"
+                icon={<ReloadOutlined />}
+                onClick={() => void refreshRealtime()}
+              />
+            }
+          >
+            <Table
+              rowKey="key"
+              columns={realtimeColumns}
+              dataSource={realtimeData}
+              pagination={false}
               size="small"
-              icon={<PlusOutlined />}
-              onClick={openCreateRoute}
-            >
-              新增路由
-            </Button>
-          }
-        >
-          {routes.length === 0 ? (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flex: 1,
-                color: '#666',
-              }}
-            >
-              暂无路由配置
-            </div>
-          ) : (
-            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '0 16px' }}>
-              {routes.map((route, index) => (
-                <RouteCard
-                  key={`${route.src.conn_id}:${route.src.tag}->${route.dst.conn_id}:${route.dst.tag}-${index}`}
-                  route={route}
-                  conns={connections}
-                  onDelete={() => void handleDeleteRoute(route)}
-                />
-              ))}
-            </div>
-          )}
-        </Card>
-
-        {/* Panel 4: 实时值监控 */}
-        <Card
-          title="实时值监控 (Realtime Values)"
-          size="small"
-          bordered
-          style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
-          styles={{ body: { flex: 1, minHeight: 0 } }}
-          extra={
-            <Button
-              type="text"
-              size="small"
-              icon={<ReloadOutlined />}
-              onClick={() => void refreshRealtime()}
+              scroll={{ x: 720, y: 'calc(50vh - 220px)' }}
+              locale={{ emptyText: '暂无实时数据' }}
             />
-          }
-        >
-          <Table
-            rowKey="key"
-            columns={realtimeColumns}
-            dataSource={realtimeData}
-            pagination={false}
-            size="small"
-            scroll={{ y: 'calc(50vh - 220px)' }}
-            locale={{ emptyText: '暂无实时数据' }}
-          />
-        </Card>
+          </Card>
+        </div>
       </div>
 
       {/* ─── Route Modal ─── */}
@@ -609,7 +634,7 @@ const DataBus: React.FC = () => {
         <Form form={routeForm} layout="vertical" size="small">
           <Form.Item
             name="source"
-            label="源端点 (Source)"
+            label="源端点"
             rules={[{ required: true, message: '请选择源端点' }]}
           >
             <Select
@@ -623,7 +648,7 @@ const DataBus: React.FC = () => {
           </Form.Item>
           <Form.Item
             name="destination"
-            label="目标端点 (Destination)"
+            label="目标端点"
             rules={[{ required: true, message: '请选择目标端点' }]}
           >
             <Select
