@@ -1,0 +1,226 @@
+.protocol-page {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.protocol-config-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.protocol-top-row {
+  display: flex;
+  flex-shrink: 0;
+  gap: 16px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.protocol-side-column {
+  display: flex;
+  width: 300px;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.protocol-point-card,
+.protocol-log-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.protocol-point-card > .ant-card-head,
+.protocol-log-card > .ant-card-head {
+  flex-shrink: 0;
+}
+
+.protocol-point-card > .ant-card-body,
+.protocol-log-card > .ant-card-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.protocol-table-scroll,
+.protocol-log-scroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.protocol-table-scroll .ant-table-thead > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.protocol-point-card > .ant-card-body > .ant-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder,
+.protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content,
+.protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+  min-height: 0;
+}
+
+.protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder {
+  display: flex;
+  flex: 1 1 auto;
+}
+
+.protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane-active,
+.protocol-tabs-pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.protocol-log-console {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 16px;
+  border-radius: 4px;
+  background: #1e1e1e;
+  color: #aaa;
+  font-family: "Consolas", monospace;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.protocol-log-line--hint {
+  margin-top: 8px;
+  color: #666;
+}
+
+.protocol-header-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.protocol-header-main.is-protocol {
+  gap: 0;
+}
+
+.protocol-header-title-text {
+  display: block;
+  overflow: hidden;
+  color: #fff;
+  font-size: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.protocol-header-view-switcher {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  flex-shrink: 0;
+  padding-left: 18px;
+}
+
+.protocol-header-main.is-protocol .protocol-header-view-switcher {
+  padding-left: 0;
+}
+
+.protocol-header-view-switcher::before {
+  content: '';
+  width: 1px;
+  height: 18px;
+  margin-right: 14px;
+  flex-shrink: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.02) 0%,
+    rgba(255, 255, 255, 0.18) 50%,
+    rgba(255, 255, 255, 0.02) 100%
+  );
+}
+
+.protocol-header-main.is-protocol .protocol-header-view-switcher::before {
+  display: none;
+}
+
+.protocol-header-tabs {
+  min-width: 0;
+}
+
+.protocol-header-tabs > .ant-tabs-nav {
+  margin: 0;
+}
+
+.protocol-header-tabs > .ant-tabs-nav::before {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+.protocol-header-tabs > .ant-tabs-nav .ant-tabs-nav-wrap,
+.protocol-header-tabs > .ant-tabs-nav .ant-tabs-nav-list {
+  align-items: center;
+}
+
+.protocol-header-tabs > .ant-tabs-nav .ant-tabs-tab {
+  margin: 0 0 0 18px;
+  padding: 11px 0 9px;
+  color: #9aa5b3;
+  font-size: 14px;
+  line-height: 1;
+  transition: color 0.18s ease;
+}
+
+.protocol-header-tabs > .ant-tabs-nav .ant-tabs-tab:first-child {
+  margin-left: 0;
+}
+
+.protocol-header-tabs > .ant-tabs-nav .ant-tabs-tab:hover {
+  color: #d8e3ef;
+}
+
+.protocol-header-tabs > .ant-tabs-nav .ant-tabs-tab .ant-tabs-tab-btn {
+  color: inherit;
+  font-weight: 500;
+}
+
+.protocol-header-tabs > .ant-tabs-nav .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.protocol-header-tabs > .ant-tabs-nav .ant-tabs-ink-bar {
+  height: 3px;
+  border-radius: 999px;
+  background: #4da3ff;
+  box-shadow: 0 0 12px rgba(77, 163, 255, 0.35);
+}
+
+.protocol-header-tabs > .ant-tabs-content-holder {
+  display: none;
+}

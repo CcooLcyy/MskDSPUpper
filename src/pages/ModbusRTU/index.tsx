@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select } from 'antd';
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import type { ModbusLinkConfig, ModbusLinkInfo, ModbusPoint, ModbusReadPlan, ModbusSerialConfig } from '../../adapters';
-import ConnectionList from './components/ConnectionList';
+import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
+import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import ConnectionConfig from './components/ConnectionConfig';
 import StatusPanel from './components/StatusPanel';
 import OperationsPanel from './components/OperationsPanel';
@@ -41,6 +43,11 @@ const ALL_FUNCTION_CODE_OPTIONS = [
   { value: 4, label: '0x06 写单寄存器' },
   { value: 5, label: '0x10 写多寄存器' },
 ];
+const LIST_STATE_COLOR_MAP: Record<number, string> = {
+  1: '#f44336',
+  2: '#4caf50',
+  3: '#ff9800',
+};
 const DATA_TYPE_OPTIONS = [
   { value: 1, label: 'BOOL' },
   { value: 2, label: 'UINT16' },
@@ -71,8 +78,10 @@ const ModbusRTU: React.FC = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [linkForm] = Form.useForm();
   const [pointForm] = Form.useForm();
+  const [searchParams] = useSearchParams();
 
   const selectedLink = links.find((l) => l.config?.conn_name === selectedConn) ?? null;
+  const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY));
 
   const transportType = Form.useWatch('transport_type', linkForm);
   const readPlanMode = Form.useWatch('read_plan_mode', linkForm);
@@ -596,65 +605,63 @@ const ModbusRTU: React.FC = () => {
   );
 
   return (
-    <div>
+    <div className="protocol-page">
       {contextHolder}
 
-      <div style={{ display: 'flex', gap: 16 }}>
-        <ConnectionList
-          links={links}
-          selectedConn={selectedConn}
-          loading={loading}
-          onSelect={setSelectedConn}
-          onCreate={openCreateLink}
-          onDelete={(connName) => void handleDeleteLink(connName)}
-          onRefresh={() => void refreshLinks()}
-        />
+      {currentView === 'config' ? (
+        <div className="protocol-config-view">
+          <div className="protocol-top-row">
+            <ProtocolConnectionList
+              title={'\u8fde\u63a5\u5217\u8868'}
+              addButtonText={'\u65b0\u589e\u8fde\u63a5'}
+              links={links}
+              selectedConn={selectedConn}
+              loading={loading}
+              onSelect={setSelectedConn}
+              onCreate={openCreateLink}
+              onDelete={(connName) => void handleDeleteLink(connName)}
+              onRefresh={() => void refreshLinks()}
+              getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
+              getDeleteTitle={(connName) => `\u786e\u8ba4\u5220\u9664 ${connName}\uff1f`}
+            />
 
-        <ConnectionConfig link={selectedLink} onEdit={openEditLink} />
+            <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+              <ConnectionConfig link={selectedLink} onEdit={openEditLink} />
+            </div>
 
-        <div style={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <StatusPanel link={selectedLink} />
-          <OperationsPanel
+            <div className="protocol-side-column">
+              <StatusPanel link={selectedLink} />
+              <OperationsPanel
+                selectedConn={selectedConn}
+                onStart={() => void handleStartLink()}
+                onStop={() => void handleStopLink()}
+                extraAction={<MqttConfigPanel block />}
+              />
+            </div>
+          </div>
+
+          <PointTable
+            points={points}
             selectedConn={selectedConn}
-            onStart={() => void handleStartLink()}
-            onStop={() => void handleStopLink()}
-            extraAction={<MqttConfigPanel block />}
+            onAdd={openCreatePoint}
+            onEdit={(index) => openEditPoint(index)}
+            onDelete={(index) => void handleDeletePoint(index)}
           />
         </div>
-      </div>
-
-
-      <div style={{ marginTop: 16 }}>
-        <PointTable
-          points={points}
-          selectedConn={selectedConn}
-          onAdd={openCreatePoint}
-          onEdit={(index) => openEditPoint(index)}
-          onDelete={(index) => void handleDeletePoint(index)}
-        />
-      </div>
-
-      <Card title="报文日志" size="small" bordered style={{ marginTop: 16 }}>
-        <div
-          style={{
-            background: '#1e1e1e',
-            borderRadius: 4,
-            padding: 16,
-            fontFamily: '"Consolas", monospace',
-            fontSize: 12,
-            lineHeight: '22px',
-            minHeight: 180,
-            color: '#aaa',
-          }}
-        >
-          <div>
-            <span style={{ color: '#007acc' }}>[TX]</span>
-            {' '}
-            --:--:--.--- - 报文日志 — 接入实时数据后渲染
+      ) : (
+        <Card title="报文日志" size="small" bordered className="protocol-log-card">
+          <div className="protocol-log-scroll">
+            <div className="protocol-log-console">
+              <div>
+                <span style={{ color: '#007acc' }}>[TX]</span>
+                {' '}
+                --:--:--.--- - 报文日志 — 接入实时数据后渲染
+              </div>
+              <div className="protocol-log-line--hint">等待链路启动后显示报文收发记录...</div>
+            </div>
           </div>
-          <div style={{ marginTop: 8, color: '#666' }}>等待链路启动后显示报文收发记录...</div>
-        </div>
-      </Card>
+        </Card>
+      )}
 
       {renderLinkModal()}
       {renderPointModal()}

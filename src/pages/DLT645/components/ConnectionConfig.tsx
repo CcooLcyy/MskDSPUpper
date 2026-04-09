@@ -44,7 +44,7 @@ const ConnectionConfig: React.FC<Props> = ({ link, onEdit }) => {
       title="连接配置"
       size="small"
       bordered
-      style={{ flex: 1 }}
+      style={{ flex: 1, height: '100%' }}
       extra={config ? <Button type="text" size="small" icon={<EditOutlined />} onClick={onEdit}>编辑</Button> : null}
     >
       {config ? (

@@ -1,38 +1,54 @@
 import React from 'react';
 import { Button, Card, List, Popconfirm, Space, Typography } from 'antd';
-import { PlusOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
-import type { Dlt645LinkInfo } from '../../../adapters';
+import { DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 
 const { Text } = Typography;
 
-const STATE_COLOR_MAP: Record<number, string> = {
-  1: '#f44336',
-  2: '#4caf50',
-  3: '#ff9800',
-};
+export interface ProtocolConnectionListItemBase {
+  config: {
+    conn_name: string;
+  } | null;
+  conn_id: number;
+  state: number;
+}
 
-interface Props {
-  links: Dlt645LinkInfo[];
-  selectedConn: string | null;
+interface ProtocolConnectionListProps<T extends ProtocolConnectionListItemBase> {
+  title: React.ReactNode;
+  addButtonText: React.ReactNode;
+  emptyText?: React.ReactNode;
   loading: boolean;
+  links: T[];
+  selectedConn: string | null;
   onSelect: (connName: string) => void;
   onCreate: () => void;
   onDelete: (connName: string) => void;
   onRefresh: () => void;
+  getStateColor: (item: T) => string;
+  getConnName?: (item: T) => string;
+  getDeleteTitle?: (connName: string) => React.ReactNode;
 }
 
-const ConnectionList: React.FC<Props> = ({
+const defaultGetConnName = <T extends ProtocolConnectionListItemBase>(item: T): string =>
+  item.config?.conn_name ?? `conn_${item.conn_id}`;
+
+function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
+  title,
+  addButtonText,
+  emptyText = '\u6682\u65e0\u8fde\u63a5',
+  loading,
   links,
   selectedConn,
-  loading,
   onSelect,
   onCreate,
   onDelete,
   onRefresh,
-}) => {
+  getStateColor,
+  getConnName = defaultGetConnName,
+  getDeleteTitle = () => '\u786e\u8ba4\u5220\u9664\u8be5\u8fde\u63a5\uff1f',
+}: ProtocolConnectionListProps<T>) {
   return (
     <Card
-      title="连接列表"
+      title={title}
       size="small"
       bordered
       style={{ width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column' }}
@@ -50,13 +66,14 @@ const ConnectionList: React.FC<Props> = ({
       <div style={{ flex: 1, overflow: 'auto', padding: '0 8px' }}>
         <List
           dataSource={links}
-          locale={{ emptyText: '暂无连接' }}
+          locale={{ emptyText }}
           renderItem={(item) => {
-            const connName = item.config?.conn_name ?? `链路-${item.conn_id}`;
+            const connName = getConnName(item);
             const isSelected = selectedConn === connName;
+            const stateColor = getStateColor(item);
 
             return (
-              <List.Item style={{ padding: '4px 0', borderBlockEnd: 'none' }}>
+              <List.Item key={connName} style={{ padding: '4px 0', borderBlockEnd: 'none' }}>
                 <div
                   role="button"
                   tabIndex={0}
@@ -83,8 +100,8 @@ const ConnectionList: React.FC<Props> = ({
                           width: 8,
                           height: 8,
                           borderRadius: '50%',
-                          background: STATE_COLOR_MAP[item.state] ?? '#8c8c8c',
-                          boxShadow: `0 0 10px ${STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}`,
+                          background: stateColor,
+                          boxShadow: `0 0 10px ${stateColor}`,
                           flexShrink: 0,
                         }}
                       />
@@ -93,7 +110,7 @@ const ConnectionList: React.FC<Props> = ({
                       </Text>
                     </Space>
                     <Popconfirm
-                      title="确认删除该连接？"
+                      title={getDeleteTitle(connName)}
                       onConfirm={(event) => {
                         event?.stopPropagation();
                         onDelete(connName);
@@ -116,11 +133,11 @@ const ConnectionList: React.FC<Props> = ({
       </div>
       <div style={{ padding: '8px' }}>
         <Button type="primary" block icon={<PlusOutlined />} onClick={onCreate}>
-          新增连接
+          {addButtonText}
         </Button>
       </div>
     </Card>
   );
-};
+}
 
-export default ConnectionList;
+export default ProtocolConnectionList;

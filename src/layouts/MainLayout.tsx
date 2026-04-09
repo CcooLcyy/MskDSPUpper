@@ -11,6 +11,8 @@ import {
   ToolOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import ProtocolHeaderViewSwitcher from '../components/protocol/ProtocolHeaderViewSwitcher';
+import '../components/protocol/protocol-page.css';
 
 const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
@@ -79,9 +81,11 @@ const MainLayout: React.FC = () => {
       .flatMap((item) => ('children' in item ? item.children || [] : []))
       .find((child) => child.key === selectedKey)?.label ||
     'MskDSP';
+  const isProtocolPage = location.pathname.startsWith('/protocol/');
+  const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage ? 'hidden' : 'auto';
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
       <Sider
         collapsible
         collapsed={collapsed}
@@ -119,7 +123,7 @@ const MainLayout: React.FC = () => {
           }}
         />
       </Sider>
-      <Layout style={{ minHeight: 0 }}>
+      <Layout style={{ minWidth: 0, minHeight: 0 }}>
         <Header
           style={{
             padding: '0 24px',
@@ -130,17 +134,23 @@ const MainLayout: React.FC = () => {
             height: 48,
           }}
         >
-          <Text strong style={{ color: '#fff', fontSize: 16 }}>
-            {currentLabel}
-          </Text>
+          <div className={`protocol-header-main${isProtocolPage ? ' is-protocol' : ''}`}>
+            {!isProtocolPage ? (
+              <Text strong className="protocol-header-title-text">
+                {currentLabel}
+              </Text>
+            ) : null}
+            {isProtocolPage ? <ProtocolHeaderViewSwitcher /> : null}
+          </div>
           <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
         </Header>
         <Content
           style={{
             padding: 20,
-            overflow: 'auto',
+            overflow: contentOverflow,
             display: 'flex',
             flexDirection: 'column',
+            minWidth: 0,
             minHeight: 0,
           }}
         >

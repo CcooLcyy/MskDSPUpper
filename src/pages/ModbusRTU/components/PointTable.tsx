@@ -101,21 +101,24 @@ const PointTable: React.FC<Props> = ({ points, selectedConn, onAdd, onEdit, onDe
       title="点表配置 (Tag ↔ Address)"
       size="small"
       bordered
+      className="protocol-point-card"
       extra={(
         <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onAdd} disabled={!selectedConn}>
           添加点位
         </Button>
       )}
     >
-      <Table<ModbusPoint>
-        rowKey={(record, index) => `${record.tag}-${record.address}-${index ?? 0}`}
-        columns={columns}
-        dataSource={points}
-        pagination={false}
-        size="small"
-        scroll={{ x: 1130 }}
-        locale={{ emptyText: selectedConn ? '暂无点位' : '请先选择连接' }}
-      />
+      <div className="protocol-table-scroll">
+        <Table<ModbusPoint>
+          rowKey={(record, index) => `${record.tag}-${record.address}-${index ?? 0}`}
+          columns={columns}
+          dataSource={points}
+          pagination={false}
+          size="small"
+          scroll={{ x: 1130 }}
+          locale={{ emptyText: selectedConn ? '暂无点位' : '请先选择连接' }}
+        />
+      </div>
     </Card>
   );
 };

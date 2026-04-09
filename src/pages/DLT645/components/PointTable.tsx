@@ -163,31 +163,39 @@ const PointTable: React.FC<Props> = ({
       key: 'points',
       label: `单点配置 (${points.length})`,
       children: (
-        <Table<Dlt645Point>
-          rowKey={(record, index) => `${record.tag}-${record.di}-${index ?? 0}`}
-          columns={pointColumns}
-          dataSource={points}
-          pagination={false}
-          size="small"
-          scroll={{ x: 840 }}
-          locale={{ emptyText: selectedConn ? '暂无点位' : '请先选择连接' }}
-        />
+        <div className="protocol-tabs-pane">
+          <div className="protocol-table-scroll">
+            <Table<Dlt645Point>
+              rowKey={(record, index) => `${record.tag}-${record.di}-${index ?? 0}`}
+              columns={pointColumns}
+              dataSource={points}
+              pagination={false}
+              size="small"
+              scroll={{ x: 840 }}
+              locale={{ emptyText: selectedConn ? '暂无点位' : '请先选择连接' }}
+            />
+          </div>
+        </div>
       ),
     },
     {
       key: 'blocks',
       label: `数据块配置 (${blocks.length})`,
       children: (
-        <Table<Dlt645Block>
-          rowKey={(record, index) => `${record.block_di}-${index ?? 0}`}
-          columns={blockColumns}
-          dataSource={blocks}
-          pagination={false}
-          size="small"
-          scroll={{ x: 500 }}
-          expandable={{ expandedRowRender: expandedBlockRow }}
-          locale={{ emptyText: selectedConn ? '暂无数据块' : '请先选择连接' }}
-        />
+        <div className="protocol-tabs-pane">
+          <div className="protocol-table-scroll">
+            <Table<Dlt645Block>
+              rowKey={(record, index) => `${record.block_di}-${index ?? 0}`}
+              columns={blockColumns}
+              dataSource={blocks}
+              pagination={false}
+              size="small"
+              scroll={{ x: 500 }}
+              expandable={{ expandedRowRender: expandedBlockRow }}
+              locale={{ emptyText: selectedConn ? '暂无数据块' : '请先选择连接' }}
+            />
+          </div>
+        </div>
       ),
     },
   ];
@@ -197,6 +205,7 @@ const PointTable: React.FC<Props> = ({
       title="点表配置 (Tag ↔ DI)"
       size="small"
       bordered
+      className="protocol-point-card"
       extra={(
         <Space>
           <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onAddPoint} disabled={!selectedConn}>

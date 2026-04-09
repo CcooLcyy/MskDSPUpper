@@ -7,7 +7,6 @@ import {
   Form,
   Input,
   InputNumber,
-  List,
   message,
   Modal,
   Popconfirm,
@@ -22,7 +21,6 @@ import {
 } from 'antd';
 import {
   PlusOutlined,
-  ReloadOutlined,
   DeleteOutlined,
   EditOutlined,
   LinkOutlined,
@@ -31,7 +29,10 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
+import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
+import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import type {
   Iec104LinkConfig,
   Iec104LinkInfo,
@@ -61,6 +62,13 @@ const STATE_MAP: Record<number, { label: string; color: string }> = {
   3: { label: 'CLOSED', color: 'red' },
 };
 
+const LIST_STATE_COLOR_MAP: Record<number, string> = {
+  0: '#8c8c8c',
+  1: '#ff9800',
+  2: '#4caf50',
+  3: '#f44336',
+};
+
 const POINT_TYPE_LABELS: Record<number, string> = {
   1: 'FLOAT (短浮点测量)',
   2: 'SINGLE (单点遥信)',
@@ -84,6 +92,7 @@ const IEC104: React.FC = () => {
   const [pointModalOpen, setPointModalOpen] = useState(false);
   const [editingPointIndex, setEditingPointIndex] = useState<number | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
+  const [searchParams] = useSearchParams();
 
   const [linkForm] = Form.useForm();
   const [pointForm] = Form.useForm();
@@ -93,6 +102,7 @@ const IEC104: React.FC = () => {
   const selectedLink = links.find(
     (l) => l.config?.conn_name === selectedConn,
   ) ?? null;
+  const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY));
 
   // ── Data Loading ──
 
@@ -414,245 +424,175 @@ const IEC104: React.FC = () => {
   const stateInfo = STATE_MAP[selectedLink?.state ?? 0] ?? STATE_MAP[0];
 
   return (
-    <div>
+    <div className="protocol-page">
       {contextHolder}
 
-      {/* Top row: Connection List | Config | Status + Operations */}
-      <div style={{ display: 'flex', gap: 16 }}>
-        {/* Panel 1: 连接列表 */}
-        <Card
-          title="连接列表"
-          size="small"
-          bordered
-          style={{ width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column' }}
-          styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', padding: '8px 0' } }}
-          extra={
-            <Button
-              type="text"
-              size="small"
-              icon={<ReloadOutlined />}
+      {currentView === 'config' ? (
+        <div className="protocol-config-view">
+          <div className="protocol-top-row">
+            <ProtocolConnectionList
+              title={'\u8fde\u63a5\u5217\u8868'}
+              addButtonText={'\u65b0\u589e\u8fde\u63a5'}
               loading={loading}
-              onClick={() => void refreshLinks()}
+              links={links}
+              selectedConn={selectedConn}
+              onSelect={setSelectedConn}
+              onCreate={openCreateLink}
+              onDelete={(connName) => void handleDeleteLink(connName)}
+              onRefresh={() => void refreshLinks()}
+              getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
+              getDeleteTitle={(connName) => `\u786e\u8ba4\u5220\u9664 ${connName}\uff1f`}
             />
-          }
-        >
-          <div style={{ flex: 1, overflow: 'auto' }}>
-            <List
-              dataSource={links}
-              renderItem={(item) => {
-                const connName = item.config?.conn_name ?? `conn_${item.conn_id}`;
-                const isActive = connName === selectedConn;
-                const stColor = (item.state >= 2) ? '#4caf50' : '#f44336';
-                return (
-                  <List.Item
-                    onClick={() => setSelectedConn(connName)}
-                    style={{
-                      cursor: 'pointer',
-                      padding: '8px 16px',
-                      background: isActive ? '#37373d' : 'transparent',
-                    }}
-                    extra={
-                      <Popconfirm
-                        title={`确认删除 ${connName}？`}
-                        onConfirm={(e) => {
-                          e?.stopPropagation();
-                          void handleDeleteLink(connName);
-                        }}
-                        onCancel={(e) => e?.stopPropagation()}
-                      >
-                        <Button
-                          type="text"
-                          size="small"
-                          danger
-                          icon={<DeleteOutlined />}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </Popconfirm>
-                    }
-                  >
-                    <Space>
-                      <span
-                        style={{
-                          display: 'inline-block',
-                          width: 8,
-                          height: 8,
-                          borderRadius: '50%',
-                          background: stColor,
-                        }}
-                      />
-                      <Text style={{ color: '#fff' }}>{connName}</Text>
-                    </Space>
-                  </List.Item>
-                );
-              }}
-            />
-          </div>
-          <div style={{ padding: '8px 12px', borderTop: '1px solid #3e3e42' }}>
-            <Button
-              block
-              icon={<PlusOutlined />}
-              onClick={openCreateLink}
+
+            <Card
+              title="连接配置"
+              size="small"
+              bordered
+              style={{ flex: 1, height: '100%' }}
+              extra={
+                selectedLink && (
+                  <Button type="link" size="small" icon={<EditOutlined />} onClick={openEditLink}>
+                    编辑
+                  </Button>
+                )
+              }
             >
-              新增连接
-            </Button>
+              {selectedLink?.config ? (
+                <Descriptions size="small" column={2}>
+                  <Descriptions.Item label="传输角色 (role)">
+                    {ROLE_LABELS[selectedLink.config.role] ?? selectedLink.config.role}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="站点角色 (station_role)">
+                    {STATION_ROLE_LABELS[selectedLink.config.station_role] ?? selectedLink.config.station_role}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="公共地址 (ca)">
+                    {selectedLink.config.ca}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="本地端点 (local)">
+                    {formatEndpoint(selectedLink.config.local)}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="源地址 (oa)">
+                    {selectedLink.config.oa}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="远程端点 (remote)">
+                    {formatEndpoint(selectedLink.config.remote)}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="APCI 参数">
+                    {formatApci(selectedLink.config.apci)}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="对时标签">
+                    {selectedLink.config.time_sync_tag || '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="带时标 (point_with_time)">
+                    {selectedLink.config.point_with_time ? 'true' : 'false'}
+                  </Descriptions.Item>
+                </Descriptions>
+              ) : (
+                <Text type="secondary">请选择连接</Text>
+              )}
+            </Card>
+
+            <div className="protocol-side-column">
+              <Card title="运行状态" size="small" bordered>
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <div>
+                    <Text type="secondary" style={{ marginRight: 12 }}>当前状态</Text>
+                    <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
+                  </div>
+                  <div>
+                    <Text type="secondary" style={{ marginRight: 12 }}>最近错误</Text>
+                    <Text>{selectedLink?.last_error || 'None'}</Text>
+                  </div>
+                </Space>
+              </Card>
+
+              <Card title="运行操作" size="small" bordered>
+                <Space wrap>
+                  <Button
+                    type="primary"
+                    icon={<LinkOutlined />}
+                    style={{ background: '#4caf50', borderColor: '#4caf50' }}
+                    disabled={!selectedConn}
+                    onClick={() => void handleStartLink()}
+                  >
+                    连接
+                  </Button>
+                  <Popconfirm
+                    title="确认断开连接？"
+                    onConfirm={() => void handleStopLink()}
+                    disabled={!selectedConn}
+                  >
+                    <Button
+                      danger
+                      icon={<DisconnectOutlined />}
+                      disabled={!selectedConn}
+                    >
+                      断开
+                    </Button>
+                  </Popconfirm>
+                  <Button
+                    icon={<ClockCircleOutlined />}
+                    disabled={!selectedConn}
+                    onClick={() => void handleTimeSync()}
+                  >
+                    手工对时
+                  </Button>
+                  <Tooltip title="暂不支持">
+                    <Button icon={<ThunderboltOutlined />} disabled>
+                      总召唤
+                    </Button>
+                  </Tooltip>
+                </Space>
+              </Card>
+            </div>
           </div>
-        </Card>
 
-        {/* Panel 2: 连接配置 */}
-        <Card
-          title="连接配置"
-          size="small"
-          bordered
-          style={{ flex: 1 }}
-          extra={
-            selectedLink && (
-              <Button type="link" size="small" icon={<EditOutlined />} onClick={openEditLink}>
-                编辑
-              </Button>
-            )
-          }
-        >
-          {selectedLink?.config ? (
-            <Descriptions size="small" column={2}>
-              <Descriptions.Item label="传输角色 (role)">
-                {ROLE_LABELS[selectedLink.config.role] ?? selectedLink.config.role}
-              </Descriptions.Item>
-              <Descriptions.Item label="站点角色 (station_role)">
-                {STATION_ROLE_LABELS[selectedLink.config.station_role] ?? selectedLink.config.station_role}
-              </Descriptions.Item>
-              <Descriptions.Item label="公共地址 (ca)">
-                {selectedLink.config.ca}
-              </Descriptions.Item>
-              <Descriptions.Item label="本地端点 (local)">
-                {formatEndpoint(selectedLink.config.local)}
-              </Descriptions.Item>
-              <Descriptions.Item label="源地址 (oa)">
-                {selectedLink.config.oa}
-              </Descriptions.Item>
-              <Descriptions.Item label="远程端点 (remote)">
-                {formatEndpoint(selectedLink.config.remote)}
-              </Descriptions.Item>
-              <Descriptions.Item label="APCI 参数">
-                {formatApci(selectedLink.config.apci)}
-              </Descriptions.Item>
-              <Descriptions.Item label="对时标签">
-                {selectedLink.config.time_sync_tag || '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="带时标 (point_with_time)">
-                {selectedLink.config.point_with_time ? 'true' : 'false'}
-              </Descriptions.Item>
-            </Descriptions>
-          ) : (
-            <Text type="secondary">请选择连接</Text>
-          )}
-        </Card>
-
-        {/* Right column: Status + Operations */}
-        <div style={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Panel 3: 运行状态 */}
-          <Card title="运行状态" size="small" bordered>
-            <Space direction="vertical" style={{ width: '100%' }}>
-              <div>
-                <Text type="secondary" style={{ marginRight: 12 }}>当前状态</Text>
-                <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
-              </div>
-              <div>
-                <Text type="secondary" style={{ marginRight: 12 }}>最近错误</Text>
-                <Text>{selectedLink?.last_error || 'None'}</Text>
-              </div>
-            </Space>
-          </Card>
-
-          {/* Panel 4: 运行操作 */}
-          <Card title="运行操作" size="small" bordered>
-            <Space wrap>
+          <Card
+            title="点表配置 (Tag ↔ IOA)"
+            size="small"
+            bordered
+            className="protocol-point-card"
+            extra={
               <Button
                 type="primary"
-                icon={<LinkOutlined />}
-                style={{ background: '#4caf50', borderColor: '#4caf50' }}
+                size="small"
+                icon={<PlusOutlined />}
                 disabled={!selectedConn}
-                onClick={() => void handleStartLink()}
+                onClick={openCreatePoint}
               >
-                连接
+                添加点位
               </Button>
-              <Popconfirm
-                title="确认断开连接？"
-                onConfirm={() => void handleStopLink()}
-                disabled={!selectedConn}
-              >
-                <Button
-                  danger
-                  icon={<DisconnectOutlined />}
-                  disabled={!selectedConn}
-                >
-                  断开
-                </Button>
-              </Popconfirm>
-              <Button
-                icon={<ClockCircleOutlined />}
-                disabled={!selectedConn}
-                onClick={() => void handleTimeSync()}
-              >
-                手工对时
-              </Button>
-              <Tooltip title="暂不支持">
-                <Button icon={<ThunderboltOutlined />} disabled>
-                  总召唤
-                </Button>
-              </Tooltip>
-            </Space>
+            }
+          >
+            <div className="protocol-table-scroll">
+              <Table
+                rowKey={(_, index) => String(index)}
+                columns={pointColumns}
+                dataSource={points}
+                pagination={false}
+                size="small"
+                scroll={{ x: 900 }}
+                locale={{ emptyText: selectedConn ? '暂无点位数据' : '请先选择连接' }}
+              />
+            </div>
           </Card>
         </div>
-      </div>
-
-      {/* Panel 5: 点表配置 */}
-      <Card
-        title="点表配置 (Tag ↔ IOA)"
-        size="small"
-        bordered
-        style={{ marginTop: 16 }}
-        extra={
-          <Button
-            type="primary"
-            size="small"
-            icon={<PlusOutlined />}
-            disabled={!selectedConn}
-            onClick={openCreatePoint}
-          >
-            添加点位
-          </Button>
-        }
-      >
-        <Table
-          rowKey={(_, index) => String(index)}
-          columns={pointColumns}
-          dataSource={points}
-          pagination={false}
-          size="small"
-          locale={{ emptyText: selectedConn ? '暂无点位数据' : '请先选择连接' }}
-        />
-      </Card>
-
-      {/* Panel 6: 报文日志 */}
-      <Card title="报文日志" size="small" bordered style={{ marginTop: 16 }}>
-        <div
-          style={{
-            background: '#1e1e1e',
-            borderRadius: 4,
-            padding: 16,
-            fontFamily: '"Consolas", monospace',
-            fontSize: 12,
-            lineHeight: '22px',
-            minHeight: 180,
-            color: '#aaa',
-          }}
-        >
-          <div><span style={{ color: '#007acc' }}>[TX]</span> --:--:--.--- - 报文日志 — 接入实时数据后渲染</div>
-          <div style={{ marginTop: 8, color: '#666' }}>
-            等待链路启动后显示 APDU 报文收发记录...
+      ) : (
+        <Card title="报文日志" size="small" bordered className="protocol-log-card">
+          <div className="protocol-log-scroll">
+            <div className="protocol-log-console">
+              <div>
+                <span style={{ color: '#007acc' }}>[TX]</span>
+                {' '}
+                --:--:--.--- - 报文日志 — 接入实时数据后渲染
+              </div>
+              <div className="protocol-log-line--hint">
+                等待链路启动后显示 APDU 报文收发记录...
+              </div>
+            </div>
           </div>
-        </div>
-      </Card>
+        </Card>
+      )}
 
       {/* Link Modal */}
       <Modal
