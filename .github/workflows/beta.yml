@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       beta_ref:
-        description: '目标 beta 分支，例如 beta/0.1 或 beta/0.1.0'
+        description: 'Target beta branch, for example beta/0.1 or beta/0.1.0'
         required: false
         type: string
 
@@ -29,11 +29,12 @@ env:
   CARGO_INCREMENTAL: '0'
 
 jobs:
-  verify-beta:
+  resolve-beta:
     runs-on: windows-latest
     outputs:
       beta_ref: ${{ steps.resolve_beta.outputs.beta_ref }}
       beta_line: ${{ steps.resolve_beta.outputs.beta_line }}
+      should_run: ${{ steps.resolve_beta.outputs.should_run }}
     steps:
       - name: Checkout workflow source
         uses: actions/checkout@v4
@@ -45,16 +46,33 @@ jobs:
       - name: Resolve beta ref
         id: resolve_beta
         shell: pwsh
+        env:
+          ALLOW_MISSING_BETA: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
         run: |
-          node scripts/workflow/resolve-beta-ref.mjs --beta-ref "${{ github.event.inputs.beta_ref }}" --current-ref "${{ github.ref_name }}"
+          $args = @(
+            'scripts/workflow/resolve-beta-ref.mjs'
+            '--beta-ref'
+            "${{ github.event.inputs.beta_ref }}"
+            '--current-ref'
+            "${{ github.ref_name }}"
+          )
+          if ($env:ALLOW_MISSING_BETA -eq 'true') {
+            $args += '--allow-missing'
+          }
+          node @args
 
+  verify-beta:
+    needs: resolve-beta
+    if: needs.resolve-beta.outputs.should_run == 'true'
+    runs-on: windows-latest
+    steps:
       - name: Checkout target beta branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: false
-          ref: ${{ steps.resolve_beta.outputs.beta_ref }}
+          ref: ${{ needs.resolve-beta.outputs.beta_ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -159,7 +177,10 @@ jobs:
           if-no-files-found: ignore
 
   publish-beta:
-    needs: verify-beta
+    needs:
+      - resolve-beta
+      - verify-beta
+    if: needs.resolve-beta.outputs.should_run == 'true'
     runs-on: windows-latest
     steps:
       - name: Checkout target beta branch
@@ -168,7 +189,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           submodules: false
-          ref: ${{ needs.verify-beta.outputs.beta_ref }}
+          ref: ${{ needs.resolve-beta.outputs.beta_ref }}
 
       - name: Capture beta HEAD SHA
         id: beta_head
@@ -237,7 +258,7 @@ jobs:
         id: metadata
         shell: pwsh
         run: |
-          node scripts/workflow/emit-build-metadata.mjs --channel beta --repository ${{ github.repository }} --ref ${{ needs.verify-beta.outputs.beta_ref }} --beta-line ${{ needs.verify-beta.outputs.beta_line }} --sha ${{ steps.beta_head.outputs.sha }} --target-triple $env:RUST_TARGET --platform $env:PLATFORM_ID --output package/metadata/beta.json
+          node scripts/workflow/emit-build-metadata.mjs --channel beta --repository ${{ github.repository }} --ref ${{ needs.resolve-beta.outputs.beta_ref }} --beta-line ${{ needs.resolve-beta.outputs.beta_line }} --sha ${{ steps.beta_head.outputs.sha }} --target-triple $env:RUST_TARGET --platform $env:PLATFORM_ID --output package/metadata/beta.json
 
       - name: Apply channel version
         shell: pwsh
@@ -294,7 +315,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $prefix = ("beta-${{ needs.verify-beta.outputs.beta_line }}").Replace('.', '-') + "-"
+          $prefix = ("beta-${{ needs.resolve-beta.outputs.beta_line }}").Replace('.', '-') + "-"
           $currentTag = "${{ steps.metadata.outputs.release_tag }}"
           $releases = gh release list --limit 100 --json tagName,isPrerelease,isDraft | ConvertFrom-Json
           $stale = $releases | Where-Object { $_.isPrerelease -and -not $_.isDraft -and $_.tagName -like "$prefix*" -and $_.tagName -ne $currentTag }

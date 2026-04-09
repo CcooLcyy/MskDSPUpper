@@ -17,29 +17,42 @@ export function listRemoteBetaRefs(remote = 'origin') {
     .map(normalizeGitRef);
 }
 
+export function resolveBetaRef(explicitRef, currentRef, remoteRefs = [], options = {}) {
+  const { allowMissing = false } = options;
+  const normalizedExplicitRef = explicitRef?.trim() ? normalizeGitRef(explicitRef) : null;
+  if (normalizedExplicitRef) {
+    if (!parseBetaLine(normalizedExplicitRef)) {
+      throw new Error(`Invalid explicit beta ref: ${explicitRef}`);
+    }
+
+    return normalizedExplicitRef;
+  }
+
+  const normalizedCurrentRef = currentRef?.trim() ? normalizeGitRef(currentRef) : null;
+  if (normalizedCurrentRef && parseBetaLine(normalizedCurrentRef)) {
+    return normalizedCurrentRef;
+  }
+
+  const resolved = choosePreferredBetaRef(remoteRefs);
+  if (!resolved) {
+    if (allowMissing) {
+      return null;
+    }
+
+    throw new Error('No usable beta/* branch was found');
+  }
+
+  return resolved;
+}
+
 export function resolveLatestStableTag() {
   const result = git(['tag', '--sort=-version:refname', '--list', 'v*']);
   return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null;
 }
 
-export function chooseResolvedBetaRef(explicitRef, currentRef, remote = 'origin') {
-  const explicitBetaLine = explicitRef ? parseBetaLine(explicitRef) : null;
-  if (explicitBetaLine) {
-    return normalizeGitRef(explicitRef);
-  }
-
-  const currentBetaLine = currentRef ? parseBetaLine(currentRef) : null;
-  if (currentBetaLine) {
-    return normalizeGitRef(currentRef);
-  }
-
+export function chooseResolvedBetaRef(explicitRef, currentRef, remote = 'origin', options = {}) {
   const remoteRefs = listRemoteBetaRefs(remote);
-  const resolved = choosePreferredBetaRef(remoteRefs);
-  if (!resolved) {
-    throw new Error('未找到可用的 beta/* 分支');
-  }
-
-  return resolved;
+  return resolveBetaRef(explicitRef, currentRef, remoteRefs, options);
 }
 
 export function findContainingBetaRefs(commit, remote = 'origin') {
