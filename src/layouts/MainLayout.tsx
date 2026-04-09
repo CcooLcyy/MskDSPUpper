@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 import { Layout, Menu, Typography } from 'antd';
 import {
-  DashboardOutlined,
-  AppstoreOutlined,
-  ApiOutlined,
-  NodeIndexOutlined,
-  ControlOutlined,
   AlertOutlined,
+  ApiOutlined,
+  AppstoreOutlined,
+  ControlOutlined,
+  DashboardOutlined,
+  NodeIndexOutlined,
+  SettingOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
@@ -55,6 +56,11 @@ const menuItems = [
     icon: <ToolOutlined />,
     label: '联调工具',
   },
+  {
+    key: '/settings',
+    icon: <SettingOutlined />,
+    label: '设置',
+  },
 ];
 
 const MainLayout: React.FC = () => {
@@ -64,8 +70,15 @@ const MainLayout: React.FC = () => {
 
   const selectedKey = location.pathname;
   const openKeys = menuItems
-    .filter((item) => 'children' in item && item.children?.some((c) => selectedKey.startsWith(c.key)))
+    .filter((item) => 'children' in item && item.children?.some((child) => selectedKey.startsWith(child.key)))
     .map((item) => item.key);
+
+  const currentLabel =
+    menuItems.find((item) => item.key === selectedKey)?.label ||
+    menuItems
+      .flatMap((item) => ('children' in item ? item.children || [] : []))
+      .find((child) => child.key === selectedKey)?.label ||
+    'MskDSP';
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -99,7 +112,11 @@ const MainLayout: React.FC = () => {
           selectedKeys={[selectedKey]}
           defaultOpenKeys={openKeys}
           items={menuItems}
-          onClick={({ key }) => navigate(key)}
+          onClick={({ key }) => {
+            if (key !== '/protocol') {
+              navigate(key);
+            }
+          }}
         />
       </Sider>
       <Layout style={{ minHeight: 0 }}>
@@ -114,11 +131,7 @@ const MainLayout: React.FC = () => {
           }}
         >
           <Text strong style={{ color: '#fff', fontSize: 16 }}>
-            {menuItems.find((item) => item.key === selectedKey)?.label ||
-              menuItems
-                .flatMap((item) => ('children' in item ? item.children || [] : []))
-                .find((c) => c.key === selectedKey)?.label ||
-              'MskDSP'}
+            {currentLabel}
           </Text>
           <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
         </Header>
