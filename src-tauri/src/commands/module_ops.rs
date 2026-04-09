@@ -112,12 +112,79 @@ impl ModuleInfoDto {
     }
 }
 
+fn validate_manager_addr(addr: &str) -> Result<String, String> {
+    let trimmed = addr.trim();
+    if trimmed.is_empty() {
+        return Err("请输入 ModuleManager 地址".into());
+    }
+
+    let Some((host_raw, port_raw)) = trimmed.rsplit_once(':') else {
+        return Err("地址格式应为 host:port".into());
+    };
+
+    let host = host_raw.trim();
+    let port_text = port_raw.trim();
+
+    if !is_valid_host(host) {
+        return Err("请输入合法的 IPv4 地址或主机名".into());
+    }
+
+    let port: u16 = port_text
+        .parse()
+        .map_err(|_| String::from("端口必须是 1-65535 的整数"))?;
+
+    if port == 0 {
+        return Err("端口范围必须在 1-65535 之间".into());
+    }
+
+    Ok(format!("{host}:{port}"))
+}
+
+fn is_valid_host(host: &str) -> bool {
+    if host.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {
+        return is_valid_ipv4(host);
+    }
+
+    is_valid_hostname(host)
+}
+
+fn is_valid_ipv4(host: &str) -> bool {
+    let segments: Vec<&str> = host.split('.').collect();
+    if segments.len() != 4 {
+        return false;
+    }
+
+    segments.iter().all(|segment| {
+        !segment.is_empty()
+            && segment.len() <= 3
+            && segment.chars().all(|ch| ch.is_ascii_digit())
+            && segment.parse::<u8>().is_ok()
+    })
+}
+
+fn is_valid_hostname(host: &str) -> bool {
+    if host.is_empty() || host.len() > 253 || host.starts_with('.') || host.ends_with('.') {
+        return false;
+    }
+
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+    })
+}
+
 // ── Tauri Commands ──
 
 /// 设置 ModuleManager 连接地址
 #[tauri::command]
 pub async fn set_manager_addr(state: State<'_, AppState>, addr: String) -> Result<(), String> {
-    state.conn_manager.set_manager_addr(addr);
+    let normalized_addr = validate_manager_addr(&addr)?;
+    state.conn_manager.set_manager_addr(normalized_addr);
     state.conn_manager.clear_channels();
     Ok(())
 }
@@ -169,4 +236,35 @@ pub async fn stop_module(
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_manager_addr;
+
+    #[test]
+    fn validate_manager_addr_accepts_ipv4_and_hostname() {
+        assert_eq!(
+            validate_manager_addr("127.0.0.1:17000").unwrap(),
+            "127.0.0.1:17000"
+        );
+        assert_eq!(
+            validate_manager_addr("  localhost : 17000 ").unwrap(),
+            "localhost:17000"
+        );
+        assert_eq!(
+            validate_manager_addr("module-manager.local:17000").unwrap(),
+            "module-manager.local:17000"
+        );
+    }
+
+    #[test]
+    fn validate_manager_addr_rejects_bad_ip_and_port() {
+        assert!(validate_manager_addr("999.0.0.1:17000").is_err());
+        assert!(validate_manager_addr("127.0.0.1:not-a-port").is_err());
+        assert!(validate_manager_addr("127.0.0.1:0").is_err());
+        assert!(validate_manager_addr("127.0.0.1:70000").is_err());
+        assert!(validate_manager_addr("module_manager:17000").is_err());
+        assert!(validate_manager_addr("127.0.0.1").is_err());
+    }
 }
