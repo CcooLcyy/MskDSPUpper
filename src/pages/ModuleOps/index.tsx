@@ -19,7 +19,7 @@ import type { ModuleInfo, ModuleRunningInfo } from '../../adapters';
 const { Text } = Typography;
 
 const MANAGER_ADDR_KEY = 'mskdsp_manager_addr';
-const DEFAULT_MANAGER_ADDR = '127.0.0.1:7000';
+const DEFAULT_MANAGER_ADDR = '127.0.0.1:17000';
 
 type RefreshOptions = {
   suppressError?: boolean;

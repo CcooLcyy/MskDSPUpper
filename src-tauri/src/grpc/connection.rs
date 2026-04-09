@@ -13,7 +13,7 @@ pub struct ModuleEndpoint {
 /// gRPC 连接管理器
 /// 维护到各模块的 gRPC channel 缓存，以及模块地址映射
 pub struct ConnectionManager {
-    /// ModuleManager 的固定地址（默认 host:7000）
+    /// ModuleManager 的固定地址（默认 host:17000）
     manager_addr: RwLock<String>,
     /// 模块名 -> 外部 gRPC 地址
     module_addrs: RwLock<HashMap<String, String>>,
@@ -41,7 +41,7 @@ impl ConnectionManager {
     }
 
     /// 从 ModuleManager 地址中提取 host 部分（不含端口）
-    /// 例如 "192.168.1.219:7000" → "192.168.1.219"
+    /// 例如 "192.168.1.219:17000" → "192.168.1.219"
     pub fn manager_host(&self) -> String {
         let addr = self.manager_addr();
         // host:port 格式，取 host 部分

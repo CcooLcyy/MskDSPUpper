@@ -77,6 +77,6 @@ npm run ci:debug
 
 ## 运行依赖
 
-- 默认连接 `ModuleManager` 地址：`127.0.0.1:7000`
+- 默认连接 `ModuleManager` 地址：`127.0.0.1:17000`
 - `upper` 已不再依赖仓库外部兄弟目录 `MskDSPProto`
 - `upper` 运行时仍依赖 `MskDSP` 提供的 gRPC 服务；如果后端未启动，页面会表现为连接失败或接口报错
