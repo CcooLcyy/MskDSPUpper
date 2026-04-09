@@ -1,28 +1,45 @@
-import React, { useState } from 'react';
-import { Button, Card, Form, Input, InputNumber, Modal, Switch, Typography, message } from 'antd';
+import React, { useEffect, useState } from 'react';
+import { Button, Form, Input, InputNumber, Modal, Switch, message } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 import { api } from '../../../adapters';
 import type { ModbusMqttConfig } from '../../../adapters';
-import { createDefaultMqttConfig } from '../../../utils/mqtt';
+import { createDefaultMqttConfig, loadStoredMqttConfig, saveStoredMqttConfig } from '../../../utils/mqtt';
 
-const { Text } = Typography;
+interface Props {
+  block?: boolean;
+}
 
-const MqttConfigPanel: React.FC = () => {
-  const [mqttConfig, setMqttConfig] = useState<ModbusMqttConfig | null>(null);
+const STORAGE_KEY = 'protocol.modbus_rtu.mqtt';
+const DEFAULT_MQTT_CONFIG: ModbusMqttConfig = createDefaultMqttConfig({
+  port: 1883,
+  keepalive_sec: 60,
+  connect_timeout_ms: 5000,
+  client_id: 'mskdsp-modbus-rtu',
+});
+
+const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
+  const [mqttConfig, setMqttConfig] = useState<ModbusMqttConfig>(() =>
+    loadStoredMqttConfig<ModbusMqttConfig>(STORAGE_KEY) ?? DEFAULT_MQTT_CONFIG,
+  );
   const [modalOpen, setModalOpen] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const [form] = Form.useForm<ModbusMqttConfig>();
 
+  useEffect(() => {
+    const syncDefaultConfig = async (): Promise<void> => {
+      try {
+        await api.modbusRtuUpdateConfig(mqttConfig);
+        saveStoredMqttConfig(STORAGE_KEY, mqttConfig);
+      } catch (error) {
+        console.warn('Failed to apply default Modbus MQTT config automatically:', error);
+      }
+    };
+
+    void syncDefaultConfig();
+  }, []);
+
   const openModal = (): void => {
-    if (mqttConfig) {
-      form.setFieldsValue(mqttConfig);
-    } else {
-      form.setFieldsValue(createDefaultMqttConfig({
-        port: 1883,
-        keepalive_sec: 60,
-        connect_timeout_ms: 5000,
-      }));
-    }
+    form.setFieldsValue(mqttConfig);
     setModalOpen(true);
   };
 
@@ -41,6 +58,7 @@ const MqttConfigPanel: React.FC = () => {
       };
       const response = await api.modbusRtuUpdateConfig(payload);
       setMqttConfig(payload);
+      saveStoredMqttConfig(STORAGE_KEY, payload);
       messageApi.success(response.message || 'MQTT 配置已保存');
       setModalOpen(false);
     } catch (error) {
@@ -51,20 +69,9 @@ const MqttConfigPanel: React.FC = () => {
   return (
     <>
       {contextHolder}
-      <Card
-        title="MQTT 全局配置"
-        size="small"
-        bordered
-        extra={(
-          <Button type="text" size="small" icon={<EditOutlined />} onClick={openModal}>
-            编辑
-          </Button>
-        )}
-      >
-        <Text type="secondary">
-          MQTT 配置用于 MQTT_UART 传输模式。点击编辑按钮配置 MQTT 连接参数。
-        </Text>
-      </Card>
+      <Button block={block} icon={<EditOutlined />} onClick={openModal} style={{ whiteSpace: 'nowrap' }}>
+        编辑 MQTT 全局配置
+      </Button>
 
       <Modal
         title="MQTT 连接配置"

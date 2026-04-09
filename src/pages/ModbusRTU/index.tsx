@@ -618,13 +618,11 @@ const ModbusRTU: React.FC = () => {
             selectedConn={selectedConn}
             onStart={() => void handleStartLink()}
             onStop={() => void handleStopLink()}
+            extraAction={<MqttConfigPanel block />}
           />
         </div>
       </div>
 
-      <div style={{ marginTop: 16 }}>
-        <MqttConfigPanel />
-      </div>
 
       <div style={{ marginTop: 16 }}>
         <PointTable

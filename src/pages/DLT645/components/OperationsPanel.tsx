@@ -6,9 +6,10 @@ interface Props {
   selectedConn: string | null;
   onStart: () => void;
   onStop: () => void;
+  extraAction?: React.ReactNode;
 }
 
-const OperationsPanel: React.FC<Props> = ({ selectedConn, onStart, onStop }) => {
+const OperationsPanel: React.FC<Props> = ({ selectedConn, onStart, onStop, extraAction }) => {
   const disabled = !selectedConn;
 
   return (
@@ -29,6 +30,7 @@ const OperationsPanel: React.FC<Props> = ({ selectedConn, onStart, onStop }) => 
             停止连接功能
           </Button>
         </Popconfirm>
+        {extraAction ? <div style={{ width: '100%' }}>{extraAction}</div> : null}
       </Space>
     </Card>
   );
