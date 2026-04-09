@@ -49,6 +49,11 @@ const ROLE_LABELS: Record<number, string> = {
   2: 'CLIENT',
 };
 
+const ROLE_SERVER = 1;
+const ROLE_CLIENT = 2;
+const DEFAULT_SERVER_LOCAL_IP = '0.0.0.0';
+const DEFAULT_SERVER_LOCAL_PORT = 2404;
+
 const STATION_ROLE_LABELS: Record<number, string> = {
   0: 'UNSPECIFIED (按 role 默认)',
   1: 'MASTER (控制站)',
@@ -148,10 +153,12 @@ const IEC104: React.FC = () => {
     setEditingLink(null);
     linkForm.resetFields();
     linkForm.setFieldsValue({
-      role: 2,
-      station_role: 1,
+      role: ROLE_SERVER,
+      station_role: 2,
       ca: 1,
       oa: 0,
+      local_ip: DEFAULT_SERVER_LOCAL_IP,
+      local_port: DEFAULT_SERVER_LOCAL_PORT,
       k: 12,
       w: 8,
       t0: 30,
@@ -179,7 +186,7 @@ const IEC104: React.FC = () => {
       ca: c.ca,
       oa: c.oa,
       local_ip: c.local?.ip ?? '',
-      local_port: c.local?.port ?? 2404,
+      local_port: c.local?.port,
       remote_ip: c.remote?.ip ?? '',
       remote_port: c.remote?.port ?? 2404,
       k: c.apci?.k ?? 12,
@@ -197,6 +204,41 @@ const IEC104: React.FC = () => {
     });
     setLinkModalOpen(true);
   }, [selectedLink, linkForm]);
+
+  const handleLinkFormValuesChange = useCallback(
+    (
+      changedValues: Record<string, unknown>,
+      allValues: Record<string, unknown>,
+    ) => {
+      const role = typeof changedValues.role === 'number' ? changedValues.role : undefined;
+      const localIp = typeof allValues.local_ip === 'string' ? allValues.local_ip : undefined;
+      const localPort = typeof allValues.local_port === 'number' ? allValues.local_port : undefined;
+
+      if (role === ROLE_SERVER) {
+        const nextValues: { local_ip?: string; local_port?: number } = {};
+
+        if (!localIp) {
+          nextValues.local_ip = DEFAULT_SERVER_LOCAL_IP;
+        }
+        if (localPort == null) {
+          nextValues.local_port = DEFAULT_SERVER_LOCAL_PORT;
+        }
+
+        if (Object.keys(nextValues).length > 0) {
+          linkForm.setFieldsValue(nextValues);
+        }
+        return;
+      }
+
+      if (role === ROLE_CLIENT) {
+        linkForm.setFieldsValue({
+          local_ip: '',
+          local_port: undefined,
+        });
+      }
+    },
+    [linkForm],
+  );
 
   const handleLinkSubmit = useCallback(async () => {
     try {
@@ -603,7 +645,12 @@ const IEC104: React.FC = () => {
         width={680}
         destroyOnClose
       >
-        <Form form={linkForm} layout="vertical" size="small">
+        <Form
+          form={linkForm}
+          layout="vertical"
+          size="small"
+          onValuesChange={handleLinkFormValuesChange}
+        >
           <Row gutter={16}>
             <Col span={8}>
               <Form.Item
