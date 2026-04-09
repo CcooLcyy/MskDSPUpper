@@ -16,6 +16,10 @@ body {
   height: 100vh;
 }
 
+.ant-app {
+  height: 100%;
+}
+
 /* Ant Design 覆盖：紧凑 List.Item */
 .ant-list-item {
   padding: 8px 0 !important;

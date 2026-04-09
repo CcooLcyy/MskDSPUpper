@@ -15,6 +15,8 @@ import { PlayCircleOutlined, ReloadOutlined, StopOutlined } from '@ant-design/ic
 import type { ColumnsType } from 'antd/es/table';
 import { api } from '../../adapters';
 import type { ModuleInfo, ModuleRunningInfo } from '../../adapters';
+import { validateManagerAddress } from '../../utils/network';
+import './index.css';
 
 const { Text } = Typography;
 
@@ -35,6 +37,8 @@ const ModuleOps: React.FC = () => {
   const [runningModules, setRunningModules] = useState<ModuleRunningInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
+  const managerAddrValidation = validateManagerAddress(managerAddr);
+  const managerAddrError = managerAddrValidation.ok ? null : managerAddrValidation.error;
 
   const isRunning = useCallback(
     (moduleName: string) => runningModules.some((item) => item.module_name === moduleName),
@@ -45,6 +49,16 @@ const ModuleOps: React.FC = () => {
     (moduleName: string) => runningModules.find((item) => item.module_name === moduleName),
     [runningModules],
   );
+
+  const normalizeManagerAddr = useCallback((addr: string) => {
+    const validation = validateManagerAddress(addr);
+
+    if (!validation.ok) {
+      throw new Error(validation.error);
+    }
+
+    return validation.normalized;
+  }, []);
 
   const refresh = useCallback(
     async ({ suppressError = false }: RefreshOptions = {}) => {
@@ -80,7 +94,15 @@ const ModuleOps: React.FC = () => {
 
     const connectAndRefreshOnEnter = async () => {
       try {
-        await api.setManagerAddr(initialManagerAddrRef.current);
+        const normalizedAddr = normalizeManagerAddr(initialManagerAddrRef.current);
+
+        if (normalizedAddr !== initialManagerAddrRef.current) {
+          initialManagerAddrRef.current = normalizedAddr;
+          setManagerAddr(normalizedAddr);
+          localStorage.setItem(MANAGER_ADDR_KEY, normalizedAddr);
+        }
+
+        await api.setManagerAddr(normalizedAddr);
         await refresh({ suppressError: true });
       } catch (error) {
         messageApi.error(`连接失败: ${error}`);
@@ -88,18 +110,25 @@ const ModuleOps: React.FC = () => {
     };
 
     void connectAndRefreshOnEnter();
-  }, [messageApi, refresh]);
+  }, [messageApi, normalizeManagerAddr, refresh]);
 
   const handleConnect = useCallback(async () => {
     try {
-      await api.setManagerAddr(managerAddr);
-      localStorage.setItem(MANAGER_ADDR_KEY, managerAddr);
+      const normalizedAddr = normalizeManagerAddr(managerAddr);
+
+      await api.setManagerAddr(normalizedAddr);
+
+      if (normalizedAddr !== managerAddr) {
+        setManagerAddr(normalizedAddr);
+      }
+
+      localStorage.setItem(MANAGER_ADDR_KEY, normalizedAddr);
       await refresh({ suppressError: true });
-      messageApi.success(`已连接到 ${managerAddr}`);
+      messageApi.success(`已连接到 ${normalizedAddr}`);
     } catch (error) {
       messageApi.error(`连接失败: ${error}`);
     }
-  }, [managerAddr, messageApi, refresh]);
+  }, [managerAddr, messageApi, normalizeManagerAddr, refresh]);
 
   const handleStart = useCallback(
     async (moduleInfo: ModuleInfo) => {
@@ -243,19 +272,27 @@ const ModuleOps: React.FC = () => {
   ];
 
   return (
-    <div>
+    <div className="module-ops-page">
       {contextHolder}
 
-      <Card size="small" bordered style={{ marginBottom: 16 }}>
-        <Space>
-          <Text>ModuleManager 地址:</Text>
-          <Input
-            value={managerAddr}
-            onChange={(event) => setManagerAddr(event.target.value)}
-            style={{ width: 240 }}
-            placeholder="host:port"
-          />
-          <Button type="primary" onClick={() => void handleConnect()}>
+      <Card size="small" bordered className="module-ops-toolbar-card">
+        <Space align="start">
+          <Text style={{ lineHeight: '32px' }}>ModuleManager 地址:</Text>
+          <div style={{ minWidth: 240 }}>
+            <Input
+              value={managerAddr}
+              onChange={(event) => setManagerAddr(event.target.value)}
+              style={{ width: 240 }}
+              status={managerAddrError ? 'error' : undefined}
+              placeholder="host:port"
+            />
+            {managerAddrError && (
+              <Text type="danger" style={{ display: 'block', marginTop: 4 }}>
+                {managerAddrError}
+              </Text>
+            )}
+          </div>
+          <Button type="primary" onClick={() => void handleConnect()} disabled={Boolean(managerAddrError)}>
             连接
           </Button>
           <Button icon={<ReloadOutlined />} onClick={() => void refresh()} loading={loading}>
@@ -264,39 +301,42 @@ const ModuleOps: React.FC = () => {
         </Space>
       </Card>
 
-      <Card title="模块列表" size="small" bordered>
-        <Table
-          rowKey="module_name"
-          columns={columns}
-          dataSource={modules}
-          loading={loading}
-          pagination={false}
-          size="small"
-          expandable={{
-            expandedRowRender: (record) => {
-              const info = getRunningInfo(record.module_name);
+      <Card title="模块列表" size="small" bordered className="module-ops-list-card">
+        <div className="module-ops-table-scroll">
+          <Table
+            rowKey="module_name"
+            columns={columns}
+            dataSource={modules}
+            loading={loading}
+            pagination={false}
+            size="small"
+            scroll={{ x: 1180 }}
+            expandable={{
+              expandedRowRender: (record) => {
+                const info = getRunningInfo(record.module_name);
 
-              if (!info) {
-                return <Text type="secondary">模块未运行</Text>;
-              }
+                if (!info) {
+                  return <Text type="secondary">模块未运行</Text>;
+                }
 
-              return (
-                <Descriptions size="small" column={2}>
-                  <Descriptions.Item label="内部 gRPC (unix socket)">
-                    {info.inner_grpc_server || '-'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="外部 gRPC (TCP)">
-                    {info.outer_grpc_server || '-'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="模块版本">
-                    {info.version?.version || '-'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="库名">{info.lib_name}</Descriptions.Item>
-                </Descriptions>
-              );
-            },
-          }}
-        />
+                return (
+                  <Descriptions size="small" column={2}>
+                    <Descriptions.Item label="内部 gRPC (unix socket)">
+                      {info.inner_grpc_server || '-'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="外部 gRPC (TCP)">
+                      {info.outer_grpc_server || '-'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="模块版本">
+                      {info.version?.version || '-'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="库名">{info.lib_name}</Descriptions.Item>
+                  </Descriptions>
+                );
+              },
+            }}
+          />
+        </div>
       </Card>
     </div>
   );
