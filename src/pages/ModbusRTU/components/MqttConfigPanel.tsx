@@ -18,9 +18,10 @@ const DEFAULT_MQTT_CONFIG: ModbusMqttConfig = createDefaultMqttConfig({
 });
 
 const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
-  const [mqttConfig, setMqttConfig] = useState<ModbusMqttConfig>(() =>
+  const [initialMqttConfig] = useState<ModbusMqttConfig>(() =>
     loadStoredMqttConfig<ModbusMqttConfig>(STORAGE_KEY) ?? DEFAULT_MQTT_CONFIG,
   );
+  const [mqttConfig, setMqttConfig] = useState<ModbusMqttConfig>(() => initialMqttConfig);
   const [modalOpen, setModalOpen] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const [form] = Form.useForm<ModbusMqttConfig>();
@@ -28,15 +29,15 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
   useEffect(() => {
     const syncDefaultConfig = async (): Promise<void> => {
       try {
-        await api.modbusRtuUpdateConfig(mqttConfig);
-        saveStoredMqttConfig(STORAGE_KEY, mqttConfig);
+        await api.modbusRtuUpdateConfig(initialMqttConfig);
+        saveStoredMqttConfig(STORAGE_KEY, initialMqttConfig);
       } catch (error) {
         console.warn('Failed to apply default Modbus MQTT config automatically:', error);
       }
     };
 
     void syncDefaultConfig();
-  }, []);
+  }, [initialMqttConfig]);
 
   const openModal = (): void => {
     form.setFieldsValue(mqttConfig);

@@ -18,9 +18,10 @@ const DEFAULT_MQTT_CONFIG: Dlt645MqttConfig = createDefaultMqttConfig({
 });
 
 const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
-  const [mqttConfig, setMqttConfig] = useState<Dlt645MqttConfig>(() =>
+  const [initialMqttConfig] = useState<Dlt645MqttConfig>(() =>
     loadStoredMqttConfig<Dlt645MqttConfig>(STORAGE_KEY) ?? DEFAULT_MQTT_CONFIG,
   );
+  const [mqttConfig, setMqttConfig] = useState<Dlt645MqttConfig>(() => initialMqttConfig);
   const [modalOpen, setModalOpen] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const [form] = Form.useForm<Dlt645MqttConfig>();
@@ -28,15 +29,15 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
   useEffect(() => {
     const syncDefaultConfig = async (): Promise<void> => {
       try {
-        await api.dlt645UpdateConfig(mqttConfig);
-        saveStoredMqttConfig(STORAGE_KEY, mqttConfig);
+        await api.dlt645UpdateConfig(initialMqttConfig);
+        saveStoredMqttConfig(STORAGE_KEY, initialMqttConfig);
       } catch (error) {
         console.warn('Failed to apply default DLT645 MQTT config automatically:', error);
       }
     };
 
     void syncDefaultConfig();
-  }, []);
+  }, [initialMqttConfig]);
 
   const openModal = (): void => {
     form.setFieldsValue(mqttConfig);
