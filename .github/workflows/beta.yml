@@ -268,7 +268,7 @@ jobs:
       - name: Render beta tauri config
         shell: pwsh
         run: |
-          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/beta.json --output package/generated/tauri.beta.conf.json --endpoint https://github.com/${{ github.repository }}/releases/download/beta-latest/latest.json --bundle-targets nsis --updater-artifacts auto
+          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/beta.json --output package/generated/tauri.beta.conf.json --endpoint https://github.com/${{ github.repository }}/releases/download/beta-latest/latest.json --bundle-targets nsis --updater-artifacts true
 
       - name: Build beta package
         shell: pwsh

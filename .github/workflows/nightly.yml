@@ -127,7 +127,7 @@ jobs:
       - name: Render tauri config
         shell: pwsh
         run: |
-          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/nightly.json --output package/generated/tauri.nightly.conf.json --endpoint https://github.com/${{ github.repository }}/releases/download/nightly-latest/latest.json --bundle-targets nsis --updater-artifacts auto
+          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/nightly.json --output package/generated/tauri.nightly.conf.json --endpoint https://github.com/${{ github.repository }}/releases/download/nightly-latest/latest.json --bundle-targets nsis --updater-artifacts true
 
       - name: Build nightly package
         shell: pwsh
