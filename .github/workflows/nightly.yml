@@ -44,6 +44,13 @@ jobs:
         with:
           targets: ${{ env.RUST_TARGET }}
 
+      - name: Capture rustc version
+        id: rustc_version
+        shell: pwsh
+        run: |
+          $version = (rustc -V).Split(' ')[1]
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Setup protoc
         uses: arduino/setup-protoc@v3
 
@@ -56,19 +63,22 @@ jobs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.7
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          shared-key: mskdsp-upper-${{ runner.os }}-${{ env.RUST_TARGET }}
+          workspaces: |
+            ./src-tauri -> target
+          cache-bin: 'false'
 
       - name: Cache sccache
         uses: actions/cache@v4
         with:
           path: ${{ env.SCCACHE_DIR }}
-          key: sccache-${{ runner.os }}-${{ env.RUST_TARGET }}-${{ hashFiles('package.json', 'package-lock.json', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'src-tauri/tauri.conf.json', 'scripts/workflow/**', '.github/workflows/nightly.yml') }}
+          key: sccache-${{ runner.os }}-${{ env.RUST_TARGET }}-${{ steps.rustc_version.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            sccache-${{ runner.os }}-${{ env.RUST_TARGET }}-${{ steps.rustc_version.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock') }}-
+            sccache-${{ runner.os }}-${{ env.RUST_TARGET }}-${{ steps.rustc_version.outputs.version }}-
 
       - name: Prepare package/log directories
         shell: pwsh
@@ -110,7 +120,7 @@ jobs:
       - name: Run cargo tests
         shell: pwsh
         run: |
-          cargo test --locked --manifest-path src-tauri/Cargo.toml 2>&1 | Tee-Object -FilePath package\logs\cargo-test.log
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET 2>&1 | Tee-Object -FilePath package\logs\cargo-test.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Emit build metadata
