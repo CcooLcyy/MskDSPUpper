@@ -26,6 +26,7 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import type {
   AgcDerivedOutputs,
@@ -35,6 +36,7 @@ import type {
   AgcSignalSpec,
   AgcValueSpec,
 } from '../../adapters';
+import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
 
 const { Text } = Typography;
 
@@ -187,6 +189,7 @@ const AGC: React.FC = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [groupForm] = Form.useForm<AgcGroupConfig>();
   const [memberForm] = Form.useForm<AgcMemberConfig>();
+  const [searchParams] = useSearchParams();
 
   const selectedGroup = useMemo(
     () => groups.find((item) => item.config?.group_name === selectedGroupName) ?? null,
@@ -433,6 +436,7 @@ const AGC: React.FC = () => {
 
   const stateInfo = STATE_MAP[selectedGroup?.state ?? 0] ?? STATE_MAP[0];
   const selectedConfig = selectedGroup?.config ?? null;
+  const currentView = normalizeControlView(searchParams.get(CONTROL_VIEW_QUERY_KEY));
 
   const runtimeRows = [
     {
@@ -450,202 +454,234 @@ const AGC: React.FC = () => {
   ];
 
   return (
-    <div>
+    <div className="protocol-page">
       {contextHolder}
 
-      <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
-        <Card
-          title="控制组列表"
-          size="small"
-          bordered
-          style={{ width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column' }}
-          styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', padding: '8px 0' } }}
-          extra={
-            <Button
-              type="text"
-              size="small"
-              icon={<ReloadOutlined />}
-              loading={loading}
-              onClick={() => void refreshGroups()}
-            />
-          }
+      {currentView === 'strategy' ? (
+        <div
+          style={{
+            display: 'flex',
+            flex: '1 1 auto',
+            gap: 16,
+            alignItems: 'stretch',
+            minWidth: 0,
+            minHeight: 0,
+            overflow: 'hidden',
+          }}
         >
-          <div style={{ flex: 1, overflow: 'auto' }}>
-            <List
-              dataSource={groups}
-              locale={{ emptyText: '暂无控制组' }}
-              renderItem={(item) => {
-                const groupName = item.config?.group_name ?? `group_${item.conn_id}`;
-                const isActive = groupName === selectedGroupName;
-                const color = item.state === 2 ? '#4caf50' : item.state === 3 ? '#ff9800' : '#f44336';
-                return (
-                  <List.Item
-                    onClick={() => handleSelectGroup(groupName)}
-                    style={{
-                      cursor: 'pointer',
-                      padding: '8px 16px',
-                      background: isActive ? '#37373d' : 'transparent',
-                    }}
-                  >
-                    <Space size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
-                      <Space size={10}>
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            width: 8,
-                            height: 8,
-                            borderRadius: '50%',
-                            background: color,
-                          }}
-                        />
-                        <Text style={{ color: '#fff' }}>{groupName}</Text>
-                      </Space>
-                      <Tag color={STATE_MAP[item.state]?.color ?? 'default'} style={{ marginInlineEnd: 0 }}>
-                        {STATE_MAP[item.state]?.label ?? 'UNKNOWN'}
-                      </Tag>
-                    </Space>
-                  </List.Item>
-                );
-              }}
-            />
-          </div>
-          <div style={{ padding: '8px 12px', borderTop: '1px solid #3e3e42' }}>
-            <Button block icon={<PlusOutlined />} onClick={openCreateGroup}>
-              + 新增控制组
-            </Button>
-          </div>
-        </Card>
-
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{ display: 'flex', gap: 16 }}>
-            <Card
-              title="组配置"
-              size="small"
-              bordered
-              style={{ flex: 1 }}
-              extra={
-                selectedConfig ? (
-                  <Space>
-                    <Button type="link" size="small" icon={<EditOutlined />} onClick={openEditGroup}>
-                      编辑
-                    </Button>
-                    <Popconfirm
-                      title={`确认删除 ${selectedConfig.group_name}？`}
-                      onConfirm={() => void handleDeleteGroup(selectedConfig.group_name)}
-                    >
-                      <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-                        删除
-                      </Button>
-                    </Popconfirm>
-                  </Space>
-                ) : undefined
-              }
-            >
-              {selectedConfig ? (
-                <Descriptions size="small" column={2}>
-                  <Descriptions.Item label="group_name">{selectedConfig.group_name}</Descriptions.Item>
-                  <Descriptions.Item label="conn_id">{selectedGroup?.conn_id ?? '-'}</Descriptions.Item>
-                  <Descriptions.Item label="p_cmd" span={2}>{formatValueSpec(selectedConfig.p_cmd)}</Descriptions.Item>
-                  <Descriptions.Item label="strategy_type">
-                    {selectedConfig.strategy?.strategy_type ?? '-'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="enable state">
-                    <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
-                  </Descriptions.Item>
-                  <Descriptions.Item label="input description" span={2}>
-                    {selectedConfig.p_cmd?.signal?.tag
-                      ? `输入命令来自 ${selectedConfig.p_cmd.signal.tag}，按 ${VALUE_MODE_LABELS[selectedConfig.p_cmd.mode] ?? selectedConfig.p_cmd.mode} 方式解释。`
-                      : '-'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="output description" span={2}>
-                    {selectedConfig.outputs
-                      ? `总测量=${selectedConfig.outputs.p_total_meas?.tag || '-'}；总目标=${selectedConfig.outputs.p_total_target?.tag || '-'}；误差=${selectedConfig.outputs.p_total_error?.tag || '-'}。`
-                      : '-'}
-                  </Descriptions.Item>
-                </Descriptions>
-              ) : (
-                <Text type="secondary">请先在左侧选择控制组</Text>
-              )}
-            </Card>
-
-            <Card title="运行状态" size="small" bordered style={{ width: 300, flexShrink: 0 }}>
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                <div>
-                  <Text type="secondary" style={{ marginRight: 12 }}>当前状态</Text>
-                  <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
-                </div>
-                <div>
-                  <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>运行控制</Text>
-                  <Space wrap>
-                    <Button
-                      type="primary"
-                      icon={<PlayCircleOutlined />}
-                      style={{ background: '#4caf50', borderColor: '#4caf50' }}
-                      disabled={!selectedGroupName}
-                      onClick={() => void handleStartGroup()}
-                    >
-                      启动
-                    </Button>
-                    <Button
-                      danger
-                      icon={<PauseCircleOutlined />}
-                      disabled={!selectedGroupName}
-                      onClick={() => void handleStopGroup()}
-                    >
-                      停止
-                    </Button>
-                  </Space>
-                </div>
-                {runtimeRows.map((item) => (
-                  <div key={item.label}>
-                    <Text type="secondary" style={{ display: 'block' }}>{item.label}</Text>
-                    <Text>{item.signal?.tag || '-'} — 接入实时数据后渲染</Text>
-                  </div>
-                ))}
-                <div>
-                  <Text type="secondary" style={{ display: 'block' }}>last_error</Text>
-                  <Text>{selectedGroup?.last_error || '— 接入实时数据后渲染'}</Text>
-                </div>
-              </Space>
-            </Card>
-          </div>
-
           <Card
-            title="成员配置"
+            title="控制组列表"
             size="small"
             bordered
+            style={{ width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+            styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', padding: '8px 0' } }}
+            extra={
+              <Button
+                type="text"
+                size="small"
+                icon={<ReloadOutlined />}
+                loading={loading}
+                onClick={() => void refreshGroups()}
+              />
+            }
           >
-            <Table
-              rowKey={(record, index) => `${record.member_name}-${index}`}
-              columns={memberColumns}
-              dataSource={selectedConfig?.members ?? []}
-              pagination={false}
-              size="small"
-              locale={{ emptyText: selectedConfig ? '暂无成员配置' : '请先选择控制组' }}
-            />
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              <List
+                dataSource={groups}
+                locale={{ emptyText: '暂无控制组' }}
+                renderItem={(item) => {
+                  const groupName = item.config?.group_name ?? `group_${item.conn_id}`;
+                  const isActive = groupName === selectedGroupName;
+                  const color = item.state === 2 ? '#4caf50' : item.state === 3 ? '#ff9800' : '#f44336';
+                  return (
+                    <List.Item
+                      onClick={() => handleSelectGroup(groupName)}
+                      style={{
+                        cursor: 'pointer',
+                        padding: '8px 16px',
+                        background: isActive ? '#37373d' : 'transparent',
+                      }}
+                    >
+                      <Space size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
+                        <Space size={10}>
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              width: 8,
+                              height: 8,
+                              borderRadius: '50%',
+                              background: color,
+                            }}
+                          />
+                          <Text style={{ color: '#fff' }}>{groupName}</Text>
+                        </Space>
+                        <Tag color={STATE_MAP[item.state]?.color ?? 'default'} style={{ marginInlineEnd: 0 }}>
+                          {STATE_MAP[item.state]?.label ?? 'UNKNOWN'}
+                        </Tag>
+                      </Space>
+                    </List.Item>
+                  );
+                }}
+              />
+            </div>
+            <div style={{ padding: '8px 12px', borderTop: '1px solid #3e3e42' }}>
+              <Button block icon={<PlusOutlined />} onClick={openCreateGroup}>
+                + 新增控制组
+              </Button>
+            </div>
           </Card>
 
-          <Card title="控制日志" size="small" bordered>
-            <div
-              style={{
-                background: '#1e1e1e',
-                borderRadius: 4,
-                padding: 16,
-                fontFamily: '"Consolas", monospace',
-                fontSize: 12,
-                lineHeight: '22px',
-                minHeight: 180,
-                color: '#aaa',
-              }}
+          <div
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 16,
+              minWidth: 0,
+              minHeight: 0,
+              overflow: 'hidden',
+            }}
+          >
+            <div className="protocol-top-row" style={{ flex: '0 1 320px', minHeight: 220 }}>
+              <Card
+                title="组配置"
+                size="small"
+                bordered
+                className="protocol-log-card"
+                style={{ flex: 1, minHeight: 0 }}
+                extra={
+                  selectedConfig ? (
+                    <Space>
+                      <Button type="link" size="small" icon={<EditOutlined />} onClick={openEditGroup}>
+                        编辑
+                      </Button>
+                      <Popconfirm
+                        title={`确认删除 ${selectedConfig.group_name}？`}
+                        onConfirm={() => void handleDeleteGroup(selectedConfig.group_name)}
+                      >
+                        <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                          删除
+                        </Button>
+                      </Popconfirm>
+                    </Space>
+                  ) : undefined
+                }
+              >
+                <div className="protocol-log-scroll">
+                  {selectedConfig ? (
+                    <Descriptions size="small" column={2}>
+                      <Descriptions.Item label="group_name">{selectedConfig.group_name}</Descriptions.Item>
+                      <Descriptions.Item label="conn_id">{selectedGroup?.conn_id ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label="p_cmd" span={2}>{formatValueSpec(selectedConfig.p_cmd)}</Descriptions.Item>
+                      <Descriptions.Item label="strategy_type">
+                        {selectedConfig.strategy?.strategy_type ?? '-'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="enable state">
+                        <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="input description" span={2}>
+                        {selectedConfig.p_cmd?.signal?.tag
+                          ? `输入命令来自 ${selectedConfig.p_cmd.signal.tag}，按 ${VALUE_MODE_LABELS[selectedConfig.p_cmd.mode] ?? selectedConfig.p_cmd.mode} 方式解释。`
+                          : '-'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="output description" span={2}>
+                        {selectedConfig.outputs
+                          ? `总测量=${selectedConfig.outputs.p_total_meas?.tag || '-'}；总目标=${selectedConfig.outputs.p_total_target?.tag || '-'}；误差=${selectedConfig.outputs.p_total_error?.tag || '-'}。`
+                          : '-'}
+                      </Descriptions.Item>
+                    </Descriptions>
+                  ) : (
+                    <Text type="secondary">请先在左侧选择控制组</Text>
+                  )}
+                </div>
+              </Card>
+
+              <Card
+                title="运行状态"
+                size="small"
+                bordered
+                className="protocol-log-card"
+                style={{ width: 300, flexShrink: 0, minHeight: 0 }}
+              >
+                <div className="protocol-log-scroll">
+                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <div>
+                      <Text type="secondary" style={{ marginRight: 12 }}>当前状态</Text>
+                      <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
+                    </div>
+                    <div>
+                      <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>运行控制</Text>
+                      <Space wrap>
+                        <Button
+                          type="primary"
+                          icon={<PlayCircleOutlined />}
+                          style={{ background: '#4caf50', borderColor: '#4caf50' }}
+                          disabled={!selectedGroupName}
+                          onClick={() => void handleStartGroup()}
+                        >
+                          启动
+                        </Button>
+                        <Button
+                          danger
+                          icon={<PauseCircleOutlined />}
+                          disabled={!selectedGroupName}
+                          onClick={() => void handleStopGroup()}
+                        >
+                          停止
+                        </Button>
+                      </Space>
+                    </div>
+                    {runtimeRows.map((item) => (
+                      <div key={item.label}>
+                        <Text type="secondary" style={{ display: 'block' }}>{item.label}</Text>
+                        <Text>{item.signal?.tag || '-'} — 接入实时数据后渲染</Text>
+                      </div>
+                    ))}
+                    <div>
+                      <Text type="secondary" style={{ display: 'block' }}>last_error</Text>
+                      <Text>{selectedGroup?.last_error || '— 接入实时数据后渲染'}</Text>
+                    </div>
+                  </Space>
+                </div>
+              </Card>
+            </div>
+
+            <Card
+              title="成员配置"
+              size="small"
+              bordered
+              className="protocol-point-card"
             >
+              <div className="protocol-table-scroll">
+                <Table
+                  rowKey={(record, index) => `${record.member_name}-${index}`}
+                  columns={memberColumns}
+                  dataSource={selectedConfig?.members ?? []}
+                  pagination={false}
+                  size="small"
+                  locale={{ emptyText: selectedConfig ? '暂无成员配置' : '请先选择控制组' }}
+                />
+              </div>
+            </Card>
+          </div>
+        </div>
+      ) : (
+        <Card
+          title="控制日志"
+          size="small"
+          bordered
+          className="protocol-log-card"
+        >
+          <div className="protocol-log-scroll">
+            <div className="protocol-log-console">
               <div>[AGC] --:--:--.--- {selectedGroupName ?? '<group>'} - 控制日志 — 接入实时数据后渲染</div>
-              <div style={{ marginTop: 8, color: '#666' }}>
+              <div className="protocol-log-line--hint">
                 等待实时控制回路、状态回写与告警事件接入后显示详细日志...
               </div>
             </div>
-          </Card>
-        </div>
-      </div>
+          </div>
+        </Card>
+      )}
 
       <Modal
         title={editingGroup ? '编辑控制组' : '新增控制组'}

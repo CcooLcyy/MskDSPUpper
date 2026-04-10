@@ -1,0 +1,20 @@
+.main-layout-sider {
+  overflow: hidden;
+}
+
+.main-layout-sider .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.main-layout-sider-menu-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.main-layout-sider-menu {
+  border-inline-end: 0 !important;
+}

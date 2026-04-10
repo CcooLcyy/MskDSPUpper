@@ -11,7 +11,9 @@ import {
   ToolOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import ControlHeaderViewSwitcher from '../components/control/ControlHeaderViewSwitcher';
 import ProtocolHeaderViewSwitcher from '../components/protocol/ProtocolHeaderViewSwitcher';
+import './MainLayout.css';
 import '../components/protocol/protocol-page.css';
 
 const { Sider, Header, Content } = Layout;
@@ -82,7 +84,9 @@ const MainLayout: React.FC = () => {
       .find((child) => child.key === selectedKey)?.label ||
     'MskDSP';
   const isProtocolPage = location.pathname.startsWith('/protocol/');
-  const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage ? 'hidden' : 'auto';
+  const isControlPage = location.pathname.startsWith('/control');
+  const hasHeaderViewSwitcher = isProtocolPage || isControlPage;
+  const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage || isControlPage ? 'hidden' : 'auto';
 
   return (
     <Layout style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
@@ -91,6 +95,7 @@ const MainLayout: React.FC = () => {
         collapsed={collapsed}
         onCollapse={setCollapsed}
         width={200}
+        className="main-layout-sider"
         style={{ borderRight: '1px solid #3e3e42' }}
       >
         <div
@@ -110,18 +115,21 @@ const MainLayout: React.FC = () => {
             {collapsed ? 'DSP' : 'MskDSP 控制台'}
           </Text>
         </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          defaultOpenKeys={openKeys}
-          items={menuItems}
-          onClick={({ key }) => {
-            if (key !== '/protocol') {
-              navigate(key);
-            }
-          }}
-        />
+        <div className="main-layout-sider-menu-wrap">
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            defaultOpenKeys={openKeys}
+            items={menuItems}
+            className="main-layout-sider-menu"
+            onClick={({ key }) => {
+              if (key !== '/protocol') {
+                navigate(key);
+              }
+            }}
+          />
+        </div>
       </Sider>
       <Layout style={{ minWidth: 0, minHeight: 0 }}>
         <Header
@@ -134,13 +142,14 @@ const MainLayout: React.FC = () => {
             height: 48,
           }}
         >
-          <div className={`protocol-header-main${isProtocolPage ? ' is-protocol' : ''}`}>
-            {!isProtocolPage ? (
+          <div className={`protocol-header-main${hasHeaderViewSwitcher ? ' is-protocol' : ''}`}>
+            {!hasHeaderViewSwitcher ? (
               <Text strong className="protocol-header-title-text">
                 {currentLabel}
               </Text>
             ) : null}
             {isProtocolPage ? <ProtocolHeaderViewSwitcher /> : null}
+            {isControlPage ? <ControlHeaderViewSwitcher /> : null}
           </div>
           <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
         </Header>
