@@ -127,11 +127,11 @@ const ModbusRTU: React.FC = () => {
       read_timeout_ms: 0,
       read_plan_mode: 1,
       read_plan_blocks: [],
-      serial_port: '',
-      request_timeout_ms: 0,
-      serial_byte_timeout_ms: 0,
-      serial_frame_timeout_ms: 0,
-      serial_est_size: 0,
+      serial_port: 'RS485-1',
+      request_timeout_ms: 1000,
+      serial_byte_timeout_ms: 2000,
+      serial_frame_timeout_ms: 3000,
+      serial_est_size: 256,
     });
     setLinkModalOpen(true);
   }, [linkForm]);
@@ -209,11 +209,11 @@ const ModbusRTU: React.FC = () => {
         address_base: values.address_base ?? 1,
         read_plan: readPlan,
         transport_type: values.transport_type ?? 1,
-        serial_port: values.serial_port || '',
-        request_timeout_ms: values.request_timeout_ms ?? 0,
-        serial_byte_timeout_ms: values.serial_byte_timeout_ms ?? 0,
-        serial_frame_timeout_ms: values.serial_frame_timeout_ms ?? 0,
-        serial_est_size: values.serial_est_size ?? 0,
+        serial_port: values.serial_port || 'RS485-1',
+        request_timeout_ms: values.request_timeout_ms ?? 1000,
+        serial_byte_timeout_ms: values.serial_byte_timeout_ms ?? 2000,
+        serial_frame_timeout_ms: values.serial_frame_timeout_ms ?? 3000,
+        serial_est_size: values.serial_est_size ?? 256,
       };
 
       const createOnly = !editingLink;
@@ -277,8 +277,8 @@ const ModbusRTU: React.FC = () => {
       tag: '',
       function: 1,
       address: 0,
-      reg_count: 0,
-      data_type: 1,
+      reg_count: 1,
+      data_type: 2,
       scale: 1,
       offset: 0,
       deadband: 0,
