@@ -11,7 +11,14 @@ import {
   removeDir,
   writeJsonFile,
 } from './lib/filesystem.mjs';
-import { logInfo, resolveRepoRoot, setGithubOutput } from './lib/runtime.mjs';
+import { logInfo, logWarn, resolveRepoRoot, setGithubOutput } from './lib/runtime.mjs';
+import {
+  createGithubReleaseAssetUrl,
+  createStaticUpdaterManifest,
+  createUpdaterTargets,
+  formatTimestampAsRfc3339,
+  normalizeUpdaterBundleType,
+} from './lib/updater-manifest.mjs';
 
 function findArtifactFiles(rootPath, predicate) {
   return listFilesRecursive(rootPath).filter(predicate);
@@ -74,12 +81,35 @@ if (installerFiles.length === 0) {
   throw new Error(`未在 ${bundleRoot} 找到安装包产物`);
 }
 
-const copiedInstallers = installerFiles.map((sourcePath) => {
+const stagedInstallers = installerFiles.map((sourcePath) => {
   const extension = path.extname(sourcePath).toLowerCase();
   const destinationName = `${metadata.artifactBaseName}${extension}`;
   const destinationPath = path.join(appDir, destinationName);
-  fs.copyFileSync(sourcePath, destinationPath);
-  return destinationPath;
+  return {
+    sourcePath,
+    destinationName,
+    destinationPath,
+    signatureSourcePath: `${sourcePath}.sig`,
+    signatureDestinationPath: `${destinationPath}.sig`,
+    bundleType: normalizeUpdaterBundleType(path.basename(path.dirname(sourcePath))),
+  };
+});
+
+const duplicateInstallerAsset = stagedInstallers.find(
+  (installer, index) =>
+    stagedInstallers.findIndex(
+      (candidate) =>
+        candidate.destinationName.toLowerCase() === installer.destinationName.toLowerCase(),
+    ) !== index,
+);
+
+if (duplicateInstallerAsset) {
+  throw new Error(`installer 资源命名冲突: ${duplicateInstallerAsset.destinationName}`);
+}
+
+const copiedInstallers = stagedInstallers.map((installer) => {
+  fs.copyFileSync(installer.sourcePath, installer.destinationPath);
+  return installer.destinationPath;
 });
 
 const updaterFiles = findArtifactFiles(
@@ -88,8 +118,55 @@ const updaterFiles = findArtifactFiles(
 );
 
 for (const sourcePath of updaterFiles) {
-  const destinationPath = path.join(appDir, path.basename(sourcePath));
+  const matchedInstaller = stagedInstallers.find(
+    (installer) => path.resolve(installer.signatureSourcePath) === path.resolve(sourcePath),
+  );
+  const destinationPath = matchedInstaller
+    ? matchedInstaller.signatureDestinationPath
+    : path.join(appDir, path.basename(sourcePath));
   fs.copyFileSync(sourcePath, destinationPath);
+}
+
+let generatedUpdaterManifestPath = null;
+if (metadata.repository) {
+  const platforms = {};
+
+  for (const installer of stagedInstallers) {
+    if (!pathExists(installer.signatureSourcePath)) {
+      throw new Error(`未找到 updater 签名文件: ${installer.signatureSourcePath}`);
+    }
+
+    const signature = fs.readFileSync(installer.signatureSourcePath, 'utf8').trim();
+    if (!signature) {
+      throw new Error(`updater 签名文件为空: ${installer.signatureSourcePath}`);
+    }
+
+    const downloadUrl = createGithubReleaseAssetUrl({
+      repository: metadata.repository,
+      releaseTag: metadata.releaseTag,
+      assetName: path.basename(installer.destinationPath),
+    });
+
+    for (const target of createUpdaterTargets(metadata.targetTriple, installer.bundleType)) {
+      platforms[target] = {
+        url: downloadUrl,
+        signature,
+      };
+    }
+  }
+
+  generatedUpdaterManifestPath = path.join(appDir, 'latest.json');
+  writeJsonFile(
+    generatedUpdaterManifestPath,
+    createStaticUpdaterManifest({
+      version: metadata.effectiveVersion,
+      notes: metadata.releaseTitle,
+      pubDate: formatTimestampAsRfc3339(metadata.timestamp),
+      platforms,
+    }),
+  );
+} else {
+  logWarn('metadata.repository 缺失，跳过 latest.json 生成');
 }
 
 const existingReleaseRoots = releaseRoots.filter((candidate) => pathExists(candidate));
@@ -168,6 +245,12 @@ const manifest = {
   diagnosticsDir,
   installers: copiedInstallers.map((filePath) => path.relative(stageRoot, filePath)),
   updaterFiles: updaterFiles.map((filePath) => path.relative(bundleRoot, filePath)),
+  stagedUpdaterFiles: listFilesRecursive(appDir)
+    .filter((filePath) => /\.(json|sig)$/i.test(filePath))
+    .map((filePath) => path.relative(stageRoot, filePath)),
+  generatedUpdaterManifest: generatedUpdaterManifestPath
+    ? path.relative(stageRoot, generatedUpdaterManifestPath)
+    : null,
   pdbFiles: pdbFiles.map((filePath) => path.relative(repoRoot, filePath)),
   sourceMaps: sourceMaps.map((filePath) => path.relative(appDir, filePath)),
 };
@@ -178,6 +261,7 @@ writeJsonFile(manifestPath, manifest);
 logInfo('已完成 staging 收集', {
   stageRoot,
   installerCount: copiedInstallers.length,
+  updaterManifestGenerated: Boolean(generatedUpdaterManifestPath),
   symbolCount: pdbFiles.length + sourceMaps.length,
 });
 

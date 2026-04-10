@@ -100,15 +100,23 @@ if (pathExists(symbolsDir) && fs.readdirSync(symbolsDir).length > 0) {
   zipDirectory(symbolsDir, symbolsArchivePath);
 }
 
+const hiddenReleaseEntries = new Set([
+  `${metadata.binaryName}.exe`.toLowerCase(),
+  `${metadata.projectSlug}.exe`.toLowerCase(),
+]);
+
 for (const entry of fs.readdirSync(payloadDir)) {
   const sourcePath = path.join(payloadDir, entry);
-  if (fs.statSync(sourcePath).isFile()) {
-    const portableName =
-      entry.toLowerCase() === `${metadata.binaryName}.exe`.toLowerCase()
-        ? `${metadata.artifactBaseName}-portable.exe`
-        : entry;
-    copyPath(sourcePath, path.join(outDir, portableName));
+  if (!fs.statSync(sourcePath).isFile()) {
+    continue;
   }
+
+  // Keep the GUI binary inside the delivery zip, but do not publish it as a standalone release asset.
+  if (hiddenReleaseEntries.has(entry.toLowerCase())) {
+    continue;
+  }
+
+  copyPath(sourcePath, path.join(outDir, entry));
 }
 
 logInfo('已生成交付包与 symbols 包', {
