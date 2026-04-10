@@ -52,7 +52,7 @@ const ROLE_LABELS: Record<number, string> = {
 const ROLE_SERVER = 1;
 const ROLE_CLIENT = 2;
 const DEFAULT_SERVER_LOCAL_IP = '0.0.0.0';
-const DEFAULT_SERVER_LOCAL_PORT = 2404;
+const DEFAULT_IEC104_PORT = 2404;
 
 const STATION_ROLE_LABELS: Record<number, string> = {
   0: 'UNSPECIFIED (按 role 默认)',
@@ -79,6 +79,28 @@ const POINT_TYPE_LABELS: Record<number, string> = {
   2: 'SINGLE (单点遥信)',
 };
 
+const MAX_IOA = 16777215;
+
+const DEFAULT_POINT_FORM_VALUES = {
+  scale: 1,
+  offset: 0,
+  deadband: 0,
+};
+
+const getCreatePointInitialValues = (points: Iec104Point[]) => {
+  const lastPoint = points[points.length - 1];
+
+  if (!lastPoint) {
+    return { ...DEFAULT_POINT_FORM_VALUES };
+  }
+
+  return {
+    ...DEFAULT_POINT_FORM_VALUES,
+    ioa: Math.min(lastPoint.ioa + 1, MAX_IOA),
+    point_type: lastPoint.point_type,
+  };
+};
+
 const formatEndpoint = (ep: { ip: string; port: number } | null): string =>
   ep ? `${ep.ip}:${ep.port}` : '-';
 
@@ -101,6 +123,7 @@ const IEC104: React.FC = () => {
 
   const [linkForm] = Form.useForm();
   const [pointForm] = Form.useForm();
+  const linkRole = Form.useWatch('role', linkForm);
 
   // ── Derived ──
 
@@ -108,6 +131,11 @@ const IEC104: React.FC = () => {
     (l) => l.config?.conn_name === selectedConn,
   ) ?? null;
   const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY));
+  const showLocalEndpointFields = linkRole !== ROLE_CLIENT;
+  const showRemoteEndpointFields = linkRole !== ROLE_SERVER;
+  const singleEndpointMode = linkRole === ROLE_SERVER || linkRole === ROLE_CLIENT;
+  const endpointIpSpan = singleEndpointMode ? 18 : 9;
+  const endpointPortSpan = singleEndpointMode ? 6 : 3;
 
   // ── Data Loading ──
 
@@ -158,7 +186,7 @@ const IEC104: React.FC = () => {
       ca: 1,
       oa: 0,
       local_ip: DEFAULT_SERVER_LOCAL_IP,
-      local_port: DEFAULT_SERVER_LOCAL_PORT,
+      local_port: DEFAULT_IEC104_PORT,
       k: 12,
       w: 8,
       t0: 30,
@@ -213,15 +241,28 @@ const IEC104: React.FC = () => {
       const role = typeof changedValues.role === 'number' ? changedValues.role : undefined;
       const localIp = typeof allValues.local_ip === 'string' ? allValues.local_ip : undefined;
       const localPort = typeof allValues.local_port === 'number' ? allValues.local_port : undefined;
+      const remoteIp = typeof allValues.remote_ip === 'string' ? allValues.remote_ip : undefined;
+      const remotePort = typeof allValues.remote_port === 'number' ? allValues.remote_port : undefined;
 
       if (role === ROLE_SERVER) {
-        const nextValues: { local_ip?: string; local_port?: number } = {};
+        const nextValues: {
+          local_ip?: string;
+          local_port?: number;
+          remote_ip?: string;
+          remote_port?: number;
+        } = {};
 
         if (!localIp) {
           nextValues.local_ip = DEFAULT_SERVER_LOCAL_IP;
         }
         if (localPort == null) {
-          nextValues.local_port = DEFAULT_SERVER_LOCAL_PORT;
+          nextValues.local_port = DEFAULT_IEC104_PORT;
+        }
+        if (remoteIp) {
+          nextValues.remote_ip = '';
+        }
+        if (remotePort != null) {
+          nextValues.remote_port = undefined;
         }
 
         if (Object.keys(nextValues).length > 0) {
@@ -231,10 +272,20 @@ const IEC104: React.FC = () => {
       }
 
       if (role === ROLE_CLIENT) {
-        linkForm.setFieldsValue({
+        const nextValues: {
+          local_ip?: string;
+          local_port?: number;
+          remote_port?: number;
+        } = {
           local_ip: '',
           local_port: undefined,
-        });
+        };
+
+        if (remotePort == null) {
+          nextValues.remote_port = DEFAULT_IEC104_PORT;
+        }
+
+        linkForm.setFieldsValue(nextValues);
       }
     },
     [linkForm],
@@ -243,14 +294,24 @@ const IEC104: React.FC = () => {
   const handleLinkSubmit = useCallback(async () => {
     try {
       const values = await linkForm.validateFields();
+      const isServerRole = values.role === ROLE_SERVER;
+      const isClientRole = values.role === ROLE_CLIENT;
       const config: Iec104LinkConfig = {
         conn_name: values.conn_name,
         role: values.role,
         station_role: values.station_role,
         ca: values.ca,
         oa: values.oa,
-        local: values.local_ip ? { ip: values.local_ip, port: values.local_port ?? 2404 } : null,
-        remote: values.remote_ip ? { ip: values.remote_ip, port: values.remote_port ?? 2404 } : null,
+        local: isClientRole
+          ? null
+          : values.local_ip
+            ? { ip: values.local_ip, port: values.local_port ?? DEFAULT_IEC104_PORT }
+            : null,
+        remote: isServerRole
+          ? null
+          : values.remote_ip
+            ? { ip: values.remote_ip, port: values.remote_port ?? DEFAULT_IEC104_PORT }
+            : null,
         apci: {
           k: values.k ?? 12,
           w: values.w ?? 8,
@@ -334,9 +395,9 @@ const IEC104: React.FC = () => {
   const openCreatePoint = useCallback(() => {
     setEditingPointIndex(null);
     pointForm.resetFields();
-    pointForm.setFieldsValue({ scale: 1, offset: 0, deadband: 0 });
+    pointForm.setFieldsValue(getCreatePointInitialValues(points));
     setPointModalOpen(true);
-  }, [pointForm]);
+  }, [pointForm, points]);
 
   const openEditPoint = useCallback(
     (index: number) => {
@@ -510,15 +571,19 @@ const IEC104: React.FC = () => {
                   <Descriptions.Item label="公共地址 (ca)">
                     {selectedLink.config.ca}
                   </Descriptions.Item>
-                  <Descriptions.Item label="本地端点 (local)">
-                    {formatEndpoint(selectedLink.config.local)}
-                  </Descriptions.Item>
+                  {selectedLink.config.role !== ROLE_CLIENT && (
+                    <Descriptions.Item label="本地端点 (local)">
+                      {formatEndpoint(selectedLink.config.local)}
+                    </Descriptions.Item>
+                  )}
                   <Descriptions.Item label="源地址 (oa)">
                     {selectedLink.config.oa}
                   </Descriptions.Item>
-                  <Descriptions.Item label="远程端点 (remote)">
-                    {formatEndpoint(selectedLink.config.remote)}
-                  </Descriptions.Item>
+                  {selectedLink.config.role !== ROLE_SERVER && (
+                    <Descriptions.Item label="远程端点 (remote)">
+                      {formatEndpoint(selectedLink.config.remote)}
+                    </Descriptions.Item>
+                  )}
                   <Descriptions.Item label="APCI 参数">
                     {formatApci(selectedLink.config.apci)}
                   </Descriptions.Item>
@@ -705,22 +770,22 @@ const IEC104: React.FC = () => {
 
           <Text type="secondary" style={{ display: 'block', margin: '8px 0 4px' }}>端点配置</Text>
           <Row gutter={16}>
-            <Col span={9}>
+            <Col span={endpointIpSpan} style={{ display: showLocalEndpointFields ? undefined : 'none' }}>
               <Form.Item name="local_ip" label="本地 IP">
                 <Input placeholder="0.0.0.0" />
               </Form.Item>
             </Col>
-            <Col span={3}>
+            <Col span={endpointPortSpan} style={{ display: showLocalEndpointFields ? undefined : 'none' }}>
               <Form.Item name="local_port" label="端口">
                 <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="2404" />
               </Form.Item>
             </Col>
-            <Col span={9}>
+            <Col span={endpointIpSpan} style={{ display: showRemoteEndpointFields ? undefined : 'none' }}>
               <Form.Item name="remote_ip" label="远程 IP">
                 <Input placeholder="192.168.1.100" />
               </Form.Item>
             </Col>
-            <Col span={3}>
+            <Col span={endpointPortSpan} style={{ display: showRemoteEndpointFields ? undefined : 'none' }}>
               <Form.Item name="remote_port" label="端口">
                 <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="2404" />
               </Form.Item>
@@ -825,7 +890,7 @@ const IEC104: React.FC = () => {
                 label="IOA (信息体地址)"
                 rules={[{ required: true, message: '请输入 IOA' }]}
               >
-                <InputNumber min={0} max={16777215} style={{ width: '100%' }} />
+                <InputNumber min={0} max={MAX_IOA} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
