@@ -3,6 +3,7 @@ import { Button, Card, Descriptions, message, Progress, Space, Tag, Typography }
 import { ReloadOutlined } from '@ant-design/icons';
 import { api } from '../../adapters';
 import type { AppUpdateInfo, AppUpdateStatus, AppUpdateStatusKind } from '../../adapters';
+import { buildFullConfigExportSnapshot, saveFullConfigExport } from '../../utils/config-export';
 
 const { Paragraph } = Typography;
 
@@ -62,6 +63,7 @@ const Settings: React.FC = () => {
   });
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const [isExportingConfig, setIsExportingConfig] = useState(false);
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [totalBytes, setTotalBytes] = useState<number | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
@@ -72,11 +74,7 @@ const Settings: React.FC = () => {
       setAppVersion(version);
     } catch (error) {
       setAppVersion('-');
-      setUpdateStatus((previous) =>
-        previous.kind === 'idle'
-          ? { kind: 'error', message: `读取客户端版本失败: ${error}` }
-          : previous,
-      );
+      console.warn('Failed to read app version:', error);
     }
   }, []);
 
@@ -172,11 +170,28 @@ const Settings: React.FC = () => {
     }
   }, [messageApi]);
 
+  const handleExportConfig = useCallback(async () => {
+    setIsExportingConfig(true);
+
+    try {
+      const snapshot = await buildFullConfigExportSnapshot();
+      const savedPath = await saveFullConfigExport(snapshot);
+
+      if (savedPath) {
+        messageApi.success(`全部配置已导出到: ${savedPath}`);
+      }
+    } catch (error) {
+      messageApi.error(`导出全部配置失败: ${error}`);
+    } finally {
+      setIsExportingConfig(false);
+    }
+  }, [messageApi]);
+
   const downloadPercent =
     totalBytes && totalBytes > 0 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)) : 0;
 
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {contextHolder}
 
       <Card title="应用更新" size="small" bordered>
@@ -234,6 +249,17 @@ const Settings: React.FC = () => {
           </Button>
           <Button onClick={() => void handleRelaunch()} disabled={updateStatus.kind !== 'ready-to-restart'}>
             重启客户端
+          </Button>
+        </Space>
+      </Card>
+
+      <Card title="配置导出" size="small" bordered>
+        <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+          导出当前上位机掌握的全部配置快照，包含 manager 地址、模块启动集、协议模块配置与 DataBus 路由。
+        </Paragraph>
+        <Space wrap>
+          <Button type="primary" onClick={() => void handleExportConfig()} loading={isExportingConfig}>
+            导出全部配置
           </Button>
         </Space>
       </Card>

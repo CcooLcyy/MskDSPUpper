@@ -18,6 +18,7 @@ import type {
   Dlt645Point,
   Dlt645PointTable,
   Dlt645UpdateConfigResponse,
+  FullConfigExportSnapshot,
   Iec104LinkConfig,
   Iec104LinkInfo,
   Iec104Point,
@@ -190,4 +191,7 @@ export const api = {
     invoke<void>('agc_start_group', { groupName }),
   agcStopGroup: (groupName: string) =>
     invoke<void>('agc_stop_group', { groupName }),
+
+  saveFullConfigExport: (filePath: string, snapshot: FullConfigExportSnapshot) =>
+    invoke<string>('save_full_config_export', { filePath, snapshot }),
 };

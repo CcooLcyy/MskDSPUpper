@@ -47,11 +47,18 @@ export type {
 } from './types';
 export type {
   AgcDerivedOutputs,
+  AgcExportTask,
   AgcGroupConfig,
   AgcGroupInfo,
   AgcMemberConfig,
   AgcSignalSpec,
   AgcStrategyConfig,
   AgcValueSpec,
+  Dlt645ExportTask,
+  FullConfigExportSnapshot,
+  Iec104ExportTask,
+  ModbusRtuExportTask,
+  StableDataBusEndpoint,
+  StableDataBusRoute,
 } from './types';
 export { api } from './tauri';

@@ -345,3 +345,89 @@ export interface AgcGroupInfo {
   state: number;
   last_error: string;
 }
+
+export interface Iec104ExportTask {
+  link: {
+    config: Iec104LinkConfig;
+  };
+  point_table: {
+    conn_name: string;
+    points: Iec104Point[];
+    replace: true;
+  };
+}
+
+export interface ModbusRtuExportTask {
+  link: {
+    config: ModbusLinkConfig;
+  };
+  point_table: {
+    conn_name: string;
+    points: ModbusPoint[];
+    replace: true;
+  };
+}
+
+export interface Dlt645ExportTask {
+  link: {
+    config: Dlt645LinkConfig;
+  };
+  point_table: {
+    conn_name: string;
+    points: Dlt645Point[];
+    blocks: Dlt645Block[];
+    replace: true;
+  };
+}
+
+export interface AgcExportTask {
+  upsert: {
+    config: AgcGroupConfig;
+  };
+}
+
+export interface StableDataBusEndpoint {
+  module_name: string;
+  conn_name: string;
+  tag: string;
+}
+
+export interface StableDataBusRoute {
+  src: StableDataBusEndpoint;
+  dst: StableDataBusEndpoint;
+}
+
+export interface FullConfigExportSnapshot {
+  schema_version: 1;
+  exported_at: string;
+  source: {
+    app_version?: string;
+    manager_addr: string;
+  };
+  module_startup: {
+    source: 'get_running_module_info';
+    modules: string[];
+  };
+  config: {
+    iec104: {
+      links: Iec104ExportTask[];
+    };
+    modbus_rtu: {
+      mqtt: ModbusMqttConfig | null;
+      links: ModbusRtuExportTask[];
+    };
+    dlt645: {
+      mqtt: Dlt645MqttConfig | null;
+      links: Dlt645ExportTask[];
+    };
+    agc: {
+      groups: AgcExportTask[];
+    };
+    data_bus: {
+      routes: {
+        replace: true;
+        items: StableDataBusRoute[];
+      };
+    };
+  };
+}
