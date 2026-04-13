@@ -3,8 +3,8 @@ use tauri::State;
 
 use crate::grpc::agc::AgcClient;
 use crate::proto::agc_proto::{
-    DerivedOutputs, GroupConfig, GroupInfo, MemberConfig, SignalSpec, StrategyConfig, ValueSpec,
-    WeightedStrategyConfig, strategy_config,
+    strategy_config, DerivedOutputs, GroupConfig, GroupInfo, MemberConfig, SignalSpec,
+    StrategyConfig, ValueSpec, WeightedStrategyConfig,
 };
 use crate::state::AppState;
 
@@ -129,7 +129,11 @@ impl From<GroupConfig> for GroupConfigDto {
             group_name: config.group_name,
             p_cmd: config.p_cmd.map(|value| value.into()),
             strategy: config.strategy.map(|strategy| strategy.into()),
-            members: config.members.into_iter().map(|member| member.into()).collect(),
+            members: config
+                .members
+                .into_iter()
+                .map(|member| member.into())
+                .collect(),
             outputs: config.outputs.map(|outputs| outputs.into()),
         }
     }
@@ -253,7 +257,11 @@ pub async fn agc_get_group(
 pub async fn agc_list_groups(state: State<'_, AppState>) -> Result<Vec<GroupInfoDto>, String> {
     let client = AgcClient::new(&state.conn_manager);
     let groups = client.list_groups().await.map_err(|e| e.to_string())?;
-    Ok(groups.groups.into_iter().map(|group| group.into()).collect())
+    Ok(groups
+        .groups
+        .into_iter()
+        .map(|group| group.into())
+        .collect())
 }
 
 #[tauri::command]
@@ -270,10 +278,7 @@ pub async fn agc_delete_group(
 }
 
 #[tauri::command]
-pub async fn agc_start_group(
-    state: State<'_, AppState>,
-    group_name: String,
-) -> Result<(), String> {
+pub async fn agc_start_group(state: State<'_, AppState>, group_name: String) -> Result<(), String> {
     let client = AgcClient::new(&state.conn_manager);
     client
         .start_group(group_name)
@@ -283,10 +288,7 @@ pub async fn agc_start_group(
 }
 
 #[tauri::command]
-pub async fn agc_stop_group(
-    state: State<'_, AppState>,
-    group_name: String,
-) -> Result<(), String> {
+pub async fn agc_stop_group(state: State<'_, AppState>, group_name: String) -> Result<(), String> {
     let client = AgcClient::new(&state.conn_manager);
     client
         .stop_group(group_name)

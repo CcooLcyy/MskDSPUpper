@@ -2,8 +2,8 @@ use anyhow::Result;
 
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::data_center_proto::{
-    data_center_service_client::DataCenterServiceClient, ConnTags, DeleteRoutesRequest,
-    Empty, GetConnTagsRequest, GetLatestRequest, GetLatestResponse, ListConnectionsResponse,
+    data_center_service_client::DataCenterServiceClient, ConnTags, DeleteRoutesRequest, Empty,
+    GetConnTagsRequest, GetLatestRequest, GetLatestResponse, ListConnectionsResponse,
     ListRoutesRequest, ListRoutesResponse, Route, UpsertRoutesRequest,
 };
 
@@ -29,17 +29,12 @@ impl<'a> DataCenterClient<'a> {
     pub async fn get_conn_tags(&self, conn_id: u32) -> Result<ConnTags> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
-        let resp = client
-            .get_conn_tags(GetConnTagsRequest { conn_id })
-            .await?;
+        let resp = client.get_conn_tags(GetConnTagsRequest { conn_id }).await?;
         Ok(resp.into_inner())
     }
 
     /// 列出路由
-    pub async fn list_routes(
-        &self,
-        request: ListRoutesRequest,
-    ) -> Result<ListRoutesResponse> {
+    pub async fn list_routes(&self, request: ListRoutesRequest) -> Result<ListRoutesResponse> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
         let resp = client.list_routes(request).await?;
@@ -60,9 +55,7 @@ impl<'a> DataCenterClient<'a> {
     pub async fn delete_routes(&self, routes: Vec<Route>) -> Result<()> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
-        client
-            .delete_routes(DeleteRoutesRequest { routes })
-            .await?;
+        client.delete_routes(DeleteRoutesRequest { routes }).await?;
         Ok(())
     }
 

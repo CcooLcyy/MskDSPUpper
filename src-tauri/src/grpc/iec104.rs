@@ -2,9 +2,9 @@ use anyhow::Result;
 
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::iec104_proto::{
-    DeleteLinkRequest, Empty, GetLinkRequest, GetPointTableRequest, LinkConfig, LinkInfo,
-    Point, PointTable, SendTimeSyncRequest, StartLinkRequest, StopLinkRequest,
-    UpsertLinkRequest, UpsertPointTableRequest, iec104_service_client::Iec104ServiceClient,
+    iec104_service_client::Iec104ServiceClient, DeleteLinkRequest, Empty, GetLinkRequest,
+    GetPointTableRequest, LinkConfig, LinkInfo, Point, PointTable, SendTimeSyncRequest,
+    StartLinkRequest, StopLinkRequest, UpsertLinkRequest, UpsertPointTableRequest,
 };
 
 pub struct Iec104Client<'a> {

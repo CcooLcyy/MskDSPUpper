@@ -2,10 +2,10 @@ use anyhow::Result;
 
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::dlt645_proto::{
-    dlt645_service_client::Dlt645ServiceClient, Block, DeleteLinkRequest, Empty,
-    GetLinkRequest, GetPointTableRequest, LinkConfig, LinkInfo, ListLinksResponse, MqttConfig,
-    Point, PointTable, StartLinkRequest, StopLinkRequest, UpdateConfigRequest,
-    UpdateConfigResponse, UpsertLinkRequest, UpsertPointTableRequest,
+    dlt645_service_client::Dlt645ServiceClient, Block, DeleteLinkRequest, Empty, GetLinkRequest,
+    GetPointTableRequest, LinkConfig, LinkInfo, ListLinksResponse, MqttConfig, Point, PointTable,
+    StartLinkRequest, StopLinkRequest, UpdateConfigRequest, UpdateConfigResponse,
+    UpsertLinkRequest, UpsertPointTableRequest,
 };
 
 pub struct Dlt645Client<'a> {

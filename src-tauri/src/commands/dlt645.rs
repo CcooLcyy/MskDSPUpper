@@ -357,10 +357,7 @@ pub async fn dlt645_start_link(
 }
 
 #[tauri::command]
-pub async fn dlt645_stop_link(
-    state: State<'_, AppState>,
-    conn_name: String,
-) -> Result<(), String> {
+pub async fn dlt645_stop_link(state: State<'_, AppState>, conn_name: String) -> Result<(), String> {
     let client = Dlt645Client::new(&state.conn_manager);
     client
         .stop_link(conn_name)

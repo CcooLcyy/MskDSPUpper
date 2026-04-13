@@ -2,9 +2,8 @@ use anyhow::Result;
 
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::agc_proto::{
-    DeleteGroupRequest, Empty, GetGroupRequest, GroupConfig, GroupInfo, ListGroupsResponse,
-    StartGroupRequest, StopGroupRequest, UpsertGroupRequest,
-    agc_service_client::AgcServiceClient,
+    agc_service_client::AgcServiceClient, DeleteGroupRequest, Empty, GetGroupRequest, GroupConfig,
+    GroupInfo, ListGroupsResponse, StartGroupRequest, StopGroupRequest, UpsertGroupRequest,
 };
 
 pub struct AgcClient<'a> {
@@ -45,7 +44,9 @@ impl<'a> AgcClient<'a> {
     pub async fn delete_group(&self, group_name: String) -> Result<()> {
         let channel = self.conn.module_channel("AGC").await?;
         let mut client = AgcServiceClient::new(channel);
-        client.delete_group(DeleteGroupRequest { group_name }).await?;
+        client
+            .delete_group(DeleteGroupRequest { group_name })
+            .await?;
         Ok(())
     }
 

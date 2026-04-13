@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::grpc::iec104::Iec104Client;
-use crate::proto::iec104_proto::{ApciParameters, Endpoint, LinkConfig, LinkInfo, Point, PointTable};
+use crate::proto::iec104_proto::{
+    ApciParameters, Endpoint, LinkConfig, LinkInfo, Point, PointTable,
+};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -256,10 +258,7 @@ pub async fn iec104_start_link(
 }
 
 #[tauri::command]
-pub async fn iec104_stop_link(
-    state: State<'_, AppState>,
-    conn_name: String,
-) -> Result<(), String> {
+pub async fn iec104_stop_link(state: State<'_, AppState>, conn_name: String) -> Result<(), String> {
     let client = Iec104Client::new(&state.conn_manager);
     client
         .stop_link(conn_name)

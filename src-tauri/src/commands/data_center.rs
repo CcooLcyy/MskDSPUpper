@@ -3,8 +3,7 @@ use tauri::State;
 
 use crate::grpc::data_center::DataCenterClient;
 use crate::proto::data_center_proto::{
-    ConnectionInfo, Endpoint, GetLatestRequest, ListRoutesRequest, PointUpdate, Route,
-    point_value,
+    point_value, ConnectionInfo, Endpoint, GetLatestRequest, ListRoutesRequest, PointUpdate, Route,
 };
 use crate::state::AppState;
 
@@ -154,10 +153,7 @@ pub async fn dc_list_connections(
     state: State<'_, AppState>,
 ) -> Result<Vec<ConnectionInfoDto>, String> {
     let client = DataCenterClient::new(&state.conn_manager);
-    let resp = client
-        .list_connections()
-        .await
-        .map_err(|e| e.to_string())?;
+    let resp = client.list_connections().await.map_err(|e| e.to_string())?;
     Ok(resp.conns.into_iter().map(|c| c.into()).collect())
 }
 
@@ -203,10 +199,7 @@ pub async fn dc_upsert_routes(
 ) -> Result<(), String> {
     let client = DataCenterClient::new(&state.conn_manager);
     client
-        .upsert_routes(
-            routes.into_iter().map(|r| r.to_proto()).collect(),
-            replace,
-        )
+        .upsert_routes(routes.into_iter().map(|r| r.to_proto()).collect(), replace)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())

@@ -2,10 +2,10 @@ use anyhow::Result;
 
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::modbus_rtu_proto::{
-    modbus_rtu_service_client::ModbusRtuServiceClient, DeleteLinkRequest, Empty,
-    GetLinkRequest, GetPointTableRequest, LinkConfig, LinkInfo, MqttConfig, Point, PointTable,
-    StartLinkRequest, StopLinkRequest, UpdateConfigRequest, UpdateConfigResponse,
-    UpsertLinkRequest, UpsertPointTableRequest,
+    modbus_rtu_service_client::ModbusRtuServiceClient, DeleteLinkRequest, Empty, GetLinkRequest,
+    GetPointTableRequest, LinkConfig, LinkInfo, MqttConfig, Point, PointTable, StartLinkRequest,
+    StopLinkRequest, UpdateConfigRequest, UpdateConfigResponse, UpsertLinkRequest,
+    UpsertPointTableRequest,
 };
 
 pub struct ModbusRtuClient<'a> {

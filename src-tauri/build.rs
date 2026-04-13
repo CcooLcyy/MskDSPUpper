@@ -6,9 +6,8 @@ fn main() {
     tauri_build::build();
 
     // Proto files are provided by the repository-local submodule at ../proto.
-    let manifest_dir = PathBuf::from(
-        env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not set"),
-    );
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not set"));
     let proto_dir = manifest_dir.join("..").join("proto");
     let proto_out_dir = manifest_dir.join("src").join("proto_gen");
 
