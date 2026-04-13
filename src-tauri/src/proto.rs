@@ -33,6 +33,10 @@ pub mod config_pusher_proto {
     include!("proto_gen/config_pusher_proto.rs");
 }
 
+pub mod export_config_proto {
+    include!("proto_gen/export_config_proto.rs");
+}
+
 pub mod mqtt_manager_proto {
     include!("proto_gen/mqtt_manager_proto.rs");
 }

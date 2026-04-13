@@ -203,7 +203,7 @@ impl From<UpdateConfigResponse> for Dlt645UpdateConfigResponseDto {
 }
 
 impl Dlt645MqttConfigDto {
-    fn to_proto(&self) -> ProtoMqttConfig {
+    pub(crate) fn to_proto(&self) -> ProtoMqttConfig {
         ProtoMqttConfig {
             host: self.host.clone(),
             port: self.port,
@@ -218,7 +218,7 @@ impl Dlt645MqttConfigDto {
 }
 
 impl Dlt645LinkConfigDto {
-    fn to_proto(&self) -> LinkConfig {
+    pub(crate) fn to_proto(&self) -> LinkConfig {
         LinkConfig {
             conn_name: self.conn_name.clone(),
             protocol_variant: self.protocol_variant,
@@ -242,7 +242,7 @@ impl Dlt645LinkConfigDto {
 }
 
 impl Dlt645PointDto {
-    fn to_proto(&self) -> Point {
+    pub(crate) fn to_proto(&self) -> Point {
         Point {
             tag: self.tag.clone(),
             di: self.di.clone(),
@@ -257,7 +257,7 @@ impl Dlt645PointDto {
 }
 
 impl Dlt645BlockItemDto {
-    fn to_proto(&self) -> BlockItem {
+    pub(crate) fn to_proto(&self) -> BlockItem {
         BlockItem {
             tag: self.tag.clone(),
             data_len: self.data_len,
@@ -272,7 +272,7 @@ impl Dlt645BlockItemDto {
 }
 
 impl Dlt645BlockDto {
-    fn to_proto(&self) -> Block {
+    pub(crate) fn to_proto(&self) -> Block {
         Block {
             block_di: self.block_di.clone(),
             block_data_len: self.block_data_len,

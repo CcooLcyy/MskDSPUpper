@@ -206,7 +206,7 @@ impl From<UpdateConfigResponse> for ModbusUpdateConfigResponseDto {
 }
 
 impl ModbusSerialConfigDto {
-    fn to_proto(&self) -> SerialConfig {
+    pub(crate) fn to_proto(&self) -> SerialConfig {
         SerialConfig {
             device: self.device.clone(),
             baud_rate: self.baud_rate,
@@ -219,7 +219,7 @@ impl ModbusSerialConfigDto {
 }
 
 impl ModbusMqttConfigDto {
-    fn to_proto(&self) -> ProtoMqttConfig {
+    pub(crate) fn to_proto(&self) -> ProtoMqttConfig {
         ProtoMqttConfig {
             host: self.host.clone(),
             port: self.port,
@@ -234,7 +234,7 @@ impl ModbusMqttConfigDto {
 }
 
 impl ModbusReadBlockDto {
-    fn to_proto(&self) -> ReadBlock {
+    pub(crate) fn to_proto(&self) -> ReadBlock {
         ReadBlock {
             function: self.function,
             start: self.start,
@@ -244,7 +244,7 @@ impl ModbusReadBlockDto {
 }
 
 impl ModbusReadPlanDto {
-    fn to_proto(&self) -> ReadPlan {
+    pub(crate) fn to_proto(&self) -> ReadPlan {
         ReadPlan {
             mode: self.mode,
             blocks: self.blocks.iter().map(|block| block.to_proto()).collect(),
@@ -253,7 +253,7 @@ impl ModbusReadPlanDto {
 }
 
 impl ModbusLinkConfigDto {
-    fn to_proto(&self) -> LinkConfig {
+    pub(crate) fn to_proto(&self) -> LinkConfig {
         LinkConfig {
             conn_name: self.conn_name.clone(),
             serial: self.serial.as_ref().map(|serial| serial.to_proto()),
@@ -272,7 +272,7 @@ impl ModbusLinkConfigDto {
 }
 
 impl ModbusPointDto {
-    fn to_proto(&self) -> Point {
+    pub(crate) fn to_proto(&self) -> Point {
         Point {
             tag: self.tag.clone(),
             function: self.function,

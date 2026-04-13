@@ -140,7 +140,7 @@ impl From<PointTable> for PointTableDto {
 }
 
 impl EndpointDto {
-    fn to_proto(&self) -> Endpoint {
+    pub(crate) fn to_proto(&self) -> Endpoint {
         Endpoint {
             ip: self.ip.clone(),
             port: self.port,
@@ -149,7 +149,7 @@ impl EndpointDto {
 }
 
 impl ApciParametersDto {
-    fn to_proto(&self) -> ApciParameters {
+    pub(crate) fn to_proto(&self) -> ApciParameters {
         ApciParameters {
             k: self.k,
             w: self.w,
@@ -162,7 +162,7 @@ impl ApciParametersDto {
 }
 
 impl LinkConfigDto {
-    fn to_proto(&self) -> LinkConfig {
+    pub(crate) fn to_proto(&self) -> LinkConfig {
         LinkConfig {
             conn_name: self.conn_name.clone(),
             role: self.role,
@@ -183,7 +183,7 @@ impl LinkConfigDto {
 }
 
 impl PointDto {
-    fn to_proto(&self) -> Point {
+    pub(crate) fn to_proto(&self) -> Point {
         Point {
             tag: self.tag.clone(),
             ioa: self.ioa,

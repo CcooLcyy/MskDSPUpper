@@ -147,7 +147,7 @@ impl From<GroupInfo> for GroupInfoDto {
 }
 
 impl SignalSpecDto {
-    fn to_proto(&self) -> SignalSpec {
+    pub(crate) fn to_proto(&self) -> SignalSpec {
         SignalSpec {
             tag: self.tag.clone(),
             unit: self.unit.clone(),
@@ -158,7 +158,7 @@ impl SignalSpecDto {
 }
 
 impl ValueSpecDto {
-    fn to_proto(&self) -> ValueSpec {
+    pub(crate) fn to_proto(&self) -> ValueSpec {
         ValueSpec {
             signal: self.signal.as_ref().map(|signal| signal.to_proto()),
             mode: self.mode,
@@ -169,9 +169,11 @@ impl ValueSpecDto {
 }
 
 impl StrategyConfigDto {
-    fn to_proto(&self) -> StrategyConfig {
+    pub(crate) fn to_proto(&self) -> StrategyConfig {
         let strategy = match self.strategy_type.as_str() {
-            "weighted" => Some(strategy_config::Strategy::Weighted(WeightedStrategyConfig {})),
+            "weighted" => Some(strategy_config::Strategy::Weighted(
+                WeightedStrategyConfig {},
+            )),
             _ => None,
         };
 
@@ -180,7 +182,7 @@ impl StrategyConfigDto {
 }
 
 impl MemberConfigDto {
-    fn to_proto(&self) -> MemberConfig {
+    pub(crate) fn to_proto(&self) -> MemberConfig {
         MemberConfig {
             member_name: self.member_name.clone(),
             controllable: self.controllable,
@@ -195,7 +197,7 @@ impl MemberConfigDto {
 }
 
 impl DerivedOutputsDto {
-    fn to_proto(&self) -> DerivedOutputs {
+    pub(crate) fn to_proto(&self) -> DerivedOutputs {
         DerivedOutputs {
             p_total_meas: self.p_total_meas.as_ref().map(|signal| signal.to_proto()),
             p_total_target: self.p_total_target.as_ref().map(|signal| signal.to_proto()),
@@ -205,7 +207,7 @@ impl DerivedOutputsDto {
 }
 
 impl GroupConfigDto {
-    fn to_proto(&self) -> GroupConfig {
+    pub(crate) fn to_proto(&self) -> GroupConfig {
         GroupConfig {
             group_name: self.group_name.clone(),
             p_cmd: self.p_cmd.as_ref().map(|value| value.to_proto()),
