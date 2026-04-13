@@ -180,6 +180,26 @@ impl FullConfigExportSnapshotDto {
             data_bus: Some(self.config.data_bus.to_proto()),
         })
     }
+
+    fn from_proto(export: FullConfigExport) -> Result<Self, String> {
+        if export.schema_version == 0 {
+            return Err("Invalid config export: schema_version must be greater than 0".to_string());
+        }
+
+        Ok(Self {
+            schema_version: export.schema_version,
+            exported_at: export.exported_at,
+            source: export
+                .source
+                .map(ExportSourceDto::from_proto)
+                .unwrap_or_else(|| ExportSourceDto {
+                    manager_addr: String::new(),
+                    app_version: None,
+                }),
+            module_startup: ModuleStartupDto::from_proto(export.module_startup)?,
+            config: FullConfigExportConfigDto::from_proto(export.config, export.data_bus)?,
+        })
+    }
 }
 
 impl ExportSourceDto {
@@ -187,6 +207,13 @@ impl ExportSourceDto {
         SourceInfo {
             manager_addr: self.manager_addr.clone(),
             app_version: self.app_version.clone(),
+        }
+    }
+
+    fn from_proto(source: SourceInfo) -> Self {
+        Self {
+            manager_addr: source.manager_addr,
+            app_version: source.app_version,
         }
     }
 }
@@ -207,6 +234,30 @@ impl ModuleStartupDto {
             modules: self.modules.clone(),
         })
     }
+
+    fn from_proto(startup: Option<ModuleStartup>) -> Result<Self, String> {
+        let Some(startup) = startup else {
+            return Ok(Self {
+                source: String::new(),
+                modules: Vec::new(),
+            });
+        };
+
+        let source = match startup.source {
+            MODULE_STARTUP_SOURCE_RUNNING_MODULE_INFO => "get_running_module_info".to_string(),
+            0 => String::new(),
+            other => {
+                return Err(format!(
+                    "Unsupported module_startup.source value in config export: {other}"
+                ))
+            }
+        };
+
+        Ok(Self {
+            source,
+            modules: startup.modules,
+        })
+    }
 }
 
 impl FullConfigExportConfigDto {
@@ -218,6 +269,26 @@ impl FullConfigExportConfigDto {
             agc: Some(self.agc.to_proto()),
         }
     }
+
+    fn from_proto(
+        config: Option<Config>,
+        data_bus: Option<ExportDataBusConfig>,
+    ) -> Result<Self, String> {
+        let config = config.unwrap_or(Config {
+            iec104: None,
+            modbus_rtu: None,
+            dlt645: None,
+            agc: None,
+        });
+
+        Ok(Self {
+            iec104: Iec104ExportConfigDto::from_proto(config.iec104)?,
+            modbus_rtu: ModbusRtuExportConfigDto::from_proto(config.modbus_rtu)?,
+            dlt645: Dlt645ExportConfigDto::from_proto(config.dlt645)?,
+            agc: AgcExportConfigDto::from_proto(config.agc)?,
+            data_bus: DataBusExportConfigDto::from_proto(data_bus)?,
+        })
+    }
 }
 
 impl Iec104ExportConfigDto {
@@ -225,6 +296,21 @@ impl Iec104ExportConfigDto {
         Iec104Config {
             links: self.links.iter().map(|task| task.to_proto()).collect(),
         }
+    }
+
+    fn from_proto(config: Option<Iec104Config>) -> Result<Self, String> {
+        let Some(config) = config else {
+            return Ok(Self { links: Vec::new() });
+        };
+
+        Ok(Self {
+            links: config
+                .links
+                .into_iter()
+                .enumerate()
+                .map(|(index, task)| Iec104ExportTaskDto::from_proto(index, task))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
@@ -248,6 +334,40 @@ impl Iec104ExportTaskDto {
             start: false,
         }
     }
+
+    fn from_proto(index: usize, task: Iec104LinkTask) -> Result<Self, String> {
+        let link = task
+            .link
+            .ok_or_else(|| format!("IEC104 export task #{index} is missing link"))?;
+        let config = link
+            .config
+            .ok_or_else(|| format!("IEC104 export task #{index} is missing link.config"))?;
+        let fallback_conn_name = config.conn_name.clone();
+
+        let point_table = match task.point_table {
+            Some(point_table) => Iec104PointTableRequestDto {
+                conn_name: if point_table.conn_name.is_empty() {
+                    fallback_conn_name
+                } else {
+                    point_table.conn_name
+                },
+                points: point_table.points.into_iter().map(Into::into).collect(),
+                replace: point_table.replace,
+            },
+            None => Iec104PointTableRequestDto {
+                conn_name: fallback_conn_name,
+                points: Vec::new(),
+                replace: false,
+            },
+        };
+
+        Ok(Self {
+            link: Iec104LinkRequestDto {
+                config: config.into(),
+            },
+            point_table,
+        })
+    }
 }
 
 impl ModbusRtuExportConfigDto {
@@ -256,6 +376,25 @@ impl ModbusRtuExportConfigDto {
             links: self.links.iter().map(|task| task.to_proto()).collect(),
             mqtt: self.mqtt.as_ref().map(|mqtt| mqtt.to_proto()),
         }
+    }
+
+    fn from_proto(config: Option<ModbusRtuConfig>) -> Result<Self, String> {
+        let Some(config) = config else {
+            return Ok(Self {
+                mqtt: None,
+                links: Vec::new(),
+            });
+        };
+
+        Ok(Self {
+            mqtt: config.mqtt.map(Into::into),
+            links: config
+                .links
+                .into_iter()
+                .enumerate()
+                .map(|(index, task)| ModbusRtuExportTaskDto::from_proto(index, task))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
@@ -279,6 +418,40 @@ impl ModbusRtuExportTaskDto {
             start: false,
         }
     }
+
+    fn from_proto(index: usize, task: ModbusRtuLinkTask) -> Result<Self, String> {
+        let link = task
+            .link
+            .ok_or_else(|| format!("Modbus RTU export task #{index} is missing link"))?;
+        let config = link
+            .config
+            .ok_or_else(|| format!("Modbus RTU export task #{index} is missing link.config"))?;
+        let fallback_conn_name = config.conn_name.clone();
+
+        let point_table = match task.point_table {
+            Some(point_table) => ModbusRtuPointTableRequestDto {
+                conn_name: if point_table.conn_name.is_empty() {
+                    fallback_conn_name
+                } else {
+                    point_table.conn_name
+                },
+                points: point_table.points.into_iter().map(Into::into).collect(),
+                replace: point_table.replace,
+            },
+            None => ModbusRtuPointTableRequestDto {
+                conn_name: fallback_conn_name,
+                points: Vec::new(),
+                replace: false,
+            },
+        };
+
+        Ok(Self {
+            link: ModbusRtuLinkRequestDto {
+                config: config.into(),
+            },
+            point_table,
+        })
+    }
 }
 
 impl Dlt645ExportConfigDto {
@@ -287,6 +460,25 @@ impl Dlt645ExportConfigDto {
             mqtt: self.mqtt.as_ref().map(|mqtt| mqtt.to_proto()),
             links: self.links.iter().map(|task| task.to_proto()).collect(),
         }
+    }
+
+    fn from_proto(config: Option<Dlt645Config>) -> Result<Self, String> {
+        let Some(config) = config else {
+            return Ok(Self {
+                mqtt: None,
+                links: Vec::new(),
+            });
+        };
+
+        Ok(Self {
+            mqtt: config.mqtt.map(Into::into),
+            links: config
+                .links
+                .into_iter()
+                .enumerate()
+                .map(|(index, task)| Dlt645ExportTaskDto::from_proto(index, task))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
@@ -317,6 +509,48 @@ impl Dlt645ExportTaskDto {
             device_nos: Vec::new(),
         }
     }
+
+    fn from_proto(index: usize, task: Dlt645LinkTask) -> Result<Self, String> {
+        if !task.device_nos.is_empty() {
+            return Err(format!(
+                "DLT645 export task #{index} uses device_nos expansion, which is not supported by the current import DTO"
+            ));
+        }
+
+        let link = task
+            .link
+            .ok_or_else(|| format!("DLT645 export task #{index} is missing link"))?;
+        let config = link
+            .config
+            .ok_or_else(|| format!("DLT645 export task #{index} is missing link.config"))?;
+        let fallback_conn_name = config.conn_name.clone();
+
+        let point_table = match task.point_table {
+            Some(point_table) => Dlt645PointTableRequestDto {
+                conn_name: if point_table.conn_name.is_empty() {
+                    fallback_conn_name
+                } else {
+                    point_table.conn_name
+                },
+                points: point_table.points.into_iter().map(Into::into).collect(),
+                blocks: point_table.blocks.into_iter().map(Into::into).collect(),
+                replace: point_table.replace,
+            },
+            None => Dlt645PointTableRequestDto {
+                conn_name: fallback_conn_name,
+                points: Vec::new(),
+                blocks: Vec::new(),
+                replace: false,
+            },
+        };
+
+        Ok(Self {
+            link: Dlt645LinkRequestDto {
+                config: config.into(),
+            },
+            point_table,
+        })
+    }
 }
 
 impl AgcExportConfigDto {
@@ -324,6 +558,21 @@ impl AgcExportConfigDto {
         AgcConfig {
             groups: self.groups.iter().map(|task| task.to_proto()).collect(),
         }
+    }
+
+    fn from_proto(config: Option<AgcConfig>) -> Result<Self, String> {
+        let Some(config) = config else {
+            return Ok(Self { groups: Vec::new() });
+        };
+
+        Ok(Self {
+            groups: config
+                .groups
+                .into_iter()
+                .enumerate()
+                .map(|(index, task)| AgcExportTaskDto::from_proto(index, task))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
@@ -337,6 +586,21 @@ impl AgcExportTaskDto {
             start: false,
         }
     }
+
+    fn from_proto(index: usize, task: AgcGroupTask) -> Result<Self, String> {
+        let upsert = task
+            .upsert
+            .ok_or_else(|| format!("AGC export group #{index} is missing upsert"))?;
+        let config = upsert
+            .config
+            .ok_or_else(|| format!("AGC export group #{index} is missing upsert.config"))?;
+
+        Ok(Self {
+            upsert: AgcUpsertRequestDto {
+                config: config.into(),
+            },
+        })
+    }
 }
 
 impl DataBusExportConfigDto {
@@ -344,6 +608,12 @@ impl DataBusExportConfigDto {
         ExportDataBusConfig {
             routes: Some(self.routes.to_proto()),
         }
+    }
+
+    fn from_proto(data_bus: Option<ExportDataBusConfig>) -> Result<Self, String> {
+        Ok(Self {
+            routes: DataBusRoutesDto::from_proto(data_bus.and_then(|config| config.routes))?,
+        })
     }
 }
 
@@ -354,6 +624,25 @@ impl DataBusRoutesDto {
             replace: self.replace,
         }
     }
+
+    fn from_proto(routes: Option<DataCenterRoutes>) -> Result<Self, String> {
+        let Some(routes) = routes else {
+            return Ok(Self {
+                replace: false,
+                items: Vec::new(),
+            });
+        };
+
+        Ok(Self {
+            replace: routes.replace,
+            items: routes
+                .routes
+                .into_iter()
+                .enumerate()
+                .map(|(index, route)| StableDataBusRouteDto::from_proto(index, route))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
 }
 
 impl StableDataBusRouteDto {
@@ -363,6 +652,20 @@ impl StableDataBusRouteDto {
             dst: Some(self.dst.to_proto()),
         }
     }
+
+    fn from_proto(index: usize, route: DataCenterRoute) -> Result<Self, String> {
+        let src = route
+            .src
+            .ok_or_else(|| format!("Data bus route #{index} is missing src"))?;
+        let dst = route
+            .dst
+            .ok_or_else(|| format!("Data bus route #{index} is missing dst"))?;
+
+        Ok(Self {
+            src: StableDataBusEndpointDto::from_proto(src),
+            dst: StableDataBusEndpointDto::from_proto(dst),
+        })
+    }
 }
 
 impl StableDataBusEndpointDto {
@@ -371,6 +674,14 @@ impl StableDataBusEndpointDto {
             module_name: self.module_name.clone(),
             conn_name: self.conn_name.clone(),
             tag: self.tag.clone(),
+        }
+    }
+
+    fn from_proto(endpoint: DataCenterEndpoint) -> Self {
+        Self {
+            module_name: endpoint.module_name,
+            conn_name: endpoint.conn_name,
+            tag: endpoint.tag,
         }
     }
 }
@@ -389,6 +700,15 @@ fn ensure_export_path(file_path: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn ensure_import_path(file_path: &str) -> Result<PathBuf, String> {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return Err("Import path cannot be empty".to_string());
+    }
+
+    Ok(PathBuf::from(trimmed))
+}
+
 fn write_export_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -397,6 +717,24 @@ fn write_export_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     }
 
     fs::write(path, bytes).map_err(|err| err.to_string())
+}
+
+fn decode_full_config_export(bytes: &[u8]) -> Result<FullConfigExportSnapshotDto, String> {
+    let export = FullConfigExport::decode(bytes).map_err(|err| {
+        format!("Failed to decode .mskcfg file as FullConfigExport protobuf: {err}")
+    })?;
+
+    FullConfigExportSnapshotDto::from_proto(export)
+}
+
+fn read_full_config_export_snapshot(path: &Path) -> Result<FullConfigExportSnapshotDto, String> {
+    let bytes = fs::read(path).map_err(|err| {
+        format!(
+            "Failed to read config export file '{}': {err}",
+            path.display()
+        )
+    })?;
+    decode_full_config_export(&bytes)
 }
 
 #[tauri::command]
@@ -414,8 +752,21 @@ pub async fn save_full_config_export(
     Ok(final_path.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+pub async fn load_full_config_export(
+    file_path: String,
+) -> Result<FullConfigExportSnapshotDto, String> {
+    let import_path = ensure_import_path(&file_path)?;
+    read_full_config_export_snapshot(&import_path)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use prost::Message;
 
     use super::{
@@ -431,6 +782,12 @@ mod tests {
             path.extension().and_then(|value| value.to_str()),
             Some("mskcfg")
         );
+    }
+
+    #[test]
+    fn ensure_import_path_rejects_empty_value() {
+        let err = super::ensure_import_path("   ").unwrap_err();
+        assert_eq!(err, "Import path cannot be empty");
     }
 
     #[test]
@@ -470,13 +827,12 @@ mod tests {
         let mut bytes = Vec::new();
         export.encode(&mut bytes).unwrap();
 
-        let decoded =
-            crate::proto::export_config_proto::FullConfigExport::decode(bytes.as_slice()).unwrap();
-        assert_eq!(decoded.schema_version, 1);
-        assert_eq!(decoded.exported_at, "2026-04-10T10:00:00Z");
-        assert_eq!(decoded.source.unwrap().manager_addr, "127.0.0.1:17000");
-        assert_eq!(decoded.module_startup.unwrap().modules.len(), 2);
-        assert!(decoded.data_bus.unwrap().routes.unwrap().replace);
+        let decoded_snapshot = super::decode_full_config_export(bytes.as_slice()).unwrap();
+        assert_eq!(decoded_snapshot.schema_version, 1);
+        assert_eq!(decoded_snapshot.exported_at, "2026-04-10T10:00:00Z");
+        assert_eq!(decoded_snapshot.source.manager_addr, "127.0.0.1:17000");
+        assert_eq!(decoded_snapshot.module_startup.modules.len(), 2);
+        assert!(decoded_snapshot.config.data_bus.routes.replace);
     }
 
     #[test]
@@ -487,5 +843,81 @@ mod tests {
         };
 
         assert!(startup.to_proto().is_err());
+    }
+
+    #[test]
+    fn zero_schema_version_is_rejected_on_import() {
+        let err = FullConfigExportSnapshotDto::from_proto(
+            crate::proto::export_config_proto::FullConfigExport {
+                schema_version: 0,
+                exported_at: String::new(),
+                source: None,
+                module_startup: None,
+                config: None,
+                data_bus: None,
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            "Invalid config export: schema_version must be greater than 0"
+        );
+    }
+
+    #[test]
+    fn prost_decode_errors_are_wrapped_with_clear_message() {
+        let err = super::decode_full_config_export(&[0xFF]).unwrap_err();
+        assert!(err.contains("Failed to decode .mskcfg file as FullConfigExport protobuf"));
+    }
+
+    #[test]
+    fn read_full_config_export_snapshot_reads_file_contents() {
+        let snapshot = FullConfigExportSnapshotDto {
+            schema_version: 1,
+            exported_at: "2026-04-10T10:00:00Z".to_string(),
+            source: ExportSourceDto {
+                manager_addr: "127.0.0.1:17000".to_string(),
+                app_version: Some("0.1.0".to_string()),
+            },
+            module_startup: ModuleStartupDto {
+                source: "get_running_module_info".to_string(),
+                modules: vec!["AGC".to_string()],
+            },
+            config: FullConfigExportConfigDto {
+                iec104: Iec104ExportConfigDto { links: Vec::new() },
+                modbus_rtu: ModbusRtuExportConfigDto {
+                    mqtt: None,
+                    links: Vec::new(),
+                },
+                dlt645: Dlt645ExportConfigDto {
+                    mqtt: None,
+                    links: Vec::new(),
+                },
+                agc: AgcExportConfigDto { groups: Vec::new() },
+                data_bus: DataBusExportConfigDto {
+                    routes: DataBusRoutesDto {
+                        replace: false,
+                        items: Vec::new(),
+                    },
+                },
+            },
+        };
+        let export = snapshot.to_proto().unwrap();
+        let mut bytes = Vec::new();
+        export.encode(&mut bytes).unwrap();
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("mskdsp-upper-import-{unique}.mskcfg"));
+        fs::write(&path, bytes).unwrap();
+
+        let loaded = super::read_full_config_export_snapshot(&path).unwrap();
+        assert_eq!(loaded.schema_version, 1);
+        assert_eq!(loaded.module_startup.modules, vec!["AGC".to_string()]);
+
+        fs::remove_file(path).unwrap();
     }
 }

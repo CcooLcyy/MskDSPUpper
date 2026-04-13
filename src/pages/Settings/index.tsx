@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Descriptions, message, Progress, Space, Tag, Typography } from 'antd';
+import { Button, Card, Descriptions, message, Modal, Progress, Space, Tag, Typography } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { api } from '../../adapters';
 import type { AppUpdateInfo, AppUpdateStatus, AppUpdateStatusKind } from '../../adapters';
-import { buildFullConfigExportSnapshot, saveFullConfigExport } from '../../utils/config-export';
+import {
+  applyFullConfigImport,
+  buildFullConfigExportSnapshot,
+  saveFullConfigExport,
+  selectFullConfigImport,
+} from '../../utils/config-export';
 
-const { Paragraph } = Typography;
+const { Paragraph, Text } = Typography;
 
 function formatReleaseDate(value?: string) {
   if (!value) {
@@ -64,6 +69,7 @@ const Settings: React.FC = () => {
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const [isExportingConfig, setIsExportingConfig] = useState(false);
+  const [isImportingConfig, setIsImportingConfig] = useState(false);
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [totalBytes, setTotalBytes] = useState<number | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
@@ -109,7 +115,7 @@ const Settings: React.FC = () => {
 
       setUpdateStatus({
         kind: 'available',
-        message: `发现新版本 ${update.version}，可下载安装`,
+        message: `发现新版本 ${update.version}，可以下载安装`,
       });
       messageApi.success(`发现客户端新版本 ${update.version}`);
     } catch (error) {
@@ -187,6 +193,60 @@ const Settings: React.FC = () => {
     }
   }, [messageApi]);
 
+  const handleImportConfig = useCallback(async () => {
+    setIsImportingConfig(true);
+
+    try {
+      const selection = await selectFullConfigImport();
+      if (!selection) {
+        return;
+      }
+
+      const result = await applyFullConfigImport(selection);
+      const summaryParts = [
+        `IEC104 ${result.summary.iec104Links}`,
+        `ModbusRTU ${result.summary.modbusRtuLinks}`,
+        `DLT645 ${result.summary.dlt645Links}`,
+        `AGC ${result.summary.agcGroups}`,
+        `DataBus ${result.summary.dataBusRoutes}`,
+      ];
+
+      messageApi.success(`全部配置已导入: ${summaryParts.join(' / ')}`);
+
+      if (result.warnings.length > 0 || result.startedModules.length > 0) {
+        Modal.info({
+          title: '导入完成',
+          width: 680,
+          content: (
+            <div style={{ marginTop: 12 }}>
+              <Paragraph style={{ marginBottom: 8 }}>
+                文件: <Text code>{result.filePath}</Text>
+              </Paragraph>
+              {result.startedModules.length > 0 && (
+                <Paragraph style={{ marginBottom: 8 }}>
+                  启动模块: {result.startedModules.join(', ')}
+                </Paragraph>
+              )}
+              {result.warnings.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {result.warnings.map((warning) => (
+                    <Text key={warning} type="warning">
+                      {warning}
+                    </Text>
+                  ))}
+                </div>
+              )}
+            </div>
+          ),
+        });
+      }
+    } catch (error) {
+      messageApi.error(`导入全部配置失败: ${error}`);
+    } finally {
+      setIsImportingConfig(false);
+    }
+  }, [messageApi]);
+
   const downloadPercent =
     totalBytes && totalBytes > 0 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)) : 0;
 
@@ -245,7 +305,7 @@ const Settings: React.FC = () => {
             disabled={!availableUpdate}
             loading={isInstallingUpdate}
           >
-            下载并安装
+            下载安装
           </Button>
           <Button onClick={() => void handleRelaunch()} disabled={updateStatus.kind !== 'ready-to-restart'}>
             重启客户端
@@ -253,11 +313,18 @@ const Settings: React.FC = () => {
         </Space>
       </Card>
 
-      <Card title="配置导出" size="small" bordered>
+      <Card title="配置导入 / 导出" size="small" bordered>
         <Paragraph type="secondary" style={{ marginBottom: 12 }}>
-          导出当前上位机掌握的全部配置快照，包含 manager 地址、模块启动集、协议模块配置与 DataBus 路由。
+          导出当前上位机掌握的全部配置快照，或从 `.mskcfg` 文件恢复 manager 地址、模块启动集、协议模块配置与
+          DataBus 路由。
+        </Paragraph>
+        <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+          导入会按快照覆盖已声明的链路、点表、控制组和路由，但不会自动停止快照之外额外运行的模块。
         </Paragraph>
         <Space wrap>
+          <Button onClick={() => void handleImportConfig()} loading={isImportingConfig}>
+            导入全部配置
+          </Button>
           <Button type="primary" onClick={() => void handleExportConfig()} loading={isExportingConfig}>
             导出全部配置
           </Button>

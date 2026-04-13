@@ -61,6 +61,7 @@ pub fn run() {
             commands::agc::agc_start_group,
             commands::agc::agc_stop_group,
             commands::export_config::save_full_config_export,
+            commands::export_config::load_full_config_export,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start MskDSP Upper");

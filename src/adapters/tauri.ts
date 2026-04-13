@@ -194,4 +194,6 @@ export const api = {
 
   saveFullConfigExport: (filePath: string, snapshot: FullConfigExportSnapshot) =>
     invoke<string>('save_full_config_export', { filePath, snapshot }),
+  loadFullConfigExport: (filePath: string) =>
+    invoke<FullConfigExportSnapshot>('load_full_config_export', { filePath }),
 };
