@@ -309,6 +309,20 @@ pub async fn dlt645_upsert_link(
 }
 
 #[tauri::command]
+pub async fn dlt645_rename_link(
+    state: State<'_, AppState>,
+    old_conn_name: String,
+    new_conn_name: String,
+) -> Result<Dlt645LinkInfoDto, String> {
+    let client = Dlt645Client::new(&state.conn_manager);
+    let link = client
+        .rename_link(old_conn_name, new_conn_name)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(link.into())
+}
+
+#[tauri::command]
 pub async fn dlt645_get_link(
     state: State<'_, AppState>,
     conn_name: String,

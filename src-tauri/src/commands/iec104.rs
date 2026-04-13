@@ -212,6 +212,20 @@ pub async fn iec104_upsert_link(
 }
 
 #[tauri::command]
+pub async fn iec104_rename_link(
+    state: State<'_, AppState>,
+    old_conn_name: String,
+    new_conn_name: String,
+) -> Result<LinkInfoDto, String> {
+    let client = Iec104Client::new(&state.conn_manager);
+    let link = client
+        .rename_link(old_conn_name, new_conn_name)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(link.into())
+}
+
+#[tauri::command]
 pub async fn iec104_get_link(
     state: State<'_, AppState>,
     conn_name: String,

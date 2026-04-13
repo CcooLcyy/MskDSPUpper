@@ -3,9 +3,9 @@ use anyhow::Result;
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::modbus_rtu_proto::{
     modbus_rtu_service_client::ModbusRtuServiceClient, DeleteLinkRequest, Empty, GetLinkRequest,
-    GetPointTableRequest, LinkConfig, LinkInfo, MqttConfig, Point, PointTable, StartLinkRequest,
-    StopLinkRequest, UpdateConfigRequest, UpdateConfigResponse, UpsertLinkRequest,
-    UpsertPointTableRequest,
+    GetPointTableRequest, LinkConfig, LinkInfo, MqttConfig, Point, PointTable, RenameLinkRequest,
+    StartLinkRequest, StopLinkRequest, UpdateConfigRequest, UpdateConfigResponse,
+    UpsertLinkRequest, UpsertPointTableRequest,
 };
 
 pub struct ModbusRtuClient<'a> {
@@ -33,6 +33,22 @@ impl<'a> ModbusRtuClient<'a> {
             .upsert_link(UpsertLinkRequest {
                 config: Some(config),
                 create_only,
+            })
+            .await?;
+        Ok(resp.into_inner())
+    }
+
+    pub async fn rename_link(
+        &self,
+        old_conn_name: String,
+        new_conn_name: String,
+    ) -> Result<LinkInfo> {
+        let channel = self.conn.module_channel("ModbusRTU").await?;
+        let mut client = ModbusRtuServiceClient::new(channel);
+        let resp = client
+            .rename_link(RenameLinkRequest {
+                old_conn_name,
+                new_conn_name,
             })
             .await?;
         Ok(resp.into_inner())

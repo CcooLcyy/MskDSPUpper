@@ -166,6 +166,7 @@ const ModbusRTU: React.FC = () => {
   }, [selectedLink, linkForm]);
 
   const handleLinkSubmit = useCallback(async () => {
+    let renameCompleted = false;
     try {
       const values = await linkForm.validateFields();
       const serial: ModbusSerialConfig | null = values.transport_type === 1
@@ -217,12 +218,35 @@ const ModbusRTU: React.FC = () => {
       };
 
       const createOnly = !editingLink;
+      const oldConnName = editingLink?.conn_name ?? null;
+      const renamed = !createOnly && oldConnName !== config.conn_name;
+
+      if (renamed && oldConnName) {
+        await api.modbusRtuRenameLink(oldConnName, config.conn_name);
+        renameCompleted = true;
+      }
+
       await api.modbusRtuUpsertLink(config, createOnly);
-      messageApi.success(createOnly ? '连接创建成功' : '连接更新成功');
+      messageApi.success(
+        createOnly ? '连接创建成功' : renamed ? '连接已改名并更新成功' : '连接更新成功',
+      );
       setLinkModalOpen(false);
       await refreshLinks();
       setSelectedConn(config.conn_name);
     } catch (error) {
+      if (renameCompleted) {
+        try {
+          await refreshLinks();
+        } catch {
+          // Best-effort refresh after a partial rename success.
+        }
+        const connName = linkForm.getFieldValue('conn_name');
+        if (typeof connName === 'string' && connName) {
+          setSelectedConn(connName);
+        }
+        messageApi.error(`连接已改名，但保存其他配置失败: ${error}`);
+        return;
+      }
       messageApi.error(`保存连接失败: ${error}`);
     }
   }, [editingLink, linkForm, messageApi, refreshLinks]);
@@ -375,7 +399,7 @@ const ModbusRTU: React.FC = () => {
         <Row gutter={16}>
           <Col span={8}>
             <Form.Item label="连接名称" name="conn_name" rules={[{ required: true, message: '请输入连接名称' }]}>
-              <Input disabled={!!editingLink} />
+              <Input />
             </Form.Item>
           </Col>
           <Col span={8}>

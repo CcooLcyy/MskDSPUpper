@@ -85,10 +85,12 @@
 .protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder,
 .protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content,
 .protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+  min-width: 0;
   min-height: 0;
 }
 
-.protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder {
+.protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder,
+.protocol-point-card > .ant-card-body > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content {
   display: flex;
   flex: 1 1 auto;
 }

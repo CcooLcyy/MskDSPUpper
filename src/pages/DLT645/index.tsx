@@ -36,15 +36,18 @@ const ACCESS_MODE_OPTIONS = [
 ];
 const PARITY_OPTIONS = [
   { value: 0, label: '未指定' },
-  { value: 1, label: 'None' },
-  { value: 2, label: 'Odd' },
-  { value: 3, label: 'Even' },
+  { value: 1, label: '无校验' },
+  { value: 2, label: '奇校验' },
+  { value: 3, label: '偶校验' },
 ];
 const STOP_BITS_OPTIONS = [
   { value: 0, label: '未指定' },
   { value: 1, label: '1' },
   { value: 2, label: '2' },
 ];
+
+const VISIBLE_PARITY_OPTIONS = PARITY_OPTIONS.filter((option) => option.value !== 0);
+const VISIBLE_STOP_BITS_OPTIONS = STOP_BITS_OPTIONS.filter((option) => option.value !== 0);
 
 const LIST_STATE_COLOR_MAP: Record<number, string> = {
   1: '#f44336',
@@ -119,12 +122,12 @@ const DLT645: React.FC = () => {
       poll_item_interval_ms: 500,
       request_timeout_ms: 3000,
       serial_port: '',
-      serial_baud_rate: 2400,
+      serial_baud_rate: 9600,
       serial_data_bits: 8,
-      serial_parity: 3,
+      serial_parity: 1,
       serial_stop_bits: 1,
-      serial_byte_timeout_ms: 0,
-      serial_frame_timeout_ms: 0,
+      serial_byte_timeout_ms: 500,
+      serial_frame_timeout_ms: 1000,
       serial_est_size: 0,
     });
     setLinkModalOpen(true);
@@ -146,20 +149,22 @@ const DLT645: React.FC = () => {
       poll_item_interval_ms: c.poll_item_interval_ms,
       request_timeout_ms: c.request_timeout_ms,
       serial_port: c.serial_port,
-      serial_baud_rate: c.serial_baud_rate || 2400,
+      serial_baud_rate: c.serial_baud_rate || 9600,
       serial_data_bits: c.serial_data_bits || 8,
-      serial_parity: c.serial_parity ?? 3,
-      serial_stop_bits: c.serial_stop_bits ?? 1,
-      serial_byte_timeout_ms: c.serial_byte_timeout_ms,
-      serial_frame_timeout_ms: c.serial_frame_timeout_ms,
+      serial_parity: c.serial_parity === 0 ? 1 : (c.serial_parity ?? 1),
+      serial_stop_bits: c.serial_stop_bits || 1,
+      serial_byte_timeout_ms: c.serial_byte_timeout_ms || 500,
+      serial_frame_timeout_ms: c.serial_frame_timeout_ms || 1000,
       serial_est_size: c.serial_est_size,
     });
     setLinkModalOpen(true);
   }, [selectedLink, linkForm]);
 
   const handleLinkSubmit = useCallback(async () => {
+    let renameCompleted = false;
     try {
       const values = await linkForm.validateFields();
+      const isSerial = (values.comm_mode ?? 3) === 2;
       const config: Dlt645LinkConfig = {
         conn_name: values.conn_name,
         protocol_variant: values.protocol_variant ?? 1,
@@ -170,22 +175,45 @@ const DLT645: React.FC = () => {
         poll_interval_ms: values.poll_interval_ms ?? 1000,
         poll_item_interval_ms: values.poll_item_interval_ms ?? 500,
         request_timeout_ms: values.request_timeout_ms ?? 3000,
-        serial_port: values.serial_port ?? '',
-        serial_baud_rate: values.serial_baud_rate ?? 0,
-        serial_data_bits: values.serial_data_bits ?? 0,
-        serial_parity: values.serial_parity ?? 0,
-        serial_stop_bits: values.serial_stop_bits ?? 0,
-        serial_byte_timeout_ms: values.serial_byte_timeout_ms ?? 0,
-        serial_frame_timeout_ms: values.serial_frame_timeout_ms ?? 0,
+        serial_port: isSerial ? (values.serial_port ?? '') : '',
+        serial_baud_rate: isSerial ? (values.serial_baud_rate ?? 9600) : 0,
+        serial_data_bits: isSerial ? (values.serial_data_bits ?? 8) : 0,
+        serial_parity: isSerial ? (values.serial_parity ?? 1) : 0,
+        serial_stop_bits: isSerial ? (values.serial_stop_bits ?? 1) : 0,
+        serial_byte_timeout_ms: isSerial ? (values.serial_byte_timeout_ms ?? 500) : 0,
+        serial_frame_timeout_ms: isSerial ? (values.serial_frame_timeout_ms ?? 1000) : 0,
         serial_est_size: values.serial_est_size ?? 0,
       };
       const createOnly = !editingLink;
+      const oldConnName = editingLink?.conn_name ?? null;
+      const renamed = !createOnly && oldConnName !== config.conn_name;
+
+      if (renamed && oldConnName) {
+        await api.dlt645RenameLink(oldConnName, config.conn_name);
+        renameCompleted = true;
+      }
+
       await api.dlt645UpsertLink(config, createOnly);
-      messageApi.success(createOnly ? '连接创建成功' : '连接更新成功');
+      messageApi.success(
+        createOnly ? '连接创建成功' : renamed ? '连接已改名并更新成功' : '连接更新成功',
+      );
       setLinkModalOpen(false);
       await refreshLinks();
       setSelectedConn(config.conn_name);
     } catch (error) {
+      if (renameCompleted) {
+        try {
+          await refreshLinks();
+        } catch {
+          // Best-effort refresh after a partial rename success.
+        }
+        const connName = linkForm.getFieldValue('conn_name');
+        if (typeof connName === 'string' && connName) {
+          setSelectedConn(connName);
+        }
+        messageApi.error(`连接已改名，但保存其他配置失败: ${error}`);
+        return;
+      }
       messageApi.error(`保存连接失败: ${error}`);
     }
   }, [editingLink, linkForm, messageApi, refreshLinks]);
@@ -418,7 +446,7 @@ const DLT645: React.FC = () => {
         <Row gutter={16}>
           <Col span={8}>
             <Form.Item label="连接名称" name="conn_name" rules={[{ required: true, message: '请输入连接名称' }]}>
-              <Input disabled={!!editingLink} />
+              <Input />
             </Form.Item>
           </Col>
           <Col span={8}>
@@ -497,12 +525,12 @@ const DLT645: React.FC = () => {
               </Col>
               <Col span={5}>
                 <Form.Item label="校验位" name="serial_parity">
-                  <Select options={PARITY_OPTIONS} />
+                  <Select options={VISIBLE_PARITY_OPTIONS} />
                 </Form.Item>
               </Col>
               <Col span={5}>
                 <Form.Item label="停止位" name="serial_stop_bits">
-                  <Select options={STOP_BITS_OPTIONS} />
+                  <Select options={VISIBLE_STOP_BITS_OPTIONS} />
                 </Form.Item>
               </Col>
             </Row>

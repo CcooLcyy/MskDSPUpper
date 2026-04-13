@@ -3,8 +3,9 @@ use anyhow::Result;
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::iec104_proto::{
     iec104_service_client::Iec104ServiceClient, DeleteLinkRequest, Empty, GetLinkRequest,
-    GetPointTableRequest, LinkConfig, LinkInfo, Point, PointTable, SendTimeSyncRequest,
-    StartLinkRequest, StopLinkRequest, UpsertLinkRequest, UpsertPointTableRequest,
+    GetPointTableRequest, LinkConfig, LinkInfo, Point, PointTable, RenameLinkRequest,
+    SendTimeSyncRequest, StartLinkRequest, StopLinkRequest, UpsertLinkRequest,
+    UpsertPointTableRequest,
 };
 
 pub struct Iec104Client<'a> {
@@ -23,6 +24,22 @@ impl<'a> Iec104Client<'a> {
             .upsert_link(UpsertLinkRequest {
                 config: Some(config),
                 create_only,
+            })
+            .await?;
+        Ok(resp.into_inner())
+    }
+
+    pub async fn rename_link(
+        &self,
+        old_conn_name: String,
+        new_conn_name: String,
+    ) -> Result<LinkInfo> {
+        let channel = self.conn.module_channel("IEC104").await?;
+        let mut client = Iec104ServiceClient::new(channel);
+        let resp = client
+            .rename_link(RenameLinkRequest {
+                old_conn_name,
+                new_conn_name,
             })
             .await?;
         Ok(resp.into_inner())

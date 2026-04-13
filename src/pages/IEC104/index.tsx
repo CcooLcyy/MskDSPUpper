@@ -292,6 +292,7 @@ const IEC104: React.FC = () => {
   );
 
   const handleLinkSubmit = useCallback(async () => {
+    let renameCompleted = false;
     try {
       const values = await linkForm.validateFields();
       const isServerRole = values.role === ROLE_SERVER;
@@ -328,14 +329,35 @@ const IEC104: React.FC = () => {
         time_sync_tag: values.time_sync_tag ?? 'sys_time',
       };
       const createOnly = !editingLink;
+      const oldConnName = editingLink?.conn_name ?? null;
+      const renamed = !createOnly && oldConnName !== config.conn_name;
+
+      if (renamed && oldConnName) {
+        await api.iec104RenameLink(oldConnName, config.conn_name);
+        renameCompleted = true;
+      }
+
       await api.iec104UpsertLink(config, createOnly);
-      messageApi.success(createOnly ? '链路创建成功' : '链路更新成功');
+      messageApi.success(
+        createOnly ? '链路创建成功' : renamed ? '链路已改名并更新成功' : '链路更新成功',
+      );
       setLinkModalOpen(false);
       await refreshLinks();
-      if (createOnly) {
-        setSelectedConn(config.conn_name);
-      }
+      setSelectedConn(config.conn_name);
     } catch (e) {
+      if (renameCompleted) {
+        try {
+          await refreshLinks();
+        } catch {
+          // Best-effort refresh after a partial rename success.
+        }
+        const connName = linkForm.getFieldValue('conn_name');
+        if (typeof connName === 'string' && connName) {
+          setSelectedConn(connName);
+        }
+        messageApi.error(`连接已改名，但保存其他配置失败: ${e}`);
+        return;
+      }
       messageApi.error(`操作失败: ${e}`);
     }
   }, [linkForm, editingLink, messageApi, refreshLinks]);
@@ -723,7 +745,7 @@ const IEC104: React.FC = () => {
                 label="连接名称"
                 rules={[{ required: true, message: '请输入连接名称' }]}
               >
-                <Input disabled={!!editingLink} placeholder="conn_104_master" />
+                <Input placeholder="conn_104_master" />
               </Form.Item>
             </Col>
             <Col span={8}>

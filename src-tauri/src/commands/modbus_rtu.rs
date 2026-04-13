@@ -316,6 +316,20 @@ pub async fn modbus_rtu_upsert_link(
 }
 
 #[tauri::command]
+pub async fn modbus_rtu_rename_link(
+    state: State<'_, AppState>,
+    old_conn_name: String,
+    new_conn_name: String,
+) -> Result<ModbusLinkInfoDto, String> {
+    let client = ModbusRtuClient::new(&state.conn_manager);
+    let link = client
+        .rename_link(old_conn_name, new_conn_name)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(link.into())
+}
+
+#[tauri::command]
 pub async fn modbus_rtu_get_link(
     state: State<'_, AppState>,
     conn_name: String,

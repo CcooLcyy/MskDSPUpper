@@ -112,6 +112,8 @@ export const api = {
 
   iec104UpsertLink: (config: Iec104LinkConfig, createOnly: boolean) =>
     invoke<Iec104LinkInfo>('iec104_upsert_link', { config, createOnly }),
+  iec104RenameLink: (oldConnName: string, newConnName: string) =>
+    invoke<Iec104LinkInfo>('iec104_rename_link', { oldConnName, newConnName }),
   iec104GetLink: (connName: string) =>
     invoke<Iec104LinkInfo>('iec104_get_link', { connName }),
   iec104ListLinks: () => invoke<Iec104LinkInfo[]>('iec104_list_links'),
@@ -132,6 +134,8 @@ export const api = {
     invoke<ModbusUpdateConfigResponse>('modbus_rtu_update_config', { mqtt }),
   modbusRtuUpsertLink: (config: ModbusLinkConfig, createOnly: boolean) =>
     invoke<ModbusLinkInfo>('modbus_rtu_upsert_link', { config, createOnly }),
+  modbusRtuRenameLink: (oldConnName: string, newConnName: string) =>
+    invoke<ModbusLinkInfo>('modbus_rtu_rename_link', { oldConnName, newConnName }),
   modbusRtuGetLink: (connName: string) =>
     invoke<ModbusLinkInfo>('modbus_rtu_get_link', { connName }),
   modbusRtuListLinks: () => invoke<ModbusLinkInfo[]>('modbus_rtu_list_links'),
@@ -150,6 +154,8 @@ export const api = {
     invoke<Dlt645UpdateConfigResponse>('dlt645_update_config', { mqtt }),
   dlt645UpsertLink: (config: Dlt645LinkConfig, createOnly: boolean) =>
     invoke<Dlt645LinkInfo>('dlt645_upsert_link', { config, createOnly }),
+  dlt645RenameLink: (oldConnName: string, newConnName: string) =>
+    invoke<Dlt645LinkInfo>('dlt645_rename_link', { oldConnName, newConnName }),
   dlt645GetLink: (connName: string) =>
     invoke<Dlt645LinkInfo>('dlt645_get_link', { connName }),
   dlt645ListLinks: () => invoke<Dlt645LinkInfo[]>('dlt645_list_links'),
