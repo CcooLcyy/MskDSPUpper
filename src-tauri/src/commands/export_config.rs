@@ -20,13 +20,17 @@ use crate::{
             ModbusRtuLinkTask,
         },
         export_config_proto::{
-            DataBusConfig as ExportDataBusConfig, FullConfigExport, ModuleStartup, SourceInfo,
+            DataBusConfig as ExportDataBusConfig, ExportMetadata, FullConfigExport, ModuleStartup,
+            SourceInfo,
         },
     },
 };
 
 const EXPORT_EXTENSION: &str = "mskcfg";
 const MODULE_STARTUP_SOURCE_RUNNING_MODULE_INFO: i32 = 1;
+const EXPORT_SCOPE_UNSPECIFIED: i32 = 0;
+const EXPORT_SCOPE_FULL: i32 = 1;
+const EXPORT_SCOPE_PARTIAL: i32 = 2;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FullConfigExportSnapshotDto {
@@ -35,6 +39,8 @@ pub struct FullConfigExportSnapshotDto {
     pub source: ExportSourceDto,
     pub module_startup: ModuleStartupDto,
     pub config: FullConfigExportConfigDto,
+    #[serde(default)]
+    pub metadata: ExportMetadataDto,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -47,6 +53,12 @@ pub struct ExportSourceDto {
 pub struct ModuleStartupDto {
     pub source: String,
     pub modules: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ExportMetadataDto {
+    pub scope: String,
+    pub included_sections: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -178,6 +190,7 @@ impl FullConfigExportSnapshotDto {
             module_startup: Some(self.module_startup.to_proto()?),
             config: Some(self.config.to_proto()),
             data_bus: Some(self.config.data_bus.to_proto()),
+            metadata: Some(self.metadata.to_proto()?),
         })
     }
 
@@ -198,6 +211,7 @@ impl FullConfigExportSnapshotDto {
                 }),
             module_startup: ModuleStartupDto::from_proto(export.module_startup)?,
             config: FullConfigExportConfigDto::from_proto(export.config, export.data_bus)?,
+            metadata: ExportMetadataDto::from_proto(export.metadata)?,
         })
     }
 }
@@ -256,6 +270,41 @@ impl ModuleStartupDto {
         Ok(Self {
             source,
             modules: startup.modules,
+        })
+    }
+}
+
+impl ExportMetadataDto {
+    fn to_proto(&self) -> Result<ExportMetadata, String> {
+        let scope = match self.scope.as_str() {
+            "" | "full" => EXPORT_SCOPE_FULL,
+            "partial" => EXPORT_SCOPE_PARTIAL,
+            other => return Err(format!("Unsupported export metadata.scope value: {other}")),
+        };
+
+        Ok(ExportMetadata {
+            scope,
+            included_sections: self.included_sections.clone(),
+        })
+    }
+
+    fn from_proto(metadata: Option<ExportMetadata>) -> Result<Self, String> {
+        let Some(metadata) = metadata else {
+            return Ok(Self {
+                scope: "full".to_string(),
+                included_sections: Vec::new(),
+            });
+        };
+
+        let scope = match metadata.scope {
+            EXPORT_SCOPE_UNSPECIFIED | EXPORT_SCOPE_FULL => "full".to_string(),
+            EXPORT_SCOPE_PARTIAL => "partial".to_string(),
+            other => return Err(format!("Unsupported export metadata.scope value: {other}")),
+        };
+
+        Ok(Self {
+            scope,
+            included_sections: metadata.included_sections,
         })
     }
 }
@@ -771,7 +820,7 @@ mod tests {
 
     use super::{
         AgcExportConfigDto, DataBusExportConfigDto, DataBusRoutesDto, Dlt645ExportConfigDto,
-        ExportSourceDto, FullConfigExportConfigDto, FullConfigExportSnapshotDto,
+        ExportMetadataDto, ExportSourceDto, FullConfigExportConfigDto, FullConfigExportSnapshotDto,
         Iec104ExportConfigDto, ModbusRtuExportConfigDto, ModuleStartupDto,
     };
 
@@ -821,6 +870,10 @@ mod tests {
                     },
                 },
             },
+            metadata: ExportMetadataDto {
+                scope: "partial".to_string(),
+                included_sections: vec!["agc".to_string(), "data_bus".to_string()],
+            },
         };
 
         let export = snapshot.to_proto().unwrap();
@@ -833,6 +886,11 @@ mod tests {
         assert_eq!(decoded_snapshot.source.manager_addr, "127.0.0.1:17000");
         assert_eq!(decoded_snapshot.module_startup.modules.len(), 2);
         assert!(decoded_snapshot.config.data_bus.routes.replace);
+        assert_eq!(decoded_snapshot.metadata.scope, "partial");
+        assert_eq!(
+            decoded_snapshot.metadata.included_sections,
+            vec!["agc".to_string(), "data_bus".to_string()]
+        );
     }
 
     #[test]
@@ -855,6 +913,7 @@ mod tests {
                 module_startup: None,
                 config: None,
                 data_bus: None,
+                metadata: None,
             },
         )
         .unwrap_err();
@@ -902,6 +961,16 @@ mod tests {
                     },
                 },
             },
+            metadata: ExportMetadataDto {
+                scope: "full".to_string(),
+                included_sections: vec![
+                    "iec104".to_string(),
+                    "modbus_rtu".to_string(),
+                    "dlt645".to_string(),
+                    "agc".to_string(),
+                    "data_bus".to_string(),
+                ],
+            },
         };
         let export = snapshot.to_proto().unwrap();
         let mut bytes = Vec::new();
@@ -917,6 +986,7 @@ mod tests {
         let loaded = super::read_full_config_export_snapshot(&path).unwrap();
         assert_eq!(loaded.schema_version, 1);
         assert_eq!(loaded.module_startup.modules, vec!["AGC".to_string()]);
+        assert_eq!(loaded.metadata.scope, "full");
 
         fs::remove_file(path).unwrap();
     }

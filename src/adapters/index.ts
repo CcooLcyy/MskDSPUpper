@@ -46,6 +46,8 @@ export type {
   DcRoute,
 } from './types';
 export type {
+  ConfigExportMetadata,
+  ConfigExportSectionId,
   AgcDerivedOutputs,
   AgcExportTask,
   AgcGroupConfig,

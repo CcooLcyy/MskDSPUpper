@@ -397,6 +397,13 @@ export interface StableDataBusRoute {
   dst: StableDataBusEndpoint;
 }
 
+export type ConfigExportSectionId = 'iec104' | 'modbus_rtu' | 'dlt645' | 'agc' | 'data_bus';
+
+export interface ConfigExportMetadata {
+  scope: 'full' | 'partial';
+  included_sections: ConfigExportSectionId[];
+}
+
 export interface FullConfigExportSnapshot {
   schema_version: 1;
   exported_at: string;
@@ -430,4 +437,5 @@ export interface FullConfigExportSnapshot {
       };
     };
   };
+  metadata: ConfigExportMetadata;
 }

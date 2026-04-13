@@ -2,6 +2,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { api } from '../adapters';
 import type {
   AgcGroupConfig,
+  ConfigExportSectionId,
   DcRoute,
   Dlt645LinkConfig,
   Dlt645MqttConfig,
@@ -12,6 +13,7 @@ import type {
   ModuleInfo,
   StableDataBusEndpoint,
 } from '../adapters';
+import { buildDuplicateConnectionName } from './connection-copy';
 import { loadStoredMqttConfig, saveStoredMqttConfig } from './mqtt';
 
 const MANAGER_ADDR_KEY = 'mskdsp_manager_addr';
@@ -30,21 +32,228 @@ const MODULE_START_RETRY_INTERVAL_MS = 500;
 const DATA_BUS_CONNECTION_RETRY_COUNT = 10;
 const DATA_BUS_CONNECTION_RETRY_INTERVAL_MS = 500;
 
+const CONFIG_SECTION_DEFINITIONS = [
+  {
+    key: 'iec104',
+    label: 'IEC104',
+    groupLabel: '协议接入',
+    moduleName: MODULE_IEC104,
+    describe: (snapshot?: FullConfigExportSnapshot) =>
+      snapshot ? `${snapshot.config.iec104.links.length} 条链路` : '链路与点表配置',
+  },
+  {
+    key: 'modbus_rtu',
+    label: 'ModbusRTU',
+    groupLabel: '协议接入',
+    moduleName: MODULE_MODBUS_RTU,
+    describe: (snapshot?: FullConfigExportSnapshot) =>
+      snapshot
+        ? `${snapshot.config.modbus_rtu.links.length} 条链路${snapshot.config.modbus_rtu.mqtt ? '，含 MQTT 全局配置' : ''}`
+        : '链路、点表与 MQTT 全局配置',
+  },
+  {
+    key: 'dlt645',
+    label: 'DLT645',
+    groupLabel: '协议接入',
+    moduleName: MODULE_DLT645,
+    describe: (snapshot?: FullConfigExportSnapshot) =>
+      snapshot
+        ? `${snapshot.config.dlt645.links.length} 条链路${snapshot.config.dlt645.mqtt ? '，含 MQTT 全局配置' : ''}`
+        : '链路、点表与 MQTT 全局配置',
+  },
+  {
+    key: 'agc',
+    label: 'AGC',
+    groupLabel: '其他配置',
+    moduleName: MODULE_AGC,
+    describe: (snapshot?: FullConfigExportSnapshot) =>
+      snapshot ? `${snapshot.config.agc.groups.length} 个控制组` : '控制组配置',
+  },
+  {
+    key: 'data_bus',
+    label: '数据总线',
+    groupLabel: '其他配置',
+    moduleName: MODULE_DATA_CENTER,
+    describe: (snapshot?: FullConfigExportSnapshot) =>
+      snapshot ? `${snapshot.config.data_bus.routes.items.length} 条路由` : 'DataBus 路由配置',
+  },
+] as const;
+
+const ALL_CONFIG_SECTION_IDS = CONFIG_SECTION_DEFINITIONS.map(
+  (definition) => definition.key,
+) as ConfigExportSectionId[];
+const CONFIG_SECTION_SET = new Set<ConfigExportSectionId>(ALL_CONFIG_SECTION_IDS);
+
 export interface FullConfigImportSelection {
   filePath: string;
   snapshot: FullConfigExportSnapshot;
 }
 
+export type ConfigImportMode = 'replace' | 'merge';
+
+export interface ConfigSectionOption {
+  key: ConfigExportSectionId;
+  label: string;
+  description: string;
+  groupLabel?: string;
+  disabled?: boolean;
+}
+
+export interface ConfigImportModeOption {
+  key: ConfigImportMode;
+  label: string;
+  description: string;
+}
+
 export interface FullConfigImportResult {
   filePath: string;
+  mode: ConfigImportMode;
   startedModules: string[];
   warnings: string[];
+  sections: ConfigExportSectionId[];
   summary: {
     iec104Links: number;
     modbusRtuLinks: number;
     dlt645Links: number;
     agcGroups: number;
     dataBusRoutes: number;
+  };
+}
+
+interface ApplyConfigImportOptions {
+  sections?: ConfigExportSectionId[];
+  applyGlobals?: boolean;
+  mode?: ConfigImportMode;
+}
+
+const DEFAULT_CONFIG_IMPORT_MODE: ConfigImportMode = 'merge';
+
+const CONFIG_IMPORT_MODE_OPTIONS: ConfigImportModeOption[] = [
+  {
+    key: 'replace',
+    label: '覆盖',
+    description: '以文件为准同步所选模块，删除当前存在但文件中未包含的连接、控制组和路由。',
+  },
+  {
+    key: 'merge',
+    label: '合并',
+    description: '保留当前已有配置；导入文件中的同名协议连接会自动重命名后追加，不主动删除未出现在文件中的项。',
+  },
+];
+
+function cloneConfigSnapshot(snapshot: FullConfigExportSnapshot): FullConfigExportSnapshot {
+  return JSON.parse(JSON.stringify(snapshot)) as FullConfigExportSnapshot;
+}
+
+function resolveProtocolMergeConflicts<
+  TTask extends {
+    link: {
+      config: {
+        conn_name: string;
+      };
+    };
+    point_table: {
+      conn_name: string;
+    };
+  },
+>(
+  moduleName: string,
+  tasks: TTask[],
+  existingNames: Iterable<string>,
+  renamedConnections: Map<string, string>,
+  warnings: string[],
+): void {
+  const usedNames = new Set(existingNames);
+
+  for (const task of tasks) {
+    const originalConnName = task.link.config.conn_name;
+    if (!usedNames.has(originalConnName)) {
+      usedNames.add(originalConnName);
+      continue;
+    }
+
+    const renamedConnName = buildDuplicateConnectionName(originalConnName, usedNames);
+    task.link.config.conn_name = renamedConnName;
+    task.point_table.conn_name = renamedConnName;
+    usedNames.add(renamedConnName);
+    renamedConnections.set(connectionKey(moduleName, originalConnName), renamedConnName);
+    warnings.push(`Merge import renamed ${moduleName} connection ${originalConnName} -> ${renamedConnName}`);
+  }
+}
+
+function rewriteDataBusRoutesForRenamedConnections(
+  snapshot: FullConfigExportSnapshot,
+  renamedConnections: Map<string, string>,
+): void {
+  for (const route of snapshot.config.data_bus.routes.items) {
+    const srcConnName = renamedConnections.get(connectionKey(route.src.module_name, route.src.conn_name));
+    if (srcConnName) {
+      route.src.conn_name = srcConnName;
+    }
+
+    const dstConnName = renamedConnections.get(connectionKey(route.dst.module_name, route.dst.conn_name));
+    if (dstConnName) {
+      route.dst.conn_name = dstConnName;
+    }
+  }
+}
+
+async function preprocessMergeImportSnapshot(
+  snapshot: FullConfigExportSnapshot,
+  mode: ConfigImportMode,
+  runningModules: Set<string>,
+): Promise<{ snapshot: FullConfigExportSnapshot; warnings: string[] }> {
+  if (mode !== 'merge') {
+    return { snapshot, warnings: [] };
+  }
+
+  const adjustedSnapshot = cloneConfigSnapshot(snapshot);
+  const warnings: string[] = [];
+  const renamedConnections = new Map<string, string>();
+  const [iec104CurrentLinks, modbusCurrentLinks, dlt645CurrentLinks] = await Promise.all([
+    runningModules.has(MODULE_IEC104) && adjustedSnapshot.config.iec104.links.length > 0
+      ? api.iec104ListLinks()
+      : Promise.resolve([]),
+    runningModules.has(MODULE_MODBUS_RTU) && adjustedSnapshot.config.modbus_rtu.links.length > 0
+      ? api.modbusRtuListLinks()
+      : Promise.resolve([]),
+    runningModules.has(MODULE_DLT645) && adjustedSnapshot.config.dlt645.links.length > 0
+      ? api.dlt645ListLinks()
+      : Promise.resolve([]),
+  ]);
+
+  resolveProtocolMergeConflicts(
+    MODULE_IEC104,
+    adjustedSnapshot.config.iec104.links,
+    iec104CurrentLinks
+      .map((link) => link.config?.conn_name)
+      .filter((connName): connName is string => Boolean(connName)),
+    renamedConnections,
+    warnings,
+  );
+  resolveProtocolMergeConflicts(
+    MODULE_MODBUS_RTU,
+    adjustedSnapshot.config.modbus_rtu.links,
+    modbusCurrentLinks
+      .map((link) => link.config?.conn_name)
+      .filter((connName): connName is string => Boolean(connName)),
+    renamedConnections,
+    warnings,
+  );
+  resolveProtocolMergeConflicts(
+    MODULE_DLT645,
+    adjustedSnapshot.config.dlt645.links,
+    dlt645CurrentLinks
+      .map((link) => link.config?.conn_name)
+      .filter((connName): connName is string => Boolean(connName)),
+    renamedConnections,
+    warnings,
+  );
+  rewriteDataBusRoutesForRenamedConnections(adjustedSnapshot, renamedConnections);
+
+  return {
+    snapshot: adjustedSnapshot,
+    warnings,
   };
 }
 
@@ -70,6 +279,127 @@ function assertModuleConfig<T>(moduleName: string, index: number, config: T | nu
   }
 
   return config;
+}
+
+function dedupeConfigSections(sections: readonly ConfigExportSectionId[]): ConfigExportSectionId[] {
+  const ordered = new Set<ConfigExportSectionId>();
+
+  for (const section of ALL_CONFIG_SECTION_IDS) {
+    if (sections.includes(section)) {
+      ordered.add(section);
+    }
+  }
+
+  return Array.from(ordered);
+}
+
+function isConfigSectionId(value: string): value is ConfigExportSectionId {
+  return CONFIG_SECTION_SET.has(value as ConfigExportSectionId);
+}
+
+function isFullSectionSelection(sections: readonly ConfigExportSectionId[]): boolean {
+  return dedupeConfigSections(sections).length === ALL_CONFIG_SECTION_IDS.length;
+}
+
+function buildConfigExportMetadata(sections: readonly ConfigExportSectionId[]): FullConfigExportSnapshot['metadata'] {
+  const includedSections = dedupeConfigSections(sections);
+
+  return {
+    scope: isFullSectionSelection(includedSections) ? 'full' : 'partial',
+    included_sections: includedSections,
+  };
+}
+
+function getSectionModuleNames(sections: readonly ConfigExportSectionId[]): Set<string> {
+  return new Set(
+    CONFIG_SECTION_DEFINITIONS.filter((definition) => sections.includes(definition.key)).map(
+      (definition) => definition.moduleName,
+    ),
+  );
+}
+
+function scopeConfigSnapshot(
+  snapshot: FullConfigExportSnapshot,
+  sections: readonly ConfigExportSectionId[],
+): FullConfigExportSnapshot {
+  const includedSections = dedupeConfigSections(sections);
+
+  if (includedSections.length === 0) {
+    throw new Error('At least one config section must be selected');
+  }
+
+  const isFull = isFullSectionSelection(includedSections);
+  const allowedModules = isFull ? null : getSectionModuleNames(includedSections);
+  const includedSectionSet = new Set(includedSections);
+
+  return {
+    ...snapshot,
+    module_startup: {
+      ...snapshot.module_startup,
+      modules: isFull
+        ? snapshot.module_startup.modules
+        : snapshot.module_startup.modules.filter((moduleName) => allowedModules?.has(moduleName)),
+    },
+    config: {
+      iec104: includedSectionSet.has('iec104') ? snapshot.config.iec104 : { links: [] },
+      modbus_rtu: includedSectionSet.has('modbus_rtu')
+        ? snapshot.config.modbus_rtu
+        : { mqtt: null, links: [] },
+      dlt645: includedSectionSet.has('dlt645') ? snapshot.config.dlt645 : { mqtt: null, links: [] },
+      agc: includedSectionSet.has('agc') ? snapshot.config.agc : { groups: [] },
+      data_bus: includedSectionSet.has('data_bus')
+        ? snapshot.config.data_bus
+        : {
+            routes: {
+              replace: true,
+              items: [],
+            },
+          },
+    },
+    metadata: buildConfigExportMetadata(includedSections),
+  };
+}
+
+export function getAllConfigSectionIds(): ConfigExportSectionId[] {
+  return [...ALL_CONFIG_SECTION_IDS];
+}
+
+export function getConfigSectionOptions(snapshot?: FullConfigExportSnapshot): ConfigSectionOption[] {
+  const includedSections = snapshot ? new Set(getIncludedConfigSections(snapshot)) : null;
+
+  return CONFIG_SECTION_DEFINITIONS.map((definition) => ({
+    key: definition.key,
+    label: definition.label,
+    description: definition.describe(snapshot),
+    groupLabel: definition.groupLabel,
+    disabled: includedSections ? !includedSections.has(definition.key) : false,
+  }));
+}
+
+export function getConfigSectionLabel(section: ConfigExportSectionId): string {
+  return CONFIG_SECTION_DEFINITIONS.find((definition) => definition.key === section)?.label ?? section;
+}
+
+export function getConfigImportModeOptions(): ConfigImportModeOption[] {
+  return CONFIG_IMPORT_MODE_OPTIONS.map((option) => ({ ...option }));
+}
+
+export function getConfigImportModeLabel(mode: ConfigImportMode): string {
+  return CONFIG_IMPORT_MODE_OPTIONS.find((option) => option.key === mode)?.label ?? mode;
+}
+
+export function getIncludedConfigSections(snapshot: FullConfigExportSnapshot): ConfigExportSectionId[] {
+  const includedSections = snapshot.metadata?.included_sections?.filter(isConfigSectionId) ?? [];
+
+  if (includedSections.length > 0) {
+    return dedupeConfigSections(includedSections);
+  }
+
+  return getAllConfigSectionIds();
+}
+
+function normalizeConfigImportMode(mode?: ConfigImportMode): ConfigImportMode {
+  return mode ?? DEFAULT_CONFIG_IMPORT_MODE;
 }
 
 async function loadIec104Config(runningModules: Set<string>): Promise<FullConfigExportSnapshot['config']['iec104']> {
@@ -234,7 +564,7 @@ async function loadDataBusConfig(
   };
 }
 
-function buildExportFileName(exportedAt: string): string {
+function buildExportFileName(exportedAt: string, sections: readonly ConfigExportSectionId[]): string {
   const date = new Date(exportedAt);
   const yyyy = String(date.getFullYear());
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -242,8 +572,12 @@ function buildExportFileName(exportedAt: string): string {
   const hh = String(date.getHours()).padStart(2, '0');
   const min = String(date.getMinutes()).padStart(2, '0');
   const sec = String(date.getSeconds()).padStart(2, '0');
+  const normalizedSections = dedupeConfigSections(sections);
+  const prefix = isFullSectionSelection(normalizedSections)
+    ? 'mskdsp-upper-config'
+    : `mskdsp-upper-config-${normalizedSections.join('-').replaceAll('_', '-')}`;
 
-  return `mskdsp-upper-config-${yyyy}${mm}${dd}-${hh}${min}${sec}.mskcfg`;
+  return `${prefix}-${yyyy}${mm}${dd}-${hh}${min}${sec}.mskcfg`;
 }
 
 function ensureExportExtension(filePath: string): string {
@@ -398,24 +732,28 @@ async function ensureModulesReady(snapshot: FullConfigExportSnapshot): Promise<{
   };
 }
 
-async function syncIec104(snapshot: FullConfigExportSnapshot): Promise<void> {
+async function syncIec104(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
+  const replace = mode === 'replace';
   const targetNames = new Set(snapshot.config.iec104.links.map((task) => task.link.config.conn_name));
   const currentLinks = await api.iec104ListLinks();
 
-  for (const currentLink of currentLinks) {
-    const connName = currentLink.config?.conn_name;
-    if (connName && !targetNames.has(connName)) {
-      await api.iec104DeleteLink(connName);
+  if (replace) {
+    for (const currentLink of currentLinks) {
+      const connName = currentLink.config?.conn_name;
+      if (connName && !targetNames.has(connName)) {
+        await api.iec104DeleteLink(connName);
+      }
     }
   }
 
   for (const task of snapshot.config.iec104.links) {
     await api.iec104UpsertLink(task.link.config, false);
-    await api.iec104UpsertPointTable(task.point_table.conn_name, task.point_table.points, task.point_table.replace);
+    await api.iec104UpsertPointTable(task.point_table.conn_name, task.point_table.points, replace);
   }
 }
 
-async function syncModbusRtu(snapshot: FullConfigExportSnapshot): Promise<void> {
+async function syncModbusRtu(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
+  const replace = mode === 'replace';
   if (snapshot.config.modbus_rtu.mqtt) {
     await api.modbusRtuUpdateConfig(snapshot.config.modbus_rtu.mqtt);
     saveStoredMqttConfig(MODBUS_MQTT_STORAGE_KEY, snapshot.config.modbus_rtu.mqtt);
@@ -424,20 +762,23 @@ async function syncModbusRtu(snapshot: FullConfigExportSnapshot): Promise<void> 
   const targetNames = new Set(snapshot.config.modbus_rtu.links.map((task) => task.link.config.conn_name));
   const currentLinks = await api.modbusRtuListLinks();
 
-  for (const currentLink of currentLinks) {
-    const connName = currentLink.config?.conn_name;
-    if (connName && !targetNames.has(connName)) {
-      await api.modbusRtuDeleteLink(connName);
+  if (replace) {
+    for (const currentLink of currentLinks) {
+      const connName = currentLink.config?.conn_name;
+      if (connName && !targetNames.has(connName)) {
+        await api.modbusRtuDeleteLink(connName);
+      }
     }
   }
 
   for (const task of snapshot.config.modbus_rtu.links) {
     await api.modbusRtuUpsertLink(task.link.config, false);
-    await api.modbusRtuUpsertPointTable(task.point_table.conn_name, task.point_table.points, task.point_table.replace);
+    await api.modbusRtuUpsertPointTable(task.point_table.conn_name, task.point_table.points, replace);
   }
 }
 
-async function syncDlt645(snapshot: FullConfigExportSnapshot): Promise<void> {
+async function syncDlt645(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
+  const replace = mode === 'replace';
   if (snapshot.config.dlt645.mqtt) {
     await api.dlt645UpdateConfig(snapshot.config.dlt645.mqtt);
     saveStoredMqttConfig(DLT645_MQTT_STORAGE_KEY, snapshot.config.dlt645.mqtt);
@@ -446,10 +787,12 @@ async function syncDlt645(snapshot: FullConfigExportSnapshot): Promise<void> {
   const targetNames = new Set(snapshot.config.dlt645.links.map((task) => task.link.config.conn_name));
   const currentLinks = await api.dlt645ListLinks();
 
-  for (const currentLink of currentLinks) {
-    const connName = currentLink.config?.conn_name;
-    if (connName && !targetNames.has(connName)) {
-      await api.dlt645DeleteLink(connName);
+  if (replace) {
+    for (const currentLink of currentLinks) {
+      const connName = currentLink.config?.conn_name;
+      if (connName && !targetNames.has(connName)) {
+        await api.dlt645DeleteLink(connName);
+      }
     }
   }
 
@@ -459,19 +802,21 @@ async function syncDlt645(snapshot: FullConfigExportSnapshot): Promise<void> {
       task.point_table.conn_name,
       task.point_table.points,
       task.point_table.blocks,
-      task.point_table.replace,
+      replace,
     );
   }
 }
 
-async function syncAgc(snapshot: FullConfigExportSnapshot): Promise<void> {
+async function syncAgc(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
   const targetNames = new Set(snapshot.config.agc.groups.map((task) => task.upsert.config.group_name));
   const currentGroups = await api.agcListGroups();
 
-  for (const currentGroup of currentGroups) {
-    const groupName = currentGroup.config?.group_name;
-    if (groupName && !targetNames.has(groupName)) {
-      await api.agcDeleteGroup(groupName);
+  if (mode === 'replace') {
+    for (const currentGroup of currentGroups) {
+      const groupName = currentGroup.config?.group_name;
+      if (groupName && !targetNames.has(groupName)) {
+        await api.agcDeleteGroup(groupName);
+      }
     }
   }
 
@@ -527,11 +872,12 @@ function toDcRoute(
   };
 }
 
-async function syncDataBus(snapshot: FullConfigExportSnapshot): Promise<void> {
+async function syncDataBus(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
+  const replace = mode === 'replace';
   const routeItems = snapshot.config.data_bus.routes.items;
 
   if (routeItems.length === 0) {
-    await api.dcUpsertRoutes([], snapshot.config.data_bus.routes.replace);
+    await api.dcUpsertRoutes([], replace);
     return;
   }
 
@@ -543,10 +889,12 @@ async function syncDataBus(snapshot: FullConfigExportSnapshot): Promise<void> {
 
   const connectionMap = await waitForConnectionMap(requiredKeys);
   const routes = routeItems.map((route) => toDcRoute(route, connectionMap));
-  await api.dcUpsertRoutes(routes, snapshot.config.data_bus.routes.replace);
+  await api.dcUpsertRoutes(routes, replace);
 }
 
-export async function buildFullConfigExportSnapshot(): Promise<FullConfigExportSnapshot> {
+export async function buildConfigExportSnapshot(
+  sections: readonly ConfigExportSectionId[] = ALL_CONFIG_SECTION_IDS,
+): Promise<FullConfigExportSnapshot> {
   const [appVersionResult, runningModulesInfo] = await Promise.all([
     api.getAppVersion().catch(() => null),
     api.getRunningModuleInfo(),
@@ -561,7 +909,7 @@ export async function buildFullConfigExportSnapshot(): Promise<FullConfigExportS
     loadDataBusConfig(runningModules),
   ]);
 
-  return {
+  const snapshot: FullConfigExportSnapshot = {
     schema_version: 1,
     exported_at: exportedAt,
     source: {
@@ -579,11 +927,18 @@ export async function buildFullConfigExportSnapshot(): Promise<FullConfigExportS
       agc,
       data_bus: dataBus,
     },
+    metadata: buildConfigExportMetadata(ALL_CONFIG_SECTION_IDS),
   };
+
+  return scopeConfigSnapshot(snapshot, sections);
+}
+
+export async function buildFullConfigExportSnapshot(): Promise<FullConfigExportSnapshot> {
+  return buildConfigExportSnapshot();
 }
 
 export async function saveFullConfigExport(snapshot: FullConfigExportSnapshot): Promise<string | null> {
-  const defaultFileName = buildExportFileName(snapshot.exported_at);
+  const defaultFileName = buildExportFileName(snapshot.exported_at, getIncludedConfigSections(snapshot));
   const selectedPath = await save({
     title: 'Export Full Config',
     defaultPath: defaultFileName,
@@ -629,42 +984,58 @@ export async function selectFullConfigImport(): Promise<FullConfigImportSelectio
   return { filePath, snapshot };
 }
 
-export async function applyFullConfigImport(selection: FullConfigImportSelection): Promise<FullConfigImportResult> {
+export async function applyConfigImport(
+  selection: FullConfigImportSelection,
+  options: ApplyConfigImportOptions = {},
+): Promise<FullConfigImportResult> {
+  const sections = dedupeConfigSections(options.sections ?? getIncludedConfigSections(selection.snapshot));
+  const mode = normalizeConfigImportMode(options.mode);
+  const scopedSnapshot = scopeConfigSnapshot(selection.snapshot, sections);
   const warnings: string[] = [];
-  await api.setManagerAddr(selection.snapshot.source.manager_addr);
-  setStoredManagerAddr(selection.snapshot.source.manager_addr);
+  const shouldApplyGlobals = options.applyGlobals ?? scopedSnapshot.metadata.scope !== 'partial';
+
+  if (shouldApplyGlobals) {
+    await api.setManagerAddr(scopedSnapshot.source.manager_addr);
+    setStoredManagerAddr(scopedSnapshot.source.manager_addr);
+  }
 
   const {
     runningModules,
     startedModules,
     warnings: moduleWarnings,
-  } = await ensureModulesReady(selection.snapshot);
+  } = await ensureModulesReady(scopedSnapshot);
   warnings.push(...moduleWarnings);
 
-  const desiredModules = collectDesiredModules(selection.snapshot);
+  const {
+    snapshot,
+    warnings: mergeWarnings,
+  } = await preprocessMergeImportSnapshot(scopedSnapshot, mode, runningModules);
+  warnings.push(...mergeWarnings);
+
+  const desiredModules = collectDesiredModules(snapshot);
 
   const syncTasks: Promise<void>[] = [];
 
   if (desiredModules.has(MODULE_IEC104) && runningModules.has(MODULE_IEC104)) {
-    syncTasks.push(syncIec104(selection.snapshot));
+    syncTasks.push(syncIec104(snapshot, mode));
   } else if (desiredModules.has(MODULE_IEC104)) {
     warnings.push('IEC104 is not running, skipped importing its links');
   }
 
   if (desiredModules.has(MODULE_MODBUS_RTU) && runningModules.has(MODULE_MODBUS_RTU)) {
-    syncTasks.push(syncModbusRtu(selection.snapshot));
+    syncTasks.push(syncModbusRtu(snapshot, mode));
   } else if (desiredModules.has(MODULE_MODBUS_RTU)) {
     warnings.push('ModbusRTU is not running, skipped importing its links');
   }
 
   if (desiredModules.has(MODULE_DLT645) && runningModules.has(MODULE_DLT645)) {
-    syncTasks.push(syncDlt645(selection.snapshot));
+    syncTasks.push(syncDlt645(snapshot, mode));
   } else if (desiredModules.has(MODULE_DLT645)) {
     warnings.push('DLT645 is not running, skipped importing its links');
   }
 
   if (desiredModules.has(MODULE_AGC) && runningModules.has(MODULE_AGC)) {
-    syncTasks.push(syncAgc(selection.snapshot));
+    syncTasks.push(syncAgc(snapshot, mode));
   } else if (desiredModules.has(MODULE_AGC)) {
     warnings.push('AGC is not running, skipped importing its groups');
   }
@@ -672,21 +1043,30 @@ export async function applyFullConfigImport(selection: FullConfigImportSelection
   await Promise.all(syncTasks);
 
   if (desiredModules.has(MODULE_DATA_CENTER) && runningModules.has(MODULE_DATA_CENTER)) {
-    await syncDataBus(selection.snapshot);
+    await syncDataBus(snapshot, mode);
   } else if (desiredModules.has(MODULE_DATA_CENTER)) {
     warnings.push('DataCenter is not running, skipped importing DataBus routes');
   }
 
   return {
     filePath: selection.filePath,
+    mode,
     startedModules,
     warnings,
+    sections,
     summary: {
-      iec104Links: selection.snapshot.config.iec104.links.length,
-      modbusRtuLinks: selection.snapshot.config.modbus_rtu.links.length,
-      dlt645Links: selection.snapshot.config.dlt645.links.length,
-      agcGroups: selection.snapshot.config.agc.groups.length,
-      dataBusRoutes: selection.snapshot.config.data_bus.routes.items.length,
+      iec104Links: snapshot.config.iec104.links.length,
+      modbusRtuLinks: snapshot.config.modbus_rtu.links.length,
+      dlt645Links: snapshot.config.dlt645.links.length,
+      agcGroups: snapshot.config.agc.groups.length,
+      dataBusRoutes: snapshot.config.data_bus.routes.items.length,
     },
   };
+}
+
+export async function applyFullConfigImport(
+  selection: FullConfigImportSelection,
+  options: Omit<ApplyConfigImportOptions, 'sections' | 'applyGlobals'> = {},
+): Promise<FullConfigImportResult> {
+  return applyConfigImport(selection, options);
 }
