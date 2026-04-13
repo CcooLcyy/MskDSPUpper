@@ -6,6 +6,7 @@ import { api } from '../../adapters';
 import type { Dlt645LinkConfig, Dlt645LinkInfo, Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
+import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
 import ConnectionConfig from './components/ConnectionConfig';
 import StatusPanel from './components/StatusPanel';
 import OperationsPanel from './components/OperationsPanel';
@@ -230,6 +231,61 @@ const DLT645: React.FC = () => {
       messageApi.error(`删除连接失败: ${error}`);
     }
   }, [messageApi, refreshLinks, selectedConn]);
+
+  const handleCopyLink = useCallback(async (sourceConnName: string) => {
+    const sourceConfig = links.find((link) => link.config?.conn_name === sourceConnName)?.config;
+    if (!sourceConfig) {
+      messageApi.error(`未找到连接 ${sourceConnName} 的配置`);
+      return;
+    }
+
+    const nextConnName = buildDuplicateConnectionName(
+      sourceConfig.conn_name,
+      links
+        .map((link) => link.config?.conn_name)
+        .filter((connName): connName is string => Boolean(connName)),
+    );
+    const copiedConfig: Dlt645LinkConfig = {
+      ...sourceConfig,
+      conn_name: nextConnName,
+    };
+
+    try {
+      await api.dlt645UpsertLink(copiedConfig, true);
+
+      let pointCopyError: unknown = null;
+      try {
+        const pointTable = await api.dlt645GetPointTable(sourceConnName);
+        if (pointTable.points.length > 0 || pointTable.blocks.length > 0) {
+          await api.dlt645UpsertPointTable(
+            nextConnName,
+            pointTable.points.map((point) => ({ ...point })),
+            pointTable.blocks.map((block) => ({
+              ...block,
+              items: block.items.map((item: Dlt645BlockItem) => ({ ...item })),
+            })),
+            true,
+          );
+        }
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          pointCopyError = error;
+        }
+      }
+
+      await refreshLinks();
+      setSelectedConn(nextConnName);
+
+      if (pointCopyError) {
+        messageApi.error(`连接已复制为 ${nextConnName}，但复制点表失败: ${pointCopyError}`);
+        return;
+      }
+
+      messageApi.success(`已复制连接为 ${nextConnName}`);
+    } catch (error) {
+      messageApi.error(`复制连接失败: ${error}`);
+    }
+  }, [links, messageApi, refreshLinks]);
 
   const handleStartLink = useCallback(async () => {
     if (!selectedConn) {
@@ -755,6 +811,7 @@ const DLT645: React.FC = () => {
               loading={loading}
               onSelect={setSelectedConn}
               onCreate={openCreateLink}
+              onCopy={(connName) => void handleCopyLink(connName)}
               onDelete={(connName) => void handleDeleteLink(connName)}
               onRefresh={() => void refreshLinks()}
               getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}

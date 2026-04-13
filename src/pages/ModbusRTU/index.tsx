@@ -6,6 +6,7 @@ import { api } from '../../adapters';
 import type { ModbusLinkConfig, ModbusLinkInfo, ModbusPoint, ModbusReadPlan, ModbusSerialConfig } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
+import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
 import ConnectionConfig from './components/ConnectionConfig';
 import StatusPanel from './components/StatusPanel';
 import OperationsPanel from './components/OperationsPanel';
@@ -263,6 +264,64 @@ const ModbusRTU: React.FC = () => {
       messageApi.error(`删除连接失败: ${error}`);
     }
   }, [messageApi, refreshLinks, selectedConn]);
+
+  const handleCopyLink = useCallback(async (sourceConnName: string) => {
+    const sourceConfig = links.find((link) => link.config?.conn_name === sourceConnName)?.config;
+    if (!sourceConfig) {
+      messageApi.error(`未找到连接 ${sourceConnName} 的配置`);
+      return;
+    }
+
+    const nextConnName = buildDuplicateConnectionName(
+      sourceConfig.conn_name,
+      links
+        .map((link) => link.config?.conn_name)
+        .filter((connName): connName is string => Boolean(connName)),
+    );
+    const copiedConfig: ModbusLinkConfig = {
+      ...sourceConfig,
+      conn_name: nextConnName,
+      serial: sourceConfig.serial ? { ...sourceConfig.serial } : null,
+      read_plan: sourceConfig.read_plan
+        ? {
+          ...sourceConfig.read_plan,
+          blocks: sourceConfig.read_plan.blocks.map((block) => ({ ...block })),
+        }
+        : null,
+    };
+
+    try {
+      await api.modbusRtuUpsertLink(copiedConfig, true);
+
+      let pointCopyError: unknown = null;
+      try {
+        const pointTable = await api.modbusRtuGetPointTable(sourceConnName);
+        if (pointTable.points.length > 0) {
+          await api.modbusRtuUpsertPointTable(
+            nextConnName,
+            pointTable.points.map((point) => ({ ...point })),
+            true,
+          );
+        }
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          pointCopyError = error;
+        }
+      }
+
+      await refreshLinks();
+      setSelectedConn(nextConnName);
+
+      if (pointCopyError) {
+        messageApi.error(`连接已复制为 ${nextConnName}，但复制点表失败: ${pointCopyError}`);
+        return;
+      }
+
+      messageApi.success(`已复制连接为 ${nextConnName}`);
+    } catch (error) {
+      messageApi.error(`复制连接失败: ${error}`);
+    }
+  }, [links, messageApi, refreshLinks]);
 
   const handleStartLink = useCallback(async () => {
     if (!selectedConn) {
@@ -643,6 +702,7 @@ const ModbusRTU: React.FC = () => {
               loading={loading}
               onSelect={setSelectedConn}
               onCreate={openCreateLink}
+              onCopy={(connName) => void handleCopyLink(connName)}
               onDelete={(connName) => void handleDeleteLink(connName)}
               onRefresh={() => void refreshLinks()}
               getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}

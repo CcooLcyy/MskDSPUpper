@@ -1,6 +1,6 @@
 import React from 'react';
 import { Button, Card, List, Popconfirm, Space, Typography } from 'antd';
-import { DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { CopyOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 
 const { Text } = Typography;
 
@@ -21,6 +21,7 @@ interface ProtocolConnectionListProps<T extends ProtocolConnectionListItemBase> 
   selectedConn: string | null;
   onSelect: (connName: string) => void;
   onCreate: () => void;
+  onCopy?: (connName: string) => void;
   onDelete: (connName: string) => void;
   onRefresh: () => void;
   getStateColor: (item: T) => string;
@@ -40,6 +41,7 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
   selectedConn,
   onSelect,
   onCreate,
+  onCopy,
   onDelete,
   onRefresh,
   getStateColor,
@@ -109,21 +111,35 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
                         {connName}
                       </Text>
                     </Space>
-                    <Popconfirm
-                      title={getDeleteTitle(connName)}
-                      onConfirm={(event) => {
-                        event?.stopPropagation();
-                        onDelete(connName);
-                      }}
-                    >
-                      <Button
-                        type="text"
-                        size="small"
-                        danger
-                        icon={<DeleteOutlined />}
-                        onClick={(event) => event.stopPropagation()}
-                      />
-                    </Popconfirm>
+                    <Space size={4}>
+                      {onCopy ? (
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<CopyOutlined />}
+                          aria-label={`复制连接 ${connName}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onCopy(connName);
+                          }}
+                        />
+                      ) : null}
+                      <Popconfirm
+                        title={getDeleteTitle(connName)}
+                        onConfirm={(event) => {
+                          event?.stopPropagation();
+                          onDelete(connName);
+                        }}
+                      >
+                        <Button
+                          type="text"
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={(event) => event.stopPropagation()}
+                        />
+                      </Popconfirm>
+                    </Space>
                   </Space>
                 </div>
               </List.Item>

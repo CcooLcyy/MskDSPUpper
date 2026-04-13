@@ -49,7 +49,6 @@ const ConnectionConfig: React.FC<Props> = ({ link, onEdit }) => {
     >
       {config ? (
         <Descriptions size="small" column={2} colon={false}>
-          <Descriptions.Item label="连接标识">{link?.conn_id ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="协议变体">
             {PROTOCOL_VARIANT_LABELS[config.protocol_variant] ?? '未指定'}
           </Descriptions.Item>

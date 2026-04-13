@@ -33,6 +33,11 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
+import {
+  buildDuplicateConnectionName,
+  findNextAvailablePort,
+  isNotFoundError,
+} from '../../utils/connection-copy';
 import type {
   Iec104LinkConfig,
   Iec104LinkInfo,
@@ -378,6 +383,83 @@ const IEC104: React.FC = () => {
     [messageApi, selectedConn, refreshLinks],
   );
 
+  const handleCopyLink = useCallback(
+    async (sourceConnName: string) => {
+      const sourceConfig = links.find((link) => link.config?.conn_name === sourceConnName)?.config;
+      if (!sourceConfig) {
+        messageApi.error(`未找到连接 ${sourceConnName} 的配置`);
+        return;
+      }
+
+      const nextConnName = buildDuplicateConnectionName(
+        sourceConfig.conn_name,
+        links
+          .map((link) => link.config?.conn_name)
+          .filter((connName): connName is string => Boolean(connName)),
+      );
+      const copiedConfig: Iec104LinkConfig = {
+        ...sourceConfig,
+        conn_name: nextConnName,
+        local: sourceConfig.local ? { ...sourceConfig.local } : null,
+        remote: sourceConfig.remote ? { ...sourceConfig.remote } : null,
+        apci: sourceConfig.apci ? { ...sourceConfig.apci } : null,
+      };
+
+      if (copiedConfig.local) {
+        const nextLocalPort = findNextAvailablePort(
+          copiedConfig.local.port,
+          links
+            .map((link) => link.config?.local?.port)
+            .filter((port): port is number => typeof port === 'number'),
+        );
+
+        if (nextLocalPort == null) {
+          messageApi.error('复制连接失败: 未找到可用的 IEC104 监听端口');
+          return;
+        }
+
+        copiedConfig.local.port = nextLocalPort;
+      }
+
+      try {
+        await api.iec104UpsertLink(copiedConfig, true);
+
+        let pointCopyError: unknown = null;
+        try {
+          const pointTable = await api.iec104GetPointTable(sourceConnName);
+          if (pointTable.points.length > 0) {
+            await api.iec104UpsertPointTable(
+              nextConnName,
+              pointTable.points.map((point) => ({ ...point })),
+              true,
+            );
+          }
+        } catch (error) {
+          if (!isNotFoundError(error)) {
+            pointCopyError = error;
+          }
+        }
+
+        await refreshLinks();
+        setSelectedConn(nextConnName);
+
+        if (pointCopyError) {
+          messageApi.error(`连接已复制为 ${nextConnName}，但复制点表失败: ${pointCopyError}`);
+          return;
+        }
+
+        messageApi.success(
+          copiedConfig.local
+            ? `已复制连接为 ${nextConnName}，监听端口已调整为 ${copiedConfig.local.port}`
+            : `已复制连接为 ${nextConnName}`,
+        );
+      } catch (error) {
+        messageApi.error(`复制连接失败: ${error}`);
+      }
+    },
+    [links, messageApi, refreshLinks],
+  );
+
   // ── Operation Handlers ──
 
   const handleStartLink = useCallback(async () => {
@@ -563,6 +645,7 @@ const IEC104: React.FC = () => {
               selectedConn={selectedConn}
               onSelect={setSelectedConn}
               onCreate={openCreateLink}
+              onCopy={(connName) => void handleCopyLink(connName)}
               onDelete={(connName) => void handleDeleteLink(connName)}
               onRefresh={() => void refreshLinks()}
               getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
