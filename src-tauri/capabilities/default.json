@@ -4,6 +4,8 @@
   "description": "Permissions for the main desktop window.",
   "windows": ["main"],
   "permissions": [
+    "core:app:allow-version",
+    "dialog:allow-save",
     "updater:default",
     "process:default"
   ]
