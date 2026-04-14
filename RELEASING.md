@@ -30,7 +30,7 @@ Create these repository secrets in `Settings -> Secrets and variables -> Actions
 - `TAURI_SIGNING_PRIVATE_KEY`
   Paste the full content of `C:\Users\mutex\.tauri\mskdsp-upper.key`.
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-  Paste the password for the signing key above.
+  Optional. Leave unset when using a passwordless updater key.
 - `SUBMODULE_TOKEN`
   Optional. Use a GitHub token that can read `CcooLcyy/MskDSPProto` if anonymous HTTPS checkout is not enough.
 - `SUBMODULE_SSH_KEY`
