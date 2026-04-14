@@ -177,7 +177,8 @@ jobs:
           }
           $cargoVersion = $cargoVersionMatch.Groups[1].Value
           $needsApply = @($packageVersion, $tauriVersion, $cargoVersion) | Where-Object { $_ -ne $expectedVersion } | Measure-Object | Select-Object -ExpandProperty Count
-          "needs_apply=$([string]($needsApply -gt 0).ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $needsApplyOutput = if ($needsApply -gt 0) { 'true' } else { 'false' }
+          "needs_apply=$needsApplyOutput" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "expected_version=$expectedVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Apply stable version
