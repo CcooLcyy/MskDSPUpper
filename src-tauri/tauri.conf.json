@@ -33,7 +33,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwRjFENDY2QkNCOEFEQTgKUldTb3JiaThadFR4MEduWm5LKzltVG96QXVHUFM1bGZETitLaTBjVXFnY3pCMVoxYUxEcmd5Qm8K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5RkEzNjlCMkZFRjEyRkIKUldUN0V1OHZtemI2V1ZNRGtBZW1SUncrSGdOcTdsd2lQNDFiQlhNN3FQdExVL0ptbFVSZ1RLbDYK",
       "endpoints": [
         "https://github.com/CcooLcyy/MskDSPUpper/releases/latest/download/latest.json"
       ],

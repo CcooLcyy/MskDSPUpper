@@ -58,7 +58,7 @@
 | `SUBMODULE_TOKEN` | 访问私有 submodule 的 PAT | 空 |
 | `SUBMODULE_SSH_KEY` | submodule SSH key 回退 | 空 |
 | `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater 签名私钥 | 空 |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Tauri updater 私钥口令 | 空 |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Tauri updater 私钥口令，可留空 | 空 |
 | `MSKDSP_UPPER_SOURCEMAP` | 是否产出前端 sourcemap | `false` |
 | `beta_ref` | Beta workflow 手动指定版本线 | 空 |
 | `threshold_hours` | Auto Promote workflow 的空窗阈值 | `72` |
