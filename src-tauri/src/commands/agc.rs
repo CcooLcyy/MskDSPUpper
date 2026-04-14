@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -226,12 +228,96 @@ impl GroupConfigDto {
     }
 }
 
+fn collect_group_tag_owner(
+    tag_owners: &mut BTreeMap<String, Vec<String>>,
+    tag: Option<&str>,
+    owner: String,
+) {
+    let normalized_tag = tag.map(str::trim).filter(|tag| !tag.is_empty());
+    if let Some(normalized_tag) = normalized_tag {
+        tag_owners
+            .entry(normalized_tag.to_string())
+            .or_default()
+            .push(owner);
+    }
+}
+
+fn validate_group_tag_uniqueness(config: &GroupConfigDto) -> Result<(), String> {
+    let mut tag_owners = BTreeMap::<String, Vec<String>>::new();
+
+    collect_group_tag_owner(
+        &mut tag_owners,
+        config
+            .p_cmd
+            .as_ref()
+            .and_then(|value| value.signal.as_ref())
+            .map(|signal| signal.tag.as_str()),
+        "p_cmd".to_string(),
+    );
+
+    for (index, member) in config.members.iter().enumerate() {
+        let member_label = if member.member_name.trim().is_empty() {
+            format!("member #{}", index + 1)
+        } else {
+            member.member_name.trim().to_string()
+        };
+        collect_group_tag_owner(
+            &mut tag_owners,
+            member.p_meas.as_ref().map(|signal| signal.tag.as_str()),
+            format!("{member_label}.p_meas"),
+        );
+        collect_group_tag_owner(
+            &mut tag_owners,
+            member
+                .p_set
+                .as_ref()
+                .and_then(|value| value.signal.as_ref())
+                .map(|signal| signal.tag.as_str()),
+            format!("{member_label}.p_set"),
+        );
+    }
+
+    if let Some(outputs) = &config.outputs {
+        collect_group_tag_owner(
+            &mut tag_owners,
+            outputs.p_total_meas.as_ref().map(|signal| signal.tag.as_str()),
+            "outputs.p_total_meas".to_string(),
+        );
+        collect_group_tag_owner(
+            &mut tag_owners,
+            outputs.p_total_target.as_ref().map(|signal| signal.tag.as_str()),
+            "outputs.p_total_target".to_string(),
+        );
+        collect_group_tag_owner(
+            &mut tag_owners,
+            outputs.p_total_error.as_ref().map(|signal| signal.tag.as_str()),
+            "outputs.p_total_error".to_string(),
+        );
+    }
+
+    let duplicate_tags = tag_owners
+        .into_iter()
+        .filter(|(_, owners)| owners.len() > 1)
+        .map(|(tag, owners)| format!("{tag} ({})", owners.join(", ")))
+        .collect::<Vec<_>>();
+
+    if duplicate_tags.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "同一 AGC 控制组内 DataBus tag 不能重复: {}",
+            duplicate_tags.join("；")
+        ))
+    }
+}
+
 #[tauri::command]
 pub async fn agc_upsert_group(
     state: State<'_, AppState>,
     config: GroupConfigDto,
     create_only: bool,
 ) -> Result<GroupInfoDto, String> {
+    validate_group_tag_uniqueness(&config)?;
     let client = AgcClient::new(&state.conn_manager);
     let group = client
         .upsert_group(config.to_proto(), create_only)
