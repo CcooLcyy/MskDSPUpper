@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Card,
@@ -39,6 +39,7 @@ import {
   isNotFoundError,
 } from '../../utils/connection-copy';
 import type {
+  DcConnectionInfo,
   Iec104LinkConfig,
   Iec104LinkInfo,
   Iec104Point,
@@ -92,15 +93,151 @@ const DEFAULT_POINT_FORM_VALUES = {
   deadband: 0,
 };
 
+type IoaCategoryKey = 'custom' | 'teleindication' | 'telemetry' | 'remoteAdjust';
+
+type IoaCategoryOption = {
+  value: IoaCategoryKey;
+  label: string;
+  start?: number;
+};
+
+type DataBusConnectionOption = {
+  value: string;
+  label: string;
+  connId: number;
+  connName: string;
+};
+
+type DataBusEndpointOption = {
+  value: string;
+  label: string;
+  connId: number;
+  connName: string;
+  tag: string;
+};
+
+type ImportedPointDraft = Iec104Point & {
+  key: string;
+  sourceValue: string;
+  sourceLabel: string;
+  ioa_category: IoaCategoryKey;
+};
+
+const IOA_CATEGORY_OPTIONS: IoaCategoryOption[] = [
+  { value: 'custom', label: '自定义' },
+  { value: 'teleindication', label: '遥信 (0001H 起)', start: 0x0001 },
+  { value: 'telemetry', label: '遥测 (4001H 起)', start: 0x4001 },
+  { value: 'remoteAdjust', label: '遥调 (6201H 起)', start: 0x6201 },
+];
+
+const KNOWN_IOA_CATEGORY_OPTIONS = IOA_CATEGORY_OPTIONS.filter(
+  (option): option is IoaCategoryOption & { start: number } => typeof option.start === 'number',
+);
+
+const buildDataBusConnectionOptions = (connections: DcConnectionInfo[]): DataBusConnectionOption[] =>
+  connections
+    .map((connection) => ({
+      value: String(connection.conn_id),
+      label: `${connection.module_name}/${connection.conn_name}`,
+      connId: connection.conn_id,
+      connName: connection.conn_name,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'));
+
+const getNextAvailableIoa = (usedIoas: Set<number>) => {
+  const maxUsed = usedIoas.size > 0 ? Math.max(...usedIoas) : -1;
+  if (maxUsed < MAX_IOA) {
+    return maxUsed + 1;
+  }
+
+  for (let candidate = 0; candidate <= MAX_IOA; candidate += 1) {
+    if (!usedIoas.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  return MAX_IOA;
+};
+
+const getDefaultImportedPointType = (points: Iec104Point[]) => points[points.length - 1]?.point_type ?? 1;
+
+const getIoaCategoryRange = (category: IoaCategoryKey) => {
+  const categoryIndex = KNOWN_IOA_CATEGORY_OPTIONS.findIndex((option) => option.value === category);
+  if (categoryIndex < 0) {
+    return null;
+  }
+
+  const start = KNOWN_IOA_CATEGORY_OPTIONS[categoryIndex].start;
+  const nextStart = KNOWN_IOA_CATEGORY_OPTIONS[categoryIndex + 1]?.start;
+
+  return {
+    start,
+    end: typeof nextStart === 'number' ? nextStart - 1 : MAX_IOA,
+  };
+};
+
+const getIoaCategoryByIoa = (ioa?: number | null): IoaCategoryKey => {
+  if (typeof ioa !== 'number' || Number.isNaN(ioa)) {
+    return 'custom';
+  }
+
+  for (const option of KNOWN_IOA_CATEGORY_OPTIONS) {
+    const range = getIoaCategoryRange(option.value);
+    if (range && ioa >= range.start && ioa <= range.end) {
+      return option.value;
+    }
+  }
+
+  return 'custom';
+};
+
+const getNextAvailableIoaInRange = (usedIoas: Set<number>, start: number, end: number) => {
+  const usedIoasInRange = Array.from(usedIoas).filter((candidate) => candidate >= start && candidate <= end);
+  const maxUsed = usedIoasInRange.length > 0 ? Math.max(...usedIoasInRange) : start - 1;
+  const sequentialCandidate = maxUsed + 1;
+
+  if (sequentialCandidate <= end && !usedIoas.has(sequentialCandidate)) {
+    return sequentialCandidate;
+  }
+
+  for (let candidate = start; candidate <= end; candidate += 1) {
+    if (!usedIoas.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  return end;
+};
+
+const getSuggestedIoaByCategory = (
+  usedIoas: Set<number>,
+  category: IoaCategoryKey,
+  fallbackIoa?: number,
+) => {
+  const range = getIoaCategoryRange(category);
+  if (!range) {
+    if (typeof fallbackIoa === 'number') {
+      return Math.min(fallbackIoa, MAX_IOA);
+    }
+    return getNextAvailableIoa(usedIoas);
+  }
+
+  return getNextAvailableIoaInRange(usedIoas, range.start, range.end);
+};
+
 const getCreatePointInitialValues = (points: Iec104Point[]) => {
   const lastPoint = points[points.length - 1];
 
   if (!lastPoint) {
-    return { ...DEFAULT_POINT_FORM_VALUES };
+    return {
+      ...DEFAULT_POINT_FORM_VALUES,
+      ioa_category: 'custom' as IoaCategoryKey,
+    };
   }
 
   return {
     ...DEFAULT_POINT_FORM_VALUES,
+    ioa_category: 'custom' as IoaCategoryKey,
     ioa: Math.min(lastPoint.ioa + 1, MAX_IOA),
     point_type: lastPoint.point_type,
   };
@@ -123,6 +260,13 @@ const IEC104: React.FC = () => {
   const [editingLink, setEditingLink] = useState<Iec104LinkConfig | null>(null);
   const [pointModalOpen, setPointModalOpen] = useState(false);
   const [editingPointIndex, setEditingPointIndex] = useState<number | null>(null);
+  const [importPointModalOpen, setImportPointModalOpen] = useState(false);
+  const [dataBusConnectionOptions, setDataBusConnectionOptions] = useState<DataBusConnectionOption[]>([]);
+  const [dataBusEndpointOptions, setDataBusEndpointOptions] = useState<DataBusEndpointOption[]>([]);
+  const [dataBusEndpointLoading, setDataBusEndpointLoading] = useState(false);
+  const [importSourceConnId, setImportSourceConnId] = useState<string>();
+  const [selectedImportEndpointValues, setSelectedImportEndpointValues] = useState<string[]>([]);
+  const [importPointDrafts, setImportPointDrafts] = useState<ImportedPointDraft[]>([]);
   const [messageApi, contextHolder] = message.useMessage();
   const [searchParams] = useSearchParams();
 
@@ -141,6 +285,24 @@ const IEC104: React.FC = () => {
   const singleEndpointMode = linkRole === ROLE_SERVER || linkRole === ROLE_CLIENT;
   const endpointIpSpan = singleEndpointMode ? 18 : 9;
   const endpointPortSpan = singleEndpointMode ? 6 : 3;
+  const currentPointTagSet = useMemo(
+    () => new Set(points.map((point) => point.tag.trim())),
+    [points],
+  );
+  const importSourceEndpointOptions = useMemo(
+    () =>
+      dataBusEndpointOptions
+        .filter((item) => String(item.connId) === importSourceConnId)
+        .map((item) => ({
+          value: item.value,
+          label: currentPointTagSet.has(item.tag.trim())
+            ? `${item.label} (当前连接已存在)`
+            : item.label,
+          selectedLabel: item.tag,
+          disabled: currentPointTagSet.has(item.tag.trim()),
+        })),
+    [currentPointTagSet, dataBusEndpointOptions, importSourceConnId],
+  );
 
   // ── Data Loading ──
 
@@ -167,6 +329,43 @@ const IEC104: React.FC = () => {
     },
     [],
   );
+
+  const refreshDataBusEndpointOptions = useCallback(async () => {
+    setDataBusEndpointLoading(true);
+    try {
+      const connections = await api.dcListConnections();
+      setDataBusConnectionOptions(buildDataBusConnectionOptions(connections));
+
+      const endpointGroups = await Promise.all(
+        connections.map(async (connection) => {
+          try {
+            const connTags = await api.dcGetConnTags(connection.conn_id);
+            return connTags.tags.map((tag) => ({
+              value: `${connection.conn_id}:${tag}`,
+              label: `${connection.module_name}/${connection.conn_name} : ${tag}`,
+              connId: connection.conn_id,
+              connName: connection.conn_name,
+              tag,
+            }));
+          } catch {
+            return [];
+          }
+        }),
+      );
+
+      setDataBusEndpointOptions(
+        endpointGroups
+          .flat()
+          .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN')),
+      );
+    } catch (e) {
+      setDataBusConnectionOptions([]);
+      setDataBusEndpointOptions([]);
+      messageApi.error(`加载现有点位失败: ${e}`);
+    } finally {
+      setDataBusEndpointLoading(false);
+    }
+  }, [messageApi]);
 
   useEffect(() => {
     void refreshLinks();
@@ -503,6 +702,14 @@ const IEC104: React.FC = () => {
     setPointModalOpen(true);
   }, [pointForm, points]);
 
+  const openImportPointModal = useCallback(() => {
+    setImportSourceConnId(undefined);
+    setSelectedImportEndpointValues([]);
+    setImportPointDrafts([]);
+    setImportPointModalOpen(true);
+    void refreshDataBusEndpointOptions();
+  }, [refreshDataBusEndpointOptions]);
+
   const openEditPoint = useCallback(
     (index: number) => {
       const p = points[index];
@@ -510,6 +717,7 @@ const IEC104: React.FC = () => {
       pointForm.setFieldsValue({
         tag: p.tag,
         ioa: p.ioa,
+        ioa_category: getIoaCategoryByIoa(p.ioa),
         point_type: p.point_type,
         scale: p.scale,
         offset: p.offset,
@@ -518,6 +726,45 @@ const IEC104: React.FC = () => {
       setPointModalOpen(true);
     },
     [points, pointForm],
+  );
+
+  const handlePointIoaCategoryChange = useCallback(
+    (nextCategory: IoaCategoryKey) => {
+      const usedIoas = new Set(
+        points
+          .filter((_point, index) => index !== editingPointIndex)
+          .map((point) => point.ioa),
+      );
+      const currentIoa = pointForm.getFieldValue('ioa');
+      const currentCategory = pointForm.getFieldValue('ioa_category') as IoaCategoryKey | undefined;
+      const keepCurrentIoa =
+        currentCategory === nextCategory && typeof currentIoa === 'number' && !usedIoas.has(currentIoa);
+      const nextIoa = getSuggestedIoaByCategory(
+        usedIoas,
+        nextCategory,
+        keepCurrentIoa
+          ? currentIoa
+          : typeof currentIoa === 'number' && !usedIoas.has(currentIoa)
+          ? currentIoa
+          : getNextAvailableIoa(usedIoas),
+      );
+
+      pointForm.setFieldsValue({
+        ioa_category: nextCategory,
+        ioa: keepCurrentIoa ? currentIoa : nextIoa,
+      });
+    },
+    [editingPointIndex, pointForm, points],
+  );
+
+  const handlePointIoaChange = useCallback(
+    (nextValue: number | null) => {
+      pointForm.setFieldsValue({
+        ioa: typeof nextValue === 'number' ? nextValue : undefined,
+        ioa_category: getIoaCategoryByIoa(nextValue),
+      });
+    },
+    [pointForm],
   );
 
   const handlePointSubmit = useCallback(async () => {
@@ -561,6 +808,173 @@ const IEC104: React.FC = () => {
     },
     [selectedConn, points, messageApi],
   );
+
+  const handleImportSourceConnChange = useCallback((value: string | undefined) => {
+    setImportSourceConnId(value);
+    setSelectedImportEndpointValues([]);
+    setImportPointDrafts([]);
+  }, []);
+
+  const handleSelectImportEndpoints = useCallback(
+    (values: string[]) => {
+      setSelectedImportEndpointValues(values);
+      setImportPointDrafts((prev) => {
+        const prevMap = new Map(prev.map((item) => [item.sourceValue, item]));
+        const usedIoas = new Set(points.map((point) => point.ioa));
+        const nextDrafts: ImportedPointDraft[] = [];
+
+        for (const value of values) {
+          const existingDraft = prevMap.get(value);
+          if (existingDraft) {
+            nextDrafts.push(existingDraft);
+            usedIoas.add(existingDraft.ioa);
+            continue;
+          }
+
+          const sourcePoint = dataBusEndpointOptions.find((item) => item.value === value);
+          if (!sourcePoint) {
+            continue;
+          }
+
+          const nextIoa = getNextAvailableIoa(usedIoas);
+          usedIoas.add(nextIoa);
+          nextDrafts.push({
+            key: value,
+            sourceValue: value,
+            sourceLabel: sourcePoint.label,
+            tag: sourcePoint.tag,
+            ioa: nextIoa,
+            ioa_category: 'custom',
+            point_type: getDefaultImportedPointType(points),
+            scale: DEFAULT_POINT_FORM_VALUES.scale,
+            offset: DEFAULT_POINT_FORM_VALUES.offset,
+            deadband: DEFAULT_POINT_FORM_VALUES.deadband,
+          });
+        }
+
+        return nextDrafts;
+      });
+    },
+    [dataBusEndpointOptions, points],
+  );
+
+  const updateImportPointDraft = useCallback((key: string, patch: Partial<ImportedPointDraft>) => {
+    setImportPointDrafts((prev) =>
+      prev.map((item) => (item.key === key ? { ...item, ...patch } : item)),
+    );
+  }, []);
+
+  const handleImportPointIoaCategoryChange = useCallback(
+    (key: string, nextCategory: IoaCategoryKey) => {
+      setImportPointDrafts((prev) => {
+        const usedIoas = new Set(points.map((point) => point.ioa));
+        const currentDraft = prev.find((item) => item.key === key);
+
+        prev.forEach((item) => {
+          if (item.key !== key) {
+            usedIoas.add(item.ioa);
+          }
+        });
+
+        const fallbackIoa =
+          currentDraft && !usedIoas.has(currentDraft.ioa)
+            ? currentDraft.ioa
+            : getNextAvailableIoa(usedIoas);
+        const keepCurrentIoa =
+          currentDraft?.ioa_category === nextCategory &&
+          typeof currentDraft.ioa === 'number' &&
+          !usedIoas.has(currentDraft.ioa);
+        const nextIoa = keepCurrentIoa
+          ? currentDraft.ioa
+          : getSuggestedIoaByCategory(usedIoas, nextCategory, fallbackIoa);
+
+        return prev.map((item) =>
+          item.key === key
+            ? {
+                ...item,
+                ioa_category: nextCategory,
+                ioa: nextIoa,
+              }
+            : item,
+        );
+      });
+    },
+    [points],
+  );
+
+  const handleImportPointIoaChange = useCallback(
+    (key: string, nextValue: number | null) => {
+      updateImportPointDraft(key, {
+        ioa: typeof nextValue === 'number' ? nextValue : 0,
+        ioa_category: getIoaCategoryByIoa(nextValue),
+      });
+    },
+    [updateImportPointDraft],
+  );
+
+  const handleRemoveImportPointDraft = useCallback((key: string) => {
+    setSelectedImportEndpointValues((prev) => prev.filter((value) => value !== key));
+    setImportPointDrafts((prev) => prev.filter((item) => item.key !== key));
+  }, []);
+
+  const handleImportPointsSubmit = useCallback(async () => {
+    if (!selectedConn) return;
+    if (importPointDrafts.length === 0) {
+      messageApi.error('请选择需要导入的现有点位');
+      return;
+    }
+
+    const existingTags = new Set(points.map((point) => point.tag.trim()));
+    const existingIoas = new Set(points.map((point) => point.ioa));
+    const draftTags = new Set<string>();
+    const draftIoas = new Set<number>();
+    const normalizedPoints: Iec104Point[] = [];
+
+    for (const draft of importPointDrafts) {
+      const tag = draft.tag.trim();
+      if (!tag) {
+        messageApi.error(`请完善来源点位 ${draft.sourceLabel} 的标签`);
+        return;
+      }
+      if (!Number.isInteger(draft.ioa) || draft.ioa < 0 || draft.ioa > MAX_IOA) {
+        messageApi.error(`点位 ${tag} 的 IOA 必须为 0 ~ ${MAX_IOA} 的整数`);
+        return;
+      }
+      if (!draft.point_type) {
+        messageApi.error(`请选择点位 ${tag} 的类型`);
+        return;
+      }
+      if (existingTags.has(tag) || draftTags.has(tag)) {
+        messageApi.error(`目标连接内标签 ${tag} 重复，请调整后再导入`);
+        return;
+      }
+      if (existingIoas.has(draft.ioa) || draftIoas.has(draft.ioa)) {
+        messageApi.error(`目标连接内 IOA ${draft.ioa} 重复，请调整后再导入`);
+        return;
+      }
+
+      normalizedPoints.push({
+        tag,
+        ioa: draft.ioa,
+        point_type: draft.point_type,
+        scale: draft.scale ?? DEFAULT_POINT_FORM_VALUES.scale,
+        offset: draft.offset ?? DEFAULT_POINT_FORM_VALUES.offset,
+        deadband: draft.deadband ?? DEFAULT_POINT_FORM_VALUES.deadband,
+      });
+      draftTags.add(tag);
+      draftIoas.add(draft.ioa);
+    }
+
+    try {
+      const newPoints = [...points, ...normalizedPoints];
+      await api.iec104UpsertPointTable(selectedConn, newPoints, true);
+      setPoints(newPoints);
+      setImportPointModalOpen(false);
+      messageApi.success(`已导入 ${normalizedPoints.length} 个点位`);
+    } catch (e) {
+      messageApi.error(`导入点位失败: ${e}`);
+    }
+  }, [importPointDrafts, messageApi, points, selectedConn]);
 
   // ── Point Table Columns ──
 
@@ -622,6 +1036,152 @@ const IEC104: React.FC = () => {
             <Button type="link" size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
+      ),
+    },
+  ];
+
+  const importPointColumns: ColumnsType<ImportedPointDraft> = [
+    {
+      title: '来源点位',
+      dataIndex: 'sourceLabel',
+      key: 'sourceLabel',
+      width: 280,
+      ellipsis: true,
+      render: (value: string) => <Text>{value}</Text>,
+    },
+    {
+      title: 'Tag',
+      dataIndex: 'tag',
+      key: 'tag',
+      width: 180,
+      render: (value: string, record) => (
+        <Input
+          size="small"
+          value={value}
+          onChange={(event) => updateImportPointDraft(record.key, { tag: event.target.value })}
+        />
+      ),
+    },
+    {
+      title: 'IOA 类型',
+      dataIndex: 'ioa_category',
+      key: 'ioa_category',
+      width: 180,
+      render: (value: IoaCategoryKey, record) => (
+        <Select
+          size="small"
+          style={{ width: '100%' }}
+          value={value}
+          options={IOA_CATEGORY_OPTIONS}
+          onChange={(nextValue) => handleImportPointIoaCategoryChange(record.key, nextValue as IoaCategoryKey)}
+        />
+      ),
+    },
+    {
+      title: 'IOA',
+      dataIndex: 'ioa',
+      key: 'ioa',
+      width: 120,
+      render: (value: number, record) => (
+        <InputNumber
+          size="small"
+          min={0}
+          max={MAX_IOA}
+          style={{ width: '100%' }}
+          value={value}
+          onChange={(nextValue) => handleImportPointIoaChange(record.key, nextValue)}
+        />
+      ),
+    },
+    {
+      title: '类型',
+      dataIndex: 'point_type',
+      key: 'point_type',
+      width: 220,
+      render: (value: number, record) => (
+        <Select
+          size="small"
+          style={{ width: '100%' }}
+          value={value}
+          options={Object.entries(POINT_TYPE_LABELS).map(([pointType, label]) => ({
+            value: Number(pointType),
+            label,
+          }))}
+          onChange={(nextValue) => updateImportPointDraft(record.key, { point_type: nextValue })}
+        />
+      ),
+    },
+    {
+      title: 'Scale',
+      dataIndex: 'scale',
+      key: 'scale',
+      width: 110,
+      render: (value: number, record) => (
+        <InputNumber
+          size="small"
+          step={0.01}
+          style={{ width: '100%' }}
+          value={value}
+          onChange={(nextValue) =>
+            updateImportPointDraft(record.key, {
+              scale: typeof nextValue === 'number' ? nextValue : DEFAULT_POINT_FORM_VALUES.scale,
+            })
+          }
+        />
+      ),
+    },
+    {
+      title: 'Offset',
+      dataIndex: 'offset',
+      key: 'offset',
+      width: 110,
+      render: (value: number, record) => (
+        <InputNumber
+          size="small"
+          step={0.01}
+          style={{ width: '100%' }}
+          value={value}
+          onChange={(nextValue) =>
+            updateImportPointDraft(record.key, {
+              offset: typeof nextValue === 'number' ? nextValue : DEFAULT_POINT_FORM_VALUES.offset,
+            })
+          }
+        />
+      ),
+    },
+    {
+      title: 'Deadband',
+      dataIndex: 'deadband',
+      key: 'deadband',
+      width: 120,
+      render: (value: number, record) => (
+        <InputNumber
+          size="small"
+          step={0.01}
+          min={0}
+          style={{ width: '100%' }}
+          value={value}
+          onChange={(nextValue) =>
+            updateImportPointDraft(record.key, {
+              deadband: typeof nextValue === 'number' ? nextValue : DEFAULT_POINT_FORM_VALUES.deadband,
+            })
+          }
+        />
+      ),
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 100,
+      fixed: 'right',
+      render: (_: unknown, record) => (
+        <Button
+          type="link"
+          size="small"
+          danger
+          icon={<DeleteOutlined />}
+          onClick={() => handleRemoveImportPointDraft(record.key)}
+        />
       ),
     },
   ];
@@ -765,15 +1325,20 @@ const IEC104: React.FC = () => {
             bordered
             className="protocol-point-card"
             extra={
-              <Button
-                type="primary"
-                size="small"
-                icon={<PlusOutlined />}
-                disabled={!selectedConn}
-                onClick={openCreatePoint}
-              >
-                添加点位
-              </Button>
+              <Space>
+                <Button size="small" disabled={!selectedConn} onClick={openImportPointModal}>
+                  从现有点位添加
+                </Button>
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  disabled={!selectedConn}
+                  onClick={openCreatePoint}
+                >
+                  添加点位
+                </Button>
+              </Space>
             }
           >
             <div className="protocol-table-scroll">
@@ -975,12 +1540,12 @@ const IEC104: React.FC = () => {
         open={pointModalOpen}
         onOk={() => void handlePointSubmit()}
         onCancel={() => setPointModalOpen(false)}
-        width={520}
+        width={680}
         destroyOnClose
       >
         <Form form={pointForm} layout="vertical" size="small">
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
                 name="tag"
                 label="Tag (标签)"
@@ -989,13 +1554,30 @@ const IEC104: React.FC = () => {
                 <Input placeholder="p_meas_1" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
+              <Form.Item
+                name="ioa_category"
+                label="IOA 类型"
+              >
+                <Select
+                  options={IOA_CATEGORY_OPTIONS}
+                  placeholder="选择 IOA 类型"
+                  onChange={(nextValue) => handlePointIoaCategoryChange(nextValue as IoaCategoryKey)}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
               <Form.Item
                 name="ioa"
                 label="IOA (信息体地址)"
                 rules={[{ required: true, message: '请输入 IOA' }]}
               >
-                <InputNumber min={0} max={MAX_IOA} style={{ width: '100%' }} />
+                <InputNumber
+                  min={0}
+                  max={MAX_IOA}
+                  style={{ width: '100%' }}
+                  onChange={handlePointIoaChange}
+                />
               </Form.Item>
             </Col>
           </Row>
@@ -1032,6 +1614,89 @@ const IEC104: React.FC = () => {
             </Col>
           </Row>
         </Form>
+      </Modal>
+
+      <Modal
+        title="从现有点位添加"
+        open={importPointModalOpen}
+        onOk={() => void handleImportPointsSubmit()}
+        onCancel={() => setImportPointModalOpen(false)}
+        width={1100}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Text type="secondary">
+            从数据总线已注册的连接标签中选择点位导入到当前 IEC104 点表。不同连接允许同名 tag，
+            这里只校验目标连接内的 tag 和 IOA 不重复。
+          </Text>
+
+          <Row gutter={16}>
+            <Col span={8}>
+              <div>
+                <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+                  来源连接
+                </Text>
+                <Select
+                  allowClear
+                  showSearch
+                  style={{ width: '100%' }}
+                  placeholder="先选择来源连接"
+                  options={dataBusConnectionOptions}
+                  value={importSourceConnId}
+                  loading={dataBusEndpointLoading}
+                  notFoundContent="暂无可选连接"
+                  onChange={handleImportSourceConnChange}
+                  filterOption={(input, option) =>
+                    String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                  }
+                />
+              </div>
+            </Col>
+            <Col span={16}>
+              <div>
+                <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+                  来源点位
+                </Text>
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  style={{ width: '100%' }}
+                  placeholder={importSourceConnId ? '选择一个或多个来源点位' : '请先选择来源连接'}
+                  options={importSourceEndpointOptions}
+                  optionLabelProp="selectedLabel"
+                  maxTagCount={1}
+                  maxTagPlaceholder={(omittedValues) => `+ ${omittedValues.length} 个点位`}
+                  value={selectedImportEndpointValues}
+                  loading={dataBusEndpointLoading}
+                  disabled={!importSourceConnId}
+                  notFoundContent={importSourceConnId ? '该连接暂无可导入点位' : '请先选择来源连接'}
+                  onChange={handleSelectImportEndpoints}
+                  filterOption={(input, option) =>
+                    String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                  }
+                />
+                <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+                  已选 {importPointDrafts.length} 个点位，可在下方表格继续修改或删除。
+                </Text>
+              </div>
+            </Col>
+          </Row>
+
+          <div className="protocol-table-scroll">
+            <Table
+              rowKey="key"
+              columns={importPointColumns}
+              dataSource={importPointDrafts}
+              pagination={false}
+              size="small"
+              scroll={{ x: 1460, y: 360 }}
+              locale={{
+                emptyText: importSourceConnId ? '请选择需要导入的来源点位' : '请先选择来源连接',
+              }}
+            />
+          </div>
+        </Space>
       </Modal>
     </div>
   );
