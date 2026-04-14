@@ -4,6 +4,8 @@ const DIGITS_ONLY_PATTERN = /^\d+$/;
 const DIGITS_AND_DOTS_PATTERN = /^[\d.]+$/;
 const HOSTNAME_LABEL_PATTERN = /^[A-Za-z0-9-]+$/;
 
+export const isValidIpv4Address = (value: string): boolean => IPV4_PATTERN.test(value.trim());
+
 const isValidHostnameLabel = (label: string): boolean =>
   label.length > 0
   && label.length <= 63
@@ -20,7 +22,7 @@ const isValidHostname = (host: string): boolean =>
 
 const isValidHost = (host: string): boolean => {
   if (DIGITS_AND_DOTS_PATTERN.test(host)) {
-    return IPV4_PATTERN.test(host);
+    return isValidIpv4Address(host);
   }
 
   return isValidHostname(host);

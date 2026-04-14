@@ -38,6 +38,7 @@ import {
   findNextAvailablePort,
   isNotFoundError,
 } from '../../utils/connection-copy';
+import { isValidIpv4Address } from '../../utils/network';
 import type {
   DcConnectionInfo,
   Iec104LinkConfig,
@@ -59,6 +60,7 @@ const ROLE_SERVER = 1;
 const ROLE_CLIENT = 2;
 const DEFAULT_SERVER_LOCAL_IP = '0.0.0.0';
 const DEFAULT_IEC104_PORT = 2404;
+const IP_ADDRESS_ERROR_MESSAGE = '请输入合法的 IPv4 地址';
 
 const STATION_ROLE_LABELS: Record<number, string> = {
   0: 'UNSPECIFIED (按 role 默认)',
@@ -91,6 +93,21 @@ const DEFAULT_POINT_FORM_VALUES = {
   scale: 1,
   offset: 0,
   deadband: 0,
+};
+
+const normalizeIpInput = (value: unknown): unknown =>
+  typeof value === 'string' ? value.trim() : value;
+
+const validateOptionalIpv4 = (_rule: unknown, value: unknown): Promise<void> => {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return Promise.resolve();
+  }
+
+  if (isValidIpv4Address(value)) {
+    return Promise.resolve();
+  }
+
+  return Promise.reject(new Error(IP_ADDRESS_ERROR_MESSAGE));
 };
 
 type IoaCategoryKey = 'custom' | 'teleindication' | 'telemetry' | 'remoteAdjust';
@@ -501,6 +518,8 @@ const IEC104: React.FC = () => {
       const values = await linkForm.validateFields();
       const isServerRole = values.role === ROLE_SERVER;
       const isClientRole = values.role === ROLE_CLIENT;
+      const localIp = typeof values.local_ip === 'string' ? values.local_ip.trim() : '';
+      const remoteIp = typeof values.remote_ip === 'string' ? values.remote_ip.trim() : '';
       const config: Iec104LinkConfig = {
         conn_name: values.conn_name,
         role: values.role,
@@ -509,13 +528,13 @@ const IEC104: React.FC = () => {
         oa: values.oa,
         local: isClientRole
           ? null
-          : values.local_ip
-            ? { ip: values.local_ip, port: values.local_port ?? DEFAULT_IEC104_PORT }
+          : localIp
+            ? { ip: localIp, port: values.local_port ?? DEFAULT_IEC104_PORT }
             : null,
         remote: isServerRole
           ? null
-          : values.remote_ip
-            ? { ip: values.remote_ip, port: values.remote_port ?? DEFAULT_IEC104_PORT }
+          : remoteIp
+            ? { ip: remoteIp, port: values.remote_port ?? DEFAULT_IEC104_PORT }
             : null,
         apci: {
           k: values.k ?? 12,
@@ -1441,7 +1460,12 @@ const IEC104: React.FC = () => {
           <Text type="secondary" style={{ display: 'block', margin: '8px 0 4px' }}>端点配置</Text>
           <Row gutter={16}>
             <Col span={endpointIpSpan} style={{ display: showLocalEndpointFields ? undefined : 'none' }}>
-              <Form.Item name="local_ip" label="本地 IP">
+              <Form.Item
+                name="local_ip"
+                label="本地 IP"
+                normalize={normalizeIpInput}
+                rules={[{ validator: validateOptionalIpv4 }]}
+              >
                 <Input placeholder="0.0.0.0" />
               </Form.Item>
             </Col>
@@ -1451,7 +1475,12 @@ const IEC104: React.FC = () => {
               </Form.Item>
             </Col>
             <Col span={endpointIpSpan} style={{ display: showRemoteEndpointFields ? undefined : 'none' }}>
-              <Form.Item name="remote_ip" label="远程 IP">
+              <Form.Item
+                name="remote_ip"
+                label="远程 IP"
+                normalize={normalizeIpInput}
+                rules={[{ validator: validateOptionalIpv4 }]}
+              >
                 <Input placeholder="192.168.1.100" />
               </Form.Item>
             </Col>
