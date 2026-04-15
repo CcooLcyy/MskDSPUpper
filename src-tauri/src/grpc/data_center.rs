@@ -2,12 +2,12 @@ use anyhow::Result;
 
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::data_center_proto::{
-    data_center_service_client::DataCenterServiceClient, ConnTags, DeleteRoutesRequest, Empty,
-    GetConnTagsRequest, GetLatestRequest, GetLatestResponse, ListConnectionsResponse,
-    ListRoutesRequest, ListRoutesResponse, Route, UpsertRoutesRequest,
+    data_center_service_client::DataCenterServiceClient, ConnTags, ConnectionInfo, ConnectionKey,
+    DeleteRoutesRequest, Empty, GetConnTagsRequest, GetLatestRequest, GetLatestResponse,
+    GetOrCreateConnectionRequest, ListConnectionsResponse, ListRoutesRequest, ListRoutesResponse,
+    PointUpdate, Route, SubscribeRequest, UpsertConnTagsRequest, UpsertRoutesRequest,
 };
 
-/// 封装 DataCenter gRPC 调用
 pub struct DataCenterClient<'a> {
     conn: &'a ConnectionManager,
 }
@@ -17,7 +17,6 @@ impl<'a> DataCenterClient<'a> {
         Self { conn }
     }
 
-    /// 列出所有连接
     pub async fn list_connections(&self) -> Result<ListConnectionsResponse> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
@@ -25,7 +24,6 @@ impl<'a> DataCenterClient<'a> {
         Ok(resp.into_inner())
     }
 
-    /// 获取某连接的标签注册表
     pub async fn get_conn_tags(&self, conn_id: u32) -> Result<ConnTags> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
@@ -33,7 +31,24 @@ impl<'a> DataCenterClient<'a> {
         Ok(resp.into_inner())
     }
 
-    /// 列出路由
+    pub async fn get_or_create_connection(
+        &self,
+        module_name: String,
+        conn_name: String,
+    ) -> Result<ConnectionInfo> {
+        let channel = self.conn.module_channel("DataCenter").await?;
+        let mut client = DataCenterServiceClient::new(channel);
+        let resp = client
+            .get_or_create_connection(GetOrCreateConnectionRequest {
+                key: Some(ConnectionKey {
+                    module_name,
+                    conn_name,
+                }),
+            })
+            .await?;
+        Ok(resp.into_inner())
+    }
+
     pub async fn list_routes(&self, request: ListRoutesRequest) -> Result<ListRoutesResponse> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
@@ -41,7 +56,6 @@ impl<'a> DataCenterClient<'a> {
         Ok(resp.into_inner())
     }
 
-    /// 配置路由
     pub async fn upsert_routes(&self, routes: Vec<Route>, replace: bool) -> Result<()> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
@@ -51,7 +65,6 @@ impl<'a> DataCenterClient<'a> {
         Ok(())
     }
 
-    /// 删除路由
     pub async fn delete_routes(&self, routes: Vec<Route>) -> Result<()> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
@@ -59,11 +72,38 @@ impl<'a> DataCenterClient<'a> {
         Ok(())
     }
 
-    /// 获取最新值快照
+    pub async fn upsert_conn_tags(
+        &self,
+        conn_id: u32,
+        tags: Vec<String>,
+        replace: bool,
+    ) -> Result<()> {
+        let channel = self.conn.module_channel("DataCenter").await?;
+        let mut client = DataCenterServiceClient::new(channel);
+        client
+            .upsert_conn_tags(UpsertConnTagsRequest {
+                conn_id,
+                tags,
+                replace,
+            })
+            .await?;
+        Ok(())
+    }
+
     pub async fn get_latest(&self, request: GetLatestRequest) -> Result<GetLatestResponse> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
         let resp = client.get_latest(request).await?;
+        Ok(resp.into_inner())
+    }
+
+    pub async fn subscribe(
+        &self,
+        request: SubscribeRequest,
+    ) -> Result<tonic::Streaming<PointUpdate>> {
+        let channel = self.conn.module_channel("DataCenter").await?;
+        let mut client = DataCenterServiceClient::new(channel);
+        let resp = client.subscribe(request).await?;
         Ok(resp.into_inner())
     }
 }

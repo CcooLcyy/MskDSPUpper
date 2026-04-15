@@ -24,6 +24,7 @@ import type {
   DcRoute,
   DcPointUpdate,
 } from '../../adapters';
+import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 
 const { Text } = Typography;
 
@@ -59,8 +60,9 @@ const formatPointValue = (pv: DcPointUpdate['value']): string => {
     case 'Bool':
       return pv.value ? '是' : '否';
     case 'Int':
-    case 'Double':
       return String(pv.value);
+    case 'Double':
+      return formatAutoRealtimeNumber(pv.value);
     case 'String':
       return pv.value;
     case 'Bytes':

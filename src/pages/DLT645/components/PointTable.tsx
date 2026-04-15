@@ -2,7 +2,13 @@ import React from 'react';
 import { Button, Card, Popconfirm, Space, Table, Tabs, Typography } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../../adapters';
+import type { DcPointUpdate, Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../../adapters';
+import {
+  type ProtocolRealtimeCellRevision,
+  renderProtocolRealtimeQualityCell,
+  renderProtocolRealtimeTimestampCell,
+  renderProtocolRealtimeValueCell,
+} from '../../../components/protocol/protocol-realtime';
 
 const { Text } = Typography;
 
@@ -27,6 +33,9 @@ interface Props {
   points: Dlt645Point[];
   blocks: Dlt645Block[];
   selectedConn: string | null;
+  realtimeByTag: Record<string, DcPointUpdate>;
+  realtimeRevisionByTag: Record<string, ProtocolRealtimeCellRevision>;
+  realtimeLoading: boolean;
   onAddPoint: () => void;
   onEditPoint: (index: number) => void;
   onDeletePoint: (index: number) => void;
@@ -39,6 +48,9 @@ const PointTable: React.FC<Props> = ({
   points,
   blocks,
   selectedConn,
+  realtimeByTag,
+  realtimeRevisionByTag,
+  realtimeLoading,
   onAddPoint,
   onEditPoint,
   onDeletePoint,
@@ -64,15 +76,39 @@ const PointTable: React.FC<Props> = ({
       render: (value: number) => DATA_TYPE_LABELS[value] ?? '未指定',
     },
     {
+      title: '实时值',
+      key: 'realtime_value',
+      width: 160,
+      render: (_value: unknown, record: Dlt645Point) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeValueCell(update, realtimeRevisionByTag[record.tag]?.value);
+      },
+    },
+    {
+      title: '时间',
+      key: 'realtime_ts',
+      width: 130,
+      render: (_value: unknown, record: Dlt645Point) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeTimestampCell(update, realtimeRevisionByTag[record.tag]?.timestamp);
+      },
+    },
+    {
+      title: '质量',
+      key: 'realtime_quality',
+      width: 100,
+      render: (_value: unknown, record: Dlt645Point) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeQualityCell(update, realtimeRevisionByTag[record.tag]?.quality);
+      },
+    },
+    {
       title: '读写属性',
       dataIndex: 'access',
       key: 'access',
       width: 80,
       render: (value: number) => ACCESS_MODE_LABELS[value] ?? '未指定',
     },
-    { title: 'Scale', dataIndex: 'scale', key: 'scale', width: 70 },
-    { title: 'Offset', dataIndex: 'offset', key: 'offset', width: 70 },
-    { title: 'Deadband', dataIndex: 'deadband', key: 'deadband', width: 80 },
     {
       title: '操作',
       key: 'action',
@@ -143,9 +179,33 @@ const PointTable: React.FC<Props> = ({
       width: 80,
       render: (value: number) => ACCESS_MODE_LABELS[value] ?? '未指定',
     },
-    { title: 'Scale', dataIndex: 'scale', key: 'scale', width: 70 },
-    { title: 'Offset', dataIndex: 'offset', key: 'offset', width: 70 },
-    { title: 'Deadband', dataIndex: 'deadband', key: 'deadband', width: 80 },
+    {
+      title: '实时值',
+      key: 'realtime_value',
+      width: 160,
+      render: (_value: unknown, record: Dlt645BlockItem) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeValueCell(update, realtimeRevisionByTag[record.tag]?.value);
+      },
+    },
+    {
+      title: '时间',
+      key: 'realtime_ts',
+      width: 130,
+      render: (_value: unknown, record: Dlt645BlockItem) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeTimestampCell(update, realtimeRevisionByTag[record.tag]?.timestamp);
+      },
+    },
+    {
+      title: '质量',
+      key: 'realtime_quality',
+      width: 100,
+      render: (_value: unknown, record: Dlt645BlockItem) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeQualityCell(update, realtimeRevisionByTag[record.tag]?.quality);
+      },
+    },
   ];
 
   const expandedBlockRow = (record: Dlt645Block): React.ReactNode => (
@@ -169,9 +229,10 @@ const PointTable: React.FC<Props> = ({
               rowKey={(record, index) => `${record.tag}-${record.di}-${index ?? 0}`}
               columns={pointColumns}
               dataSource={points}
+              loading={realtimeLoading}
               pagination={false}
               size="small"
-              scroll={{ x: 840 }}
+              scroll={{ x: 1010 }}
               locale={{ emptyText: selectedConn ? '暂无点位' : '请先选择连接' }}
             />
           </div>
@@ -188,6 +249,7 @@ const PointTable: React.FC<Props> = ({
               rowKey={(record, index) => `${record.block_di}-${index ?? 0}`}
               columns={blockColumns}
               dataSource={blocks}
+              loading={realtimeLoading}
               pagination={false}
               size="small"
               scroll={{ x: 500 }}
@@ -202,7 +264,7 @@ const PointTable: React.FC<Props> = ({
 
   return (
     <Card
-      title="点表配置 (Tag ↔ DI)"
+      title="点表配置 (Tag -> DI)"
       size="small"
       bordered
       className="protocol-point-card"

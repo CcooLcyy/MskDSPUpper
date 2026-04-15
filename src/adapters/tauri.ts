@@ -185,6 +185,10 @@ export const api = {
     invoke<void>('dc_delete_routes', { routes }),
   dcGetLatest: (connId: number, tags: string[]) =>
     invoke<DcPointUpdate[]>('dc_get_latest', { connId, tags }),
+  dcStartProtocolShadowStream: () =>
+    invoke<void>('dc_start_protocol_shadow_stream'),
+  dcGetProtocolShadowLatest: (sourceConnId: number, sourceTags: string[]) =>
+    invoke<DcPointUpdate[]>('dc_get_protocol_shadow_latest', { sourceConnId, sourceTags }),
 
   agcUpsertGroup: (config: AgcGroupConfig, createOnly: boolean) =>
     invoke<AgcGroupInfo>('agc_upsert_group', { config, createOnly }),

@@ -184,6 +184,7 @@ fn is_valid_hostname(host: &str) -> bool {
 #[tauri::command]
 pub async fn set_manager_addr(state: State<'_, AppState>, addr: String) -> Result<(), String> {
     let normalized_addr = validate_manager_addr(&addr)?;
+    state.protocol_shadow.stop();
     state.conn_manager.set_manager_addr(normalized_addr);
     state.conn_manager.clear_channels();
     Ok(())

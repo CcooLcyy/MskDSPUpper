@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Switch } from 'antd';
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
@@ -12,6 +12,7 @@ import StatusPanel from './components/StatusPanel';
 import OperationsPanel from './components/OperationsPanel';
 import PointTable from './components/PointTable';
 import MqttConfigPanel from './components/MqttConfigPanel';
+import { useProtocolShadowRealtime } from '../../components/protocol/protocol-realtime';
 
 const PROTOCOL_VARIANT_OPTIONS = [
   { value: 1, label: 'DLT645 标准版' },
@@ -76,6 +77,17 @@ const DLT645: React.FC = () => {
 
   const selectedLink = links.find((l) => l.config?.conn_name === selectedConn) ?? null;
   const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY));
+  const realtimeTags = useMemo(
+    () => Array.from(new Set([
+      ...points.map((point) => point.tag),
+      ...blocks.flatMap((block) => block.items.map((item) => item.tag)),
+    ])),
+    [blocks, points],
+  );
+  const { realtimeByTag, realtimeRevisionByTag, loading: realtimeLoading } = useProtocolShadowRealtime(
+    selectedLink?.conn_id ?? null,
+    realtimeTags,
+  );
 
   const protocolVariant = Form.useWatch('protocol_variant', linkForm);
   const commMode = Form.useWatch('comm_mode', linkForm);
@@ -837,6 +849,9 @@ const DLT645: React.FC = () => {
             points={points}
             blocks={blocks}
             selectedConn={selectedConn}
+            realtimeByTag={realtimeByTag}
+            realtimeRevisionByTag={realtimeRevisionByTag}
+            realtimeLoading={realtimeLoading}
             onAddPoint={openCreatePoint}
             onEditPoint={(index) => openEditPoint(index)}
             onDeletePoint={(index) => void handleDeletePoint(index)}

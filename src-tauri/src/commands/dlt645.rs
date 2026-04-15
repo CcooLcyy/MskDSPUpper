@@ -6,6 +6,7 @@ use crate::proto::dlt645_proto::{
     Block, BlockItem, LinkConfig, LinkInfo, MqttConfig as ProtoMqttConfig, Point, PointTable,
     UpdateConfigResponse,
 };
+use crate::protocol_shadow::{self, ProtocolShadowModule};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -305,6 +306,11 @@ pub async fn dlt645_upsert_link(
         .upsert_link(config.to_proto(), create_only)
         .await
         .map_err(|e| e.to_string())?;
+    let _ = protocol_shadow::sync_protocol_shadow_module(
+        state.conn_manager.as_ref(),
+        ProtocolShadowModule::Dlt645,
+    )
+    .await;
     Ok(link.into())
 }
 
@@ -319,6 +325,11 @@ pub async fn dlt645_rename_link(
         .rename_link(old_conn_name, new_conn_name)
         .await
         .map_err(|e| e.to_string())?;
+    let _ = protocol_shadow::sync_protocol_shadow_module(
+        state.conn_manager.as_ref(),
+        ProtocolShadowModule::Dlt645,
+    )
+    .await;
     Ok(link.into())
 }
 
@@ -354,6 +365,11 @@ pub async fn dlt645_delete_link(
         .delete_link(conn_name)
         .await
         .map_err(|e| e.to_string())?;
+    let _ = protocol_shadow::sync_protocol_shadow_module(
+        state.conn_manager.as_ref(),
+        ProtocolShadowModule::Dlt645,
+    )
+    .await;
     Ok(())
 }
 
@@ -398,6 +414,11 @@ pub async fn dlt645_upsert_point_table(
         )
         .await
         .map_err(|e| e.to_string())?;
+    let _ = protocol_shadow::sync_protocol_shadow_module(
+        state.conn_manager.as_ref(),
+        ProtocolShadowModule::Dlt645,
+    )
+    .await;
     Ok(())
 }
 

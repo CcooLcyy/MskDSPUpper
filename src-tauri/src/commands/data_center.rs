@@ -1,10 +1,13 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::grpc::data_center::DataCenterClient;
 use crate::proto::data_center_proto::{
     point_value, ConnectionInfo, Endpoint, GetLatestRequest, ListRoutesRequest, PointUpdate, Route,
 };
+use crate::protocol_shadow;
 use crate::state::AppState;
 
 // ── DTOs ──
@@ -148,13 +151,47 @@ impl RouteDto {
 
 // ── Tauri Commands ──
 
+fn is_protocol_shadow_connection(info: &ConnectionInfo) -> bool {
+    info.module_name == protocol_shadow::PROTOCOL_SHADOW_MODULE_NAME
+        && info.conn_name == protocol_shadow::PROTOCOL_SHADOW_CONN_NAME
+}
+
+fn route_uses_hidden_connection(route: &Route, hidden_conn_ids: &HashSet<u32>) -> bool {
+    route
+        .src
+        .as_ref()
+        .map(|endpoint| hidden_conn_ids.contains(&endpoint.conn_id))
+        .unwrap_or(false)
+        || route
+            .dst
+            .as_ref()
+            .map(|endpoint| hidden_conn_ids.contains(&endpoint.conn_id))
+            .unwrap_or(false)
+}
+
+async fn list_hidden_connection_ids(client: &DataCenterClient<'_>) -> Result<HashSet<u32>, String> {
+    let resp = client.list_connections().await.map_err(|e| e.to_string())?;
+
+    Ok(resp
+        .conns
+        .into_iter()
+        .filter(is_protocol_shadow_connection)
+        .map(|conn| conn.conn_id)
+        .collect())
+}
+
 #[tauri::command]
 pub async fn dc_list_connections(
     state: State<'_, AppState>,
 ) -> Result<Vec<ConnectionInfoDto>, String> {
     let client = DataCenterClient::new(&state.conn_manager);
     let resp = client.list_connections().await.map_err(|e| e.to_string())?;
-    Ok(resp.conns.into_iter().map(|c| c.into()).collect())
+    Ok(resp
+        .conns
+        .into_iter()
+        .filter(|conn| !is_protocol_shadow_connection(conn))
+        .map(|c| c.into())
+        .collect())
 }
 
 #[tauri::command]
@@ -179,6 +216,7 @@ pub async fn dc_list_routes(
     dst_tag: String,
 ) -> Result<Vec<RouteDto>, String> {
     let client = DataCenterClient::new(&state.conn_manager);
+    let hidden_conn_ids = list_hidden_connection_ids(&client).await?;
     let resp = client
         .list_routes(ListRoutesRequest {
             src_conn_id,
@@ -188,7 +226,12 @@ pub async fn dc_list_routes(
         })
         .await
         .map_err(|e| e.to_string())?;
-    Ok(resp.routes.into_iter().map(|r| r.into()).collect())
+    Ok(resp
+        .routes
+        .into_iter()
+        .filter(|route| !route_uses_hidden_connection(route, &hidden_conn_ids))
+        .map(|r| r.into())
+        .collect())
 }
 
 #[tauri::command]
@@ -230,4 +273,33 @@ pub async fn dc_get_latest(
         .await
         .map_err(|e| e.to_string())?;
     Ok(resp.updates.into_iter().map(|u| u.into()).collect())
+}
+
+#[tauri::command]
+pub async fn dc_start_protocol_shadow_stream(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let _ = protocol_shadow::sync_all_protocol_shadow(state.conn_manager.as_ref()).await;
+    state
+        .protocol_shadow
+        .ensure_started(app_handle, state.conn_manager.clone());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn dc_get_protocol_shadow_latest(
+    state: State<'_, AppState>,
+    source_conn_id: u32,
+    source_tags: Vec<String>,
+) -> Result<Vec<PointUpdateDto>, String> {
+    let updates = protocol_shadow::get_protocol_shadow_latest(
+        state.conn_manager.as_ref(),
+        source_conn_id,
+        source_tags,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(updates.into_iter().map(PointUpdateDto::from).collect())
 }

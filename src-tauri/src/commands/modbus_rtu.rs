@@ -6,6 +6,7 @@ use crate::proto::modbus_rtu_proto::{
     LinkConfig, LinkInfo, MqttConfig as ProtoMqttConfig, Point, PointTable, ReadBlock, ReadPlan,
     SerialConfig, UpdateConfigResponse,
 };
+use crate::protocol_shadow::{self, ProtocolShadowModule};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -312,6 +313,11 @@ pub async fn modbus_rtu_upsert_link(
         .upsert_link(config.to_proto(), create_only)
         .await
         .map_err(|e| e.to_string())?;
+    let _ = protocol_shadow::sync_protocol_shadow_module(
+        state.conn_manager.as_ref(),
+        ProtocolShadowModule::ModbusRtu,
+    )
+    .await;
     Ok(link.into())
 }
 
@@ -326,6 +332,11 @@ pub async fn modbus_rtu_rename_link(
         .rename_link(old_conn_name, new_conn_name)
         .await
         .map_err(|e| e.to_string())?;
+    let _ = protocol_shadow::sync_protocol_shadow_module(
+        state.conn_manager.as_ref(),
+        ProtocolShadowModule::ModbusRtu,
+    )
+    .await;
     Ok(link.into())
 }
 
@@ -361,6 +372,11 @@ pub async fn modbus_rtu_delete_link(
         .delete_link(conn_name)
         .await
         .map_err(|e| e.to_string())?;
+    let _ = protocol_shadow::sync_protocol_shadow_module(
+        state.conn_manager.as_ref(),
+        ProtocolShadowModule::ModbusRtu,
+    )
+    .await;
     Ok(())
 }
 
@@ -406,6 +422,11 @@ pub async fn modbus_rtu_upsert_point_table(
         )
         .await
         .map_err(|e| e.to_string())?;
+    let _ = protocol_shadow::sync_protocol_shadow_module(
+        state.conn_manager.as_ref(),
+        ProtocolShadowModule::ModbusRtu,
+    )
+    .await;
     Ok(())
 }
 

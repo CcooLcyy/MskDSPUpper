@@ -34,6 +34,12 @@ import { api } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import {
+  renderProtocolRealtimeQualityCell,
+  renderProtocolRealtimeTimestampCell,
+  renderProtocolRealtimeValueCell,
+  useProtocolShadowRealtime,
+} from '../../components/protocol/protocol-realtime';
+import {
   buildDuplicateConnectionName,
   findNextAvailablePort,
   isNotFoundError,
@@ -305,6 +311,14 @@ const IEC104: React.FC = () => {
   const currentPointTagSet = useMemo(
     () => new Set(points.map((point) => point.tag.trim())),
     [points],
+  );
+  const realtimeTags = useMemo(
+    () => points.map((point) => point.tag),
+    [points],
+  );
+  const { realtimeByTag, realtimeRevisionByTag, loading: realtimeLoading } = useProtocolShadowRealtime(
+    selectedLink?.conn_id ?? null,
+    realtimeTags,
   );
   const importSourceEndpointOptions = useMemo(
     () =>
@@ -1019,22 +1033,31 @@ const IEC104: React.FC = () => {
       render: (v: number) => POINT_TYPE_LABELS[v] ?? `TypeID: ${v}`,
     },
     {
-      title: 'Scale',
-      dataIndex: 'scale',
-      key: 'scale',
-      width: 80,
+      title: '实时值',
+      key: 'realtime_value',
+      width: 160,
+      render: (_: unknown, record: Iec104Point) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeValueCell(update, realtimeRevisionByTag[record.tag]?.value);
+      },
     },
     {
-      title: 'Offset',
-      dataIndex: 'offset',
-      key: 'offset',
-      width: 80,
+      title: '时间',
+      key: 'realtime_ts',
+      width: 130,
+      render: (_: unknown, record: Iec104Point) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeTimestampCell(update, realtimeRevisionByTag[record.tag]?.timestamp);
+      },
     },
     {
-      title: 'Deadband',
-      dataIndex: 'deadband',
-      key: 'deadband',
-      width: 90,
+      title: '质量',
+      key: 'realtime_quality',
+      width: 100,
+      render: (_: unknown, record: Iec104Point) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeQualityCell(update, realtimeRevisionByTag[record.tag]?.quality);
+      },
     },
     {
       title: '操作',
@@ -1365,9 +1388,10 @@ const IEC104: React.FC = () => {
                 rowKey={(_, index) => String(index)}
                 columns={pointColumns}
                 dataSource={points}
+                loading={realtimeLoading}
                 pagination={false}
                 size="small"
-                scroll={{ x: 900 }}
+                scroll={{ x: 1040 }}
                 locale={{ emptyText: selectedConn ? '暂无点位数据' : '请先选择连接' }}
               />
             </div>

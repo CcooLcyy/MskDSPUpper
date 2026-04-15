@@ -2,7 +2,13 @@ import React from 'react';
 import { Button, Card, Popconfirm, Space, Table, Typography } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { ModbusPoint } from '../../../adapters';
+import type { DcPointUpdate, ModbusPoint } from '../../../adapters';
+import {
+  type ProtocolRealtimeCellRevision,
+  renderProtocolRealtimeQualityCell,
+  renderProtocolRealtimeTimestampCell,
+  renderProtocolRealtimeValueCell,
+} from '../../../components/protocol/protocol-realtime';
 
 const { Text } = Typography;
 
@@ -30,12 +36,24 @@ const BYTE_ORDER_LABELS: Record<number, string> = { 0: '默认 (AB)', 1: 'AB', 2
 interface Props {
   points: ModbusPoint[];
   selectedConn: string | null;
+  realtimeByTag: Record<string, DcPointUpdate>;
+  realtimeRevisionByTag: Record<string, ProtocolRealtimeCellRevision>;
+  realtimeLoading: boolean;
   onAdd: () => void;
   onEdit: (index: number) => void;
   onDelete: (index: number) => void;
 }
 
-const PointTable: React.FC<Props> = ({ points, selectedConn, onAdd, onEdit, onDelete }) => {
+const PointTable: React.FC<Props> = ({
+  points,
+  selectedConn,
+  realtimeByTag,
+  realtimeRevisionByTag,
+  realtimeLoading,
+  onAdd,
+  onEdit,
+  onDelete,
+}) => {
   const columns: ColumnsType<ModbusPoint> = [
     {
       title: '标签',
@@ -60,9 +78,33 @@ const PointTable: React.FC<Props> = ({ points, selectedConn, onAdd, onEdit, onDe
       width: 120,
       render: (value: number) => DATA_TYPE_LABELS[value] ?? '未指定',
     },
-    { title: 'Scale', dataIndex: 'scale', key: 'scale', width: 70 },
-    { title: 'Offset', dataIndex: 'offset', key: 'offset', width: 70 },
-    { title: 'Deadband', dataIndex: 'deadband', key: 'deadband', width: 80 },
+    {
+      title: '实时值',
+      key: 'realtime_value',
+      width: 160,
+      render: (_value: unknown, record: ModbusPoint) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeValueCell(update, realtimeRevisionByTag[record.tag]?.value);
+      },
+    },
+    {
+      title: '时间',
+      key: 'realtime_ts',
+      width: 130,
+      render: (_value: unknown, record: ModbusPoint) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeTimestampCell(update, realtimeRevisionByTag[record.tag]?.timestamp);
+      },
+    },
+    {
+      title: '质量',
+      key: 'realtime_quality',
+      width: 100,
+      render: (_value: unknown, record: ModbusPoint) => {
+        const update = realtimeByTag[record.tag];
+        return renderProtocolRealtimeQualityCell(update, realtimeRevisionByTag[record.tag]?.quality);
+      },
+    },
     {
       title: '字序',
       dataIndex: 'word_order',
@@ -98,7 +140,7 @@ const PointTable: React.FC<Props> = ({ points, selectedConn, onAdd, onEdit, onDe
 
   return (
     <Card
-      title="点表配置 (Tag ↔ Address)"
+      title="点表配置 (Tag -> Address)"
       size="small"
       bordered
       className="protocol-point-card"
@@ -113,9 +155,10 @@ const PointTable: React.FC<Props> = ({ points, selectedConn, onAdd, onEdit, onDe
           rowKey={(record, index) => `${record.tag}-${record.address}-${index ?? 0}`}
           columns={columns}
           dataSource={points}
+          loading={realtimeLoading}
           pagination={false}
           size="small"
-          scroll={{ x: 1130 }}
+          scroll={{ x: 1290 }}
           locale={{ emptyText: selectedConn ? '暂无点位' : '请先选择连接' }}
         />
       </div>

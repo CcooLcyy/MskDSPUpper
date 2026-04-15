@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select } from 'antd';
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
@@ -12,6 +12,7 @@ import StatusPanel from './components/StatusPanel';
 import OperationsPanel from './components/OperationsPanel';
 import PointTable from './components/PointTable';
 import MqttConfigPanel from './components/MqttConfigPanel';
+import { useProtocolShadowRealtime } from '../../components/protocol/protocol-realtime';
 
 const TRANSPORT_TYPE_OPTIONS = [
   { value: 1, label: '串口 (Serial)' },
@@ -83,6 +84,14 @@ const ModbusRTU: React.FC = () => {
 
   const selectedLink = links.find((l) => l.config?.conn_name === selectedConn) ?? null;
   const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY));
+  const realtimeTags = useMemo(
+    () => points.map((point) => point.tag),
+    [points],
+  );
+  const { realtimeByTag, realtimeRevisionByTag, loading: realtimeLoading } = useProtocolShadowRealtime(
+    selectedLink?.conn_id ?? null,
+    realtimeTags,
+  );
 
   const transportType = Form.useWatch('transport_type', linkForm);
   const readPlanMode = Form.useWatch('read_plan_mode', linkForm);
@@ -727,6 +736,9 @@ const ModbusRTU: React.FC = () => {
           <PointTable
             points={points}
             selectedConn={selectedConn}
+            realtimeByTag={realtimeByTag}
+            realtimeRevisionByTag={realtimeRevisionByTag}
+            realtimeLoading={realtimeLoading}
             onAdd={openCreatePoint}
             onEdit={(index) => openEditPoint(index)}
             onDelete={(index) => void handleDeletePoint(index)}

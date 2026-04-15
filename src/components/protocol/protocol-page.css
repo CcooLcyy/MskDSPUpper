@@ -74,6 +74,34 @@
   z-index: 1;
 }
 
+.protocol-realtime-cell {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.protocol-realtime-cell--mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.protocol-realtime-cell--pulse {
+  animation: protocol-realtime-pulse 720ms ease-out;
+}
+
+@keyframes protocol-realtime-pulse {
+  0% {
+    background: rgba(24, 144, 255, 0.24);
+    box-shadow: 0 0 0 1px rgba(24, 144, 255, 0.18);
+  }
+
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 1px transparent;
+  }
+}
+
 .protocol-point-card > .ant-card-body > .ant-tabs {
   display: flex;
   flex: 1 1 auto;
