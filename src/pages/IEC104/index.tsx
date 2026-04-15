@@ -248,6 +248,27 @@ const getSuggestedIoaByCategory = (
   return getNextAvailableIoaInRange(usedIoas, range.start, range.end);
 };
 
+const resolveIoaCategoryChange = ({
+  usedIoas,
+  currentIoa,
+  currentCategory,
+  nextCategory,
+}: {
+  usedIoas: Set<number>;
+  currentIoa?: number;
+  currentCategory?: IoaCategoryKey;
+  nextCategory: IoaCategoryKey;
+}) => {
+  const hasAvailableCurrentIoa = typeof currentIoa === 'number' && !usedIoas.has(currentIoa);
+  const fallbackIoa = hasAvailableCurrentIoa ? currentIoa : getNextAvailableIoa(usedIoas);
+  const keepCurrentIoa = currentCategory === nextCategory && hasAvailableCurrentIoa;
+
+  return {
+    ioa_category: nextCategory,
+    ioa: keepCurrentIoa ? currentIoa : getSuggestedIoaByCategory(usedIoas, nextCategory, fallbackIoa),
+  };
+};
+
 const getCreatePointInitialValues = (points: Iec104Point[]) => {
   const lastPoint = points[points.length - 1];
 
@@ -296,6 +317,7 @@ const IEC104: React.FC = () => {
   const [linkForm] = Form.useForm();
   const [pointForm] = Form.useForm();
   const linkRole = Form.useWatch('role', linkForm);
+  const pointIoaCategory = Form.useWatch('ioa_category', pointForm) as IoaCategoryKey | undefined;
 
   // ── Derived ──
 
@@ -769,25 +791,17 @@ const IEC104: React.FC = () => {
           .map((point) => point.ioa),
       );
       const currentIoa = pointForm.getFieldValue('ioa');
-      const currentCategory = pointForm.getFieldValue('ioa_category') as IoaCategoryKey | undefined;
-      const keepCurrentIoa =
-        currentCategory === nextCategory && typeof currentIoa === 'number' && !usedIoas.has(currentIoa);
-      const nextIoa = getSuggestedIoaByCategory(
-        usedIoas,
-        nextCategory,
-        keepCurrentIoa
-          ? currentIoa
-          : typeof currentIoa === 'number' && !usedIoas.has(currentIoa)
-          ? currentIoa
-          : getNextAvailableIoa(usedIoas),
-      );
 
-      pointForm.setFieldsValue({
-        ioa_category: nextCategory,
-        ioa: keepCurrentIoa ? currentIoa : nextIoa,
-      });
+      pointForm.setFieldsValue(
+        resolveIoaCategoryChange({
+          usedIoas,
+          currentIoa: typeof currentIoa === 'number' ? currentIoa : undefined,
+          currentCategory: pointIoaCategory,
+          nextCategory,
+        }),
+      );
     },
-    [editingPointIndex, pointForm, points],
+    [editingPointIndex, pointForm, pointIoaCategory, points],
   );
 
   const handlePointIoaChange = useCallback(
@@ -909,24 +923,18 @@ const IEC104: React.FC = () => {
           }
         });
 
-        const fallbackIoa =
-          currentDraft && !usedIoas.has(currentDraft.ioa)
-            ? currentDraft.ioa
-            : getNextAvailableIoa(usedIoas);
-        const keepCurrentIoa =
-          currentDraft?.ioa_category === nextCategory &&
-          typeof currentDraft.ioa === 'number' &&
-          !usedIoas.has(currentDraft.ioa);
-        const nextIoa = keepCurrentIoa
-          ? currentDraft.ioa
-          : getSuggestedIoaByCategory(usedIoas, nextCategory, fallbackIoa);
+        const nextDraftFields = resolveIoaCategoryChange({
+          usedIoas,
+          currentIoa: currentDraft?.ioa,
+          currentCategory: currentDraft?.ioa_category,
+          nextCategory,
+        });
 
         return prev.map((item) =>
           item.key === key
             ? {
                 ...item,
-                ioa_category: nextCategory,
-                ioa: nextIoa,
+                ...nextDraftFields,
               }
             : item,
         );
