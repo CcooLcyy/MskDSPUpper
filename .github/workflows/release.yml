@@ -159,7 +159,30 @@ jobs:
         run: |
           node scripts/workflow/emit-build-metadata.mjs --channel stable --repository ${{ github.repository }} --tag ${{ steps.release_target.outputs.release_tag }} --ref ${{ steps.release_target.outputs.release_tag }} --sha ${{ steps.release_target.outputs.release_sha }} --target-triple $env:RUST_TARGET --platform $env:PLATFORM_ID --output package/metadata/release.json
 
+      - name: Detect stable manifest alignment
+        id: manifest_alignment
+        shell: pwsh
+        run: |
+          $expectedVersion = "${{ steps.metadata.outputs.effective_version }}"
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoToml = Get-Content src-tauri/Cargo.toml -Raw
+          $packageBlock = [regex]::Match($cargoToml, '(?ms)^\[package\][\s\S]*?(?=^\[|\z)')
+          if (-not $packageBlock.Success) {
+            throw "Cargo.toml [package] block is missing."
+          }
+          $cargoVersionMatch = [regex]::Match($packageBlock.Value, '(?m)^version\s*=\s*"([^"\r\n]+)"')
+          if (-not $cargoVersionMatch.Success) {
+            throw "Cargo.toml [package] block is missing a version line."
+          }
+          $cargoVersion = $cargoVersionMatch.Groups[1].Value
+          $needsApply = @($packageVersion, $tauriVersion, $cargoVersion) | Where-Object { $_ -ne $expectedVersion } | Measure-Object | Select-Object -ExpandProperty Count
+          $needsApplyOutput = if ($needsApply -gt 0) { 'true' } else { 'false' }
+          "needs_apply=$needsApplyOutput" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "expected_version=$expectedVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Apply stable version
+        if: steps.manifest_alignment.outputs.needs_apply == 'true'
         shell: pwsh
         run: |
           node scripts/workflow/apply-channel-version.mjs --metadata-file package/metadata/release.json --backup-dir package/.manifest-backup

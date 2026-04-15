@@ -34,3 +34,13 @@ for (const [workflowPath, stepName] of [
     assert.match(stepBlock, /--updater-artifacts true/);
   });
 }
+
+test('release workflow skips stable manifest rewrite when versions already match', () => {
+  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8');
+  const detectBlock = extractStepBlock(fileText, 'Detect stable manifest alignment');
+  const applyBlock = extractStepBlock(fileText, 'Apply stable version');
+
+  assert.match(detectBlock, /Cargo\.toml/);
+  assert.match(detectBlock, /needs_apply=/);
+  assert.match(applyBlock, /if: steps\.manifest_alignment\.outputs\.needs_apply == 'true'/);
+});

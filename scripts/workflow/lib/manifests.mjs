@@ -5,14 +5,15 @@ export function replaceCargoPackageVersion(source, nextVersion) {
     throw new Error('Cargo.toml 缺少 [package] 段');
   }
 
-  const replacedBlock = packageBlock[0].replace(
-    /^version\s*=\s*"[^"]*"/m,
-    `version = "${nextVersion}"`,
-  );
-
-  if (replacedBlock === packageBlock[0]) {
+  const versionLineRegex = /^version\s*=\s*"[^"]*"/m;
+  if (!versionLineRegex.test(packageBlock[0])) {
     throw new Error('Cargo.toml [package] 段缺少 version 字段');
   }
+
+  const replacedBlock = packageBlock[0].replace(
+    versionLineRegex,
+    `version = "${nextVersion}"`,
+  );
 
   return source.replace(packageBlock[0], replacedBlock);
 }
