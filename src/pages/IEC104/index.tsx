@@ -135,6 +135,7 @@ type DataBusEndpointOption = {
   value: string;
   label: string;
   connId: number;
+  moduleName: string;
   connName: string;
   tag: string;
 };
@@ -166,6 +167,36 @@ const buildDataBusConnectionOptions = (connections: DcConnectionInfo[]): DataBus
       connName: connection.conn_name,
     }))
     .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'));
+
+const normalizeImportedTagPart = (value: string) =>
+  value
+    .trim()
+    .replace(/[\\/:]+/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const buildImportedPointBaseTag = (sourcePoint: DataBusEndpointOption) => {
+  const parts = [sourcePoint.moduleName, sourcePoint.connName, sourcePoint.tag]
+    .map(normalizeImportedTagPart)
+    .filter(Boolean);
+
+  return parts.join('_') || sourcePoint.tag.trim();
+};
+
+const buildUniqueImportedPointTag = (sourcePoint: DataBusEndpointOption, usedTags: Set<string>) => {
+  const baseTag = buildImportedPointBaseTag(sourcePoint) || `imported_${sourcePoint.connId}`;
+  let candidate = baseTag;
+  let suffix = 2;
+
+  while (usedTags.has(candidate)) {
+    candidate = `${baseTag}_${suffix}`;
+    suffix += 1;
+  }
+
+  usedTags.add(candidate);
+  return candidate;
+};
 
 const getNextAvailableIoa = (usedIoas: Set<number>) => {
   const maxUsed = usedIoas.size > 0 ? Math.max(...usedIoas) : -1;
@@ -330,10 +361,6 @@ const IEC104: React.FC = () => {
   const singleEndpointMode = linkRole === ROLE_SERVER || linkRole === ROLE_CLIENT;
   const endpointIpSpan = singleEndpointMode ? 18 : 9;
   const endpointPortSpan = singleEndpointMode ? 6 : 3;
-  const currentPointTagSet = useMemo(
-    () => new Set(points.map((point) => point.tag.trim())),
-    [points],
-  );
   const realtimeTags = useMemo(
     () => points.map((point) => point.tag),
     [points],
@@ -342,19 +369,39 @@ const IEC104: React.FC = () => {
     selectedLink?.conn_id ?? null,
     realtimeTags,
   );
+  const importReservedTagSet = useMemo(() => {
+    const reservedTags = new Set<string>();
+
+    for (const point of points) {
+      const tag = point.tag.trim();
+      if (tag) {
+        reservedTags.add(tag);
+      }
+    }
+
+    for (const endpoint of dataBusEndpointOptions) {
+      if (endpoint.connId === selectedLink?.conn_id) {
+        continue;
+      }
+
+      const tag = endpoint.tag.trim();
+      if (tag) {
+        reservedTags.add(tag);
+      }
+    }
+
+    return reservedTags;
+  }, [dataBusEndpointOptions, points, selectedLink?.conn_id]);
   const importSourceEndpointOptions = useMemo(
     () =>
       dataBusEndpointOptions
         .filter((item) => String(item.connId) === importSourceConnId)
         .map((item) => ({
           value: item.value,
-          label: currentPointTagSet.has(item.tag.trim())
-            ? `${item.label} (当前连接已存在)`
-            : item.label,
+          label: item.label,
           selectedLabel: item.tag,
-          disabled: currentPointTagSet.has(item.tag.trim()),
         })),
-    [currentPointTagSet, dataBusEndpointOptions, importSourceConnId],
+    [dataBusEndpointOptions, importSourceConnId],
   );
 
   // ── Data Loading ──
@@ -397,6 +444,7 @@ const IEC104: React.FC = () => {
               value: `${connection.conn_id}:${tag}`,
               label: `${connection.module_name}/${connection.conn_name} : ${tag}`,
               connId: connection.conn_id,
+              moduleName: connection.module_name,
               connName: connection.conn_name,
               tag,
             }));
@@ -866,6 +914,7 @@ const IEC104: React.FC = () => {
       messageApi.error(`删除全部点位失败: ${e}`);
     }
   }, [messageApi, selectedConn]);
+
   const handleImportSourceConnChange = useCallback((value: string | undefined) => {
     setImportSourceConnId(value);
     setSelectedImportEndpointValues([]);
@@ -878,6 +927,7 @@ const IEC104: React.FC = () => {
       setImportPointDrafts((prev) => {
         const prevMap = new Map(prev.map((item) => [item.sourceValue, item]));
         const usedIoas = new Set(points.map((point) => point.ioa));
+        const usedTags = new Set(importReservedTagSet);
         const nextDrafts: ImportedPointDraft[] = [];
 
         for (const value of values) {
@@ -885,6 +935,9 @@ const IEC104: React.FC = () => {
           if (existingDraft) {
             nextDrafts.push(existingDraft);
             usedIoas.add(existingDraft.ioa);
+            if (existingDraft.tag.trim()) {
+              usedTags.add(existingDraft.tag.trim());
+            }
             continue;
           }
 
@@ -899,7 +952,7 @@ const IEC104: React.FC = () => {
             key: value,
             sourceValue: value,
             sourceLabel: sourcePoint.label,
-            tag: sourcePoint.tag,
+            tag: buildUniqueImportedPointTag(sourcePoint, usedTags),
             ioa: nextIoa,
             ioa_category: 'custom',
             point_type: getDefaultImportedPointType(points),
@@ -912,7 +965,7 @@ const IEC104: React.FC = () => {
         return nextDrafts;
       });
     },
-    [dataBusEndpointOptions, points],
+    [dataBusEndpointOptions, importReservedTagSet, points],
   );
 
   const updateImportPointDraft = useCallback((key: string, patch: Partial<ImportedPointDraft>) => {
@@ -977,6 +1030,7 @@ const IEC104: React.FC = () => {
 
     const existingTags = new Set(points.map((point) => point.tag.trim()));
     const existingIoas = new Set(points.map((point) => point.ioa));
+    const importReservedTags = new Set(importReservedTagSet);
     const draftTags = new Set<string>();
     const draftIoas = new Set<number>();
     const normalizedPoints: Iec104Point[] = [];
@@ -997,6 +1051,10 @@ const IEC104: React.FC = () => {
       }
       if (existingTags.has(tag) || draftTags.has(tag)) {
         messageApi.error(`目标连接内标签 ${tag} 重复，请调整后再导入`);
+        return;
+      }
+      if (importReservedTags.has(tag)) {
+        messageApi.error(`标签 ${tag} 已被其他连接占用，请调整后再导入`);
         return;
       }
       if (existingIoas.has(draft.ioa) || draftIoas.has(draft.ioa)) {
@@ -1025,7 +1083,7 @@ const IEC104: React.FC = () => {
     } catch (e) {
       messageApi.error(`导入点位失败: ${e}`);
     }
-  }, [importPointDrafts, messageApi, points, selectedConn]);
+  }, [importPointDrafts, importReservedTagSet, messageApi, points, selectedConn]);
 
   // ── Point Table Columns ──
 
@@ -1712,8 +1770,9 @@ const IEC104: React.FC = () => {
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Text type="secondary">
-            从数据总线已注册的连接标签中选择点位导入到当前 IEC104 点表。不同连接允许同名 tag，
-            这里只校验目标连接内的 tag 和 IOA 不重复。
+            从数据总线已注册的连接标签中选择点位导入到当前 IEC104 点表。
+            导入时会默认按“模块_连接_tag”生成新标签，避免直接复用来源点位的 tag；
+            你仍然可以在下方表格里继续修改。
           </Text>
 
           <Row gutter={16}>
