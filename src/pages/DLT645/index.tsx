@@ -407,6 +407,19 @@ const DLT645: React.FC = () => {
 
   // ── Block CRUD ──
 
+  const handleDeleteAllPoints = useCallback(async () => {
+    if (!selectedConn) {
+      return;
+    }
+    try {
+      await api.dlt645UpsertPointTable(selectedConn, [], blocks, true);
+      setPoints([]);
+      messageApi.success('全部点位已删除');
+    } catch (error) {
+      messageApi.error(`删除全部点位失败: ${error}`);
+    }
+  }, [blocks, messageApi, selectedConn]);
+
   const openCreateBlock = useCallback(() => {
     setEditingBlockIndex(null);
     blockForm.resetFields();
@@ -855,6 +868,7 @@ const DLT645: React.FC = () => {
             onAddPoint={openCreatePoint}
             onEditPoint={(index) => openEditPoint(index)}
             onDeletePoint={(index) => void handleDeletePoint(index)}
+            onDeleteAllPoints={() => void handleDeleteAllPoints()}
             onAddBlock={openCreateBlock}
             onEditBlock={(index) => openEditBlock(index)}
             onDeleteBlock={(index) => void handleDeleteBlock(index)}

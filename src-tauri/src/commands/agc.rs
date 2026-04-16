@@ -280,17 +280,26 @@ fn validate_group_tag_uniqueness(config: &GroupConfigDto) -> Result<(), String> 
     if let Some(outputs) = &config.outputs {
         collect_group_tag_owner(
             &mut tag_owners,
-            outputs.p_total_meas.as_ref().map(|signal| signal.tag.as_str()),
+            outputs
+                .p_total_meas
+                .as_ref()
+                .map(|signal| signal.tag.as_str()),
             "outputs.p_total_meas".to_string(),
         );
         collect_group_tag_owner(
             &mut tag_owners,
-            outputs.p_total_target.as_ref().map(|signal| signal.tag.as_str()),
+            outputs
+                .p_total_target
+                .as_ref()
+                .map(|signal| signal.tag.as_str()),
             "outputs.p_total_target".to_string(),
         );
         collect_group_tag_owner(
             &mut tag_owners,
-            outputs.p_total_error.as_ref().map(|signal| signal.tag.as_str()),
+            outputs
+                .p_total_error
+                .as_ref()
+                .map(|signal| signal.tag.as_str()),
             "outputs.p_total_error".to_string(),
         );
     }

@@ -856,6 +856,16 @@ const IEC104: React.FC = () => {
     [selectedConn, points, messageApi],
   );
 
+  const handleDeleteAllPoints = useCallback(async () => {
+    if (!selectedConn) return;
+    try {
+      await api.iec104UpsertPointTable(selectedConn, [], true);
+      setPoints([]);
+      messageApi.success('全部点位已删除');
+    } catch (e) {
+      messageApi.error(`删除全部点位失败: ${e}`);
+    }
+  }, [messageApi, selectedConn]);
   const handleImportSourceConnChange = useCallback((value: string | undefined) => {
     setImportSourceConnId(value);
     setSelectedImportEndpointValues([]);
@@ -1376,6 +1386,21 @@ const IEC104: React.FC = () => {
             className="protocol-point-card"
             extra={
               <Space>
+                <Popconfirm
+                  title="确认删除全部点位？"
+                  description={`当前连接的 ${points.length} 个点位将被清空`}
+                  onConfirm={() => void handleDeleteAllPoints()}
+                  disabled={!selectedConn || points.length === 0}
+                >
+                  <Button
+                    danger
+                    size="small"
+                    icon={<DeleteOutlined />}
+                    disabled={!selectedConn || points.length === 0}
+                  >
+                    删除全部点位
+                  </Button>
+                </Popconfirm>
                 <Button size="small" disabled={!selectedConn} onClick={openImportPointModal}>
                   从现有点位添加
                 </Button>

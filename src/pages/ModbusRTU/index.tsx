@@ -442,6 +442,19 @@ const ModbusRTU: React.FC = () => {
     }
   }, [messageApi, points, selectedConn]);
 
+  const handleDeleteAllPoints = useCallback(async () => {
+    if (!selectedConn) {
+      return;
+    }
+    try {
+      await api.modbusRtuUpsertPointTable(selectedConn, [], true);
+      setPoints([]);
+      messageApi.success('全部点位已删除');
+    } catch (error) {
+      messageApi.error(`删除全部点位失败: ${error}`);
+    }
+  }, [messageApi, selectedConn]);
+
   useEffect(() => {
     void refreshLinks();
   }, [refreshLinks]);
@@ -742,6 +755,7 @@ const ModbusRTU: React.FC = () => {
             onAdd={openCreatePoint}
             onEdit={(index) => openEditPoint(index)}
             onDelete={(index) => void handleDeletePoint(index)}
+            onDeleteAll={() => void handleDeleteAllPoints()}
           />
         </div>
       ) : (

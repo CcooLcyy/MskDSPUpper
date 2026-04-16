@@ -42,6 +42,7 @@ interface Props {
   onAdd: () => void;
   onEdit: (index: number) => void;
   onDelete: (index: number) => void;
+  onDeleteAll: () => void;
 }
 
 const PointTable: React.FC<Props> = ({
@@ -53,6 +54,7 @@ const PointTable: React.FC<Props> = ({
   onAdd,
   onEdit,
   onDelete,
+  onDeleteAll,
 }) => {
   const columns: ColumnsType<ModbusPoint> = [
     {
@@ -145,9 +147,26 @@ const PointTable: React.FC<Props> = ({
       bordered
       className="protocol-point-card"
       extra={(
-        <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onAdd} disabled={!selectedConn}>
-          添加点位
-        </Button>
+        <Space>
+          <Popconfirm
+            title="确认删除全部点位？"
+            description={`当前连接的 ${points.length} 个点位将被清空`}
+            onConfirm={onDeleteAll}
+            disabled={!selectedConn || points.length === 0}
+          >
+            <Button
+              danger
+              size="small"
+              icon={<DeleteOutlined />}
+              disabled={!selectedConn || points.length === 0}
+            >
+              删除全部点位
+            </Button>
+          </Popconfirm>
+          <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onAdd} disabled={!selectedConn}>
+            添加点位
+          </Button>
+        </Space>
       )}
     >
       <div className="protocol-table-scroll">

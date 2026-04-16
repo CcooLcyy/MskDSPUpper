@@ -39,6 +39,7 @@ interface Props {
   onAddPoint: () => void;
   onEditPoint: (index: number) => void;
   onDeletePoint: (index: number) => void;
+  onDeleteAllPoints: () => void;
   onAddBlock: () => void;
   onEditBlock: (index: number) => void;
   onDeleteBlock: (index: number) => void;
@@ -54,6 +55,7 @@ const PointTable: React.FC<Props> = ({
   onAddPoint,
   onEditPoint,
   onDeletePoint,
+  onDeleteAllPoints,
   onAddBlock,
   onEditBlock,
   onDeleteBlock,
@@ -270,6 +272,21 @@ const PointTable: React.FC<Props> = ({
       className="protocol-point-card"
       extra={(
         <Space>
+          <Popconfirm
+            title="确认删除全部点位？"
+            description={`当前连接的 ${points.length} 个点位将被清空，数据块配置会保留`}
+            onConfirm={onDeleteAllPoints}
+            disabled={!selectedConn || points.length === 0}
+          >
+            <Button
+              danger
+              size="small"
+              icon={<DeleteOutlined />}
+              disabled={!selectedConn || points.length === 0}
+            >
+              删除全部点位
+            </Button>
+          </Popconfirm>
           <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onAddPoint} disabled={!selectedConn}>
             添加点位
           </Button>
