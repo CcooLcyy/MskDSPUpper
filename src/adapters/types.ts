@@ -346,6 +346,64 @@ export interface AgcGroupInfo {
   last_error: string;
 }
 
+export interface AvcSignalSpec {
+  tag: string;
+  unit: string;
+  scale: number;
+  offset: number;
+}
+
+export interface AvcValueSpec {
+  signal: AvcSignalSpec | null;
+  mode: number;
+  delta_base: number;
+  base_tag: string;
+}
+
+export interface AvcVoltageControlConfig {
+  kp: number;
+  deadband: number;
+}
+
+export interface AvcStrategyConfig {
+  strategy_type: string;
+}
+
+export interface AvcMemberConfig {
+  member_name: string;
+  controllable: boolean;
+  weight: number;
+  q_min_kvar: number;
+  q_max_kvar: number;
+  q_meas: AvcSignalSpec | null;
+  q_set: AvcValueSpec | null;
+}
+
+export interface AvcGroupConfig {
+  group_name: string;
+  voltage_meas: AvcSignalSpec | null;
+  voltage_cmd: AvcSignalSpec | null;
+  q_total_cmd: AvcValueSpec | null;
+  voltage_control: AvcVoltageControlConfig | null;
+  strategy: AvcStrategyConfig | null;
+  members: AvcMemberConfig[];
+}
+
+export interface AvcDefaultPointInfo {
+  kind: number;
+  tag: string;
+  name: string;
+  description: string;
+}
+
+export interface AvcGroupInfo {
+  config: AvcGroupConfig | null;
+  conn_id: number;
+  state: number;
+  last_error: string;
+  default_points: AvcDefaultPointInfo[];
+}
+
 export interface Iec104ExportTask {
   link: {
     config: Iec104LinkConfig;
@@ -386,6 +444,12 @@ export interface AgcExportTask {
   };
 }
 
+export interface AvcExportTask {
+  upsert: {
+    config: AvcGroupConfig;
+  };
+}
+
 export interface StableDataBusEndpoint {
   module_name: string;
   conn_name: string;
@@ -397,7 +461,7 @@ export interface StableDataBusRoute {
   dst: StableDataBusEndpoint;
 }
 
-export type ConfigExportSectionId = 'iec104' | 'modbus_rtu' | 'dlt645' | 'agc' | 'data_bus';
+export type ConfigExportSectionId = 'iec104' | 'modbus_rtu' | 'dlt645' | 'agc' | 'avc' | 'data_bus';
 
 export interface ConfigExportMetadata {
   scope: 'full' | 'partial';
@@ -429,6 +493,9 @@ export interface FullConfigExportSnapshot {
     };
     agc: {
       groups: AgcExportTask[];
+    };
+    avc: {
+      groups: AvcExportTask[];
     };
     data_bus: {
       routes: {

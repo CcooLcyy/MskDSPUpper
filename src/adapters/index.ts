@@ -46,6 +46,14 @@ export type {
   DcRoute,
 } from './types';
 export type {
+  AvcDefaultPointInfo,
+  AvcGroupConfig,
+  AvcGroupInfo,
+  AvcMemberConfig,
+  AvcSignalSpec,
+  AvcStrategyConfig,
+  AvcValueSpec,
+  AvcVoltageControlConfig,
   ConfigExportMetadata,
   ConfigExportSectionId,
   AgcDerivedOutputs,

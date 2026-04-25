@@ -8,16 +8,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     commands::{
-        agc::GroupConfigDto,
+        agc::GroupConfigDto as AgcGroupConfigDto,
+        avc::GroupConfigDto as AvcGroupConfigDto,
         dlt645::{Dlt645BlockDto, Dlt645LinkConfigDto, Dlt645MqttConfigDto, Dlt645PointDto},
         iec104::{LinkConfigDto as Iec104LinkConfigDto, PointDto as Iec104PointDto},
         modbus_rtu::{ModbusLinkConfigDto, ModbusMqttConfigDto, ModbusPointDto},
     },
     proto::{
         config_pusher_proto::{
-            AgcConfig, AgcGroupTask, Config, DataCenterEndpoint, DataCenterRoute, DataCenterRoutes,
-            Dlt645Config, Dlt645LinkTask, Iec104Config, Iec104LinkTask, ModbusRtuConfig,
-            ModbusRtuLinkTask,
+            AgcConfig, AgcGroupTask, AvcConfig, AvcGroupTask, Config, DataCenterEndpoint,
+            DataCenterRoute, DataCenterRoutes, Dlt645Config, Dlt645LinkTask, Iec104Config,
+            Iec104LinkTask, ModbusRtuConfig, ModbusRtuLinkTask,
         },
         export_config_proto::{
             DataBusConfig as ExportDataBusConfig, ExportMetadata, FullConfigExport, ModuleStartup,
@@ -67,6 +68,8 @@ pub struct FullConfigExportConfigDto {
     pub modbus_rtu: ModbusRtuExportConfigDto,
     pub dlt645: Dlt645ExportConfigDto,
     pub agc: AgcExportConfigDto,
+    #[serde(default)]
+    pub avc: AvcExportConfigDto,
     pub data_bus: DataBusExportConfigDto,
 }
 
@@ -154,7 +157,22 @@ pub struct AgcExportTaskDto {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgcUpsertRequestDto {
-    pub config: GroupConfigDto,
+    pub config: AgcGroupConfigDto,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AvcExportConfigDto {
+    pub groups: Vec<AvcExportTaskDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AvcExportTaskDto {
+    pub upsert: AvcUpsertRequestDto,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AvcUpsertRequestDto {
+    pub config: AvcGroupConfigDto,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -316,6 +334,7 @@ impl FullConfigExportConfigDto {
             modbus_rtu: Some(self.modbus_rtu.to_proto()),
             dlt645: Some(self.dlt645.to_proto()),
             agc: Some(self.agc.to_proto()),
+            avc: Some(self.avc.to_proto()),
         }
     }
 
@@ -328,6 +347,7 @@ impl FullConfigExportConfigDto {
             modbus_rtu: None,
             dlt645: None,
             agc: None,
+            avc: None,
         });
 
         Ok(Self {
@@ -335,6 +355,7 @@ impl FullConfigExportConfigDto {
             modbus_rtu: ModbusRtuExportConfigDto::from_proto(config.modbus_rtu)?,
             dlt645: Dlt645ExportConfigDto::from_proto(config.dlt645)?,
             agc: AgcExportConfigDto::from_proto(config.agc)?,
+            avc: AvcExportConfigDto::from_proto(config.avc)?,
             data_bus: DataBusExportConfigDto::from_proto(data_bus)?,
         })
     }
@@ -652,6 +673,56 @@ impl AgcExportTaskDto {
     }
 }
 
+impl AvcExportConfigDto {
+    fn to_proto(&self) -> AvcConfig {
+        AvcConfig {
+            groups: self.groups.iter().map(|task| task.to_proto()).collect(),
+        }
+    }
+
+    fn from_proto(config: Option<AvcConfig>) -> Result<Self, String> {
+        let Some(config) = config else {
+            return Ok(Self { groups: Vec::new() });
+        };
+
+        Ok(Self {
+            groups: config
+                .groups
+                .into_iter()
+                .enumerate()
+                .map(|(index, task)| AvcExportTaskDto::from_proto(index, task))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl AvcExportTaskDto {
+    fn to_proto(&self) -> AvcGroupTask {
+        AvcGroupTask {
+            upsert: Some(crate::proto::avc_proto::UpsertGroupRequest {
+                config: Some(self.upsert.config.to_proto()),
+                create_only: false,
+            }),
+            start: false,
+        }
+    }
+
+    fn from_proto(index: usize, task: AvcGroupTask) -> Result<Self, String> {
+        let upsert = task
+            .upsert
+            .ok_or_else(|| format!("AVC export group #{index} is missing upsert"))?;
+        let config = upsert
+            .config
+            .ok_or_else(|| format!("AVC export group #{index} is missing upsert.config"))?;
+
+        Ok(Self {
+            upsert: AvcUpsertRequestDto {
+                config: config.into(),
+            },
+        })
+    }
+}
+
 impl DataBusExportConfigDto {
     fn to_proto(&self) -> ExportDataBusConfig {
         ExportDataBusConfig {
@@ -819,9 +890,10 @@ mod tests {
     use prost::Message;
 
     use super::{
-        AgcExportConfigDto, DataBusExportConfigDto, DataBusRoutesDto, Dlt645ExportConfigDto,
-        ExportMetadataDto, ExportSourceDto, FullConfigExportConfigDto, FullConfigExportSnapshotDto,
-        Iec104ExportConfigDto, ModbusRtuExportConfigDto, ModuleStartupDto,
+        AgcExportConfigDto, AvcExportConfigDto, DataBusExportConfigDto, DataBusRoutesDto,
+        Dlt645ExportConfigDto, ExportMetadataDto, ExportSourceDto, FullConfigExportConfigDto,
+        FullConfigExportSnapshotDto, Iec104ExportConfigDto, ModbusRtuExportConfigDto,
+        ModuleStartupDto,
     };
 
     #[test]
@@ -863,6 +935,7 @@ mod tests {
                     links: Vec::new(),
                 },
                 agc: AgcExportConfigDto { groups: Vec::new() },
+                avc: AvcExportConfigDto { groups: Vec::new() },
                 data_bus: DataBusExportConfigDto {
                     routes: DataBusRoutesDto {
                         replace: true,
@@ -954,6 +1027,7 @@ mod tests {
                     links: Vec::new(),
                 },
                 agc: AgcExportConfigDto { groups: Vec::new() },
+                avc: AvcExportConfigDto { groups: Vec::new() },
                 data_bus: DataBusExportConfigDto {
                     routes: DataBusRoutesDto {
                         replace: false,

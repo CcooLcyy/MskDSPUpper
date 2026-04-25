@@ -7,6 +7,7 @@ export const ModbusRTUPage = lazy(() => import('./pages/ModbusRTU'));
 export const DLT645Page = lazy(() => import('./pages/DLT645'));
 export const DataBusPage = lazy(() => import('./pages/DataBus'));
 export const AGCPage = lazy(() => import('./pages/AGC'));
+export const AVCPage = lazy(() => import('./pages/AVC'));
 export const SettingsPage = lazy(() => import('./pages/Settings'));
 
 function RouteLoading() {

@@ -1,7 +1,8 @@
-import { createBrowserRouter } from 'react-router-dom';
+import { createBrowserRouter, redirect } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
 import {
   AGCPage,
+  AVCPage,
   DataBusPage,
   DLT645Page,
   IEC104Page,
@@ -67,9 +68,24 @@ export const router = createBrowserRouter([
       },
       {
         path: 'control',
+        loader: ({ request }) => {
+          const url = new URL(request.url);
+          throw redirect(`/control/agc${url.search}`);
+        },
+      },
+      {
+        path: 'control/agc',
         element: (
           <RouteSuspense>
             <AGCPage />
+          </RouteSuspense>
+        ),
+      },
+      {
+        path: 'control/avc',
+        element: (
+          <RouteSuspense>
+            <AVCPage />
           </RouteSuspense>
         ),
       },

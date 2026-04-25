@@ -2,6 +2,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { api } from '../adapters';
 import type {
   AgcGroupConfig,
+  AvcGroupConfig,
   ConfigExportSectionId,
   DcRoute,
   Dlt645LinkConfig,
@@ -25,6 +26,7 @@ const MODULE_IEC104 = 'IEC104';
 const MODULE_MODBUS_RTU = 'ModbusRTU';
 const MODULE_DLT645 = 'DLT645';
 const MODULE_AGC = 'AGC';
+const MODULE_AVC = 'AVC';
 const MODULE_DATA_CENTER = 'DataCenter';
 
 const MODULE_START_RETRY_COUNT = 10;
@@ -68,6 +70,14 @@ const CONFIG_SECTION_DEFINITIONS = [
     moduleName: MODULE_AGC,
     describe: (snapshot?: FullConfigExportSnapshot) =>
       snapshot ? `${snapshot.config.agc.groups.length} 个控制组` : '控制组配置',
+  },
+  {
+    key: 'avc',
+    label: 'AVC',
+    groupLabel: '其他配置',
+    moduleName: MODULE_AVC,
+    describe: (snapshot?: FullConfigExportSnapshot) =>
+      snapshot ? `${snapshot.config.avc?.groups.length ?? 0} 个控制组` : '控制组配置',
   },
   {
     key: 'data_bus',
@@ -116,6 +126,7 @@ export interface FullConfigImportResult {
     modbusRtuLinks: number;
     dlt645Links: number;
     agcGroups: number;
+    avcGroups: number;
     dataBusRoutes: number;
   };
 }
@@ -177,7 +188,7 @@ function resolveProtocolMergeConflicts<
     task.point_table.conn_name = renamedConnName;
     usedNames.add(renamedConnName);
     renamedConnections.set(connectionKey(moduleName, originalConnName), renamedConnName);
-    warnings.push(`Merge import renamed ${moduleName} connection ${originalConnName} -> ${renamedConnName}`);
+    warnings.push(`合并导入时已将 ${moduleName} 连接 ${originalConnName} 重命名为 ${renamedConnName}`);
   }
 }
 
@@ -275,7 +286,7 @@ function setStoredManagerAddr(addr: string): void {
 
 function assertModuleConfig<T>(moduleName: string, index: number, config: T | null): T {
   if (!config) {
-    throw new Error(`${moduleName} item #${index + 1} is missing config`);
+    throw new Error(`${moduleName} 第 ${index + 1} 项缺少配置`);
   }
 
   return config;
@@ -325,7 +336,7 @@ function scopeConfigSnapshot(
   const includedSections = dedupeConfigSections(sections);
 
   if (includedSections.length === 0) {
-    throw new Error('At least one config section must be selected');
+    throw new Error('至少需要选择一个配置分区');
   }
 
   const isFull = isFullSectionSelection(includedSections);
@@ -347,6 +358,7 @@ function scopeConfigSnapshot(
         : { mqtt: null, links: [] },
       dlt645: includedSectionSet.has('dlt645') ? snapshot.config.dlt645 : { mqtt: null, links: [] },
       agc: includedSectionSet.has('agc') ? snapshot.config.agc : { groups: [] },
+      avc: includedSectionSet.has('avc') ? snapshot.config.avc ?? { groups: [] } : { groups: [] },
       data_bus: includedSectionSet.has('data_bus')
         ? snapshot.config.data_bus
         : {
@@ -438,7 +450,7 @@ async function loadModbusRtuConfig(
   const mqtt = loadStoredMqttConfig<ModbusMqttConfig>(MODBUS_MQTT_STORAGE_KEY);
 
   if (links.some((item) => item.config?.transport_type === 2) && !mqtt) {
-    throw new Error('ModbusRTU MQTT config is missing from local storage');
+    throw new Error('本地存储中缺少 ModbusRTU 的 MQTT 配置');
   }
 
   const tasks = await Promise.all(
@@ -469,7 +481,7 @@ async function loadDlt645Config(runningModules: Set<string>): Promise<FullConfig
   const mqtt = loadStoredMqttConfig<Dlt645MqttConfig>(DLT645_MQTT_STORAGE_KEY);
 
   if (links.length > 0 && !mqtt) {
-    throw new Error('DLT645 MQTT config is missing from local storage');
+    throw new Error('本地存储中缺少 DLT645 的 MQTT 配置');
   }
 
   const tasks = await Promise.all(
@@ -508,6 +520,22 @@ async function loadAgcConfig(runningModules: Set<string>): Promise<FullConfigExp
   };
 }
 
+async function loadAvcConfig(runningModules: Set<string>): Promise<FullConfigExportSnapshot['config']['avc']> {
+  if (!runningModules.has(MODULE_AVC)) {
+    return { groups: [] };
+  }
+
+  const groups = await api.avcListGroups();
+
+  return {
+    groups: groups.map((groupInfo, index) => ({
+      upsert: {
+        config: assertModuleConfig<AvcGroupConfig>(MODULE_AVC, index, groupInfo.config),
+      },
+    })),
+  };
+}
+
 function resolveStableDataBusEndpoint(
   connId: number,
   tag: string,
@@ -516,7 +544,7 @@ function resolveStableDataBusEndpoint(
   const connection = connectionMap.get(connId);
 
   if (!connection) {
-    throw new Error(`Failed to resolve DataBus route endpoint for conn_id=${connId}`);
+    throw new Error(`无法解析 DataBus 路由端点，conn_id=${connId}`);
   }
 
   return {
@@ -617,6 +645,10 @@ function collectDesiredModules(snapshot: FullConfigExportSnapshot): Set<string> 
     modules.add(MODULE_AGC);
   }
 
+  if (snapshot.config.avc.groups.length > 0) {
+    modules.add(MODULE_AVC);
+  }
+
   if (snapshot.config.data_bus.routes.items.length > 0) {
     modules.add(MODULE_DATA_CENTER);
   }
@@ -698,12 +730,12 @@ async function ensureModulesReady(snapshot: FullConfigExportSnapshot): Promise<{
     const moduleInfo = moduleMap.get(moduleName);
 
     if (!moduleInfo) {
-      warnings.push(`Module ${moduleName} is missing from ModuleManager`);
+      warnings.push(`模块 ${moduleName} 未在 ModuleManager 中注册`);
       continue;
     }
 
     if (moduleInfo.manifest_error) {
-      warnings.push(`Module ${moduleName} has manifest error and was skipped`);
+      warnings.push(`模块 ${moduleName} 存在 manifest 错误，已跳过`);
       continue;
     }
 
@@ -721,7 +753,7 @@ async function ensureModulesReady(snapshot: FullConfigExportSnapshot): Promise<{
 
   for (const moduleName of waitTargets) {
     if (!runningModules.has(moduleName)) {
-      warnings.push(`Module ${moduleName} did not become ready in time`);
+      warnings.push(`模块 ${moduleName} 未在限定时间内就绪`);
     }
   }
 
@@ -825,6 +857,24 @@ async function syncAgc(snapshot: FullConfigExportSnapshot, mode: ConfigImportMod
   }
 }
 
+async function syncAvc(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
+  const targetNames = new Set(snapshot.config.avc.groups.map((task) => task.upsert.config.group_name));
+  const currentGroups = await api.avcListGroups();
+
+  if (mode === 'replace') {
+    for (const currentGroup of currentGroups) {
+      const groupName = currentGroup.config?.group_name;
+      if (groupName && !targetNames.has(groupName)) {
+        await api.avcDeleteGroup(groupName);
+      }
+    }
+  }
+
+  for (const task of snapshot.config.avc.groups) {
+    await api.avcUpsertGroup(task.upsert.config, false);
+  }
+}
+
 async function waitForConnectionMap(requiredKeys: Set<string>): Promise<Map<string, number>> {
   let connectionMap = new Map<string, number>();
 
@@ -856,7 +906,7 @@ function toDcRoute(
 
   if (srcConnId === undefined || dstConnId === undefined) {
     throw new Error(
-      `DataBus route endpoint is unavailable: ${route.src.module_name}/${route.src.conn_name} -> ${route.dst.module_name}/${route.dst.conn_name}`,
+      `DataBus 路由端点不可用：${route.src.module_name}/${route.src.conn_name} -> ${route.dst.module_name}/${route.dst.conn_name}`,
     );
   }
 
@@ -901,11 +951,12 @@ export async function buildConfigExportSnapshot(
   ]);
   const runningModules = new Set(runningModulesInfo.map((moduleInfo) => moduleInfo.module_name));
   const exportedAt = new Date().toISOString();
-  const [iec104, modbusRtu, dlt645, agc, dataBus] = await Promise.all([
+  const [iec104, modbusRtu, dlt645, agc, avc, dataBus] = await Promise.all([
     loadIec104Config(runningModules),
     loadModbusRtuConfig(runningModules),
     loadDlt645Config(runningModules),
     loadAgcConfig(runningModules),
+    loadAvcConfig(runningModules),
     loadDataBusConfig(runningModules),
   ]);
 
@@ -925,6 +976,7 @@ export async function buildConfigExportSnapshot(
       modbus_rtu: modbusRtu,
       dlt645,
       agc,
+      avc,
       data_bus: dataBus,
     },
     metadata: buildConfigExportMetadata(ALL_CONFIG_SECTION_IDS),
@@ -940,11 +992,11 @@ export async function buildFullConfigExportSnapshot(): Promise<FullConfigExportS
 export async function saveFullConfigExport(snapshot: FullConfigExportSnapshot): Promise<string | null> {
   const defaultFileName = buildExportFileName(snapshot.exported_at, getIncludedConfigSections(snapshot));
   const selectedPath = await save({
-    title: 'Export Full Config',
+    title: '导出完整配置',
     defaultPath: defaultFileName,
     filters: [
       {
-        name: 'MskDSP Config',
+        name: 'MskDSP 配置',
         extensions: ['mskcfg'],
       },
     ],
@@ -960,12 +1012,12 @@ export async function saveFullConfigExport(snapshot: FullConfigExportSnapshot): 
 
 export async function selectFullConfigImport(): Promise<FullConfigImportSelection | null> {
   const selectedPath = await open({
-    title: 'Import Full Config',
+    title: '导入完整配置',
     multiple: false,
     directory: false,
     filters: [
       {
-        name: 'MskDSP Config',
+        name: 'MskDSP 配置',
         extensions: ['mskcfg'],
       },
     ],
@@ -1019,25 +1071,31 @@ export async function applyConfigImport(
   if (desiredModules.has(MODULE_IEC104) && runningModules.has(MODULE_IEC104)) {
     syncTasks.push(syncIec104(snapshot, mode));
   } else if (desiredModules.has(MODULE_IEC104)) {
-    warnings.push('IEC104 is not running, skipped importing its links');
+    warnings.push('IEC104 未运行，已跳过其链路导入');
   }
 
   if (desiredModules.has(MODULE_MODBUS_RTU) && runningModules.has(MODULE_MODBUS_RTU)) {
     syncTasks.push(syncModbusRtu(snapshot, mode));
   } else if (desiredModules.has(MODULE_MODBUS_RTU)) {
-    warnings.push('ModbusRTU is not running, skipped importing its links');
+    warnings.push('ModbusRTU 未运行，已跳过其链路导入');
   }
 
   if (desiredModules.has(MODULE_DLT645) && runningModules.has(MODULE_DLT645)) {
     syncTasks.push(syncDlt645(snapshot, mode));
   } else if (desiredModules.has(MODULE_DLT645)) {
-    warnings.push('DLT645 is not running, skipped importing its links');
+    warnings.push('DLT645 未运行，已跳过其链路导入');
   }
 
   if (desiredModules.has(MODULE_AGC) && runningModules.has(MODULE_AGC)) {
     syncTasks.push(syncAgc(snapshot, mode));
   } else if (desiredModules.has(MODULE_AGC)) {
-    warnings.push('AGC is not running, skipped importing its groups');
+    warnings.push('AGC 未运行，已跳过其控制组导入');
+  }
+
+  if (desiredModules.has(MODULE_AVC) && runningModules.has(MODULE_AVC)) {
+    syncTasks.push(syncAvc(snapshot, mode));
+  } else if (desiredModules.has(MODULE_AVC)) {
+    warnings.push('AVC 未运行，已跳过其控制组导入');
   }
 
   await Promise.all(syncTasks);
@@ -1045,7 +1103,7 @@ export async function applyConfigImport(
   if (desiredModules.has(MODULE_DATA_CENTER) && runningModules.has(MODULE_DATA_CENTER)) {
     await syncDataBus(snapshot, mode);
   } else if (desiredModules.has(MODULE_DATA_CENTER)) {
-    warnings.push('DataCenter is not running, skipped importing DataBus routes');
+    warnings.push('DataCenter 未运行，已跳过 DataBus 路由导入');
   }
 
   return {
@@ -1059,6 +1117,7 @@ export async function applyConfigImport(
       modbusRtuLinks: snapshot.config.modbus_rtu.links.length,
       dlt645Links: snapshot.config.dlt645.links.length,
       agcGroups: snapshot.config.agc.groups.length,
+      avcGroups: snapshot.config.avc.groups.length,
       dataBusRoutes: snapshot.config.data_bus.routes.items.length,
     },
   };

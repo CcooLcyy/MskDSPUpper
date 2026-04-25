@@ -54,6 +54,10 @@ const menuItems = [
     key: '/control',
     icon: <ControlOutlined />,
     label: '控制策略',
+    children: [
+      { key: '/control/agc', label: 'AGC' },
+      { key: '/control/avc', label: 'AVC' },
+    ],
   },
   {
     key: '/debug-tools',
@@ -71,6 +75,7 @@ const MainLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
+  const parentMenuKeys = new Set(['/protocol', '/control']);
 
   const selectedKey = location.pathname;
   const openKeys = menuItems
@@ -124,7 +129,7 @@ const MainLayout: React.FC = () => {
             items={menuItems}
             className="main-layout-sider-menu"
             onClick={({ key }) => {
-              if (key !== '/protocol') {
+              if (!parentMenuKeys.has(key)) {
                 navigate(key);
               }
             }}

@@ -66,6 +66,13 @@ pub fn run() {
             commands::agc::agc_delete_group,
             commands::agc::agc_start_group,
             commands::agc::agc_stop_group,
+            commands::avc::avc_upsert_group,
+            commands::avc::avc_rename_group,
+            commands::avc::avc_get_group,
+            commands::avc::avc_list_groups,
+            commands::avc::avc_delete_group,
+            commands::avc::avc_start_group,
+            commands::avc::avc_stop_group,
             commands::export_config::save_full_config_export,
             commands::export_config::load_full_config_export,
         ])

@@ -7,6 +7,8 @@ import type {
   AgcGroupInfo,
   AppUpdateDownloadEvent,
   AppUpdateInfo,
+  AvcGroupConfig,
+  AvcGroupInfo,
   DcConnTags,
   DcConnectionInfo,
   DcPointUpdate,
@@ -201,6 +203,20 @@ export const api = {
     invoke<void>('agc_start_group', { groupName }),
   agcStopGroup: (groupName: string) =>
     invoke<void>('agc_stop_group', { groupName }),
+
+  avcUpsertGroup: (config: AvcGroupConfig, createOnly: boolean) =>
+    invoke<AvcGroupInfo>('avc_upsert_group', { config, createOnly }),
+  avcRenameGroup: (oldGroupName: string, newGroupName: string) =>
+    invoke<AvcGroupInfo>('avc_rename_group', { oldGroupName, newGroupName }),
+  avcGetGroup: (groupName: string) =>
+    invoke<AvcGroupInfo>('avc_get_group', { groupName }),
+  avcListGroups: () => invoke<AvcGroupInfo[]>('avc_list_groups'),
+  avcDeleteGroup: (groupName: string) =>
+    invoke<void>('avc_delete_group', { groupName }),
+  avcStartGroup: (groupName: string) =>
+    invoke<void>('avc_start_group', { groupName }),
+  avcStopGroup: (groupName: string) =>
+    invoke<void>('avc_stop_group', { groupName }),
 
   saveFullConfigExport: (filePath: string, snapshot: FullConfigExportSnapshot) =>
     invoke<string>('save_full_config_export', { filePath, snapshot }),
