@@ -41,7 +41,7 @@ import type {
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 
-const { Text } = Typography;
+const { Paragraph, Text } = Typography;
 
 type AvcCommandMode = 'voltage' | 'q_total';
 
@@ -134,6 +134,24 @@ const DEFAULT_MEMBER: AvcMemberConfig = {
     base_tag: '',
   },
 };
+
+const AvcCreateGroupNotice: React.FC = () => (
+  <div style={{ marginTop: 8 }}>
+    <Paragraph style={{ marginBottom: 8 }}>
+      AVC 按目标电压与实测电压的偏差计算需要调节的总无功，kp 没有一个确定的固定值，必须根据现场实际进行整定。
+    </Paragraph>
+    <Paragraph style={{ marginBottom: 8 }}>计算逻辑为：</Paragraph>
+    <ul style={{ margin: '0 0 12px 20px', padding: 0 }}>
+      <li>电压偏差 = 目标电压 - 实测电压；</li>
+      <li>当电压偏差绝对值小于等于电压控制死区时，AVC 保持当前总无功实测值，不继续调节；</li>
+      <li>当电压偏差超出死区时，目标总无功 = 当前总无功实测 + 电压-无功比例系数 × 电压偏差。</li>
+    </ul>
+    <Paragraph style={{ marginBottom: 0 }}>
+      因此，电压-无功比例系数用于描述“每偏差 1 个电压单位，需要调整多少 kVar 无功”，是目标电压模式下必须配置的现场整定参数。
+      系数过小会导致调节偏慢，系数过大可能导致过冲或震荡。
+    </Paragraph>
+  </div>
+);
 
 const buildEmptyGroupForm = (): AvcGroupFormValues => ({
   group_name: '控制组1',
@@ -429,6 +447,7 @@ const AVC: React.FC = () => {
   >({});
   const [runtimeUpdates, setRuntimeUpdates] = useState<Record<string, DcPointUpdate>>({});
   const [messageApi, contextHolder] = message.useMessage();
+  const [modalApi, modalContextHolder] = Modal.useModal();
   const [groupForm] = Form.useForm<AvcGroupFormValues>();
   const [renameForm] = Form.useForm<{ old_group_name: string; new_group_name: string }>();
   const [memberForm] = Form.useForm<AvcMemberConfig>();
@@ -657,7 +676,7 @@ const AVC: React.FC = () => {
     [dataBusEndpointOptions, memberForm],
   );
 
-  const openCreateGroup = useCallback(() => {
+  const openCreateGroupForm = useCallback(() => {
     setEditingGroup(null);
     setMembersDraft([]);
     setGroupTagPickerValues({});
@@ -665,6 +684,17 @@ const AVC: React.FC = () => {
     groupForm.setFieldsValue(buildEmptyGroupForm());
     setGroupModalOpen(true);
   }, [groupForm]);
+
+  const openCreateGroup = useCallback(() => {
+    modalApi.confirm({
+      title: '新增 AVC 控制组前请确认',
+      width: 760,
+      content: <AvcCreateGroupNotice />,
+      okText: '我已了解，继续新增',
+      cancelText: '取消',
+      onOk: openCreateGroupForm,
+    });
+  }, [modalApi, openCreateGroupForm]);
 
   const openEditGroup = useCallback(() => {
     if (!selectedConfig) {
@@ -1009,6 +1039,7 @@ const AVC: React.FC = () => {
   return (
     <div className="protocol-page">
       {contextHolder}
+      {modalContextHolder}
 
       {currentView === 'strategy' ? (
         <div
