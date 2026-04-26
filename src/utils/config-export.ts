@@ -28,11 +28,17 @@ const MODULE_DLT645 = 'DLT645';
 const MODULE_AGC = 'AGC';
 const MODULE_AVC = 'AVC';
 const MODULE_DATA_CENTER = 'DataCenter';
+const MODULE_CONFIG_PUSHER = 'ConfigPusher';
+const UNCONTROLLED_MODULE_NAMES = new Set([MODULE_CONFIG_PUSHER.toLowerCase()]);
 
 const MODULE_START_RETRY_COUNT = 10;
 const MODULE_START_RETRY_INTERVAL_MS = 500;
 const DATA_BUS_CONNECTION_RETRY_COUNT = 10;
 const DATA_BUS_CONNECTION_RETRY_INTERVAL_MS = 500;
+
+function isUpperControlledModuleName(moduleName: string): boolean {
+  return !UNCONTROLLED_MODULE_NAMES.has(moduleName.toLowerCase());
+}
 
 const CONFIG_SECTION_DEFINITIONS = [
   {
@@ -342,14 +348,15 @@ function scopeConfigSnapshot(
   const isFull = isFullSectionSelection(includedSections);
   const allowedModules = isFull ? null : getSectionModuleNames(includedSections);
   const includedSectionSet = new Set(includedSections);
+  const startupModules = snapshot.module_startup.modules.filter(isUpperControlledModuleName);
 
   return {
     ...snapshot,
     module_startup: {
       ...snapshot.module_startup,
       modules: isFull
-        ? snapshot.module_startup.modules
-        : snapshot.module_startup.modules.filter((moduleName) => allowedModules?.has(moduleName)),
+        ? startupModules
+        : startupModules.filter((moduleName) => allowedModules?.has(moduleName)),
     },
     config: {
       iec104: includedSectionSet.has('iec104') ? snapshot.config.iec104 : { links: [] },
@@ -627,7 +634,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function collectDesiredModules(snapshot: FullConfigExportSnapshot): Set<string> {
-  const modules = new Set(snapshot.module_startup.modules);
+  const modules = new Set(snapshot.module_startup.modules.filter(isUpperControlledModuleName));
 
   if (snapshot.config.iec104.links.length > 0) {
     modules.add(MODULE_IEC104);
@@ -949,7 +956,11 @@ export async function buildConfigExportSnapshot(
     api.getAppVersion().catch(() => null),
     api.getRunningModuleInfo(),
   ]);
-  const runningModules = new Set(runningModulesInfo.map((moduleInfo) => moduleInfo.module_name));
+  const runningModules = new Set(
+    runningModulesInfo
+      .map((moduleInfo) => moduleInfo.module_name)
+      .filter(isUpperControlledModuleName),
+  );
   const exportedAt = new Date().toISOString();
   const [iec104, modbusRtu, dlt645, agc, avc, dataBus] = await Promise.all([
     loadIec104Config(runningModules),

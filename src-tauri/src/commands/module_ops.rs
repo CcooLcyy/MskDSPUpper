@@ -4,6 +4,8 @@ use tauri::State;
 use crate::grpc::module_manager::ModuleManagerClient;
 use crate::state::AppState;
 
+const UNCONTROLLED_MODULE_NAMES: &[&str] = &["ConfigPusher"];
+
 // ── 序列化类型（前端 ↔ Rust） ──
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -112,6 +114,22 @@ impl ModuleInfoDto {
     }
 }
 
+fn is_upper_controlled_module_name(module_name: &str) -> bool {
+    !UNCONTROLLED_MODULE_NAMES
+        .iter()
+        .any(|ignored| module_name.eq_ignore_ascii_case(ignored))
+}
+
+fn reject_uncontrolled_module(module_name: &str) -> Result<(), String> {
+    if is_upper_controlled_module_name(module_name) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Module {module_name} is not controlled by this upper app"
+        ))
+    }
+}
+
 fn validate_manager_addr(addr: &str) -> Result<String, String> {
     let trimmed = addr.trim();
     if trimmed.is_empty() {
@@ -195,7 +213,11 @@ pub async fn set_manager_addr(state: State<'_, AppState>, addr: String) -> Resul
 pub async fn get_module_info(state: State<'_, AppState>) -> Result<Vec<ModuleInfoDto>, String> {
     let client = ModuleManagerClient::new(&state.conn_manager);
     let infos = client.get_module_info().await.map_err(|e| e.to_string())?;
-    Ok(infos.into_iter().map(|m| m.into()).collect())
+    Ok(infos
+        .into_iter()
+        .map(ModuleInfoDto::from)
+        .filter(|m| is_upper_controlled_module_name(&m.module_name))
+        .collect())
 }
 
 /// 获取运行中模块信息（同时刷新地址缓存）
@@ -208,7 +230,11 @@ pub async fn get_running_module_info(
         .get_running_module_info()
         .await
         .map_err(|e| e.to_string())?;
-    Ok(infos.into_iter().map(|m| m.into()).collect())
+    Ok(infos
+        .into_iter()
+        .map(ModuleRunningInfoDto::from)
+        .filter(|m| is_upper_controlled_module_name(&m.module_name))
+        .collect())
 }
 
 /// 启动模块
@@ -217,6 +243,8 @@ pub async fn start_module(
     state: State<'_, AppState>,
     module_info: ModuleInfoDto,
 ) -> Result<(), String> {
+    reject_uncontrolled_module(&module_info.module_name)?;
+
     let client = ModuleManagerClient::new(&state.conn_manager);
     client
         .start_module(module_info.to_proto())
@@ -231,6 +259,8 @@ pub async fn stop_module(
     state: State<'_, AppState>,
     module_info: ModuleInfoDto,
 ) -> Result<(), String> {
+    reject_uncontrolled_module(&module_info.module_name)?;
+
     let client = ModuleManagerClient::new(&state.conn_manager);
     client
         .stop_module(module_info.to_proto())
@@ -241,7 +271,17 @@ pub async fn stop_module(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_manager_addr;
+    use super::{
+        is_upper_controlled_module_name, reject_uncontrolled_module, validate_manager_addr,
+    };
+
+    #[test]
+    fn config_pusher_is_not_upper_controlled() {
+        assert!(!is_upper_controlled_module_name("ConfigPusher"));
+        assert!(!is_upper_controlled_module_name("configpusher"));
+        assert!(is_upper_controlled_module_name("ModbusRTU"));
+        assert!(reject_uncontrolled_module("ConfigPusher").is_err());
+    }
 
     #[test]
     fn validate_manager_addr_accepts_ipv4_and_hostname() {
