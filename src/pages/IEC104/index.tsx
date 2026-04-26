@@ -1518,6 +1518,7 @@ const IEC104: React.FC = () => {
           form={linkForm}
           layout="vertical"
           size="small"
+          autoComplete="off"
           onValuesChange={handleLinkFormValuesChange}
         >
           <Row gutter={16}>
@@ -1527,7 +1528,7 @@ const IEC104: React.FC = () => {
                 label="连接名称"
                 rules={[{ required: true, message: '请输入连接名称' }]}
               >
-                <Input placeholder="conn_104_master" />
+                <Input placeholder="conn_104_master" autoComplete="off" />
               </Form.Item>
             </Col>
             <Col span={8}>

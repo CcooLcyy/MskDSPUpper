@@ -476,11 +476,11 @@ const ModbusRTU: React.FC = () => {
       width={720}
       destroyOnClose
     >
-      <Form form={linkForm} layout="vertical" size="small">
+      <Form form={linkForm} layout="vertical" size="small" autoComplete="off">
         <Row gutter={16}>
           <Col span={8}>
             <Form.Item label="连接名称" name="conn_name" rules={[{ required: true, message: '请输入连接名称' }]}>
-              <Input />
+              <Input autoComplete="off" />
             </Form.Item>
           </Col>
           <Col span={8}>
