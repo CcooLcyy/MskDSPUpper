@@ -447,7 +447,6 @@ const Settings: React.FC = () => {
     try {
       const result = await applyConfigImport(moduleImportSelection, {
         sections: selectedImportSections,
-        applyGlobals: false,
         mode: moduleImportMode,
       });
 
@@ -530,7 +529,7 @@ const Settings: React.FC = () => {
           可以导出完整配置快照，也可以只导出单独模块的配置文件。导入时会在选中文件后提示选择“合并”或“覆盖”。
         </Paragraph>
         <Paragraph type="secondary" style={{ marginBottom: 12 }}>
-          模块级导入只会影响选中的模块，不会修改 manager 地址，也不会改动全局模块启动集。
+          完整导出不会写入当前 manager 地址；完整导入和模块级导入都不会修改 manager 地址。
         </Paragraph>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <Space wrap>
@@ -601,7 +600,7 @@ const Settings: React.FC = () => {
               </Space>
             </Radio.Group>
             <Text type="secondary">
-              完整导入会继续应用文件中的 manager 地址。覆盖会清理文件未包含的连接、控制组和路由；合并会保留现有项，并在协议连接同名时自动重命名后导入。
+              完整导入不会修改 manager 地址。覆盖会清理文件未包含的连接、控制组和路由；合并会保留现有项，并在协议连接同名时自动重命名后导入。
             </Text>
           </Space>
         ) : null}

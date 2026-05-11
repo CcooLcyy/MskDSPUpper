@@ -17,8 +17,6 @@ import type {
 import { buildDuplicateConnectionName } from './connection-copy';
 import { loadStoredMqttConfig, saveStoredMqttConfig } from './mqtt';
 
-const MANAGER_ADDR_KEY = 'mskdsp_manager_addr';
-const DEFAULT_MANAGER_ADDR = '127.0.0.1:17000';
 const MODBUS_MQTT_STORAGE_KEY = 'protocol.modbus_rtu.mqtt';
 const DLT645_MQTT_STORAGE_KEY = 'protocol.dlt645.mqtt';
 
@@ -139,7 +137,6 @@ export interface FullConfigImportResult {
 
 interface ApplyConfigImportOptions {
   sections?: ConfigExportSectionId[];
-  applyGlobals?: boolean;
   mode?: ConfigImportMode;
 }
 
@@ -272,22 +269,6 @@ async function preprocessMergeImportSnapshot(
     snapshot: adjustedSnapshot,
     warnings,
   };
-}
-
-function getStoredManagerAddr(): string {
-  try {
-    return globalThis.localStorage?.getItem(MANAGER_ADDR_KEY) || DEFAULT_MANAGER_ADDR;
-  } catch {
-    return DEFAULT_MANAGER_ADDR;
-  }
-}
-
-function setStoredManagerAddr(addr: string): void {
-  try {
-    globalThis.localStorage?.setItem(MANAGER_ADDR_KEY, addr);
-  } catch {
-    // Ignore storage failures and keep the import flow usable.
-  }
 }
 
 function assertModuleConfig<T>(moduleName: string, index: number, config: T | null): T {
@@ -976,7 +957,8 @@ export async function buildConfigExportSnapshot(
     exported_at: exportedAt,
     source: {
       ...(appVersionResult ? { app_version: appVersionResult } : {}),
-      manager_addr: getStoredManagerAddr(),
+      // Legacy schema field. Full exports should not capture the local ModuleManager address.
+      manager_addr: '',
     },
     module_startup: {
       source: 'get_running_module_info',
@@ -1055,12 +1037,6 @@ export async function applyConfigImport(
   const mode = normalizeConfigImportMode(options.mode);
   const scopedSnapshot = scopeConfigSnapshot(selection.snapshot, sections);
   const warnings: string[] = [];
-  const shouldApplyGlobals = options.applyGlobals ?? scopedSnapshot.metadata.scope !== 'partial';
-
-  if (shouldApplyGlobals) {
-    await api.setManagerAddr(scopedSnapshot.source.manager_addr);
-    setStoredManagerAddr(scopedSnapshot.source.manager_addr);
-  }
 
   const {
     runningModules,
@@ -1136,7 +1112,7 @@ export async function applyConfigImport(
 
 export async function applyFullConfigImport(
   selection: FullConfigImportSelection,
-  options: Omit<ApplyConfigImportOptions, 'sections' | 'applyGlobals'> = {},
+  options: Omit<ApplyConfigImportOptions, 'sections'> = {},
 ): Promise<FullConfigImportResult> {
   return applyConfigImport(selection, options);
 }
