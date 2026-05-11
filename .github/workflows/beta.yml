@@ -95,6 +95,8 @@ jobs:
 
       - name: Setup protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ github.token }}
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.7
@@ -228,6 +230,8 @@ jobs:
 
       - name: Setup protoc
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ github.token }}
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.7
