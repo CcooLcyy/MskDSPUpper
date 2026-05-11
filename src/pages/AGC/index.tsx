@@ -177,6 +177,10 @@ const normalizeOutputs = (outputs: AgcDerivedOutputs | null | undefined): AgcDer
   };
 };
 
+const isFiniteNumber = (value: unknown): value is number => (
+  typeof value === 'number' && Number.isFinite(value)
+);
+
 const buildDefaultMemberTag = (memberName: string, kind: 'p_meas' | 'p_set'): string => {
   const normalizedMemberName = memberName
     .trim()
@@ -1032,8 +1036,19 @@ const AGC: React.FC = () => {
 
           <div style={{ display: 'flex', gap: 16 }}>
             <div style={{ flex: 1 }}>
-              <Form.Item name="capacity_kw" label="capacity_kw">
-                <InputNumber style={{ width: '100%' }} step={0.1} />
+              <Form.Item
+                name="capacity_kw"
+                label="capacity_kw"
+                rules={[
+                  {
+                    validator: async (_rule, value) => {
+                      if (value == null || isFiniteNumber(value)) return;
+                      throw new Error('额定容量必须是有效数字');
+                    },
+                  },
+                ]}
+              >
+                <InputNumber style={{ width: '100%' }} step={0.1} min={0} />
               </Form.Item>
             </div>
             <div style={{ flex: 1 }}>
@@ -1047,7 +1062,31 @@ const AGC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ flex: 1 }}>
-              <Form.Item name="max_kw" label="max_kw">
+              <Form.Item
+                name="max_kw"
+                label="max_kw"
+                dependencies={['capacity_kw', 'min_kw']}
+                rules={[
+                  {
+                    validator: async (_rule, value) => {
+                      if (value == null) return;
+                      if (!isFiniteNumber(value)) {
+                        throw new Error('最大可调有功必须是有效数字');
+                      }
+
+                      const capacityKw = memberForm.getFieldValue('capacity_kw');
+                      if (isFiniteNumber(capacityKw) && value > capacityKw) {
+                        throw new Error('最大可调有功不能大于额定容量');
+                      }
+
+                      const minKw = memberForm.getFieldValue('min_kw');
+                      if (isFiniteNumber(minKw) && value < minKw) {
+                        throw new Error('最大可调有功不能小于最小可调有功');
+                      }
+                    },
+                  },
+                ]}
+              >
                 <InputNumber style={{ width: '100%' }} step={0.1} />
               </Form.Item>
             </div>
