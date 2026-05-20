@@ -270,8 +270,10 @@ export interface DcConnTags {
 }
 
 export interface DcEndpoint {
-  conn_id: number;
+  module_name: string;
+  conn_name: string;
   tag: string;
+  conn_id?: number;
 }
 
 export interface DcRoute {
@@ -454,6 +456,7 @@ export interface StableDataBusEndpoint {
   module_name: string;
   conn_name: string;
   tag: string;
+  conn_id?: number;
 }
 
 export interface StableDataBusRoute {

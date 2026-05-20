@@ -1,11 +1,13 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-use crate::grpc::data_center::DataCenterClient;
+use crate::grpc::data_center::{
+    DataCenterClient, StableRoute as Route, StableRouteEndpoint as Endpoint,
+};
 use crate::proto::data_center_proto::{
-    point_value, ConnectionInfo, Endpoint, GetLatestRequest, ListRoutesRequest, PointUpdate, Route,
+    point_value, ConnectionInfo, GetLatestRequest, ListRoutesRequest, PointUpdate,
 };
 use crate::protocol_shadow;
 use crate::state::AppState;
@@ -27,7 +29,12 @@ pub struct ConnTagsDto {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EndpointDto {
-    pub conn_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conn_id: Option<u32>,
+    #[serde(default)]
+    pub module_name: String,
+    #[serde(default)]
+    pub conn_name: String,
     pub tag: String,
 }
 
@@ -79,14 +86,38 @@ impl From<crate::proto::data_center_proto::ConnTags> for ConnTagsDto {
     }
 }
 
-fn endpoint_from_proto(ep: Option<Endpoint>) -> EndpointDto {
+fn endpoint_from_proto(
+    ep: Option<Endpoint>,
+    connection_lookup: &HashMap<u32, (String, String)>,
+) -> EndpointDto {
     match ep {
-        Some(e) => EndpointDto {
-            conn_id: e.conn_id,
-            tag: e.tag,
-        },
+        Some(e) => {
+            let (fallback_module_name, fallback_conn_name) = connection_lookup
+                .get(&e.conn_id)
+                .cloned()
+                .unwrap_or_else(|| (String::new(), String::new()));
+            let module_name = if e.module_name.is_empty() {
+                fallback_module_name
+            } else {
+                e.module_name
+            };
+            let conn_name = if e.conn_name.is_empty() {
+                fallback_conn_name
+            } else {
+                e.conn_name
+            };
+
+            EndpointDto {
+                conn_id: (e.conn_id != 0).then_some(e.conn_id),
+                module_name,
+                conn_name,
+                tag: e.tag,
+            }
+        }
         None => EndpointDto {
-            conn_id: 0,
+            conn_id: None,
+            module_name: String::new(),
+            conn_name: String::new(),
             tag: String::new(),
         },
     }
@@ -106,11 +137,11 @@ fn point_value_from_proto(
     })
 }
 
-impl From<Route> for RouteDto {
-    fn from(r: Route) -> Self {
+impl RouteDto {
+    fn from_proto(r: Route, connection_lookup: &HashMap<u32, (String, String)>) -> Self {
         Self {
-            src: endpoint_from_proto(r.src),
-            dst: endpoint_from_proto(r.dst),
+            src: endpoint_from_proto(r.src, connection_lookup),
+            dst: endpoint_from_proto(r.dst, connection_lookup),
         }
     }
 }
@@ -134,7 +165,9 @@ impl From<PointUpdate> for PointUpdateDto {
 impl EndpointDto {
     fn to_proto(&self) -> Endpoint {
         Endpoint {
-            conn_id: self.conn_id,
+            conn_id: self.conn_id.unwrap_or_default(),
+            module_name: self.module_name.clone(),
+            conn_name: self.conn_name.clone(),
             tag: self.tag.clone(),
         }
     }
@@ -156,28 +189,35 @@ fn is_protocol_shadow_connection(info: &ConnectionInfo) -> bool {
         && info.conn_name == protocol_shadow::PROTOCOL_SHADOW_CONN_NAME
 }
 
-fn route_uses_hidden_connection(route: &Route, hidden_conn_ids: &HashSet<u32>) -> bool {
+fn endpoint_uses_hidden_connection(
+    endpoint: &Endpoint,
+    hidden_conn_ids: &HashSet<u32>,
+    hidden_connection_keys: &HashSet<(String, String)>,
+) -> bool {
+    hidden_conn_ids.contains(&endpoint.conn_id)
+        || hidden_connection_keys
+            .contains(&(endpoint.module_name.clone(), endpoint.conn_name.clone()))
+}
+
+fn route_uses_hidden_connection(
+    route: &Route,
+    hidden_conn_ids: &HashSet<u32>,
+    hidden_connection_keys: &HashSet<(String, String)>,
+) -> bool {
     route
         .src
         .as_ref()
-        .map(|endpoint| hidden_conn_ids.contains(&endpoint.conn_id))
+        .map(|endpoint| {
+            endpoint_uses_hidden_connection(endpoint, hidden_conn_ids, hidden_connection_keys)
+        })
         .unwrap_or(false)
         || route
             .dst
             .as_ref()
-            .map(|endpoint| hidden_conn_ids.contains(&endpoint.conn_id))
+            .map(|endpoint| {
+                endpoint_uses_hidden_connection(endpoint, hidden_conn_ids, hidden_connection_keys)
+            })
             .unwrap_or(false)
-}
-
-async fn list_hidden_connection_ids(client: &DataCenterClient<'_>) -> Result<HashSet<u32>, String> {
-    let resp = client.list_connections().await.map_err(|e| e.to_string())?;
-
-    Ok(resp
-        .conns
-        .into_iter()
-        .filter(is_protocol_shadow_connection)
-        .map(|conn| conn.conn_id)
-        .collect())
 }
 
 #[tauri::command]
@@ -216,7 +256,20 @@ pub async fn dc_list_routes(
     dst_tag: String,
 ) -> Result<Vec<RouteDto>, String> {
     let client = DataCenterClient::new(&state.conn_manager);
-    let hidden_conn_ids = list_hidden_connection_ids(&client).await?;
+    let connections = client.list_connections().await.map_err(|e| e.to_string())?;
+    let mut connection_lookup = HashMap::new();
+    let mut hidden_conn_ids = HashSet::new();
+    let mut hidden_connection_keys = HashSet::new();
+
+    for conn in connections.conns {
+        if is_protocol_shadow_connection(&conn) {
+            hidden_conn_ids.insert(conn.conn_id);
+            hidden_connection_keys.insert((conn.module_name.clone(), conn.conn_name.clone()));
+        }
+
+        connection_lookup.insert(conn.conn_id, (conn.module_name, conn.conn_name));
+    }
+
     let resp = client
         .list_routes(ListRoutesRequest {
             src_conn_id,
@@ -229,8 +282,10 @@ pub async fn dc_list_routes(
     Ok(resp
         .routes
         .into_iter()
-        .filter(|route| !route_uses_hidden_connection(route, &hidden_conn_ids))
-        .map(|r| r.into())
+        .filter(|route| {
+            !route_uses_hidden_connection(route, &hidden_conn_ids, &hidden_connection_keys)
+        })
+        .map(|r| RouteDto::from_proto(r, &connection_lookup))
         .collect())
 }
 

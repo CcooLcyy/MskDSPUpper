@@ -44,6 +44,32 @@ const resolveConnName = (connId: number, conns: DcConnectionInfo[]): string => {
   return c ? c.conn_name : `连接_${connId}`;
 };
 
+type RouteEndpointOption = {
+  value: string;
+  label: string;
+  endpoint: DcRoute['src'];
+};
+
+const routeEndpointKey = (endpoint: DcRoute['src']): string =>
+  `${endpoint.module_name}\u0000${endpoint.conn_name}\u0000${endpoint.tag}`;
+
+const routeKey = (route: DcRoute): string =>
+  `${routeEndpointKey(route.src)}->${routeEndpointKey(route.dst)}`;
+
+const encodeRouteEndpointOption = (endpoint: DcRoute['src']): string =>
+  JSON.stringify(endpoint);
+
+const decodeRouteEndpointOption = (value: string): DcRoute['src'] =>
+  JSON.parse(value) as DcRoute['src'];
+
+const formatEndpointConnId = (endpoint: DcRoute['src']): string => {
+  if (endpoint.conn_id === undefined || endpoint.conn_id === 0) {
+    return '-';
+  }
+
+  return String(endpoint.conn_id);
+};
+
 const formatTimestamp = (tsMs: number): string => {
   if (tsMs <= 0) return '-';
   const d = new Date(tsMs);
@@ -76,12 +102,8 @@ const formatPointValue = (pv: DcPointUpdate['value']): string => {
 
 const RouteCard: React.FC<{
   route: DcRoute;
-  conns: DcConnectionInfo[];
   onDelete: () => void;
-}> = ({ route, conns, onDelete }) => {
-  const srcName = resolveConnName(route.src.conn_id, conns);
-  const dstName = resolveConnName(route.dst.conn_id, conns);
-
+}> = ({ route, onDelete }) => {
   return (
     <div
       style={{
@@ -106,7 +128,10 @@ const RouteCard: React.FC<{
           源端
         </Text>
         <Text style={{ color: '#fff' }}>
-          {srcName} : {route.src.tag}
+          {route.src.module_name}/{route.src.conn_name} : {route.src.tag}
+        </Text>
+        <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+          conn_id: {formatEndpointConnId(route.src)}
         </Text>
       </div>
 
@@ -149,7 +174,10 @@ const RouteCard: React.FC<{
           目标端
         </Text>
         <Text style={{ color: '#fff' }}>
-          {dstName} : {route.dst.tag}
+          {route.dst.module_name}/{route.dst.conn_name} : {route.dst.tag}
+        </Text>
+        <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+          conn_id: {formatEndpointConnId(route.dst)}
         </Text>
       </div>
 
@@ -263,11 +291,11 @@ const DataBus: React.FC = () => {
   const handleRouteSubmit = useCallback(async () => {
     try {
       const values = await routeForm.validateFields();
-      const [srcConnId, srcTag] = (values.source as string).split(':');
-      const [dstConnId, dstTag] = (values.destination as string).split(':');
+      const src = decodeRouteEndpointOption(values.source as string);
+      const dst = decodeRouteEndpointOption(values.destination as string);
       const newRoute: DcRoute = {
-        src: { conn_id: Number(srcConnId), tag: srcTag },
-        dst: { conn_id: Number(dstConnId), tag: dstTag },
+        src,
+        dst,
       };
       await api.dcUpsertRoutes([newRoute], false);
       messageApi.success('路由已添加');
@@ -313,14 +341,22 @@ const DataBus: React.FC = () => {
     }
   }, [connections]);
 
-  const endpointOptions = useMemo(() => {
-    const opts: { value: string; label: string }[] = [];
+  const endpointOptions = useMemo<RouteEndpointOption[]>(() => {
+    const opts: RouteEndpointOption[] = [];
     for (const conn of connections) {
       const tags = allConnTags.get(conn.conn_id) ?? [];
       for (const tag of tags) {
+        const endpoint: DcRoute['src'] = {
+          module_name: conn.module_name,
+          conn_name: conn.conn_name,
+          tag,
+          conn_id: conn.conn_id,
+        };
+
         opts.push({
-          value: `${conn.conn_id}:${tag}`,
-          label: `${conn.conn_name} : ${tag}`,
+          value: encodeRouteEndpointOption(endpoint),
+          label: `${conn.module_name}/${conn.conn_name} (${conn.conn_id}) : ${tag}`,
+          endpoint,
         });
       }
     }
@@ -586,9 +622,8 @@ const DataBus: React.FC = () => {
               <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '0 16px' }}>
                 {routes.map((route, index) => (
                   <RouteCard
-                    key={`${route.src.conn_id}:${route.src.tag}->${route.dst.conn_id}:${route.dst.tag}-${index}`}
+                    key={`${routeKey(route)}-${index}`}
                     route={route}
-                    conns={connections}
                     onDelete={() => void handleDeleteRoute(route)}
                   />
                 ))}

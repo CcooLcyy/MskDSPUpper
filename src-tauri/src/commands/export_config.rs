@@ -197,6 +197,8 @@ pub struct StableDataBusEndpointDto {
     pub module_name: String,
     pub conn_name: String,
     pub tag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conn_id: Option<u32>,
 }
 
 impl FullConfigExportSnapshotDto {
@@ -802,6 +804,7 @@ impl StableDataBusEndpointDto {
             module_name: endpoint.module_name,
             conn_name: endpoint.conn_name,
             tag: endpoint.tag,
+            conn_id: None,
         }
     }
 }
@@ -939,7 +942,20 @@ mod tests {
                 data_bus: DataBusExportConfigDto {
                     routes: DataBusRoutesDto {
                         replace: true,
-                        items: Vec::new(),
+                        items: vec![super::StableDataBusRouteDto {
+                            src: super::StableDataBusEndpointDto {
+                                module_name: "IEC104".to_string(),
+                                conn_name: "line-1".to_string(),
+                                tag: "P_CMD_SRC".to_string(),
+                                conn_id: None,
+                            },
+                            dst: super::StableDataBusEndpointDto {
+                                module_name: "AGC".to_string(),
+                                conn_name: "g-1".to_string(),
+                                tag: "P_CMD".to_string(),
+                                conn_id: None,
+                            },
+                        }],
                     },
                 },
             },
@@ -959,6 +975,28 @@ mod tests {
         assert_eq!(decoded_snapshot.source.manager_addr, "127.0.0.1:17000");
         assert_eq!(decoded_snapshot.module_startup.modules.len(), 2);
         assert!(decoded_snapshot.config.data_bus.routes.replace);
+        assert_eq!(
+            decoded_snapshot.config.data_bus.routes.items[0]
+                .src
+                .module_name,
+            "IEC104"
+        );
+        assert_eq!(
+            decoded_snapshot.config.data_bus.routes.items[0]
+                .src
+                .conn_name,
+            "line-1"
+        );
+        assert_eq!(
+            decoded_snapshot.config.data_bus.routes.items[0].src.tag,
+            "P_CMD_SRC"
+        );
+        assert_eq!(
+            decoded_snapshot.config.data_bus.routes.items[0]
+                .dst
+                .module_name,
+            "AGC"
+        );
         assert_eq!(decoded_snapshot.metadata.scope, "partial");
         assert_eq!(
             decoded_snapshot.metadata.included_sections,

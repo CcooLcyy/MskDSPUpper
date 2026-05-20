@@ -4,6 +4,8 @@ import type {
   AgcGroupConfig,
   AvcGroupConfig,
   ConfigExportSectionId,
+  DcConnectionInfo,
+  DcEndpoint,
   DcRoute,
   Dlt645LinkConfig,
   Dlt645MqttConfig,
@@ -524,11 +526,20 @@ async function loadAvcConfig(runningModules: Set<string>): Promise<FullConfigExp
   };
 }
 
-function resolveStableDataBusEndpoint(
-  connId: number,
-  tag: string,
+export function resolveStableDataBusEndpoint(
+  endpoint: DcEndpoint,
   connectionMap: Map<number, { module_name: string; conn_name: string }>,
 ): StableDataBusEndpoint {
+  if (endpoint.module_name && endpoint.conn_name) {
+    return {
+      module_name: endpoint.module_name,
+      conn_name: endpoint.conn_name,
+      tag: endpoint.tag,
+      ...(endpoint.conn_id !== undefined ? { conn_id: endpoint.conn_id } : {}),
+    };
+  }
+
+  const connId = endpoint.conn_id ?? 0;
   const connection = connectionMap.get(connId);
 
   if (!connection) {
@@ -538,7 +549,8 @@ function resolveStableDataBusEndpoint(
   return {
     module_name: connection.module_name,
     conn_name: connection.conn_name,
-    tag,
+    tag: endpoint.tag,
+    conn_id: connId,
   };
 }
 
@@ -573,10 +585,111 @@ async function loadDataBusConfig(
     routes: {
       replace: true,
       items: routes.map((route) => ({
-        src: resolveStableDataBusEndpoint(route.src.conn_id, route.src.tag, connectionMap),
-        dst: resolveStableDataBusEndpoint(route.dst.conn_id, route.dst.tag, connectionMap),
+        src: stripRuntimeConnId(resolveStableDataBusEndpoint(route.src, connectionMap)),
+        dst: stripRuntimeConnId(resolveStableDataBusEndpoint(route.dst, connectionMap)),
       })),
     },
+  };
+}
+
+export function stripRuntimeConnId(endpoint: StableDataBusEndpoint): StableDataBusEndpoint {
+  const { module_name, conn_name, tag } = endpoint;
+  return { module_name, conn_name, tag };
+}
+
+type LegacyDataBusEndpoint = Partial<StableDataBusEndpoint> & {
+  conn_id?: number | string;
+};
+
+type LegacyDataBusRoute = {
+  src: LegacyDataBusEndpoint;
+  dst: LegacyDataBusEndpoint;
+};
+
+function isStableDataBusEndpoint(endpoint: LegacyDataBusEndpoint): endpoint is StableDataBusEndpoint {
+  return Boolean(endpoint.module_name && endpoint.conn_name);
+}
+
+export function needsLegacyDataBusRouteMigration(route: LegacyDataBusRoute): boolean {
+  return !isStableDataBusEndpoint(route.src) || !isStableDataBusEndpoint(route.dst);
+}
+
+function parseLegacyConnId(endpoint: LegacyDataBusEndpoint): number | null {
+  if (endpoint.conn_id === undefined || endpoint.conn_id === null) {
+    return null;
+  }
+
+  const connId = Number(endpoint.conn_id);
+  return Number.isInteger(connId) && connId > 0 ? connId : null;
+}
+
+export function migrateLegacyDataBusEndpoint(
+  endpoint: LegacyDataBusEndpoint,
+  connectionsById: Map<number, DcConnectionInfo>,
+  routeIndex: number,
+  sideLabel: string,
+): StableDataBusEndpoint {
+  if (isStableDataBusEndpoint(endpoint)) {
+    return stripRuntimeConnId({
+      module_name: endpoint.module_name,
+      conn_name: endpoint.conn_name,
+      tag: endpoint.tag ?? '',
+    });
+  }
+
+  const connId = parseLegacyConnId(endpoint);
+  if (!connId) {
+    throw new Error(`旧 DataBus 路由 #${routeIndex + 1} 的${sideLabel}端点缺少 module_name/conn_name，且没有可用于迁移的 conn_id`);
+  }
+
+  const connection = connectionsById.get(connId);
+  if (!connection) {
+    throw new Error(`旧 DataBus 路由 #${routeIndex + 1} 的${sideLabel}端点引用 conn_id=${connId}，当前连接注册表不存在该连接，无法迁移为稳定路由`);
+  }
+
+  return {
+    module_name: connection.module_name,
+    conn_name: connection.conn_name,
+    tag: endpoint.tag ?? '',
+  };
+}
+
+async function migrateLegacyDataBusRoutes(
+  snapshot: FullConfigExportSnapshot,
+  runningModules: Set<string>,
+): Promise<{ snapshot: FullConfigExportSnapshot; warnings: string[] }> {
+  const routeItems = snapshot.config.data_bus.routes.items as LegacyDataBusRoute[];
+  if (!routeItems.some(needsLegacyDataBusRouteMigration)) {
+    return { snapshot, warnings: [] };
+  }
+
+  if (!runningModules.has(MODULE_DATA_CENTER)) {
+    throw new Error('旧 DataBus 路由需要通过 DataCenter 连接注册表迁移，但 DataCenter 当前未运行');
+  }
+
+  const connections = await api.dcListConnections();
+  const connectionsById = new Map(connections.map((connection) => [connection.conn_id, connection]));
+  const adjustedSnapshot = cloneConfigSnapshot(snapshot);
+  let migratedEndpointCount = 0;
+
+  (adjustedSnapshot.config.data_bus.routes.items as LegacyDataBusRoute[]).forEach((route, index) => {
+    const originalSrcStable = isStableDataBusEndpoint(route.src);
+    const originalDstStable = isStableDataBusEndpoint(route.dst);
+
+    route.src = migrateLegacyDataBusEndpoint(route.src, connectionsById, index, '源');
+    route.dst = migrateLegacyDataBusEndpoint(route.dst, connectionsById, index, '目标');
+
+    if (!originalSrcStable) {
+      migratedEndpointCount += 1;
+    }
+    if (!originalDstStable) {
+      migratedEndpointCount += 1;
+    }
+  });
+
+  return {
+    snapshot: adjustedSnapshot,
+    warnings: [`已将 ${migratedEndpointCount} 个旧 DataBus 路由端点从 conn_id 迁移为 module_name/conn_name`],
   };
 }
 
@@ -863,13 +976,13 @@ async function syncAvc(snapshot: FullConfigExportSnapshot, mode: ConfigImportMod
   }
 }
 
-async function waitForConnectionMap(requiredKeys: Set<string>): Promise<Map<string, number>> {
-  let connectionMap = new Map<string, number>();
+async function waitForConnectionMap(requiredKeys: Set<string>): Promise<Map<string, DcConnectionInfo>> {
+  let connectionMap = new Map<string, DcConnectionInfo>();
 
   for (let attempt = 0; attempt < DATA_BUS_CONNECTION_RETRY_COUNT; attempt += 1) {
     const connections = await api.dcListConnections();
     connectionMap = new Map(
-      connections.map((connection) => [connectionKey(connection.module_name, connection.conn_name), connection.conn_id]),
+      connections.map((connection) => [connectionKey(connection.module_name, connection.conn_name), connection]),
     );
 
     const allReady = Array.from(requiredKeys).every((key) => connectionMap.has(key));
@@ -885,14 +998,14 @@ async function waitForConnectionMap(requiredKeys: Set<string>): Promise<Map<stri
   return connectionMap;
 }
 
-function toDcRoute(
+export function toDcRoute(
   route: FullConfigExportSnapshot['config']['data_bus']['routes']['items'][number],
-  connectionMap: Map<string, number>,
+  connectionMap: Map<string, DcConnectionInfo>,
 ): DcRoute {
-  const srcConnId = connectionMap.get(connectionKey(route.src.module_name, route.src.conn_name));
-  const dstConnId = connectionMap.get(connectionKey(route.dst.module_name, route.dst.conn_name));
+  const srcConnection = connectionMap.get(connectionKey(route.src.module_name, route.src.conn_name));
+  const dstConnection = connectionMap.get(connectionKey(route.dst.module_name, route.dst.conn_name));
 
-  if (srcConnId === undefined || dstConnId === undefined) {
+  if (!srcConnection || !dstConnection) {
     throw new Error(
       `DataBus 路由端点不可用：${route.src.module_name}/${route.src.conn_name} -> ${route.dst.module_name}/${route.dst.conn_name}`,
     );
@@ -900,12 +1013,16 @@ function toDcRoute(
 
   return {
     src: {
-      conn_id: srcConnId,
+      module_name: route.src.module_name,
+      conn_name: route.src.conn_name,
       tag: route.src.tag,
+      conn_id: srcConnection.conn_id,
     },
     dst: {
-      conn_id: dstConnId,
+      module_name: route.dst.module_name,
+      conn_name: route.dst.conn_name,
       tag: route.dst.tag,
+      conn_id: dstConnection.conn_id,
     },
   };
 }
@@ -1046,9 +1163,15 @@ export async function applyConfigImport(
   warnings.push(...moduleWarnings);
 
   const {
+    snapshot: migratedSnapshot,
+    warnings: migrationWarnings,
+  } = await migrateLegacyDataBusRoutes(scopedSnapshot, runningModules);
+  warnings.push(...migrationWarnings);
+
+  const {
     snapshot,
     warnings: mergeWarnings,
-  } = await preprocessMergeImportSnapshot(scopedSnapshot, mode, runningModules);
+  } = await preprocessMergeImportSnapshot(migratedSnapshot, mode, runningModules);
   warnings.push(...mergeWarnings);
 
   const desiredModules = collectDesiredModules(snapshot);

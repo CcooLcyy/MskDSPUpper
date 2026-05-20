@@ -11,11 +11,15 @@ use tokio::task::JoinHandle;
 
 use crate::commands::data_center::PointUpdateDto;
 use crate::grpc::{
-    connection::ConnectionManager, data_center::DataCenterClient, dlt645::Dlt645Client,
-    iec104::Iec104Client, modbus_rtu::ModbusRtuClient, module_manager::ModuleManagerClient,
+    connection::ConnectionManager,
+    data_center::{DataCenterClient, StableRoute as Route, StableRouteEndpoint as Endpoint},
+    dlt645::Dlt645Client,
+    iec104::Iec104Client,
+    modbus_rtu::ModbusRtuClient,
+    module_manager::ModuleManagerClient,
 };
 use crate::proto::data_center_proto::{
-    ConnectionInfo, Endpoint, GetLatestRequest, ListRoutesRequest, Route, SubscribeRequest,
+    ConnectionInfo, GetLatestRequest, ListRoutesRequest, SubscribeRequest,
 };
 
 pub const PROTOCOL_SHADOW_MODULE_NAME: &str = "MskDSPUpper";
@@ -42,6 +46,13 @@ impl ProtocolShadowModule {
 #[derive(Default)]
 pub struct ProtocolShadowRuntime {
     stream_task: Mutex<Option<JoinHandle<()>>>,
+}
+
+struct ShadowSource {
+    conn_id: u32,
+    module_name: &'static str,
+    conn_name: String,
+    tags: Vec<String>,
 }
 
 impl ProtocolShadowRuntime {
@@ -118,10 +129,14 @@ pub async fn sync_protocol_shadow_module(
             continue;
         };
 
-        let route_module_name = conn_module_map
-            .get(&src.conn_id)
-            .map(String::as_str)
-            .unwrap_or_default();
+        let route_module_name = if src.module_name.is_empty() {
+            conn_module_map
+                .get(&src.conn_id)
+                .map(String::as_str)
+                .unwrap_or_default()
+        } else {
+            src.module_name.as_str()
+        };
 
         if route_module_name == module.module_name() {
             current_module_routes.push(route);
@@ -308,17 +323,29 @@ async fn collect_shadow_routes_for_module(
 
     Ok(bindings
         .into_iter()
-        .flat_map(|(source_conn_id, tags)| {
-            tags.into_iter().map(move |source_tag| {
-                build_shadow_route(source_conn_id, source_tag, shadow_conn_id)
+        .flat_map(|source| {
+            let source_conn_id = source.conn_id;
+            let source_module_name = source.module_name;
+            let source_conn_name = source.conn_name;
+            let source_tags = source.tags;
+            let shadow_module_name = PROTOCOL_SHADOW_MODULE_NAME.to_string();
+            let shadow_conn_name = PROTOCOL_SHADOW_CONN_NAME.to_string();
+            source_tags.into_iter().map(move |source_tag| {
+                build_shadow_route(
+                    source_conn_id,
+                    source_module_name,
+                    &source_conn_name,
+                    source_tag,
+                    shadow_conn_id,
+                    &shadow_module_name,
+                    &shadow_conn_name,
+                )
             })
         })
         .collect())
 }
 
-async fn collect_iec104_sources(
-    conn_manager: &ConnectionManager,
-) -> Result<Vec<(u32, Vec<String>)>> {
+async fn collect_iec104_sources(conn_manager: &ConnectionManager) -> Result<Vec<ShadowSource>> {
     let client = Iec104Client::new(conn_manager);
     let links = client.list_links().await?;
     let mut sources = Vec::new();
@@ -331,7 +358,7 @@ async fn collect_iec104_sources(
             continue;
         }
 
-        let point_table = client.get_point_table(config.conn_name).await.ok();
+        let point_table = client.get_point_table(config.conn_name.clone()).await.ok();
         let tags = point_table
             .map(|table| {
                 table
@@ -344,15 +371,18 @@ async fn collect_iec104_sources(
             })
             .unwrap_or_default();
 
-        sources.push((link.conn_id, tags));
+        sources.push(ShadowSource {
+            conn_id: link.conn_id,
+            module_name: ProtocolShadowModule::Iec104.module_name(),
+            conn_name: config.conn_name,
+            tags,
+        });
     }
 
     Ok(sources)
 }
 
-async fn collect_modbus_rtu_sources(
-    conn_manager: &ConnectionManager,
-) -> Result<Vec<(u32, Vec<String>)>> {
+async fn collect_modbus_rtu_sources(conn_manager: &ConnectionManager) -> Result<Vec<ShadowSource>> {
     let client = ModbusRtuClient::new(conn_manager);
     let links = client.list_links().await?;
     let mut sources = Vec::new();
@@ -365,7 +395,7 @@ async fn collect_modbus_rtu_sources(
             continue;
         }
 
-        let point_table = client.get_point_table(config.conn_name).await.ok();
+        let point_table = client.get_point_table(config.conn_name.clone()).await.ok();
         let tags = point_table
             .map(|table| {
                 table
@@ -378,15 +408,18 @@ async fn collect_modbus_rtu_sources(
             })
             .unwrap_or_default();
 
-        sources.push((link.conn_id, tags));
+        sources.push(ShadowSource {
+            conn_id: link.conn_id,
+            module_name: ProtocolShadowModule::ModbusRtu.module_name(),
+            conn_name: config.conn_name,
+            tags,
+        });
     }
 
     Ok(sources)
 }
 
-async fn collect_dlt645_sources(
-    conn_manager: &ConnectionManager,
-) -> Result<Vec<(u32, Vec<String>)>> {
+async fn collect_dlt645_sources(conn_manager: &ConnectionManager) -> Result<Vec<ShadowSource>> {
     let client = Dlt645Client::new(conn_manager);
     let links = client.list_links().await?;
     let mut sources = Vec::new();
@@ -399,7 +432,7 @@ async fn collect_dlt645_sources(
             continue;
         }
 
-        let point_table = client.get_point_table(config.conn_name).await.ok();
+        let point_table = client.get_point_table(config.conn_name.clone()).await.ok();
         let tags = point_table
             .map(|table| {
                 table
@@ -418,20 +451,37 @@ async fn collect_dlt645_sources(
             })
             .unwrap_or_default();
 
-        sources.push((link.conn_id, tags));
+        sources.push(ShadowSource {
+            conn_id: link.conn_id,
+            module_name: ProtocolShadowModule::Dlt645.module_name(),
+            conn_name: config.conn_name,
+            tags,
+        });
     }
 
     Ok(sources)
 }
 
-fn build_shadow_route(source_conn_id: u32, source_tag: String, shadow_conn_id: u32) -> Route {
+fn build_shadow_route(
+    source_conn_id: u32,
+    source_module_name: &str,
+    source_conn_name: &str,
+    source_tag: String,
+    shadow_conn_id: u32,
+    shadow_module_name: &str,
+    shadow_conn_name: &str,
+) -> Route {
     Route {
         src: Some(Endpoint {
             conn_id: source_conn_id,
+            module_name: source_module_name.to_string(),
+            conn_name: source_conn_name.to_string(),
             tag: source_tag.clone(),
         }),
         dst: Some(Endpoint {
             conn_id: shadow_conn_id,
+            module_name: shadow_module_name.to_string(),
+            conn_name: shadow_conn_name.to_string(),
             tag: shadow_tag_for_source(source_conn_id, &source_tag),
         }),
     }
@@ -444,8 +494,15 @@ fn shadow_tag_for_source(source_conn_id: u32, source_tag: &str) -> String {
 fn route_key(route: &Route) -> Option<String> {
     let src = route.src.as_ref()?;
     let dst = route.dst.as_ref()?;
-    Some(format!(
-        "{}:{}->{}:{}",
-        src.conn_id, src.tag, dst.conn_id, dst.tag
-    ))
+    let src_key = if src.module_name.is_empty() || src.conn_name.is_empty() {
+        src.conn_id.to_string()
+    } else {
+        format!("{}/{}", src.module_name, src.conn_name)
+    };
+    let dst_key = if dst.module_name.is_empty() || dst.conn_name.is_empty() {
+        dst.conn_id.to_string()
+    } else {
+        format!("{}/{}", dst.module_name, dst.conn_name)
+    };
+    Some(format!("{}:{}->{}:{}", src_key, src.tag, dst_key, dst.tag))
 }
