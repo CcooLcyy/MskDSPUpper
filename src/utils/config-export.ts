@@ -18,6 +18,7 @@ import type {
 } from '../adapters';
 import { buildDuplicateConnectionName } from './connection-copy';
 import { loadStoredMqttConfig, saveStoredMqttConfig } from './mqtt';
+import { formatErrorText, isRunningState } from './runtime-restart';
 
 const MODBUS_MQTT_STORAGE_KEY = 'protocol.modbus_rtu.mqtt';
 const DLT645_MQTT_STORAGE_KEY = 'protocol.dlt645.mqtt';
@@ -35,6 +36,16 @@ const MODULE_START_RETRY_COUNT = 10;
 const MODULE_START_RETRY_INTERVAL_MS = 500;
 const DATA_BUS_CONNECTION_RETRY_COUNT = 10;
 const DATA_BUS_CONNECTION_RETRY_INTERVAL_MS = 500;
+
+type RuntimeNamedItem = {
+  name: string;
+  state: number;
+};
+
+type RuntimeRestartPlan = {
+  name: string;
+  restartName: string | null;
+};
 
 function isUpperControlledModuleName(moduleName: string): boolean {
   return !UNCONTROLLED_MODULE_NAMES.has(moduleName.toLowerCase());
@@ -790,6 +801,69 @@ function connectionKey(moduleName: string, connName: string): string {
   return `${moduleName}\u0000${connName}`;
 }
 
+function buildRuntimeRestartPlan(
+  currentItems: RuntimeNamedItem[],
+  targetNames: Set<string>,
+  replace: boolean,
+): RuntimeRestartPlan[] {
+  return currentItems
+    .filter((item) => isRunningState(item.state) && (replace || targetNames.has(item.name)))
+    .map((item) => ({
+      name: item.name,
+      restartName: targetNames.has(item.name) ? item.name : null,
+    }));
+}
+
+async function restoreRuntimeItems(
+  moduleLabel: string,
+  restartPlan: RuntimeRestartPlan[],
+  start: (name: string) => Promise<void>,
+  warnings: string[],
+  includeDeletedItems = false,
+): Promise<void> {
+  for (const item of restartPlan) {
+    const restartName = item.restartName ?? (includeDeletedItems ? item.name : null);
+    if (!restartName) {
+      continue;
+    }
+
+    try {
+      await start(restartName);
+    } catch (error) {
+      warnings.push(
+        includeDeletedItems && !item.restartName
+          ? `${moduleLabel} ${restartName} 导入失败后尝试恢复运行失败: ${formatErrorText(error)}`
+          : `${moduleLabel} ${restartName} 配置已导入，但重新启动失败: ${formatErrorText(error)}`,
+      );
+    }
+  }
+}
+
+async function withStoppedRuntimeItems(
+  moduleLabel: string,
+  restartPlan: RuntimeRestartPlan[],
+  stop: (name: string) => Promise<void>,
+  start: (name: string) => Promise<void>,
+  warnings: string[],
+  operation: () => Promise<void>,
+): Promise<void> {
+  const stoppedItems: RuntimeRestartPlan[] = [];
+
+  try {
+    for (const item of restartPlan) {
+      await stop(item.name);
+      stoppedItems.push(item);
+    }
+
+    await operation();
+  } catch (error) {
+    await restoreRuntimeItems(moduleLabel, stoppedItems, start, warnings, true);
+    throw error;
+  }
+
+  await restoreRuntimeItems(moduleLabel, stoppedItems, start, warnings);
+}
+
 async function waitForRunningModules(targetModules: string[]): Promise<Set<string>> {
   let runningModules = new Set<string>();
 
@@ -865,27 +939,54 @@ async function ensureModulesReady(snapshot: FullConfigExportSnapshot): Promise<{
   };
 }
 
-async function syncIec104(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
+async function syncIec104(
+  snapshot: FullConfigExportSnapshot,
+  mode: ConfigImportMode,
+  warnings: string[],
+): Promise<void> {
   const replace = mode === 'replace';
   const targetNames = new Set(snapshot.config.iec104.links.map((task) => task.link.config.conn_name));
   const currentLinks = await api.iec104ListLinks();
+  const restartPlan = buildRuntimeRestartPlan(
+    currentLinks
+      .map((link) => ({
+        name: link.config?.conn_name ?? '',
+        state: link.state,
+      }))
+      .filter((item) => item.name),
+    targetNames,
+    replace,
+  );
 
-  if (replace) {
-    for (const currentLink of currentLinks) {
-      const connName = currentLink.config?.conn_name;
-      if (connName && !targetNames.has(connName)) {
-        await api.iec104DeleteLink(connName);
+  await withStoppedRuntimeItems(
+    MODULE_IEC104,
+    restartPlan,
+    api.iec104StopLink,
+    api.iec104StartLink,
+    warnings,
+    async () => {
+      if (replace) {
+        for (const currentLink of currentLinks) {
+          const connName = currentLink.config?.conn_name;
+          if (connName && !targetNames.has(connName)) {
+            await api.iec104DeleteLink(connName);
+          }
+        }
       }
-    }
-  }
 
-  for (const task of snapshot.config.iec104.links) {
-    await api.iec104UpsertLink(task.link.config, false);
-    await api.iec104UpsertPointTable(task.point_table.conn_name, task.point_table.points, replace);
-  }
+      for (const task of snapshot.config.iec104.links) {
+        await api.iec104UpsertLink(task.link.config, false);
+        await api.iec104UpsertPointTable(task.point_table.conn_name, task.point_table.points, replace);
+      }
+    },
+  );
 }
 
-async function syncModbusRtu(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
+async function syncModbusRtu(
+  snapshot: FullConfigExportSnapshot,
+  mode: ConfigImportMode,
+  warnings: string[],
+): Promise<void> {
   const replace = mode === 'replace';
   if (snapshot.config.modbus_rtu.mqtt) {
     await api.modbusRtuUpdateConfig(snapshot.config.modbus_rtu.mqtt);
@@ -894,23 +995,46 @@ async function syncModbusRtu(snapshot: FullConfigExportSnapshot, mode: ConfigImp
 
   const targetNames = new Set(snapshot.config.modbus_rtu.links.map((task) => task.link.config.conn_name));
   const currentLinks = await api.modbusRtuListLinks();
+  const restartPlan = buildRuntimeRestartPlan(
+    currentLinks
+      .map((link) => ({
+        name: link.config?.conn_name ?? '',
+        state: link.state,
+      }))
+      .filter((item) => item.name),
+    targetNames,
+    replace,
+  );
 
-  if (replace) {
-    for (const currentLink of currentLinks) {
-      const connName = currentLink.config?.conn_name;
-      if (connName && !targetNames.has(connName)) {
-        await api.modbusRtuDeleteLink(connName);
+  await withStoppedRuntimeItems(
+    MODULE_MODBUS_RTU,
+    restartPlan,
+    api.modbusRtuStopLink,
+    api.modbusRtuStartLink,
+    warnings,
+    async () => {
+      if (replace) {
+        for (const currentLink of currentLinks) {
+          const connName = currentLink.config?.conn_name;
+          if (connName && !targetNames.has(connName)) {
+            await api.modbusRtuDeleteLink(connName);
+          }
+        }
       }
-    }
-  }
 
-  for (const task of snapshot.config.modbus_rtu.links) {
-    await api.modbusRtuUpsertLink(task.link.config, false);
-    await api.modbusRtuUpsertPointTable(task.point_table.conn_name, task.point_table.points, replace);
-  }
+      for (const task of snapshot.config.modbus_rtu.links) {
+        await api.modbusRtuUpsertLink(task.link.config, false);
+        await api.modbusRtuUpsertPointTable(task.point_table.conn_name, task.point_table.points, replace);
+      }
+    },
+  );
 }
 
-async function syncDlt645(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
+async function syncDlt645(
+  snapshot: FullConfigExportSnapshot,
+  mode: ConfigImportMode,
+  warnings: string[],
+): Promise<void> {
   const replace = mode === 'replace';
   if (snapshot.config.dlt645.mqtt) {
     await api.dlt645UpdateConfig(snapshot.config.dlt645.mqtt);
@@ -919,61 +1043,126 @@ async function syncDlt645(snapshot: FullConfigExportSnapshot, mode: ConfigImport
 
   const targetNames = new Set(snapshot.config.dlt645.links.map((task) => task.link.config.conn_name));
   const currentLinks = await api.dlt645ListLinks();
+  const restartPlan = buildRuntimeRestartPlan(
+    currentLinks
+      .map((link) => ({
+        name: link.config?.conn_name ?? '',
+        state: link.state,
+      }))
+      .filter((item) => item.name),
+    targetNames,
+    replace,
+  );
 
-  if (replace) {
-    for (const currentLink of currentLinks) {
-      const connName = currentLink.config?.conn_name;
-      if (connName && !targetNames.has(connName)) {
-        await api.dlt645DeleteLink(connName);
+  await withStoppedRuntimeItems(
+    MODULE_DLT645,
+    restartPlan,
+    api.dlt645StopLink,
+    api.dlt645StartLink,
+    warnings,
+    async () => {
+      if (replace) {
+        for (const currentLink of currentLinks) {
+          const connName = currentLink.config?.conn_name;
+          if (connName && !targetNames.has(connName)) {
+            await api.dlt645DeleteLink(connName);
+          }
+        }
       }
-    }
-  }
 
-  for (const task of snapshot.config.dlt645.links) {
-    await api.dlt645UpsertLink(task.link.config, false);
-    await api.dlt645UpsertPointTable(
-      task.point_table.conn_name,
-      task.point_table.points,
-      task.point_table.blocks,
-      replace,
-    );
-  }
+      for (const task of snapshot.config.dlt645.links) {
+        await api.dlt645UpsertLink(task.link.config, false);
+        await api.dlt645UpsertPointTable(
+          task.point_table.conn_name,
+          task.point_table.points,
+          task.point_table.blocks,
+          replace,
+        );
+      }
+    },
+  );
 }
 
-async function syncAgc(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
+async function syncAgc(
+  snapshot: FullConfigExportSnapshot,
+  mode: ConfigImportMode,
+  warnings: string[],
+): Promise<void> {
   const targetNames = new Set(snapshot.config.agc.groups.map((task) => task.upsert.config.group_name));
   const currentGroups = await api.agcListGroups();
+  const restartPlan = buildRuntimeRestartPlan(
+    currentGroups
+      .map((group) => ({
+        name: group.config?.group_name ?? '',
+        state: group.state,
+      }))
+      .filter((item) => item.name),
+    targetNames,
+    mode === 'replace',
+  );
 
-  if (mode === 'replace') {
-    for (const currentGroup of currentGroups) {
-      const groupName = currentGroup.config?.group_name;
-      if (groupName && !targetNames.has(groupName)) {
-        await api.agcDeleteGroup(groupName);
+  await withStoppedRuntimeItems(
+    MODULE_AGC,
+    restartPlan,
+    api.agcStopGroup,
+    api.agcStartGroup,
+    warnings,
+    async () => {
+      if (mode === 'replace') {
+        for (const currentGroup of currentGroups) {
+          const groupName = currentGroup.config?.group_name;
+          if (groupName && !targetNames.has(groupName)) {
+            await api.agcDeleteGroup(groupName);
+          }
+        }
       }
-    }
-  }
 
-  for (const task of snapshot.config.agc.groups) {
-    await api.agcUpsertGroup(task.upsert.config, false);
-  }
+      for (const task of snapshot.config.agc.groups) {
+        await api.agcUpsertGroup(task.upsert.config, false);
+      }
+    },
+  );
 }
 
-async function syncAvc(snapshot: FullConfigExportSnapshot, mode: ConfigImportMode): Promise<void> {
+async function syncAvc(
+  snapshot: FullConfigExportSnapshot,
+  mode: ConfigImportMode,
+  warnings: string[],
+): Promise<void> {
   const targetNames = new Set(snapshot.config.avc.groups.map((task) => task.upsert.config.group_name));
   const currentGroups = await api.avcListGroups();
+  const restartPlan = buildRuntimeRestartPlan(
+    currentGroups
+      .map((group) => ({
+        name: group.config?.group_name ?? '',
+        state: group.state,
+      }))
+      .filter((item) => item.name),
+    targetNames,
+    mode === 'replace',
+  );
 
-  if (mode === 'replace') {
-    for (const currentGroup of currentGroups) {
-      const groupName = currentGroup.config?.group_name;
-      if (groupName && !targetNames.has(groupName)) {
-        await api.avcDeleteGroup(groupName);
+  await withStoppedRuntimeItems(
+    MODULE_AVC,
+    restartPlan,
+    api.avcStopGroup,
+    api.avcStartGroup,
+    warnings,
+    async () => {
+      if (mode === 'replace') {
+        for (const currentGroup of currentGroups) {
+          const groupName = currentGroup.config?.group_name;
+          if (groupName && !targetNames.has(groupName)) {
+            await api.avcDeleteGroup(groupName);
+          }
+        }
       }
-    }
-  }
 
-  for (const task of snapshot.config.avc.groups) {
-    await api.avcUpsertGroup(task.upsert.config, false);
-  }
+      for (const task of snapshot.config.avc.groups) {
+        await api.avcUpsertGroup(task.upsert.config, false);
+      }
+    },
+  );
 }
 
 async function waitForConnectionMap(requiredKeys: Set<string>): Promise<Map<string, DcConnectionInfo>> {
@@ -1179,31 +1368,31 @@ export async function applyConfigImport(
   const syncTasks: Promise<void>[] = [];
 
   if (desiredModules.has(MODULE_IEC104) && runningModules.has(MODULE_IEC104)) {
-    syncTasks.push(syncIec104(snapshot, mode));
+    syncTasks.push(syncIec104(snapshot, mode, warnings));
   } else if (desiredModules.has(MODULE_IEC104)) {
     warnings.push('IEC104 未运行，已跳过其链路导入');
   }
 
   if (desiredModules.has(MODULE_MODBUS_RTU) && runningModules.has(MODULE_MODBUS_RTU)) {
-    syncTasks.push(syncModbusRtu(snapshot, mode));
+    syncTasks.push(syncModbusRtu(snapshot, mode, warnings));
   } else if (desiredModules.has(MODULE_MODBUS_RTU)) {
     warnings.push('ModbusRTU 未运行，已跳过其链路导入');
   }
 
   if (desiredModules.has(MODULE_DLT645) && runningModules.has(MODULE_DLT645)) {
-    syncTasks.push(syncDlt645(snapshot, mode));
+    syncTasks.push(syncDlt645(snapshot, mode, warnings));
   } else if (desiredModules.has(MODULE_DLT645)) {
     warnings.push('DLT645 未运行，已跳过其链路导入');
   }
 
   if (desiredModules.has(MODULE_AGC) && runningModules.has(MODULE_AGC)) {
-    syncTasks.push(syncAgc(snapshot, mode));
+    syncTasks.push(syncAgc(snapshot, mode, warnings));
   } else if (desiredModules.has(MODULE_AGC)) {
     warnings.push('AGC 未运行，已跳过其控制组导入');
   }
 
   if (desiredModules.has(MODULE_AVC) && runningModules.has(MODULE_AVC)) {
-    syncTasks.push(syncAvc(snapshot, mode));
+    syncTasks.push(syncAvc(snapshot, mode, warnings));
   } else if (desiredModules.has(MODULE_AVC)) {
     warnings.push('AVC 未运行，已跳过其控制组导入');
   }

@@ -37,6 +37,7 @@ import type {
   AgcValueSpec,
 } from '../../adapters';
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
+import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 
 const { Text } = Typography;
 
@@ -257,6 +258,37 @@ const AGC: React.FC = () => {
     [groups, selectedGroupName],
   );
 
+  const getGroupState = useCallback(async (groupName: string): Promise<number | null> => {
+    const group = await api.agcGetGroup(groupName);
+    return group.state;
+  }, []);
+
+  const runSelectedGroupStopped = useCallback(
+    async (operation: () => Promise<void>, groupName: string) => {
+      if (!selectedGroupName) {
+        await operation();
+        return {
+          stoppedBeforeRun: false,
+          restartedAfterRun: false,
+          retriedAfterRunningPrecondition: false,
+          restartError: null,
+        };
+      }
+
+      const originalGroupName = editingGroup?.group_name ?? groupName;
+      return runWithRuntimeRestart({
+        initialState: selectedGroup?.state ?? null,
+        loadState: () => getGroupState(originalGroupName),
+        stop: () => api.agcStopGroup(originalGroupName),
+        run: operation,
+        start: () => api.agcStartGroup(groupName),
+        restoreStart: () => api.agcStartGroup(originalGroupName),
+        failOnRestartError: false,
+      });
+    },
+    [editingGroup?.group_name, getGroupState, selectedGroup?.state, selectedGroupName],
+  );
+
   const refreshGroups = useCallback(async () => {
     setLoading(true);
     try {
@@ -464,15 +496,30 @@ const AGC: React.FC = () => {
         throw new Error(`同一控制组内 DataBus tag 不能重复: ${duplicateTags.join('；')}`);
       }
       const createOnly = !editingGroup;
-      await api.agcUpsertGroup(config, createOnly);
-      messageApi.success(createOnly ? '控制组创建成功' : '控制组更新成功');
+      const saveGroup = () => api.agcUpsertGroup(config, createOnly).then(() => undefined);
+      const restartResult = createOnly
+        ? await runWithRuntimeRestart({
+          initialState: null,
+          stop: () => api.agcStopGroup(config.group_name),
+          run: saveGroup,
+          start: () => api.agcStartGroup(config.group_name),
+          failOnRestartError: false,
+        })
+        : await runSelectedGroupStopped(saveGroup, config.group_name);
+      if (restartResult.restartError) {
+        messageApi.warning(`控制组配置已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('控制组已更新并重新启动成功');
+      } else {
+        messageApi.success(createOnly ? '控制组创建成功' : '控制组更新成功');
+      }
       setGroupModalOpen(false);
       await refreshGroups();
       setSelectedGroupName(config.group_name);
     } catch (e) {
       messageApi.error(`操作失败: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, [editingGroup, groupForm, membersDraft, messageApi, refreshGroups]);
+  }, [editingGroup, groupForm, membersDraft, messageApi, refreshGroups, runSelectedGroupStopped]);
 
   const openCreateMember = useCallback(() => {
     setEditingMemberIndex(null);

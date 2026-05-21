@@ -40,6 +40,7 @@ import type {
 } from '../../adapters';
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
+import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 
 const { Paragraph, Text } = Typography;
 
@@ -468,6 +469,37 @@ const AVC: React.FC = () => {
   const stateInfo = STATE_MAP[selectedGroup?.state ?? 0] ?? STATE_MAP[0];
   const currentView = normalizeControlView(searchParams.get(CONTROL_VIEW_QUERY_KEY));
 
+  const getGroupState = useCallback(async (groupName: string): Promise<number | null> => {
+    const group = await api.avcGetGroup(groupName);
+    return group.state;
+  }, []);
+
+  const runSelectedGroupStopped = useCallback(
+    async (operation: () => Promise<void>, groupName: string) => {
+      if (!selectedGroupName) {
+        await operation();
+        return {
+          stoppedBeforeRun: false,
+          restartedAfterRun: false,
+          retriedAfterRunningPrecondition: false,
+          restartError: null,
+        };
+      }
+
+      const originalGroupName = editingGroup?.group_name ?? groupName;
+      return runWithRuntimeRestart({
+        initialState: selectedGroup?.state ?? null,
+        loadState: () => getGroupState(originalGroupName),
+        stop: () => api.avcStopGroup(originalGroupName),
+        run: operation,
+        start: () => api.avcStartGroup(groupName),
+        restoreStart: () => api.avcStartGroup(originalGroupName),
+        failOnRestartError: false,
+      });
+    },
+    [editingGroup?.group_name, getGroupState, selectedGroup?.state, selectedGroupName],
+  );
+
   const refreshGroups = useCallback(async () => {
     setLoading(true);
     try {
@@ -822,15 +854,30 @@ const AVC: React.FC = () => {
       validateGroupConfig(config);
 
       const createOnly = !editingGroup;
-      await api.avcUpsertGroup(config, createOnly);
-      messageApi.success(createOnly ? 'AVC 控制组创建成功' : 'AVC 控制组更新成功');
+      const saveGroup = () => api.avcUpsertGroup(config, createOnly).then(() => undefined);
+      const restartResult = createOnly
+        ? await runWithRuntimeRestart({
+          initialState: null,
+          stop: () => api.avcStopGroup(config.group_name),
+          run: saveGroup,
+          start: () => api.avcStartGroup(config.group_name),
+          failOnRestartError: false,
+        })
+        : await runSelectedGroupStopped(saveGroup, config.group_name);
+      if (restartResult.restartError) {
+        messageApi.warning(`AVC 控制组配置已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('AVC 控制组已更新并重新启动成功');
+      } else {
+        messageApi.success(createOnly ? 'AVC 控制组创建成功' : 'AVC 控制组更新成功');
+      }
       setGroupModalOpen(false);
       await refreshGroups();
       setSelectedGroupName(config.group_name);
     } catch (error) {
       messageApi.error(`保存 AVC 控制组失败: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [editingGroup, groupForm, membersDraft, messageApi, refreshGroups]);
+  }, [editingGroup, groupForm, membersDraft, messageApi, refreshGroups, runSelectedGroupStopped]);
 
   const handleRenameGroup = useCallback(async () => {
     try {

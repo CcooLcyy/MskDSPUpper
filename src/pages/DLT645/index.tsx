@@ -7,6 +7,7 @@ import type { Dlt645LinkConfig, Dlt645LinkInfo, Dlt645Point, Dlt645Block, Dlt645
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
+import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import ConnectionConfig from './components/ConnectionConfig';
 import StatusPanel from './components/StatusPanel';
 import OperationsPanel from './components/OperationsPanel';
@@ -120,6 +121,47 @@ const DLT645: React.FC = () => {
     }
   }, []);
 
+  const getLinkState = useCallback(async (connName: string): Promise<number | null> => {
+    const link = await api.dlt645GetLink(connName);
+    return link.state;
+  }, []);
+
+  const runSelectedLinkStopped = useCallback(
+    async (
+      operation: () => Promise<void>,
+      options?: {
+        initialState?: number | null;
+        originalConnName?: string;
+        restartConnName?: string;
+      },
+    ) => {
+      if (!selectedConn) {
+        await operation();
+        return {
+          stoppedBeforeRun: false,
+          restartedAfterRun: false,
+          retriedAfterRunningPrecondition: false,
+          restartError: null,
+        };
+      }
+
+      const originalConnName = options?.originalConnName ?? selectedConn;
+      const restartConnName = options?.restartConnName ?? originalConnName;
+      const initialState = options?.initialState ?? selectedLink?.state ?? null;
+
+      return runWithRuntimeRestart({
+        initialState,
+        loadState: () => getLinkState(originalConnName),
+        stop: () => api.dlt645StopLink(originalConnName),
+        run: operation,
+        start: () => api.dlt645StartLink(restartConnName),
+        restoreStart: () => api.dlt645StartLink(originalConnName),
+        failOnRestartError: false,
+      });
+    },
+    [getLinkState, selectedConn, selectedLink?.state],
+  );
+
   // ── Link CRUD ──
 
   const openCreateLink = useCallback(() => {
@@ -201,15 +243,33 @@ const DLT645: React.FC = () => {
       const oldConnName = editingLink?.conn_name ?? null;
       const renamed = !createOnly && oldConnName !== config.conn_name;
 
-      if (renamed && oldConnName) {
-        await api.dlt645RenameLink(oldConnName, config.conn_name);
-        renameCompleted = true;
-      }
+      const saveLink = async () => {
+        if (renamed && oldConnName) {
+          await api.dlt645RenameLink(oldConnName, config.conn_name);
+          renameCompleted = true;
+        }
 
-      await api.dlt645UpsertLink(config, createOnly);
-      messageApi.success(
-        createOnly ? '连接创建成功' : renamed ? '连接已改名并更新成功' : '连接更新成功',
-      );
+        await api.dlt645UpsertLink(config, createOnly);
+      };
+      const restartResult = createOnly
+        ? await runWithRuntimeRestart({
+          initialState: null,
+          stop: () => api.dlt645StopLink(config.conn_name),
+          run: saveLink,
+          start: () => api.dlt645StartLink(config.conn_name),
+          failOnRestartError: false,
+        })
+        : await runSelectedLinkStopped(saveLink, {
+          originalConnName: oldConnName ?? config.conn_name,
+          restartConnName: config.conn_name,
+        });
+      if (restartResult.restartError) {
+        messageApi.warning(`连接配置已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success(renamed ? '连接已改名、更新并重新启动成功' : '连接已更新并重新启动成功');
+      } else {
+        messageApi.success(createOnly ? '连接创建成功' : renamed ? '连接已改名并更新成功' : '连接更新成功');
+      }
       setLinkModalOpen(false);
       await refreshLinks();
       setSelectedConn(config.conn_name);
@@ -229,7 +289,7 @@ const DLT645: React.FC = () => {
       }
       messageApi.error(`保存连接失败: ${error}`);
     }
-  }, [editingLink, linkForm, messageApi, refreshLinks]);
+  }, [editingLink, linkForm, messageApi, refreshLinks, runSelectedLinkStopped]);
 
   const handleDeleteLink = useCallback(async (connName: string) => {
     try {
@@ -382,14 +442,19 @@ const DLT645: React.FC = () => {
       const newPoints = editingPointIndex !== null
         ? points.map((point, index) => (index === editingPointIndex ? newPoint : point))
         : [...points, newPoint];
-      await api.dlt645UpsertPointTable(selectedConn, newPoints, blocks, true);
+      const restartResult = await runSelectedLinkStopped(() => api.dlt645UpsertPointTable(selectedConn, newPoints, blocks, true));
       setPoints(newPoints);
       setPointModalOpen(false);
       messageApi.success(editingPointIndex !== null ? '点位已更新' : '点位已添加');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动连接');
+      }
     } catch (error) {
       messageApi.error(`保存点位失败: ${error}`);
     }
-  }, [blocks, editingPointIndex, messageApi, pointForm, points, selectedConn]);
+  }, [blocks, editingPointIndex, messageApi, pointForm, points, selectedConn, runSelectedLinkStopped]);
 
   const handleDeletePoint = useCallback(async (index: number) => {
     if (!selectedConn) {
@@ -397,13 +462,18 @@ const DLT645: React.FC = () => {
     }
     try {
       const newPoints = points.filter((_point, pointIndex) => pointIndex !== index);
-      await api.dlt645UpsertPointTable(selectedConn, newPoints, blocks, true);
+      const restartResult = await runSelectedLinkStopped(() => api.dlt645UpsertPointTable(selectedConn, newPoints, blocks, true));
       setPoints(newPoints);
       messageApi.success('点位已删除');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动连接');
+      }
     } catch (error) {
       messageApi.error(`删除点位失败: ${error}`);
     }
-  }, [blocks, messageApi, points, selectedConn]);
+  }, [blocks, messageApi, points, selectedConn, runSelectedLinkStopped]);
 
   // ── Block CRUD ──
 
@@ -412,13 +482,18 @@ const DLT645: React.FC = () => {
       return;
     }
     try {
-      await api.dlt645UpsertPointTable(selectedConn, [], blocks, true);
+      const restartResult = await runSelectedLinkStopped(() => api.dlt645UpsertPointTable(selectedConn, [], blocks, true));
       setPoints([]);
       messageApi.success('全部点位已删除');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动连接');
+      }
     } catch (error) {
       messageApi.error(`删除全部点位失败: ${error}`);
     }
-  }, [blocks, messageApi, selectedConn]);
+  }, [blocks, messageApi, selectedConn, runSelectedLinkStopped]);
 
   const openCreateBlock = useCallback(() => {
     setEditingBlockIndex(null);
@@ -474,14 +549,19 @@ const DLT645: React.FC = () => {
       const newBlocks = editingBlockIndex !== null
         ? blocks.map((block, index) => (index === editingBlockIndex ? newBlock : block))
         : [...blocks, newBlock];
-      await api.dlt645UpsertPointTable(selectedConn, points, newBlocks, true);
+      const restartResult = await runSelectedLinkStopped(() => api.dlt645UpsertPointTable(selectedConn, points, newBlocks, true));
       setBlocks(newBlocks);
       setBlockModalOpen(false);
       messageApi.success(editingBlockIndex !== null ? '数据块已更新' : '数据块已添加');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动连接');
+      }
     } catch (error) {
       messageApi.error(`保存数据块失败: ${error}`);
     }
-  }, [blocks, editingBlockIndex, messageApi, blockForm, points, selectedConn]);
+  }, [blocks, editingBlockIndex, messageApi, blockForm, points, selectedConn, runSelectedLinkStopped]);
 
   const handleDeleteBlock = useCallback(async (index: number) => {
     if (!selectedConn) {
@@ -489,13 +569,18 @@ const DLT645: React.FC = () => {
     }
     try {
       const newBlocks = blocks.filter((_block, blockIndex) => blockIndex !== index);
-      await api.dlt645UpsertPointTable(selectedConn, points, newBlocks, true);
+      const restartResult = await runSelectedLinkStopped(() => api.dlt645UpsertPointTable(selectedConn, points, newBlocks, true));
       setBlocks(newBlocks);
       messageApi.success('数据块已删除');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动连接');
+      }
     } catch (error) {
       messageApi.error(`删除数据块失败: ${error}`);
     }
-  }, [blocks, messageApi, points, selectedConn]);
+  }, [blocks, messageApi, points, selectedConn, runSelectedLinkStopped]);
 
   // ── Effects ──
 

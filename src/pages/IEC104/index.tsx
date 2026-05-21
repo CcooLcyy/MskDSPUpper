@@ -45,6 +45,7 @@ import {
   isNotFoundError,
 } from '../../utils/connection-copy';
 import { isValidIpv4Address } from '../../utils/network';
+import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import type {
   DcConnectionInfo,
   Iec104LinkConfig,
@@ -430,6 +431,51 @@ const IEC104: React.FC = () => {
     [],
   );
 
+  const getLinkState = useCallback(
+    async (connName: string): Promise<number | null> => {
+      const link = await api.iec104GetLink(connName);
+      return link.state;
+    },
+    [],
+  );
+
+  const runSelectedLinkStopped = useCallback(
+    async (
+      operation: () => Promise<void>,
+      options?: {
+        initialState?: number | null;
+        originalConnName?: string;
+        restartConnName?: string;
+        failOnRestartError?: boolean;
+      },
+    ) => {
+      if (!selectedConn) {
+        await operation();
+        return {
+          stoppedBeforeRun: false,
+          restartedAfterRun: false,
+          retriedAfterRunningPrecondition: false,
+          restartError: null,
+        };
+      }
+
+      const originalConnName = options?.originalConnName ?? selectedConn;
+      const restartConnName = options?.restartConnName ?? originalConnName;
+      const initialState = options?.initialState ?? selectedLink?.state ?? null;
+
+      return runWithRuntimeRestart({
+        initialState,
+        loadState: () => getLinkState(originalConnName),
+        stop: () => api.iec104StopLink(originalConnName),
+        run: operation,
+        start: () => api.iec104StartLink(restartConnName),
+        restoreStart: () => api.iec104StartLink(originalConnName),
+        failOnRestartError: options?.failOnRestartError ?? false,
+      });
+    },
+    [getLinkState, selectedConn, selectedLink?.state],
+  );
+
   const refreshDataBusEndpointOptions = useCallback(async () => {
     setDataBusEndpointLoading(true);
     try {
@@ -639,15 +685,33 @@ const IEC104: React.FC = () => {
       const oldConnName = editingLink?.conn_name ?? null;
       const renamed = !createOnly && oldConnName !== config.conn_name;
 
-      if (renamed && oldConnName) {
-        await api.iec104RenameLink(oldConnName, config.conn_name);
-        renameCompleted = true;
-      }
+      const saveLink = async () => {
+        if (renamed && oldConnName) {
+          await api.iec104RenameLink(oldConnName, config.conn_name);
+          renameCompleted = true;
+        }
 
-      await api.iec104UpsertLink(config, createOnly);
-      messageApi.success(
-        createOnly ? '链路创建成功' : renamed ? '链路已改名并更新成功' : '链路更新成功',
-      );
+        await api.iec104UpsertLink(config, createOnly);
+      };
+      const restartResult = createOnly
+        ? await runWithRuntimeRestart({
+          initialState: null,
+          stop: () => api.iec104StopLink(config.conn_name),
+          run: saveLink,
+          start: () => api.iec104StartLink(config.conn_name),
+          failOnRestartError: false,
+        })
+        : await runSelectedLinkStopped(saveLink, {
+          originalConnName: oldConnName ?? config.conn_name,
+          restartConnName: config.conn_name,
+        });
+      if (restartResult.restartError) {
+        messageApi.warning(`链路配置已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success(renamed ? '链路已改名、更新并重新启动成功' : '链路已更新并重新启动成功');
+      } else {
+        messageApi.success(createOnly ? '链路创建成功' : renamed ? '链路已改名并更新成功' : '链路更新成功');
+      }
       setLinkModalOpen(false);
       await refreshLinks();
       setSelectedConn(config.conn_name);
@@ -667,7 +731,7 @@ const IEC104: React.FC = () => {
       }
       messageApi.error(`操作失败: ${e}`);
     }
-  }, [linkForm, editingLink, messageApi, refreshLinks]);
+  }, [linkForm, editingLink, messageApi, refreshLinks, runSelectedLinkStopped]);
 
   const handleDeleteLink = useCallback(
     async (connName: string) => {
@@ -880,40 +944,55 @@ const IEC104: React.FC = () => {
       } else {
         newPoints = [...points, newPoint];
       }
-      await api.iec104UpsertPointTable(selectedConn, newPoints, true);
+      const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
       messageApi.success(editingPointIndex !== null ? '点位已更新' : '点位已添加');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动链路');
+      }
       setPointModalOpen(false);
       setPoints(newPoints);
     } catch (e) {
       messageApi.error(`操作失败: ${e}`);
     }
-  }, [selectedConn, pointForm, editingPointIndex, points, messageApi]);
+  }, [selectedConn, pointForm, editingPointIndex, points, messageApi, runSelectedLinkStopped]);
 
   const handleDeletePoint = useCallback(
     async (index: number) => {
       if (!selectedConn) return;
       try {
         const newPoints = points.filter((_p, i) => i !== index);
-        await api.iec104UpsertPointTable(selectedConn, newPoints, true);
+        const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
         messageApi.success('点位已删除');
+        if (restartResult.restartError) {
+          messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+        } else if (restartResult.stoppedBeforeRun) {
+          messageApi.success('点表已保存并重新启动链路');
+        }
         setPoints(newPoints);
       } catch (e) {
         messageApi.error(`删除失败: ${e}`);
       }
     },
-    [selectedConn, points, messageApi],
+    [selectedConn, points, messageApi, runSelectedLinkStopped],
   );
 
   const handleDeleteAllPoints = useCallback(async () => {
     if (!selectedConn) return;
     try {
-      await api.iec104UpsertPointTable(selectedConn, [], true);
+      const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, [], true));
       setPoints([]);
       messageApi.success('全部点位已删除');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动链路');
+      }
     } catch (e) {
       messageApi.error(`删除全部点位失败: ${e}`);
     }
-  }, [messageApi, selectedConn]);
+  }, [messageApi, selectedConn, runSelectedLinkStopped]);
 
   const handleImportSourceConnChange = useCallback((value: string | undefined) => {
     setImportSourceConnId(value);
@@ -1076,14 +1155,19 @@ const IEC104: React.FC = () => {
 
     try {
       const newPoints = [...points, ...normalizedPoints];
-      await api.iec104UpsertPointTable(selectedConn, newPoints, true);
+      const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
       setPoints(newPoints);
       setImportPointModalOpen(false);
       messageApi.success(`已导入 ${normalizedPoints.length} 个点位`);
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动链路');
+      }
     } catch (e) {
       messageApi.error(`导入点位失败: ${e}`);
     }
-  }, [importPointDrafts, importReservedTagSet, messageApi, points, selectedConn]);
+  }, [importPointDrafts, importReservedTagSet, messageApi, points, selectedConn, runSelectedLinkStopped]);
 
   // ── Point Table Columns ──
 

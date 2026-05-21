@@ -7,6 +7,7 @@ import type { ModbusLinkConfig, ModbusLinkInfo, ModbusPoint, ModbusReadPlan, Mod
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
+import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import ConnectionConfig from './components/ConnectionConfig';
 import StatusPanel from './components/StatusPanel';
 import OperationsPanel from './components/OperationsPanel';
@@ -120,6 +121,47 @@ const ModbusRTU: React.FC = () => {
     }
   }, []);
 
+  const getLinkState = useCallback(async (connName: string): Promise<number | null> => {
+    const link = await api.modbusRtuGetLink(connName);
+    return link.state;
+  }, []);
+
+  const runSelectedLinkStopped = useCallback(
+    async (
+      operation: () => Promise<void>,
+      options?: {
+        initialState?: number | null;
+        originalConnName?: string;
+        restartConnName?: string;
+      },
+    ) => {
+      if (!selectedConn) {
+        await operation();
+        return {
+          stoppedBeforeRun: false,
+          restartedAfterRun: false,
+          retriedAfterRunningPrecondition: false,
+          restartError: null,
+        };
+      }
+
+      const originalConnName = options?.originalConnName ?? selectedConn;
+      const restartConnName = options?.restartConnName ?? originalConnName;
+      const initialState = options?.initialState ?? selectedLink?.state ?? null;
+
+      return runWithRuntimeRestart({
+        initialState,
+        loadState: () => getLinkState(originalConnName),
+        stop: () => api.modbusRtuStopLink(originalConnName),
+        run: operation,
+        start: () => api.modbusRtuStartLink(restartConnName),
+        restoreStart: () => api.modbusRtuStartLink(originalConnName),
+        failOnRestartError: false,
+      });
+    },
+    [getLinkState, selectedConn, selectedLink?.state],
+  );
+
   const openCreateLink = useCallback(() => {
     setEditingLink(null);
     linkForm.resetFields();
@@ -231,15 +273,33 @@ const ModbusRTU: React.FC = () => {
       const oldConnName = editingLink?.conn_name ?? null;
       const renamed = !createOnly && oldConnName !== config.conn_name;
 
-      if (renamed && oldConnName) {
-        await api.modbusRtuRenameLink(oldConnName, config.conn_name);
-        renameCompleted = true;
-      }
+      const saveLink = async () => {
+        if (renamed && oldConnName) {
+          await api.modbusRtuRenameLink(oldConnName, config.conn_name);
+          renameCompleted = true;
+        }
 
-      await api.modbusRtuUpsertLink(config, createOnly);
-      messageApi.success(
-        createOnly ? '连接创建成功' : renamed ? '连接已改名并更新成功' : '连接更新成功',
-      );
+        await api.modbusRtuUpsertLink(config, createOnly);
+      };
+      const restartResult = createOnly
+        ? await runWithRuntimeRestart({
+          initialState: null,
+          stop: () => api.modbusRtuStopLink(config.conn_name),
+          run: saveLink,
+          start: () => api.modbusRtuStartLink(config.conn_name),
+          failOnRestartError: false,
+        })
+        : await runSelectedLinkStopped(saveLink, {
+          originalConnName: oldConnName ?? config.conn_name,
+          restartConnName: config.conn_name,
+        });
+      if (restartResult.restartError) {
+        messageApi.warning(`连接配置已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success(renamed ? '连接已改名、更新并重新启动成功' : '连接已更新并重新启动成功');
+      } else {
+        messageApi.success(createOnly ? '连接创建成功' : renamed ? '连接已改名并更新成功' : '连接更新成功');
+      }
       setLinkModalOpen(false);
       await refreshLinks();
       setSelectedConn(config.conn_name);
@@ -259,7 +319,7 @@ const ModbusRTU: React.FC = () => {
       }
       messageApi.error(`保存连接失败: ${error}`);
     }
-  }, [editingLink, linkForm, messageApi, refreshLinks]);
+  }, [editingLink, linkForm, messageApi, refreshLinks, runSelectedLinkStopped]);
 
   const handleDeleteLink = useCallback(async (connName: string) => {
     try {
@@ -419,14 +479,19 @@ const ModbusRTU: React.FC = () => {
       const newPoints = editingPointIndex !== null
         ? points.map((point, index) => (index === editingPointIndex ? newPoint : point))
         : [...points, newPoint];
-      await api.modbusRtuUpsertPointTable(selectedConn, newPoints, true);
+      const restartResult = await runSelectedLinkStopped(() => api.modbusRtuUpsertPointTable(selectedConn, newPoints, true));
       setPoints(newPoints);
       setPointModalOpen(false);
       messageApi.success(editingPointIndex !== null ? '点位已更新' : '点位已添加');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动连接');
+      }
     } catch (error) {
       messageApi.error(`保存点位失败: ${error}`);
     }
-  }, [editingPointIndex, messageApi, pointForm, points, selectedConn]);
+  }, [editingPointIndex, messageApi, pointForm, points, selectedConn, runSelectedLinkStopped]);
 
   const handleDeletePoint = useCallback(async (index: number) => {
     if (!selectedConn) {
@@ -434,26 +499,36 @@ const ModbusRTU: React.FC = () => {
     }
     try {
       const newPoints = points.filter((_point, pointIndex) => pointIndex !== index);
-      await api.modbusRtuUpsertPointTable(selectedConn, newPoints, true);
+      const restartResult = await runSelectedLinkStopped(() => api.modbusRtuUpsertPointTable(selectedConn, newPoints, true));
       setPoints(newPoints);
       messageApi.success('点位已删除');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动连接');
+      }
     } catch (error) {
       messageApi.error(`删除点位失败: ${error}`);
     }
-  }, [messageApi, points, selectedConn]);
+  }, [messageApi, points, selectedConn, runSelectedLinkStopped]);
 
   const handleDeleteAllPoints = useCallback(async () => {
     if (!selectedConn) {
       return;
     }
     try {
-      await api.modbusRtuUpsertPointTable(selectedConn, [], true);
+      const restartResult = await runSelectedLinkStopped(() => api.modbusRtuUpsertPointTable(selectedConn, [], true));
       setPoints([]);
       messageApi.success('全部点位已删除');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动连接');
+      }
     } catch (error) {
       messageApi.error(`删除全部点位失败: ${error}`);
     }
-  }, [messageApi, selectedConn]);
+  }, [messageApi, selectedConn, runSelectedLinkStopped]);
 
   useEffect(() => {
     void refreshLinks();
