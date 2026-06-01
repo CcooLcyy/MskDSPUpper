@@ -27,6 +27,7 @@ fn main() {
         proto_dir.join("DLT645.proto"),
         proto_dir.join("AGC.proto"),
         proto_dir.join("AVC.proto"),
+        proto_dir.join("Calc.proto"),
         proto_dir.join("ConfigPusher.proto"),
         proto_dir.join("ExportConfig.proto"),
         proto_dir.join("MQTTManager.proto"),

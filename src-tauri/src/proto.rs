@@ -29,6 +29,10 @@ pub mod avc_proto {
     include!("proto_gen/avc_proto.rs");
 }
 
+pub mod calc_proto {
+    include!("proto_gen/calc_proto.rs");
+}
+
 pub mod config_pusher_proto {
     include!("proto_gen/config_pusher_proto.rs");
 }
