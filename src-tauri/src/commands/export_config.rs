@@ -337,6 +337,7 @@ impl FullConfigExportConfigDto {
             dlt645: Some(self.dlt645.to_proto()),
             agc: Some(self.agc.to_proto()),
             avc: Some(self.avc.to_proto()),
+            calc: None,
         }
     }
 
@@ -350,6 +351,7 @@ impl FullConfigExportConfigDto {
             dlt645: None,
             agc: None,
             avc: None,
+            calc: None,
         });
 
         Ok(Self {
