@@ -23,6 +23,7 @@ env:
   RUSTC_WRAPPER: sccache
   CARGO_INCREMENTAL: '0'
   PACKAGE_DIR: package
+  STATIC_UPDATE_BASE_URL: ${{ vars.UPDATE_STATIC_BASE_URL || 'https://update.clsclear.top/mskdsp-upper' }}
 
 jobs:
   verify-debug:
@@ -125,7 +126,7 @@ jobs:
       - name: Render debug tauri config
         shell: pwsh
         run: |
-          node scripts/workflow/render-tauri-config.mjs --output package/generated/tauri.verify.conf.json --endpoint https://github.com/${{ github.repository }}/releases/latest/download/latest.json --updater-artifacts false
+          node scripts/workflow/render-tauri-config.mjs --output package/generated/tauri.verify.conf.json --endpoint "$env:STATIC_UPDATE_BASE_URL/stable/latest.json" --updater-artifacts false
 
       - name: Build debug validation bundle
         shell: pwsh
@@ -247,7 +248,7 @@ jobs:
       - name: Render release tauri config
         shell: pwsh
         run: |
-          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/ci.json --output package/generated/tauri.ci.conf.json --endpoint https://github.com/${{ github.repository }}/releases/latest/download/latest.json --bundle-targets nsis --updater-artifacts true
+          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/ci.json --output package/generated/tauri.ci.conf.json --endpoint "$env:STATIC_UPDATE_BASE_URL/stable/latest.json" --bundle-targets nsis --updater-artifacts true
 
       - name: Build release package
         shell: pwsh
@@ -263,7 +264,7 @@ jobs:
         id: stage
         shell: pwsh
         run: |
-          node scripts/workflow/stage-release.mjs --metadata-file package/metadata/ci.json --build-log package/logs/tauri-release-build.log --submodule-status-file package/logs/git-submodule-status.log
+          node scripts/workflow/stage-release.mjs --metadata-file package/metadata/ci.json --build-log package/logs/tauri-release-build.log --submodule-status-file package/logs/git-submodule-status.log --asset-base-url "$env:STATIC_UPDATE_BASE_URL/stable/$env:PLATFORM_ID"
 
       - name: Create delivery bundle
         id: bundle

@@ -59,6 +59,12 @@
 | `SUBMODULE_SSH_KEY` | submodule SSH key 回退 | 空 |
 | `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater 签名私钥 | 空 |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Tauri updater 私钥口令，可留空 | 空 |
+| `UPDATE_STATIC_SSH_KEY` | 同步静态更新源的 SSH 私钥 secret | 必填 |
+| `UPDATE_STATIC_BASE_URL` | 静态更新源公网基地址变量 | `https://update.clsclear.top/mskdsp-upper` |
+| `UPDATE_STATIC_REMOTE_ROOT` | 静态更新源远端根目录变量 | `/home/daniel/update-server/www/mskdsp-upper` |
+| `UPDATE_STATIC_SSH_HOST` | 静态更新源 SSH 主机变量 | `clsclear.top` |
+| `UPDATE_STATIC_SSH_PORT` | 静态更新源 SSH 端口变量 | `32118` |
+| `UPDATE_STATIC_SSH_USER` | 静态更新源 SSH 用户变量 | `daniel` |
 | `MSKDSP_UPPER_SOURCEMAP` | 是否产出前端 sourcemap | `false` |
 | `beta_ref` | Beta workflow 手动指定版本线 | 空 |
 | `threshold_hours` | Auto Promote workflow 的空窗阈值 | `72` |
@@ -103,6 +109,18 @@
   - 构建日志、锁文件、配置、submodule 状态、staging manifest
 - `package/out/<channel>/<platform>`
   - 最终交付 zip、symbols zip、校验文件、原始安装包
+- 静态更新源：
+  - `<UPDATE_STATIC_REMOTE_ROOT>/<channel>/latest.json`
+  - `<UPDATE_STATIC_REMOTE_ROOT>/<channel>/<platform>/` 下保存安装包、签名、交付包、symbols 包与校验文件
+  - 对应公网地址为 `<UPDATE_STATIC_BASE_URL>/<channel>/latest.json` 与 `<UPDATE_STATIC_BASE_URL>/<channel>/<platform>/<asset>`
+
+## 静态更新源同步
+
+- Nightly / Beta / Stable 在生成 `package/out` 后调用 `scripts/workflow/Sync-StaticUpdater.ps1`。
+- 同步顺序固定为先上传安装包、签名、交付包、symbols 包与校验文件，再最后覆盖 `latest.json`。
+- `latest.json` 中的 `platforms.*.url` 由 `stage-release.mjs --asset-base-url` 生成，指向静态源 `<channel>/<platform>/` 下的安装包。
+- 静态文件上传或覆盖后，nginx 正常不需要重启；只有修改 nginx 配置、挂载目录、TLS 或缓存策略时才需要 reload/restart。
+- 发布仍会更新 GitHub Release。由于静态源同步发生在 GitHub Release 上传前，旧客户端即使从 GitHub endpoint 读取新的 `latest.json`，也能下载已经同步到静态源的安装包。
 
 ## 研发流程
 

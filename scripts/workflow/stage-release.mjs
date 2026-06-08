@@ -14,6 +14,7 @@ import {
 import { logInfo, logWarn, resolveRepoRoot, setGithubOutput } from './lib/runtime.mjs';
 import {
   createGithubReleaseAssetUrl,
+  createStaticAssetUrl,
   createStaticUpdaterManifest,
   createUpdaterTargets,
   formatTimestampAsRfc3339,
@@ -32,6 +33,7 @@ const { values } = parseArgs({
     'dist-dir': { type: 'string' },
     'build-log': { type: 'string' },
     'submodule-status-file': { type: 'string' },
+    'asset-base-url': { type: 'string' },
   },
 });
 
@@ -128,7 +130,7 @@ for (const sourcePath of updaterFiles) {
 }
 
 let generatedUpdaterManifestPath = null;
-if (metadata.repository) {
+if (metadata.repository || values['asset-base-url']) {
   const platforms = {};
 
   for (const installer of stagedInstallers) {
@@ -141,11 +143,17 @@ if (metadata.repository) {
       throw new Error(`updater 签名文件为空: ${installer.signatureSourcePath}`);
     }
 
-    const downloadUrl = createGithubReleaseAssetUrl({
-      repository: metadata.repository,
-      releaseTag: metadata.releaseTag,
-      assetName: path.basename(installer.destinationPath),
-    });
+    const assetName = path.basename(installer.destinationPath);
+    const downloadUrl = values['asset-base-url']
+      ? createStaticAssetUrl({
+          assetBaseUrl: values['asset-base-url'],
+          assetName,
+        })
+      : createGithubReleaseAssetUrl({
+          repository: metadata.repository,
+          releaseTag: metadata.releaseTag,
+          assetName,
+        });
 
     for (const target of createUpdaterTargets(metadata.targetTriple, installer.bundleType)) {
       platforms[target] = {
@@ -166,7 +174,7 @@ if (metadata.repository) {
     }),
   );
 } else {
-  logWarn('metadata.repository 缺失，跳过 latest.json 生成');
+  logWarn('metadata.repository 与 --asset-base-url 均缺失，跳过 latest.json 生成');
 }
 
 const existingReleaseRoots = releaseRoots.filter((candidate) => pathExists(candidate));
@@ -243,6 +251,7 @@ const manifest = {
   appDir,
   symbolsDir,
   diagnosticsDir,
+  assetBaseUrl: values['asset-base-url'] ?? null,
   installers: copiedInstallers.map((filePath) => path.relative(stageRoot, filePath)),
   updaterFiles: updaterFiles.map((filePath) => path.relative(bundleRoot, filePath)),
   stagedUpdaterFiles: listFilesRecursive(appDir)

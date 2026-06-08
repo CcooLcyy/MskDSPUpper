@@ -27,6 +27,11 @@ env:
   SCCACHE_DIR: ${{ github.workspace }}\.sccache
   RUSTC_WRAPPER: sccache
   CARGO_INCREMENTAL: '0'
+  STATIC_UPDATE_BASE_URL: ${{ vars.UPDATE_STATIC_BASE_URL || 'https://update.clsclear.top/mskdsp-upper' }}
+  STATIC_UPDATE_REMOTE_ROOT: ${{ vars.UPDATE_STATIC_REMOTE_ROOT || '/home/daniel/update-server/www/mskdsp-upper' }}
+  STATIC_UPDATE_SSH_HOST: ${{ vars.UPDATE_STATIC_SSH_HOST || 'clsclear.top' }}
+  STATIC_UPDATE_SSH_PORT: ${{ vars.UPDATE_STATIC_SSH_PORT || '32118' }}
+  STATIC_UPDATE_SSH_USER: ${{ vars.UPDATE_STATIC_SSH_USER || 'daniel' }}
 
 jobs:
   resolve-beta:
@@ -164,7 +169,7 @@ jobs:
       - name: Render debug tauri config
         shell: pwsh
         run: |
-          node scripts/workflow/render-tauri-config.mjs --output package/generated/tauri.beta.verify.conf.json --endpoint https://github.com/${{ github.repository }}/releases/download/beta-latest/latest.json --updater-artifacts false
+          node scripts/workflow/render-tauri-config.mjs --output package/generated/tauri.beta.verify.conf.json --endpoint "$env:STATIC_UPDATE_BASE_URL/beta/latest.json" --updater-artifacts false
 
       - name: Build debug validation bundle
         shell: pwsh
@@ -292,7 +297,7 @@ jobs:
       - name: Render beta tauri config
         shell: pwsh
         run: |
-          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/beta.json --output package/generated/tauri.beta.conf.json --endpoint https://github.com/${{ github.repository }}/releases/download/beta-latest/latest.json --bundle-targets nsis --updater-artifacts true
+          node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/beta.json --output package/generated/tauri.beta.conf.json --endpoint "$env:STATIC_UPDATE_BASE_URL/beta/latest.json" --bundle-targets nsis --updater-artifacts true
 
       - name: Build beta package
         shell: pwsh
@@ -307,7 +312,7 @@ jobs:
       - name: Stage artifacts
         shell: pwsh
         run: |
-          node scripts/workflow/stage-release.mjs --metadata-file package/metadata/beta.json --build-log package/logs/tauri-beta-build.log --submodule-status-file package/logs/git-submodule-status.log
+          node scripts/workflow/stage-release.mjs --metadata-file package/metadata/beta.json --build-log package/logs/tauri-beta-build.log --submodule-status-file package/logs/git-submodule-status.log --asset-base-url "$env:STATIC_UPDATE_BASE_URL/beta/$env:PLATFORM_ID"
 
       - name: Create delivery bundle
         id: bundle
@@ -319,6 +324,21 @@ jobs:
         shell: pwsh
         run: |
           node scripts/workflow/write-sha256sums.mjs --metadata-file package/metadata/beta.json --output-dir ${{ steps.bundle.outputs.output_dir }}
+
+      - name: Sync beta static updater source
+        shell: pwsh
+        env:
+          STATIC_UPDATE_SSH_KEY: ${{ secrets.UPDATE_STATIC_SSH_KEY }}
+        run: |
+          .\scripts\workflow\Sync-StaticUpdater.ps1 `
+            -PackageOutputDir "${{ steps.bundle.outputs.output_dir }}" `
+            -ChannelPath beta `
+            -Platform "$env:PLATFORM_ID" `
+            -BaseUrl "$env:STATIC_UPDATE_BASE_URL" `
+            -SshHost "$env:STATIC_UPDATE_SSH_HOST" `
+            -SshPort "$env:STATIC_UPDATE_SSH_PORT" `
+            -SshUser "$env:STATIC_UPDATE_SSH_USER" `
+            -RemoteRoot "$env:STATIC_UPDATE_REMOTE_ROOT"
 
       - name: Resolve latest stable tag
         id: stable_tag

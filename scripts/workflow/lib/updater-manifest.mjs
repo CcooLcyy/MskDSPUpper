@@ -25,6 +25,14 @@ export function createGithubReleaseAssetUrl({ repository, releaseTag, assetName 
   return `https://github.com/${repository}/releases/download/${encodeURIComponent(releaseTag)}/${encodeURIComponent(assetName)}`;
 }
 
+export function createStaticAssetUrl({ assetBaseUrl, assetName }) {
+  assertNonEmpty('assetBaseUrl', assetBaseUrl);
+  assertNonEmpty('assetName', assetName);
+
+  const normalizedBaseUrl = assetBaseUrl.endsWith('/') ? assetBaseUrl : `${assetBaseUrl}/`;
+  return new URL(encodeURIComponent(assetName), normalizedBaseUrl).toString();
+}
+
 export function resolveUpdaterTargetBase(targetTriple) {
   assertNonEmpty('targetTriple', targetTriple);
 

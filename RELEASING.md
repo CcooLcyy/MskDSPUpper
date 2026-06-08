@@ -3,9 +3,10 @@
 ## Current Baseline
 
 - App version: `0.1.0`
-- Stable updater URL: `https://github.com/CcooLcyy/MskDSPUpper/releases/latest/download/latest.json`
-- Beta updater URL: `https://github.com/CcooLcyy/MskDSPUpper/releases/download/beta-latest/latest.json`
-- Nightly updater URL: `https://github.com/CcooLcyy/MskDSPUpper/releases/download/nightly-latest/latest.json`
+- Stable updater URL: `https://update.clsclear.top/mskdsp-upper/stable/latest.json`
+- Beta updater URL: `https://update.clsclear.top/mskdsp-upper/beta/latest.json`
+- Nightly updater URL: `https://update.clsclear.top/mskdsp-upper/nightly/latest.json`
+- Static updater base URL: `https://update.clsclear.top/mskdsp-upper`
 - Stable workflow trigger: push tag `v*`
 - Beta workflow trigger: push branch `beta/**`, or manual `workflow_dispatch`
 - Nightly workflow trigger: schedule or manual `workflow_dispatch`
@@ -35,11 +36,18 @@ Create these repository secrets in `Settings -> Secrets and variables -> Actions
   Optional. Use a GitHub token that can read `CcooLcyy/MskDSPProto` if anonymous HTTPS checkout is not enough.
 - `SUBMODULE_SSH_KEY`
   Optional alternative to `SUBMODULE_TOKEN` for submodule access.
+- `UPDATE_STATIC_SSH_KEY`
+  SSH private key used by GitHub Actions to upload updater assets to the static update server.
 
 Notes:
 
 - `scripts/workflow/Prepare-SubmoduleAccess.ps1` falls back to anonymous HTTPS if neither submodule secret is set.
 - If the `proto` submodule is private, at least one of `SUBMODULE_TOKEN` or `SUBMODULE_SSH_KEY` is required.
+- Static update server defaults are configured through repository variables:
+  `UPDATE_STATIC_BASE_URL`, `UPDATE_STATIC_REMOTE_ROOT`, `UPDATE_STATIC_SSH_HOST`,
+  `UPDATE_STATIC_SSH_PORT`, and `UPDATE_STATIC_SSH_USER`.
+  If unset, workflows use `https://update.clsclear.top/mskdsp-upper`,
+  `/home/daniel/update-server/www/mskdsp-upper`, `clsclear.top`, `32118`, and `daniel`.
 
 ## Actions Permissions
 
@@ -67,7 +75,7 @@ The workflows create or update releases, upload release assets, and the auto-pro
    - the delivery zip
    - the symbols zip
    - the SHA256 sums file
-6. Open `https://github.com/CcooLcyy/MskDSPUpper/releases/download/nightly-latest/latest.json` and confirm it downloads.
+6. Open `https://update.clsclear.top/mskdsp-upper/nightly/latest.json` and confirm it downloads.
 
 ### 2. First Beta
 
@@ -79,7 +87,7 @@ The workflows create or update releases, upload release assets, and the auto-pro
 4. Confirm `verify-beta` and `publish-beta` both succeed.
 5. Open the rolling release `beta-latest` and confirm its assets were refreshed.
 6. Confirm there is also a timestamped beta prerelease whose tag starts with `beta-0-1-`.
-7. Open `https://github.com/CcooLcyy/MskDSPUpper/releases/download/beta-latest/latest.json` and confirm it downloads.
+7. Open `https://update.clsclear.top/mskdsp-upper/beta/latest.json` and confirm it downloads.
 
 ### 3. First Stable
 
@@ -90,7 +98,7 @@ The workflows create or update releases, upload release assets, and the auto-pro
    `git push origin v0.1.0`
 4. Wait for `Actions -> Release` to finish successfully.
 5. Open the `v0.1.0` release and confirm it is marked as the latest release.
-6. Open `https://github.com/CcooLcyy/MskDSPUpper/releases/latest/download/latest.json` and confirm it downloads.
+6. Open `https://update.clsclear.top/mskdsp-upper/stable/latest.json` and confirm it downloads.
 
 ### 4. Client Updater Validation
 
@@ -108,13 +116,13 @@ Beta validation:
 
 1. Install an older beta build generated from the beta channel.
 2. Repeat the same updater flow.
-3. Confirm the downloaded metadata comes from `beta-latest/latest.json`.
+3. Confirm the downloaded metadata comes from `https://update.clsclear.top/mskdsp-upper/beta/latest.json`.
 
 Stable validation:
 
 1. Install an older stable build.
 2. Repeat the same updater flow.
-3. Confirm the downloaded metadata comes from `releases/latest/download/latest.json`.
+3. Confirm the downloaded metadata comes from `https://update.clsclear.top/mskdsp-upper/stable/latest.json`.
 
 ## Optional Follow-up
 

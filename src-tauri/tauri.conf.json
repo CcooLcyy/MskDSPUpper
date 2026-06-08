@@ -35,7 +35,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5RkEzNjlCMkZFRjEyRkIKUldUN0V1OHZtemI2V1ZNRGtBZW1SUncrSGdOcTdsd2lQNDFiQlhNN3FQdExVL0ptbFVSZ1RLbDYK",
       "endpoints": [
-        "https://github.com/CcooLcyy/MskDSPUpper/releases/latest/download/latest.json"
+        "https://update.clsclear.top/mskdsp-upper/stable/latest.json"
       ],
       "windows": {
         "installMode": "passive"
