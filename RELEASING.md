@@ -10,6 +10,7 @@
 - Stable workflow trigger: push tag `v*`
 - Beta workflow trigger: push branch `beta/**`, or manual `workflow_dispatch`
 - Nightly workflow trigger: schedule or manual `workflow_dispatch`
+- Static source backfill trigger: manual `workflow_dispatch`
 - Auto-promote workflow trigger: schedule or manual `workflow_dispatch`
 
 ## Before The First GitHub Run
@@ -48,6 +49,10 @@ Notes:
   `UPDATE_STATIC_SSH_PORT`, and `UPDATE_STATIC_SSH_USER`.
   If unset, workflows use `https://update.clsclear.top/mskdsp-upper`,
   `/home/daniel/update-server/www/mskdsp-upper`, `clsclear.top`, `32118`, and `daniel`.
+- `Sync Static Updater Source` can backfill the static source from an existing
+  GitHub Release without building or publishing a new version. Leave `release_tag`
+  empty to use `v<package version>` for stable, `beta-latest` for beta, or
+  `nightly-latest` for nightly.
 
 ## Actions Permissions
 
@@ -123,6 +128,25 @@ Stable validation:
 1. Install an older stable build.
 2. Repeat the same updater flow.
 3. Confirm the downloaded metadata comes from `https://update.clsclear.top/mskdsp-upper/stable/latest.json`.
+
+## Static Source Backfill
+
+Use `Actions -> Sync Static Updater Source -> Run workflow` when GitHub Release
+assets already exist but the static source is empty or needs to be fully
+resynced.
+
+Inputs:
+
+- `channel`: `stable`, `beta`, or `nightly`.
+- `release_tag`: optional. Defaults to `v<package version>` for stable,
+  `beta-latest` for beta, and `nightly-latest` for nightly.
+- `platform`: optional. Defaults to `windows-x64`.
+
+The workflow downloads all assets from the selected GitHub Release, rewrites
+`latest.json` so `platforms.*.url` points at
+`<UPDATE_STATIC_BASE_URL>/<channel>/<platform>/`, uploads all assets first, and
+uploads `latest.json` last. Nginx does not need to restart after the files are
+uploaded.
 
 ## Optional Follow-up
 

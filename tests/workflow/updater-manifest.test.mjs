@@ -246,3 +246,147 @@ test('stage-release can generate latest.json with static asset URLs', (t) => {
   );
   assert.equal(stagingManifest.assetBaseUrl, assetBaseUrl);
 });
+
+test('rewrite-static-updater-manifest rewrites release URLs to static URLs', (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mskdsp-upper-rewrite-static-'));
+  t.after(() => {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  const installerName =
+    'mskdsp-upper-0.3.2-stable-20260525t080930z-55fb0a6-windows-x64.exe';
+  fs.writeFileSync(path.join(tempRoot, installerName), 'installer', 'utf8');
+  writeJson(path.join(tempRoot, 'latest.json'), {
+    version: '0.3.2',
+    notes: 'MskDSP Upper stable 0.3.2',
+    pub_date: '2026-05-25T08:09:30Z',
+    platforms: {
+      'windows-x86_64-nsis': {
+        url: `https://github.com/CcooLcyy/MskDSPUpper/releases/download/v0.3.2/${installerName}`,
+        signature: 'signature',
+      },
+      'windows-x86_64': {
+        url: `https://github.com/CcooLcyy/MskDSPUpper/releases/download/v0.3.2/${installerName}`,
+        signature: 'signature',
+      },
+    },
+  });
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(repoRoot, 'scripts', 'workflow', 'rewrite-static-updater-manifest.mjs'),
+      '--package-output-dir',
+      tempRoot,
+      '--channel-path',
+      'stable',
+      '--platform',
+      'windows-x64',
+      '--base-url',
+      'https://update.clsclear.top/mskdsp-upper',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const latestJson = JSON.parse(fs.readFileSync(path.join(tempRoot, 'latest.json'), 'utf8'));
+  const expectedUrl = createStaticAssetUrl({
+    assetBaseUrl: 'https://update.clsclear.top/mskdsp-upper/stable/windows-x64',
+    assetName: installerName,
+  });
+
+  assert.equal(latestJson.platforms['windows-x86_64-nsis'].url, expectedUrl);
+  assert.equal(latestJson.platforms['windows-x86_64'].url, expectedUrl);
+  assert.equal(latestJson.platforms['windows-x86_64'].signature, 'signature');
+});
+
+test('rewrite-static-updater-manifest decodes asset names before checking files', (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mskdsp-upper-rewrite-encoded-'));
+  t.after(() => {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  const installerName = 'MskDSP Upper Setup.exe';
+  fs.writeFileSync(path.join(tempRoot, installerName), 'installer', 'utf8');
+  writeJson(path.join(tempRoot, 'latest.json'), {
+    version: '0.3.2',
+    pub_date: '2026-05-25T08:09:30Z',
+    platforms: {
+      'windows-x86_64': {
+        url: 'https://github.com/CcooLcyy/MskDSPUpper/releases/download/v0.3.2/MskDSP%20Upper%20Setup.exe',
+        signature: 'signature',
+      },
+    },
+  });
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(repoRoot, 'scripts', 'workflow', 'rewrite-static-updater-manifest.mjs'),
+      '--package-output-dir',
+      tempRoot,
+      '--channel-path',
+      'beta',
+      '--platform',
+      'windows-x64',
+      '--base-url',
+      'https://update.clsclear.top/mskdsp-upper/',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const latestJson = JSON.parse(fs.readFileSync(path.join(tempRoot, 'latest.json'), 'utf8'));
+  assert.equal(
+    latestJson.platforms['windows-x86_64'].url,
+    'https://update.clsclear.top/mskdsp-upper/beta/windows-x64/MskDSP%20Upper%20Setup.exe',
+  );
+});
+
+test('rewrite-static-updater-manifest fails when manifest asset is missing', (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mskdsp-upper-rewrite-missing-'));
+  t.after(() => {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  writeJson(path.join(tempRoot, 'latest.json'), {
+    version: '0.3.2',
+    pub_date: '2026-05-25T08:09:30Z',
+    platforms: {
+      'windows-x86_64': {
+        url: 'https://github.com/CcooLcyy/MskDSPUpper/releases/download/v0.3.2/missing.exe',
+        signature: 'signature',
+      },
+    },
+  });
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(repoRoot, 'scripts', 'workflow', 'rewrite-static-updater-manifest.mjs'),
+      '--package-output-dir',
+      tempRoot,
+      '--channel-path',
+      'stable',
+      '--platform',
+      'windows-x64',
+      '--base-url',
+      'https://update.clsclear.top/mskdsp-upper',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    },
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /资产不存在/);
+});

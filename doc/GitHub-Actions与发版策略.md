@@ -46,6 +46,7 @@
   - `scripts/workflow/apply-channel-version.mjs`
   - `scripts/workflow/render-tauri-config.mjs`
   - `scripts/workflow/stage-release.mjs`
+  - `scripts/workflow/rewrite-static-updater-manifest.mjs`
   - `scripts/workflow/create-delivery-bundle.mjs`
   - `scripts/workflow/write-sha256sums.mjs`
   - `scripts/workflow/resolve-beta-ref.mjs`
@@ -119,6 +120,8 @@
 - Nightly / Beta / Stable 在生成 `package/out` 后调用 `scripts/workflow/Sync-StaticUpdater.ps1`。
 - 同步顺序固定为先上传安装包、签名、交付包、symbols 包与校验文件，再最后覆盖 `latest.json`。
 - `latest.json` 中的 `platforms.*.url` 由 `stage-release.mjs --asset-base-url` 生成，指向静态源 `<channel>/<platform>/` 下的安装包。
+- 若 GitHub Release 资产已经存在，但静态源为空或需要完整重同步，可手动运行 `Sync Static Updater Source`。
+  它会下载指定 release 的所有资产，用 `rewrite-static-updater-manifest.mjs` 将 `latest.json` 的下载地址改写为静态源地址，再调用同一个上传脚本同步。
 - 静态文件上传或覆盖后，nginx 正常不需要重启；只有修改 nginx 配置、挂载目录、TLS 或缓存策略时才需要 reload/restart。
 - 发布仍会更新 GitHub Release。由于静态源同步发生在 GitHub Release 上传前，旧客户端即使从 GitHub endpoint 读取新的 `latest.json`，也能下载已经同步到静态源的安装包。
 
@@ -183,6 +186,20 @@
   - 校验 tag 对应提交属于某条 `beta/*`
   - 生成正式安装包、symbols 包、校验文件
   - 创建或更新 GitHub Release
+
+### Sync Static Updater Source
+
+- 触发：
+  - `workflow_dispatch`
+- 输入：
+  - `channel`: `stable`、`beta` 或 `nightly`
+  - `release_tag`: 可选；默认 stable 使用 `v<package.json version>`，beta 使用 `beta-latest`，nightly 使用 `nightly-latest`
+  - `platform`: 可选；默认 `windows-x64`
+- 行为：
+  - 下载指定 GitHub Release 的全部资产
+  - 校验 `latest.json` 与 updater 资产存在
+  - 将 `latest.json` 的 `platforms.*.url` 改写到静态源
+  - 先上传资产，最后上传 `latest.json`
 
 ### Promote Stable
 

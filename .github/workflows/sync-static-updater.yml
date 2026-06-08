@@ -1,0 +1,129 @@
+name: Sync Static Updater Source
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Updater channel to sync'
+        required: true
+        type: choice
+        options:
+          - stable
+          - beta
+          - nightly
+      release_tag:
+        description: 'GitHub release tag to copy; defaults to v<package version>, beta-latest, or nightly-latest'
+        required: false
+        type: string
+      platform:
+        description: 'Updater platform directory'
+        required: false
+        default: windows-x64
+        type: string
+
+concurrency:
+  group: sync-static-updater-${{ github.event.inputs.channel }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+  STATIC_UPDATE_BASE_URL: ${{ vars.UPDATE_STATIC_BASE_URL || 'https://update.clsclear.top/mskdsp-upper' }}
+  STATIC_UPDATE_REMOTE_ROOT: ${{ vars.UPDATE_STATIC_REMOTE_ROOT || '/home/daniel/update-server/www/mskdsp-upper' }}
+  STATIC_UPDATE_SSH_HOST: ${{ vars.UPDATE_STATIC_SSH_HOST || 'clsclear.top' }}
+  STATIC_UPDATE_SSH_PORT: ${{ vars.UPDATE_STATIC_SSH_PORT || '32118' }}
+  STATIC_UPDATE_SSH_USER: ${{ vars.UPDATE_STATIC_SSH_USER || 'daniel' }}
+
+jobs:
+  sync-static-updater:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Resolve source release
+        id: source
+        shell: pwsh
+        run: |
+          $channel = "${{ github.event.inputs.channel }}"
+          $inputTag = "${{ github.event.inputs.release_tag }}"
+          $releaseTag = $inputTag.Trim()
+          if ([string]::IsNullOrWhiteSpace($releaseTag)) {
+            if ($channel -eq "stable") {
+              $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+              $releaseTag = "v$version"
+            } elseif ($channel -eq "beta") {
+              $releaseTag = "beta-latest"
+            } elseif ($channel -eq "nightly") {
+              $releaseTag = "nightly-latest"
+            } else {
+              throw "Unsupported channel: $channel"
+            }
+          }
+
+          "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "channel_path=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "platform=${{ github.event.inputs.platform || 'windows-x64' }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Prepare package directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package\static-updater-source -Force | Out-Null
+
+      - name: Download GitHub release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ steps.source.outputs.release_tag }}" `
+            --repo "${{ github.repository }}" `
+            --dir package\static-updater-source `
+            --clobber
+
+      - name: Verify downloaded source assets
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -LiteralPath package\static-updater-source -File
+          if (-not ($files | Where-Object { $_.Name -eq "latest.json" })) {
+            throw "Downloaded release assets do not include latest.json"
+          }
+          if (-not ($files | Where-Object { $_.Name -ne "latest.json" })) {
+            throw "Downloaded release assets do not include updater assets"
+          }
+          $files | Sort-Object Name | ForEach-Object { Write-Host $_.Name }
+
+      - name: Rewrite manifest URLs for static source
+        shell: pwsh
+        run: |
+          node scripts/workflow/rewrite-static-updater-manifest.mjs `
+            --package-output-dir package/static-updater-source `
+            --channel-path "${{ steps.source.outputs.channel_path }}" `
+            --platform "${{ steps.source.outputs.platform }}" `
+            --base-url "$env:STATIC_UPDATE_BASE_URL"
+
+      - name: Sync static updater source
+        shell: pwsh
+        env:
+          STATIC_UPDATE_SSH_KEY: ${{ secrets.UPDATE_STATIC_SSH_KEY }}
+        run: |
+          .\scripts\workflow\Sync-StaticUpdater.ps1 `
+            -PackageOutputDir package\static-updater-source `
+            -ChannelPath "${{ steps.source.outputs.channel_path }}" `
+            -Platform "${{ steps.source.outputs.platform }}" `
+            -BaseUrl "$env:STATIC_UPDATE_BASE_URL" `
+            -SshHost "$env:STATIC_UPDATE_SSH_HOST" `
+            -SshPort "$env:STATIC_UPDATE_SSH_PORT" `
+            -SshUser "$env:STATIC_UPDATE_SSH_USER" `
+            -RemoteRoot "$env:STATIC_UPDATE_REMOTE_ROOT"
