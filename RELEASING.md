@@ -3,6 +3,7 @@
 ## Current Baseline
 
 - App version: `0.1.0`
+- CI updater URL: `https://update.clsclear.top/mskdsp-upper/ci/latest.json`
 - Stable updater URL: `https://update.clsclear.top/mskdsp-upper/stable/latest.json`
 - Beta updater URL: `https://update.clsclear.top/mskdsp-upper/beta/latest.json`
 - Nightly updater URL: `https://update.clsclear.top/mskdsp-upper/nightly/latest.json`
@@ -12,6 +13,7 @@
 - Nightly workflow trigger: schedule or manual `workflow_dispatch`
 - Static source backfill trigger: manual `workflow_dispatch`
 - Auto-promote workflow trigger: schedule or manual `workflow_dispatch`
+- CI workflow trigger: pull request, or push to `main`
 
 ## Before The First GitHub Run
 
@@ -24,6 +26,13 @@
    For `0.1.0`, use `beta/0.1` or `beta/0.1.0`.
 4. Do not create the stable tag from `main` only.
    `release.yml` verifies that the tagged commit belongs to at least one `beta/*` branch.
+
+## CI Static Channel
+
+`CI` runs verification on pull requests and pushes to `main`. Only `main` pushes
+run `package-main`; that job builds the CI package, writes updater metadata for
+`https://update.clsclear.top/mskdsp-upper/ci/latest.json`, uploads updater assets
+to `ci/windows-x64/`, and uploads `latest.json` last.
 
 ## GitHub Secrets
 

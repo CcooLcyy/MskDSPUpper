@@ -44,3 +44,31 @@ test('release workflow skips stable manifest rewrite when versions already match
   assert.match(detectBlock, /needs_apply=/);
   assert.match(applyBlock, /if: steps\.manifest_alignment\.outputs\.needs_apply == 'true'/);
 });
+
+test('ci workflow only runs push builds on main while keeping pull request checks', () => {
+  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
+
+  assert.match(fileText, /^\s{2}pull_request:\s*$/m);
+  assert.match(fileText, /^\s{2}push:\s*$/m);
+  assert.match(fileText, /^\s{6}- main\s*$/m);
+  assert.doesNotMatch(fileText, /^\s{6}- master\s*$/m);
+  assert.doesNotMatch(fileText, /^\s{6}- beta\/\*\*\s*$/m);
+
+  assert.match(
+    fileText,
+    /^  package-main:\n    if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'$/m,
+  );
+});
+
+test('ci package publishes updater artifacts to the ci static channel', () => {
+  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
+  const renderBlock = extractStepBlock(fileText, 'Render release tauri config');
+  const stageBlock = extractStepBlock(fileText, 'Stage artifacts');
+  const syncBlock = extractStepBlock(fileText, 'Sync CI static updater source');
+
+  assert.match(renderBlock, /\$env:STATIC_UPDATE_BASE_URL\/ci\/latest\.json/);
+  assert.match(stageBlock, /\$env:STATIC_UPDATE_BASE_URL\/ci\/\$env:PLATFORM_ID/);
+  assert.match(syncBlock, /Sync-StaticUpdater\.ps1/);
+  assert.match(syncBlock, /-ChannelPath ci/);
+  assert.match(syncBlock, /secrets\.UPDATE_STATIC_SSH_KEY/);
+});

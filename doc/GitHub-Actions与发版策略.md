@@ -75,8 +75,8 @@
 ### 渠道与分支模型
 
 - `CI`
-  - 触发 `pull_request`、`push main/master/beta/**`
-  - 输出 Debug 校验结果与主线测试交付包
+  - 触发 `pull_request`、`push main`
+  - 输出 Debug 校验结果；`push main` 时额外输出主线测试交付包并同步到静态源 `ci` 通道
 - `Nightly`
   - 固定基于默认分支
   - 每日或手动重建最新包
@@ -117,7 +117,7 @@
 
 ## 静态更新源同步
 
-- Nightly / Beta / Stable 在生成 `package/out` 后调用 `scripts/workflow/Sync-StaticUpdater.ps1`。
+- CI / Nightly / Beta / Stable 在生成 `package/out` 后调用 `scripts/workflow/Sync-StaticUpdater.ps1`。
 - 同步顺序固定为先上传安装包、签名、交付包、symbols 包与校验文件，再最后覆盖 `latest.json`。
 - `latest.json` 中的 `platforms.*.url` 由 `stage-release.mjs --asset-base-url` 生成，指向静态源 `<channel>/<platform>/` 下的安装包。
 - 若 GitHub Release 资产已经存在，但静态源为空或需要完整重同步，可手动运行 `Sync Static Updater Source`。
@@ -139,8 +139,6 @@
 - 触发：
   - `pull_request`
   - `push main`
-  - `push master`
-  - `push beta/**`
 - 行为：
   - 安装 Node、Rust、protoc
   - 准备 submodule 访问并拉取 `proto/`
@@ -149,7 +147,7 @@
   - 运行 `cargo test --locked --manifest-path src-tauri/Cargo.toml`
   - 运行 `npx tauri build --debug --no-bundle`
   - 失败时上传 diagnostics
-  - `push main/master` 时继续打包 `ci` 渠道交付包并上传 artifact
+  - `push main` 时继续打包 `ci` 渠道交付包，上传 artifact，并同步到 `<UPDATE_STATIC_BASE_URL>/ci/latest.json`
 
 ### Nightly
 
