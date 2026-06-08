@@ -46,7 +46,9 @@ test('release workflow skips stable manifest rewrite when versions already match
 });
 
 test('ci workflow only runs push builds on main while keeping pull request checks', () => {
-  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
+  const fileText = fs
+    .readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
+    .replace(/\r\n/g, '\n');
 
   assert.match(fileText, /^\s{2}pull_request:\s*$/m);
   assert.match(fileText, /^\s{2}push:\s*$/m);
