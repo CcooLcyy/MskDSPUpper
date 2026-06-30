@@ -124,7 +124,7 @@ const metadata = {
   checksumFileName: `${artifactBaseName}-SHA256SUMS.txt`,
   deliveryArchiveName: `${artifactBaseName}.zip`,
   symbolsArchiveName: `${artifactBaseName}-symbols.zip`,
-  defaultInstallDir: `%LOCALAPPDATA%\\Programs\\${tauriConfig.productName}`,
+  defaultInstallDir: `$env:LOCALAPPDATA\\Programs\\${tauriConfig.productName}`,
 };
 
 const outputPath = path.resolve(repoRoot, values.output ?? path.join('package', 'build-metadata.json'));

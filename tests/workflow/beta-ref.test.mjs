@@ -39,3 +39,9 @@ test('resolveBetaRef rejects invalid explicit beta refs', () => {
     resolveBetaRef('feature/demo', 'main', ['beta/1.2']);
   });
 });
+
+test('resolveBetaRef rejects invalid current beta refs instead of falling back', () => {
+  assert.throws(() => {
+    resolveBetaRef(null, 'beta/foo', ['beta/1.2']);
+  }, /Invalid current beta ref/);
+});

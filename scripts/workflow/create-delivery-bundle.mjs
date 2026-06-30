@@ -37,6 +37,7 @@ const packageDir = path.resolve(repoRoot, values['package-dir'] ?? 'package');
 const stageRoot = path.join(packageDir, 'staging', metadata.channelLabel, metadata.platform);
 const appDir = path.join(stageRoot, 'app');
 const symbolsDir = path.join(stageRoot, 'symbols');
+const stagingManifestPath = path.join(stageRoot, 'staging-manifest.json');
 const outDir = path.join(packageDir, 'out', metadata.channelLabel, metadata.platform);
 const tempBundleDir = path.join(packageDir, 'tmp', metadata.artifactBaseName);
 const payloadDir = path.join(tempBundleDir, 'payload');
@@ -48,8 +49,15 @@ ensureDir(outDir);
 
 copyPath(appDir, payloadDir);
 
+const stagingManifest = pathExists(stagingManifestPath) ? readJsonFile(stagingManifestPath) : null;
 const installerName =
-  fs.readdirSync(payloadDir).find((entry) => /\.(exe|msi)$/i.test(entry)) ?? '';
+  stagingManifest?.installers
+    ?.map((entry) => path.basename(entry))
+    .find((entry) => /\.(exe|msi)$/i.test(entry)) ?? '';
+
+if (!installerName) {
+  throw new Error(`未在 staging manifest 中找到安装包: ${stagingManifestPath}`);
+}
 
 const replacements = {
   PRODUCT_NAME: metadata.productName,

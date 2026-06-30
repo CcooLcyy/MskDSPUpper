@@ -3,8 +3,15 @@ import { parseArgs } from 'node:util';
 
 import { git, listRemoteBetaRefs } from './lib/git.mjs';
 import { readJsonFile, writeJsonFile } from './lib/filesystem.mjs';
+import { normalizeGitRef } from './lib/metadata.mjs';
 import { evaluatePromotionCandidate } from './lib/promotion.mjs';
-import { appendGithubSummary, logInfo, resolveRepoRoot, setGithubOutput } from './lib/runtime.mjs';
+import {
+  appendGithubSummary,
+  logInfo,
+  resolveRepoRoot,
+  runCommand,
+  setGithubOutput,
+} from './lib/runtime.mjs';
 
 function readPackageVersionAtRef(ref) {
   const result = git(['show', `origin/${ref}:package.json`], { allowFailure: true });
@@ -26,6 +33,17 @@ function readHeadInfo(ref) {
     sha: sha ?? null,
     committedAt: committedAt ?? null,
   };
+}
+
+function githubReleaseExists(tag) {
+  if (!tag) {
+    return false;
+  }
+
+  const result = runCommand('gh', ['release', 'view', tag], {
+    allowFailure: true,
+  });
+  return result.status === 0;
 }
 
 const { values } = parseArgs({
@@ -51,7 +69,7 @@ const stableTags = git(['tag', '--list', 'v*'])
   .filter(Boolean);
 
 const betaRefs = values['beta-ref']
-  ? [values['beta-ref']]
+  ? [normalizeGitRef(values['beta-ref'])]
   : listRemoteBetaRefs(values.remote ?? 'origin');
 
 const evaluations = betaRefs.map((ref) => {
@@ -78,14 +96,42 @@ const evaluations = betaRefs.map((ref) => {
       : null,
     eligible: decision.eligible,
     reason: decision.reason,
+    dispatchRelease: false,
   };
 });
 
 const candidates = evaluations.filter((entry) => entry.eligible);
+const dispatchOnlyCandidates = evaluations.filter(
+  (entry) =>
+    entry.reason === 'stable_tag_exists' &&
+    entry.stableTag &&
+    !githubReleaseExists(entry.stableTag),
+);
+for (const entry of dispatchOnlyCandidates) {
+  entry.reason = 'stable_tag_exists_release_missing';
+  entry.dispatchRelease = true;
+}
+
+const releaseDispatches = [
+  ...candidates.map((entry) => ({
+    stableTag: entry.stableTag,
+    branchRef: entry.branchRef,
+    commitSha: entry.commitSha,
+    reason: 'promoted',
+  })),
+  ...dispatchOnlyCandidates.map((entry) => ({
+    stableTag: entry.stableTag,
+    branchRef: entry.branchRef,
+    commitSha: entry.commitSha,
+    reason: entry.reason,
+  })),
+];
+
 writeJsonFile(outputPath, {
   thresholdHours,
   generatedAt: now.toISOString(),
   candidates,
+  releaseDispatches,
   evaluations,
 });
 
@@ -95,10 +141,11 @@ appendGithubSummary([
   `- 阈值: ${thresholdHours} 小时`,
   `- 检查分支数: ${evaluations.length}`,
   `- 可晋升数: ${candidates.length}`,
+  `- 需触发正式发布数: ${releaseDispatches.length}`,
   '',
   ...evaluations.map(
     (entry) =>
-      `- ${entry.branchRef}: ${entry.reason} | version=${entry.version ?? '-'} | idleHours=${entry.idleHours ?? '-'} | tag=${entry.stableTag ?? '-'}`,
+      `- ${entry.branchRef}: ${entry.reason} | version=${entry.version ?? '-'} | idleHours=${entry.idleHours ?? '-'} | tag=${entry.stableTag ?? '-'} | dispatch=${entry.dispatchRelease ? 'yes' : 'no'}`,
   ),
 ]);
 
@@ -111,3 +158,5 @@ logInfo('已完成 beta 自动晋升评估', {
 setGithubOutput('candidates_file', outputPath);
 setGithubOutput('has_candidates', candidates.length > 0 ? 'true' : 'false');
 setGithubOutput('candidate_count', String(candidates.length));
+setGithubOutput('has_release_dispatches', releaseDispatches.length > 0 ? 'true' : 'false');
+setGithubOutput('release_dispatch_count', String(releaseDispatches.length));

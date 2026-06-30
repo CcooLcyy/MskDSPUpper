@@ -3,7 +3,7 @@ name: Beta
 on:
   push:
     branches:
-      - beta/**
+      - beta/*
   schedule:
     - cron: '45 2 * * *'
   workflow_dispatch:
@@ -380,6 +380,7 @@ jobs:
           if ($stableTag) {
             $args += @('--notes-start-tag', $stableTag)
           }
+          $args += @('--target', "${{ steps.beta_head.outputs.sha }}")
           gh @args
 
       - name: Create or update rolling beta release
@@ -402,7 +403,7 @@ jobs:
             gh release edit $tag --title $title --prerelease --notes $notes
           }
           else {
-            gh release create $tag $files --title $title --prerelease --notes $notes
+            gh release create $tag $files --target "${{ steps.beta_head.outputs.sha }}" --title $title --prerelease --notes $notes
           }
 
       - name: Restore manifests

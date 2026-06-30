@@ -236,5 +236,5 @@ jobs:
             gh release edit $tag --title $title --prerelease --notes $notes
           }
           else {
-            gh release create $tag $files --title $title --prerelease --notes $notes
+            gh release create $tag $files --target "${{ steps.nightly_head.outputs.sha }}" --title $title --prerelease --notes $notes
           }

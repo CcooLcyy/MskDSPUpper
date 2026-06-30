@@ -17,9 +17,11 @@
     "shortSha",
     "artifactBaseName",
     "platform",
+    "targetTriple",
     "deliveryArchiveName",
     "symbolsArchiveName",
-    "checksumFileName"
+    "checksumFileName",
+    "defaultInstallDir"
   ],
   "properties": {
     "projectSlug": { "type": "string" },
@@ -49,7 +51,8 @@
     "repository": { "type": ["string", "null"] },
     "deliveryArchiveName": { "type": "string" },
     "symbolsArchiveName": { "type": "string" },
-    "checksumFileName": { "type": "string" }
+    "checksumFileName": { "type": "string" },
+    "defaultInstallDir": { "type": "string" }
   },
   "additionalProperties": true
 }

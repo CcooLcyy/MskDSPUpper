@@ -63,10 +63,24 @@ appendGithubSummary([
   ...skipped.map((entry) => `- skipped ${entry.branchRef} -> ${entry.stableTag}: ${entry.reason}`),
 ]);
 
+const releaseDispatches = [
+  ...(input.releaseDispatches ?? []).filter((entry) =>
+    promoted.some((candidate) => candidate.stableTag === entry.stableTag),
+  ),
+  ...(input.releaseDispatches ?? []).filter(
+    (entry) =>
+      entry.reason === 'stable_tag_exists_release_missing' &&
+      !promoted.some((candidate) => candidate.stableTag === entry.stableTag),
+  ),
+];
+
 logInfo('已完成 beta 自动晋升执行', {
   promoted: promoted.map((entry) => entry.stableTag),
   skipped: skipped.map((entry) => ({ tag: entry.stableTag, reason: entry.reason })),
+  releaseDispatches: releaseDispatches.map((entry) => entry.stableTag),
 });
 
 setGithubOutput('promoted_count', String(promoted.length));
 setGithubOutput('promoted_tags_json', JSON.stringify(promoted.map((entry) => entry.stableTag)));
+setGithubOutput('release_dispatch_count', String(releaseDispatches.length));
+setGithubOutput('release_dispatch_tags_json', JSON.stringify(releaseDispatches.map((entry) => entry.stableTag)));

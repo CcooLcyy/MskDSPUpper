@@ -29,7 +29,11 @@ export function resolveBetaRef(explicitRef, currentRef, remoteRefs = [], options
   }
 
   const normalizedCurrentRef = currentRef?.trim() ? normalizeGitRef(currentRef) : null;
-  if (normalizedCurrentRef && parseBetaLine(normalizedCurrentRef)) {
+  if (normalizedCurrentRef?.startsWith('beta/')) {
+    if (!parseBetaLine(normalizedCurrentRef)) {
+      throw new Error(`Invalid current beta ref: ${currentRef}`);
+    }
+
     return normalizedCurrentRef;
   }
 

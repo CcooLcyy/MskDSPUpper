@@ -74,3 +74,46 @@ test('ci package publishes updater artifacts to the ci static channel', () => {
   assert.match(syncBlock, /-ChannelPath ci/);
   assert.match(syncBlock, /secrets\.UPDATE_STATIC_SSH_KEY/);
 });
+
+test('beta workflow only triggers one-segment beta branch names', () => {
+  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/beta.yml'), 'utf8');
+
+  assert.match(fileText, /^\s{6}- beta\/\*\s*$/m);
+  assert.doesNotMatch(fileText, /^\s{6}- beta\/\*\*\s*$/m);
+});
+
+test('rolling release tags are created from the build commit', () => {
+  const nightlyText = fs.readFileSync(path.join(repoRoot, '.github/workflows/nightly.yml'), 'utf8');
+  const betaText = fs.readFileSync(path.join(repoRoot, '.github/workflows/beta.yml'), 'utf8');
+  const nightlyBlock = extractStepBlock(nightlyText, 'Create or update rolling nightly release');
+  const betaPrereleaseBlock = extractStepBlock(betaText, 'Create GitHub prerelease');
+  const betaRollingBlock = extractStepBlock(betaText, 'Create or update rolling beta release');
+
+  assert.match(nightlyBlock, /gh release create \$tag \$files --target "\$\{\{ steps\.nightly_head\.outputs\.sha \}\}"/);
+  assert.match(betaPrereleaseBlock, /\$args \+= @\('--target', "\$\{\{ steps\.beta_head\.outputs\.sha \}\}"\)/);
+  assert.match(betaRollingBlock, /gh release create \$tag \$files --target "\$\{\{ steps\.beta_head\.outputs\.sha \}\}"/);
+});
+
+test('release workflow verifies existing stable tags and fetches beta refs before lineage checks', () => {
+  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8');
+  const fetchBlock = extractStepBlock(fileText, 'Fetch beta refs for lineage check');
+  const releaseBlock = extractStepBlock(fileText, 'Create or update GitHub Release');
+
+  assert.match(fetchBlock, /git fetch origin '\+refs\/heads\/beta\/\*:refs\/remotes\/origin\/beta\/\*' --prune/);
+  assert.match(releaseBlock, /gh release create \$tag \$files --verify-tag --title \$title --generate-notes --latest/);
+});
+
+test('promote workflow only dispatches release workflow after successful promotions', () => {
+  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/promote.yml'), 'utf8');
+  const evaluateBlock = extractStepBlock(fileText, 'Evaluate stale beta branches');
+  const promoteBlock = extractStepBlock(fileText, 'Promote beta branches to stable tags');
+  const triggerBlock = extractStepBlock(fileText, 'Trigger release workflows for promoted tags');
+
+  assert.match(evaluateBlock, /GH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
+  assert.match(promoteBlock, /if: steps\.evaluate\.outputs\.has_release_dispatches == 'true'/);
+  assert.match(
+    triggerBlock,
+    /if: steps\.evaluate\.outputs\.has_release_dispatches == 'true' && steps\.promote\.outputs\.release_dispatch_count != '0'/,
+  );
+  assert.match(triggerBlock, /steps\.promote\.outputs\.release_dispatch_tags_json/);
+});
