@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Layout, Menu, Typography } from 'antd';
+import React, { useMemo, useState } from 'react';
+import { Badge, Layout, Menu, Typography } from 'antd';
 import {
   AlertOutlined,
   ApiOutlined,
@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ControlHeaderViewSwitcher from '../components/control/ControlHeaderViewSwitcher';
+import { useAppUpdate } from '../components/app-update/app-update-context';
 import ProtocolHeaderViewSwitcher from '../components/protocol/ProtocolHeaderViewSwitcher';
 import './MainLayout.css';
 import '../components/protocol/protocol-page.css';
@@ -74,17 +75,34 @@ const menuItems = [
 const MainLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { hasAvailableUpdate } = useAppUpdate();
   const [collapsed, setCollapsed] = useState(false);
   const parentMenuKeys = new Set(['/protocol', '/control']);
+  const renderedMenuItems = useMemo(
+    () =>
+      menuItems.map((item) =>
+        item.key === '/settings'
+          ? {
+              ...item,
+              icon: (
+                <Badge dot={hasAvailableUpdate} offset={[2, 1]} className="main-layout-update-badge">
+                  <SettingOutlined />
+                </Badge>
+              ),
+            }
+          : item,
+      ),
+    [hasAvailableUpdate],
+  );
 
   const selectedKey = location.pathname;
-  const openKeys = menuItems
+  const openKeys = renderedMenuItems
     .filter((item) => 'children' in item && item.children?.some((child) => selectedKey.startsWith(child.key)))
     .map((item) => item.key);
 
   const currentLabel =
-    menuItems.find((item) => item.key === selectedKey)?.label ||
-    menuItems
+    renderedMenuItems.find((item) => item.key === selectedKey)?.label ||
+    renderedMenuItems
       .flatMap((item) => ('children' in item ? item.children || [] : []))
       .find((child) => child.key === selectedKey)?.label ||
     'MskDSP';
@@ -126,7 +144,7 @@ const MainLayout: React.FC = () => {
             mode="inline"
             selectedKeys={[selectedKey]}
             defaultOpenKeys={openKeys}
-            items={menuItems}
+            items={renderedMenuItems}
             className="main-layout-sider-menu"
             onClick={({ key }) => {
               if (!parentMenuKeys.has(key)) {

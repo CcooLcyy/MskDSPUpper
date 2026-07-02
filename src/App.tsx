@@ -1,6 +1,7 @@
 import { RouterProvider } from 'react-router-dom';
 import { ConfigProvider, App as AntApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
+import { AppUpdateProvider } from './components/app-update/AppUpdateProvider';
 import { darkTheme } from './theme/dark';
 import { router } from './router';
 
@@ -8,7 +9,9 @@ function App() {
   return (
     <ConfigProvider theme={darkTheme} locale={zhCN}>
       <AntApp>
-        <RouterProvider router={router} />
+        <AppUpdateProvider>
+          <RouterProvider router={router} />
+        </AppUpdateProvider>
       </AntApp>
     </ConfigProvider>
   );

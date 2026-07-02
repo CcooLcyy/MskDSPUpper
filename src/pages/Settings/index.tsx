@@ -1,13 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Button, Card, Descriptions, message, Modal, Progress, Radio, Space, Tag, Typography } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import { api } from '../../adapters';
-import type {
-  AppUpdateInfo,
-  AppUpdateStatus,
-  AppUpdateStatusKind,
-  ConfigExportSectionId,
-} from '../../adapters';
+import type { AppUpdateStatusKind, ConfigExportSectionId } from '../../adapters';
+import { useAppUpdate } from '../../components/app-update/app-update-context';
 import {
   applyConfigImport,
   applyFullConfigImport,
@@ -116,14 +111,6 @@ function formatImportSummary(result: FullConfigImportResult): string {
 }
 
 const Settings: React.FC = () => {
-  const [appVersion, setAppVersion] = useState('-');
-  const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>({
-    kind: 'idle',
-    message: '尚未检查客户端更新',
-  });
-  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const [isExportingConfig, setIsExportingConfig] = useState(false);
   const [isImportingConfig, setIsImportingConfig] = useState(false);
   const [isFullImportModalOpen, setIsFullImportModalOpen] = useState(false);
@@ -139,10 +126,20 @@ const Settings: React.FC = () => {
   const [selectedImportSections, setSelectedImportSections] = useState<ConfigExportSectionId[]>([]);
   const [moduleImportSelection, setModuleImportSelection] = useState<FullConfigImportSelection | null>(null);
   const [moduleImportMode, setModuleImportMode] = useState<ConfigImportMode>(DEFAULT_IMPORT_MODE);
-  const [downloadedBytes, setDownloadedBytes] = useState(0);
-  const [totalBytes, setTotalBytes] = useState<number | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
+  const {
+    appVersion,
+    availableUpdate,
+    updateStatus,
+    isCheckingUpdate,
+    isInstallingUpdate,
+    downloadedBytes,
+    totalBytes,
+    checkForUpdate,
+    installUpdate,
+    relaunchAfterUpdate,
+  } = useAppUpdate();
 
   const exportSectionOptions = useMemo(() => getConfigSectionOptions(), []);
   const fullImportSections = useMemo(
@@ -153,26 +150,6 @@ const Settings: React.FC = () => {
     () => (moduleImportSelection ? getConfigSectionOptions(moduleImportSelection.snapshot) : []),
     [moduleImportSelection],
   );
-
-  const loadAppVersion = useCallback(async () => {
-    try {
-      const version = await api.getAppVersion();
-      setAppVersion(version);
-    } catch (error) {
-      setAppVersion('-');
-      console.warn('Failed to read app version:', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadAppVersion();
-  }, [loadAppVersion]);
-
-  useEffect(() => {
-    return () => {
-      void api.disposePendingAppUpdate();
-    };
-  }, []);
 
   const showImportResult = useCallback(
     (result: FullConfigImportResult, successMessage: string) => {
@@ -212,86 +189,36 @@ const Settings: React.FC = () => {
   );
 
   const handleCheckUpdate = useCallback(async () => {
-    setIsCheckingUpdate(true);
-    setDownloadedBytes(0);
-    setTotalBytes(null);
-    setUpdateStatus({ kind: 'checking', message: '正在检查客户端更新...' });
-
     try {
-      const version = await api.getAppVersion();
-      setAppVersion(version);
-
-      const update = await api.checkAppUpdate();
-      setAvailableUpdate(update);
+      const update = await checkForUpdate();
 
       if (!update) {
-        setUpdateStatus({ kind: 'up-to-date', message: '当前客户端已经是最新版本' });
         messageApi.success('当前客户端已经是最新版本');
         return;
       }
 
-      setUpdateStatus({
-        kind: 'available',
-        message: `发现新版本 ${update.version}，可以下载安装`,
-      });
       messageApi.success(`发现客户端新版本 ${update.version}`);
     } catch (error) {
-      setAvailableUpdate(null);
-      setUpdateStatus({ kind: 'error', message: `检查更新失败: ${error}` });
       messageApi.error(`检查更新失败: ${error}`);
-    } finally {
-      setIsCheckingUpdate(false);
     }
-  }, [messageApi]);
+  }, [checkForUpdate, messageApi]);
 
   const handleInstallUpdate = useCallback(async () => {
-    setIsInstallingUpdate(true);
-    setDownloadedBytes(0);
-    setTotalBytes(null);
-    setUpdateStatus({ kind: 'installing', message: '正在下载并安装客户端更新...' });
-
     try {
-      const update = await api.downloadAndInstallAppUpdate((event) => {
-        switch (event.event) {
-          case 'Started':
-            setTotalBytes(event.data.contentLength ?? null);
-            setDownloadedBytes(0);
-            setUpdateStatus({ kind: 'installing', message: '已开始下载更新包' });
-            break;
-          case 'Progress':
-            setDownloadedBytes((previous) => previous + event.data.chunkLength);
-            break;
-          case 'Finished':
-            setUpdateStatus({
-              kind: 'installing',
-              message: '更新包下载完成，正在安装',
-            });
-            break;
-        }
-      });
-
-      setAvailableUpdate(update);
-      setUpdateStatus({
-        kind: 'ready-to-restart',
-        message: `客户端 ${update.version} 已安装完成，如未自动重启，请手动重启应用`,
-      });
+      const update = await installUpdate();
       messageApi.success(`客户端 ${update.version} 已下载安装完成`);
     } catch (error) {
-      setUpdateStatus({ kind: 'error', message: `安装更新失败: ${error}` });
       messageApi.error(`安装更新失败: ${error}`);
-    } finally {
-      setIsInstallingUpdate(false);
     }
-  }, [messageApi]);
+  }, [installUpdate, messageApi]);
 
   const handleRelaunch = useCallback(async () => {
     try {
-      await api.relaunchApp();
+      await relaunchAfterUpdate();
     } catch (error) {
-      setUpdateStatus({ kind: 'error', message: `重启客户端失败: ${error}` });
       messageApi.error(`重启客户端失败: ${error}`);
     }
-  }, [messageApi]);
+  }, [messageApi, relaunchAfterUpdate]);
 
   const handleExportConfig = useCallback(async () => {
     setIsExportingConfig(true);
