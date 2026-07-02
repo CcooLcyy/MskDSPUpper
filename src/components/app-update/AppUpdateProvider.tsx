@@ -3,7 +3,9 @@ import type { ReactNode } from 'react';
 import { api } from '../../adapters';
 import type { AppUpdateDownloadEvent, AppUpdateInfo, AppUpdateStatus } from '../../adapters';
 import { AppUpdateContext } from './app-update-context';
-import type { AppUpdateContextValue } from './app-update-context';
+import type { AppUpdateCheckOptions, AppUpdateContextValue } from './app-update-context';
+
+const UPDATE_CHECK_INTERVAL_MS = 60_000;
 
 const initialUpdateStatus: AppUpdateStatus = {
   kind: 'idle',
@@ -25,17 +27,22 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
   const startupCheckStartedRef = useRef(false);
   const checkingPromiseRef = useRef<Promise<AppUpdateInfo | null> | null>(null);
   const installingPromiseRef = useRef<Promise<AppUpdateInfo> | null>(null);
+  const availableUpdateRef = useRef<AppUpdateInfo | null>(null);
+  const isInstallingUpdateRef = useRef(false);
 
-  const checkForUpdate = useCallback(async () => {
+  const checkForUpdate = useCallback(async (options: AppUpdateCheckOptions = {}) => {
     if (checkingPromiseRef.current) {
       return checkingPromiseRef.current;
     }
 
+    const silent = options.silent === true;
     const promise = (async () => {
-      setIsCheckingUpdate(true);
-      setDownloadedBytes(0);
-      setTotalBytes(null);
-      setUpdateStatus({ kind: 'checking', message: '正在检查客户端更新...' });
+      if (!silent) {
+        setIsCheckingUpdate(true);
+        setDownloadedBytes(0);
+        setTotalBytes(null);
+        setUpdateStatus({ kind: 'checking', message: '正在检查客户端更新...' });
+      }
 
       try {
         const version = await api.getAppVersion();
@@ -43,9 +50,13 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
 
         const update = await api.checkAppUpdate();
         setAvailableUpdate(update);
+        availableUpdateRef.current = update;
 
         if (!update) {
-          setUpdateStatus({ kind: 'up-to-date', message: '当前客户端已经是最新版本' });
+          if (!silent) {
+            setUpdateStatus({ kind: 'up-to-date', message: '当前客户端已经是最新版本' });
+          }
+
           return null;
         }
 
@@ -56,10 +67,18 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
         return update;
       } catch (error) {
         setAvailableUpdate(null);
-        setUpdateStatus({ kind: 'error', message: `检查更新失败: ${formatError(error)}` });
+        availableUpdateRef.current = null;
+
+        if (!silent) {
+          setUpdateStatus({ kind: 'error', message: `检查更新失败: ${formatError(error)}` });
+        }
+
         throw error;
       } finally {
-        setIsCheckingUpdate(false);
+        if (!silent) {
+          setIsCheckingUpdate(false);
+        }
+
         checkingPromiseRef.current = null;
       }
     })();
@@ -68,12 +87,21 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
     return promise;
   }, []);
 
+  useEffect(() => {
+    availableUpdateRef.current = availableUpdate;
+  }, [availableUpdate]);
+
+  useEffect(() => {
+    isInstallingUpdateRef.current = isInstallingUpdate;
+  }, [isInstallingUpdate]);
+
   const installUpdate = useCallback(async () => {
     if (installingPromiseRef.current) {
       return installingPromiseRef.current;
     }
 
     const promise = (async () => {
+      isInstallingUpdateRef.current = true;
       setIsInstallingUpdate(true);
       setDownloadedBytes(0);
       setTotalBytes(null);
@@ -100,6 +128,7 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
         });
 
         setAvailableUpdate(update);
+        availableUpdateRef.current = update;
         setUpdateStatus({
           kind: 'ready-to-restart',
           message: `客户端 ${update.version} 已安装完成，如未自动重启，请手动重启应用`,
@@ -109,6 +138,7 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
         setUpdateStatus({ kind: 'error', message: `安装更新失败: ${formatError(error)}` });
         throw error;
       } finally {
+        isInstallingUpdateRef.current = false;
         setIsInstallingUpdate(false);
         installingPromiseRef.current = null;
       }
@@ -136,6 +166,22 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
     void checkForUpdate().catch((error) => {
       console.warn('Failed to check app update on startup:', error);
     });
+  }, [checkForUpdate]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (availableUpdateRef.current || isInstallingUpdateRef.current) {
+        return;
+      }
+
+      void checkForUpdate({ silent: true }).catch((error) => {
+        console.warn('Failed to check app update in background:', error);
+      });
+    }, UPDATE_CHECK_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(timer);
+    };
   }, [checkForUpdate]);
 
   useEffect(() => {

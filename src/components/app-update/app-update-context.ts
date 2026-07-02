@@ -1,6 +1,10 @@
 import { createContext, useContext } from 'react';
 import type { AppUpdateInfo, AppUpdateStatus } from '../../adapters';
 
+export interface AppUpdateCheckOptions {
+  silent?: boolean;
+}
+
 export interface AppUpdateContextValue {
   appVersion: string;
   availableUpdate: AppUpdateInfo | null;
@@ -10,7 +14,7 @@ export interface AppUpdateContextValue {
   downloadedBytes: number;
   totalBytes: number | null;
   hasAvailableUpdate: boolean;
-  checkForUpdate: () => Promise<AppUpdateInfo | null>;
+  checkForUpdate: (options?: AppUpdateCheckOptions) => Promise<AppUpdateInfo | null>;
   installUpdate: () => Promise<AppUpdateInfo>;
   relaunchAfterUpdate: () => Promise<void>;
 }
