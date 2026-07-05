@@ -216,8 +216,11 @@
 - Cargo 依赖缓存：
   - `Cargo.lock` 驱动的 registry/git 缓存
 - 编译缓存：
-  - `sccache`
-  - key 包含 `Cargo.lock`、`Cargo.toml`、`tauri.conf.json`、`package.json`、workflow 文件
+  - `mozilla-actions/sccache-action@v0.0.10`
+  - 通过 `SCCACHE_GHA_ENABLED=true` 使用 GitHub Actions cache backend
+  - `SCCACHE_GHA_VERSION=mskdsp-upper-windows-msvc-v1` 作为共享命名空间，CI / Beta / Nightly / Release 复用同一类编译缓存
+  - 不再把 `github.sha` 放入编译缓存维度，避免每个 commit 生成彼此隔离的 `.sccache` 缓存包
+  - 每个 Rust/Tauri 构建 job 结束时执行 [scripts/workflow/Show-SccacheStats.ps1](../scripts/workflow/Show-SccacheStats.ps1)，输出命中率用于评估提速效果
 
 ## 私有依赖 / 子模块访问方式
 
