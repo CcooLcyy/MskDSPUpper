@@ -1,6 +1,8 @@
 import { createBrowserRouter, redirect } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
+import { ADVANCED_CONFIG_PATH } from './utils/advanced-config-auth';
 import {
+  AdvancedConfigPage,
   AGCPage,
   AVCPage,
   DataBusPage,
@@ -106,12 +108,19 @@ export const router = createBrowserRouter([
         ),
       },
       {
-        path: 'debug-tools',
+        path: ADVANCED_CONFIG_PATH.slice(1),
         element: (
-          <div style={{ color: '#aaa', fontSize: 16, padding: 40, textAlign: 'center' }}>
-            {'\u8054\u8c03\u5de5\u5177\u529f\u80fd\u5f00\u53d1\u4e2d'}
-          </div>
+          <RouteSuspense>
+            <AdvancedConfigPage />
+          </RouteSuspense>
         ),
+      },
+      {
+        path: 'debug-tools',
+        loader: ({ request }) => {
+          const url = new URL(request.url);
+          throw redirect(`${ADVANCED_CONFIG_PATH}${url.search}`);
+        },
       },
     ],
   },

@@ -14,6 +14,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ControlHeaderViewSwitcher from '../components/control/ControlHeaderViewSwitcher';
 import { useAppUpdate } from '../components/app-update/app-update-context';
 import ProtocolHeaderViewSwitcher from '../components/protocol/ProtocolHeaderViewSwitcher';
+import { ADVANCED_CONFIG_PATH } from '../utils/advanced-config-auth';
 import './MainLayout.css';
 import '../components/protocol/protocol-page.css';
 
@@ -61,9 +62,9 @@ const menuItems = [
     ],
   },
   {
-    key: '/debug-tools',
+    key: ADVANCED_CONFIG_PATH,
     icon: <ToolOutlined />,
-    label: '联调工具',
+    label: '高级配置',
   },
   {
     key: '/settings',

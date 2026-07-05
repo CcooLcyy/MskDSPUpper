@@ -9,6 +9,7 @@ export const DataBusPage = lazy(() => import('./pages/DataBus'));
 export const AGCPage = lazy(() => import('./pages/AGC'));
 export const AVCPage = lazy(() => import('./pages/AVC'));
 export const SettingsPage = lazy(() => import('./pages/Settings'));
+export const AdvancedConfigPage = lazy(() => import('./pages/AdvancedConfig'));
 
 function RouteLoading() {
   return (
