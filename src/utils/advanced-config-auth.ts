@@ -19,6 +19,10 @@ export function authorizeAdvancedConfigSession(): void {
   getSessionStorage()?.setItem(ADVANCED_CONFIG_AUTH_KEY, '1');
 }
 
+export function revokeAdvancedConfigSession(): void {
+  getSessionStorage()?.removeItem(ADVANCED_CONFIG_AUTH_KEY);
+}
+
 export function isAdvancedConfigPasswordValid(password: string): boolean {
   return password === ADVANCED_CONFIG_PASSWORD;
 }

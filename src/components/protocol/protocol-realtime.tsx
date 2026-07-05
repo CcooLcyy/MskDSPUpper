@@ -47,6 +47,14 @@ function normalizeTags(tags: string[]): string[] {
   return Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean)));
 }
 
+function hasTauriEventRuntime(): boolean {
+  const internals = (window as Window & {
+    __TAURI_INTERNALS__?: { transformCallback?: unknown };
+  }).__TAURI_INTERNALS__;
+
+  return typeof internals?.transformCallback === 'function';
+}
+
 function buildUpdateMap(updates: DcPointUpdate[], sourceConnId: number): Record<string, DcPointUpdate> {
   const next: Record<string, DcPointUpdate> = {};
   for (const update of updates) {
@@ -233,6 +241,13 @@ export function useProtocolShadowRealtime(
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
+
+    if (!hasTauriEventRuntime()) {
+      return () => {
+        disposed = true;
+        resetPendingUpdates();
+      };
+    }
 
     void listen<DcPointUpdate>(PROTOCOL_SHADOW_UPDATE_EVENT, ({ payload }) => {
       if (payload.src_conn_id !== activeConnIdRef.current) {

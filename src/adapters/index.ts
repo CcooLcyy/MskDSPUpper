@@ -71,4 +71,11 @@ export type {
   StableDataBusEndpoint,
   StableDataBusRoute,
 } from './types';
-export { api } from './tauri';
+import { browserApi } from './browser';
+import { api as tauriApi } from './tauri';
+
+function hasTauriRuntime() {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+export const api: typeof tauriApi = hasTauriRuntime() ? tauriApi : browserApi;
