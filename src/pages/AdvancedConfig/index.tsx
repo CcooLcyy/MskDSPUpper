@@ -5,12 +5,10 @@ import {
   Descriptions,
   Form,
   Input,
+  Modal,
   Progress,
-  Segmented,
   Select,
   Space,
-  Steps,
-  Table,
   Tag,
   Typography,
 } from 'antd';
@@ -22,13 +20,13 @@ import {
   SafetyCertificateOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import type { ColumnsType } from 'antd/es/table';
 import {
   authorizeAdvancedConfigSession,
   isAdvancedConfigAuthorized,
   isAdvancedConfigPasswordValid,
   revokeAdvancedConfigSession,
 } from '../../utils/advanced-config-auth';
+import { validateManagerAddress } from '../../utils/network';
 import './index.css';
 
 const { Text } = Typography;
@@ -37,17 +35,8 @@ type AdvancedConfigAuthFormValues = {
   password: string;
 };
 
-type UpdateMode = 'static-source' | 'offline-package';
 type UpdateChannel = 'stable' | 'beta' | 'nightly' | 'ci';
 type LowerUpdateStatus = '未检查' | '发现更新' | '已下载到上位机' | '模拟安装完成';
-type LowerUpdateAssetStatus = '待获取' | '已发现' | '已校验' | '已下发';
-
-type LowerUpdateAsset = {
-  key: string;
-  name: string;
-  source: string;
-  status: LowerUpdateAssetStatus;
-};
 
 type LowerUpdateMockManifest = {
   version: string;
@@ -57,26 +46,14 @@ type LowerUpdateMockManifest = {
   sha256: string;
 };
 
-const LOWER_UPDATE_BASE_URL = 'https://update.clsclear.top/mskdsp-lower';
-
-const UPDATE_MODE_OPTIONS: Array<{ label: string; value: UpdateMode }> = [
-  { label: '静态源获取', value: 'static-source' },
-  { label: '离线包导入', value: 'offline-package' },
-];
+const SSH_ACCOUNT_PATTERN = /^([A-Za-z_][A-Za-z0-9_-]*)@([^@:]+):(\d+)$/;
+const LINUX_ABSOLUTE_PATH_PATTERN = /^\/[^\s]*$/;
 
 const UPDATE_CHANNEL_OPTIONS: Array<{ label: string; value: UpdateChannel }> = [
   { label: 'Stable', value: 'stable' },
   { label: 'Beta', value: 'beta' },
   { label: 'Nightly', value: 'nightly' },
   { label: 'CI', value: 'ci' },
-];
-
-const LOWER_UPDATE_STEP_TITLES = [
-  '读取清单',
-  '下载校验',
-  '上传下位机',
-  '执行安装',
-  '验证恢复',
 ];
 
 const LOWER_UPDATE_MOCK_MANIFESTS: Record<UpdateChannel, LowerUpdateMockManifest> = {
@@ -110,103 +87,11 @@ const LOWER_UPDATE_MOCK_MANIFESTS: Record<UpdateChannel, LowerUpdateMockManifest
   },
 };
 
-const LOWER_UPDATE_OFFLINE_MANIFEST: LowerUpdateMockManifest = {
-  version: '0.2.4-offline',
-  packageName: 'mskdsp-0.2.4-offline-linux-arm64',
-  packageSize: '438 MB',
-  publishedAt: '2026-07-05 09:30:00',
-  sha256: 'b2b5b0ed0b70468d8611b46365186b2fe7ccf1a6b0bdcd746fbbf2de740aa515',
-};
-
 const LOWER_UPDATE_MOCK_TARGET = {
   managerAddr: '192.168.1.219:17000',
   uploadAccount: 'root@192.168.1.219:22',
   installDir: '/root',
 };
-
-const EMPTY_ASSETS: LowerUpdateAsset[] = [
-  {
-    key: 'package',
-    name: 'mskdsp-<version>-linux-arm64',
-    source: 'linux-arm64 安装包',
-    status: '待获取',
-  },
-  {
-    key: 'checksum',
-    name: 'SHA256SUMS',
-    source: '校验文件',
-    status: '待获取',
-  },
-  {
-    key: 'manifest',
-    name: 'latest.json',
-    source: '版本清单',
-    status: '待获取',
-  },
-];
-
-function buildLowerUpdateAssets(manifest: LowerUpdateMockManifest, status: LowerUpdateAssetStatus): LowerUpdateAsset[] {
-  return [
-    {
-      key: 'package',
-      name: manifest.packageName,
-      source: `${manifest.packageSize} 安装包`,
-      status,
-    },
-    {
-      key: 'checksum',
-      name: 'SHA256SUMS',
-      source: '校验文件',
-      status,
-    },
-    {
-      key: 'manifest',
-      name: 'latest.json',
-      source: '版本清单',
-      status,
-    },
-  ];
-}
-
-const ASSET_COLUMNS: ColumnsType<LowerUpdateAsset> = [
-  {
-    title: '资产',
-    dataIndex: 'name',
-    key: 'name',
-    width: 260,
-    render: (value: string) => <Text code>{value}</Text>,
-  },
-  {
-    title: '类型',
-    dataIndex: 'source',
-    key: 'source',
-    width: 160,
-  },
-  {
-    title: '状态',
-    dataIndex: 'status',
-    key: 'status',
-    width: 120,
-    render: (value: LowerUpdateAssetStatus) => <Tag color={getAssetStatusColor(value)}>{value}</Tag>,
-  },
-];
-
-function buildLowerUpdateManifestUrl(channel: UpdateChannel): string {
-  return `${LOWER_UPDATE_BASE_URL}/${channel}/latest.json`;
-}
-
-function getAssetStatusColor(status: LowerUpdateAssetStatus): string {
-  switch (status) {
-    case '已发现':
-      return 'blue';
-    case '已校验':
-      return 'green';
-    case '已下发':
-      return 'success';
-    default:
-      return 'default';
-  }
-}
 
 function getDeliveryStatusColor(status: LowerUpdateStatus): string {
   switch (status) {
@@ -221,9 +106,46 @@ function getDeliveryStatusColor(status: LowerUpdateStatus): string {
   }
 }
 
+function validateUploadAccount(value: string): { ok: true } | { ok: false; error: string } {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { ok: false, error: '请输入上传账号' };
+  }
+
+  const match = trimmed.match(SSH_ACCOUNT_PATTERN);
+  if (!match) {
+    return { ok: false, error: '上传账号格式应为 user@host:port' };
+  }
+
+  const host = match[2];
+  const portText = match[3];
+  const hostValidation = validateManagerAddress(`${host}:${portText}`);
+  if (!hostValidation.ok) {
+    return { ok: false, error: hostValidation.error };
+  }
+
+  return { ok: true };
+}
+
+function validateInstallDir(value: string): { ok: true } | { ok: false; error: string } {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { ok: false, error: '请输入安装目录' };
+  }
+
+  if (!LINUX_ABSOLUTE_PATH_PATTERN.test(trimmed)) {
+    return { ok: false, error: '安装目录必须是 Linux 绝对路径' };
+  }
+
+  if (trimmed.includes('..')) {
+    return { ok: false, error: '安装目录不能包含 ..' };
+  }
+
+  return { ok: true };
+}
+
 const AdvancedConfigPage: React.FC = () => {
   const [authorized, setAuthorized] = useState(isAdvancedConfigAuthorized);
-  const [updateMode, setUpdateMode] = useState<UpdateMode>('static-source');
   const [channel, setChannel] = useState<UpdateChannel>('stable');
   const [currentLowerVersion, setCurrentLowerVersion] = useState('0.2.3');
   const [latestLowerVersion, setLatestLowerVersion] = useState('-');
@@ -232,24 +154,19 @@ const AdvancedConfigPage: React.FC = () => {
   const [publishedAt, setPublishedAt] = useState('-');
   const [sha256, setSha256] = useState('-');
   const [deliveryStatus, setDeliveryStatus] = useState<LowerUpdateStatus>('未检查');
-  const [deliveryProgress, setDeliveryProgress] = useState(0);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [assets, setAssets] = useState<LowerUpdateAsset[]>(EMPTY_ASSETS);
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
+  const [downloadModalProgress, setDownloadModalProgress] = useState(0);
+  const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
+  const [installModalProgress, setInstallModalProgress] = useState(0);
+  const [targetManagerAddr, setTargetManagerAddr] = useState(LOWER_UPDATE_MOCK_TARGET.managerAddr);
+  const [targetUploadAccount, setTargetUploadAccount] = useState(LOWER_UPDATE_MOCK_TARGET.uploadAccount);
+  const [targetInstallDir, setTargetInstallDir] = useState(LOWER_UPDATE_MOCK_TARGET.installDir);
   const [form] = Form.useForm<AdvancedConfigAuthFormValues>();
-  const manifestUrl = buildLowerUpdateManifestUrl(channel);
-  const stepItems = LOWER_UPDATE_STEP_TITLES.map((title, index) => {
-    let description = '等待';
-
-    if (deliveryStatus === '模拟安装完成') {
-      description = '已完成';
-    } else if (index < currentStep) {
-      description = '已完成';
-    } else if (index === currentStep) {
-      description = deliveryStatus === '未检查' ? '等待操作' : '进行中';
-    }
-
-    return { title, description };
-  });
+  const targetManagerAddrValidation = validateManagerAddress(targetManagerAddr);
+  const targetUploadAccountValidation = validateUploadAccount(targetUploadAccount);
+  const targetInstallDirValidation = validateInstallDir(targetInstallDir);
+  const hasTargetValidationError =
+    !targetManagerAddrValidation.ok || !targetUploadAccountValidation.ok || !targetInstallDirValidation.ok;
 
   const handleSubmit = ({ password }: AdvancedConfigAuthFormValues): void => {
     if (!isAdvancedConfigPasswordValid(password)) {
@@ -270,13 +187,13 @@ const AdvancedConfigPage: React.FC = () => {
     setPublishedAt('-');
     setSha256('-');
     setDeliveryStatus('未检查');
-    setDeliveryProgress(0);
-    setCurrentStep(0);
-    setAssets(EMPTY_ASSETS);
+    setDownloadModalProgress(0);
+    setIsDownloadModalOpen(false);
+    setInstallModalProgress(0);
+    setIsInstallModalOpen(false);
   };
 
-  const getActiveMockManifest = (): LowerUpdateMockManifest =>
-    updateMode === 'static-source' ? LOWER_UPDATE_MOCK_MANIFESTS[channel] : LOWER_UPDATE_OFFLINE_MANIFEST;
+  const getActiveMockManifest = (): LowerUpdateMockManifest => LOWER_UPDATE_MOCK_MANIFESTS[channel];
 
   const applyMockManifest = (manifest: LowerUpdateMockManifest): void => {
     setLatestLowerVersion(manifest.version);
@@ -291,19 +208,15 @@ const AdvancedConfigPage: React.FC = () => {
 
     applyMockManifest(manifest);
     setDeliveryStatus('发现更新');
-    setDeliveryProgress(20);
-    setCurrentStep(1);
-    setAssets(buildLowerUpdateAssets(manifest, '已发现'));
   };
 
   const handleMockDownload = (): void => {
     const manifest = getActiveMockManifest();
 
     applyMockManifest(manifest);
+    setIsDownloadModalOpen(true);
+    setDownloadModalProgress(100);
     setDeliveryStatus('已下载到上位机');
-    setDeliveryProgress(55);
-    setCurrentStep(2);
-    setAssets(buildLowerUpdateAssets(manifest, '已校验'));
   };
 
   const handleMockDeploy = (): void => {
@@ -311,10 +224,9 @@ const AdvancedConfigPage: React.FC = () => {
 
     applyMockManifest(manifest);
     setCurrentLowerVersion(manifest.version);
+    setIsInstallModalOpen(true);
+    setInstallModalProgress(100);
     setDeliveryStatus('模拟安装完成');
-    setDeliveryProgress(100);
-    setCurrentStep(4);
-    setAssets(buildLowerUpdateAssets(manifest, '已下发'));
   };
 
   const handleLogout = (): void => {
@@ -326,63 +238,68 @@ const AdvancedConfigPage: React.FC = () => {
   if (authorized) {
     return (
       <div className="advanced-config-page">
+        <div className="advanced-config-page-header">
+          <Space size={8}>
+            <CloudDownloadOutlined />
+            <Text strong className="advanced-config-page-title">
+              下位机更新下发
+            </Text>
+            <Tag color="processing">模拟数据</Tag>
+            <Tag color="warning">真实接口待接入</Tag>
+          </Space>
+          <Button size="small" icon={<LogoutOutlined />} onClick={handleLogout}>
+            退出
+          </Button>
+        </div>
+
         <Card
           size="small"
           bordered
-          title={
-            <Space size={8}>
-              <CloudDownloadOutlined />
-              <span>下位机更新下发</span>
-              <Tag color="processing">模拟数据</Tag>
-            </Space>
-          }
-          extra={
-            <Space size={8}>
-              <Tag color="warning">真实接口待接入</Tag>
-              <Button size="small" icon={<LogoutOutlined />} onClick={handleLogout}>
-                退出
-              </Button>
-            </Space>
-          }
+          title="更新参数"
         >
-          <div className="advanced-config-update-toolbar">
-            <Segmented
-              options={UPDATE_MODE_OPTIONS}
-              value={updateMode}
-              onChange={(value) => {
-                setUpdateMode(value as UpdateMode);
-                resetMockState();
-              }}
-            />
-            <Space wrap>
-              <Button icon={<FileSearchOutlined />} onClick={handleMockCheckUpdate}>
-                检查更新
-              </Button>
-              <Button
-                icon={<DownloadOutlined />}
-                onClick={handleMockDownload}
-                disabled={deliveryStatus === '未检查'}
-              >
-                下载到上位机
-              </Button>
-              <Button
-                type="primary"
-                icon={<UploadOutlined />}
-                onClick={handleMockDeploy}
-                disabled={deliveryStatus !== '已下载到上位机'}
-              >
-                下发并安装
-              </Button>
-            </Space>
-          </div>
-
-          <div className="advanced-config-update-grid">
+          <div className="advanced-config-parameter-grid">
             <div className="advanced-config-section">
-              <div className="advanced-config-section-title">更新来源</div>
+              <div className="advanced-config-section-title">目标下位机</div>
               <Form layout="vertical" size="small">
-                <Form.Item label="获取方式">
-                  <Input value={updateMode === 'static-source' ? '上位机访问静态源' : '本地离线包'} disabled />
+                <Form.Item
+                  label="ModuleManager 地址"
+                  validateStatus={targetManagerAddrValidation.ok ? undefined : 'error'}
+                  help={targetManagerAddrValidation.ok ? undefined : targetManagerAddrValidation.error}
+                >
+                  <Input
+                    value={targetManagerAddr}
+                    onChange={(event) => setTargetManagerAddr(event.target.value)}
+                    placeholder="例如 192.168.1.219:17000"
+                  />
                 </Form.Item>
+                <Form.Item
+                  label="上传账号"
+                  validateStatus={targetUploadAccountValidation.ok ? undefined : 'error'}
+                  help={targetUploadAccountValidation.ok ? undefined : targetUploadAccountValidation.error}
+                >
+                  <Input
+                    value={targetUploadAccount}
+                    onChange={(event) => setTargetUploadAccount(event.target.value)}
+                    placeholder="例如 root@192.168.1.219:22"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label="安装目录"
+                  validateStatus={targetInstallDirValidation.ok ? undefined : 'error'}
+                  help={targetInstallDirValidation.ok ? undefined : targetInstallDirValidation.error}
+                >
+                  <Input
+                    value={targetInstallDir}
+                    onChange={(event) => setTargetInstallDir(event.target.value)}
+                    placeholder="例如 /root"
+                  />
+                </Form.Item>
+              </Form>
+            </div>
+
+            <div className="advanced-config-section">
+              <div className="advanced-config-section-title">版本来源</div>
+              <Form layout="vertical" size="small">
                 <Form.Item label="发布通道">
                   <Select<UpdateChannel>
                     value={channel}
@@ -391,79 +308,111 @@ const AdvancedConfigPage: React.FC = () => {
                       setChannel(value);
                       resetMockState();
                     }}
-                    disabled={updateMode !== 'static-source'}
-                  />
-                </Form.Item>
-                <Form.Item label="清单地址">
-                  <Input
-                    value={updateMode === 'static-source' ? manifestUrl : '选择离线包后读取'}
-                    disabled
                   />
                 </Form.Item>
               </Form>
-            </div>
-
-            <div className="advanced-config-section">
-              <div className="advanced-config-section-title">目标下位机</div>
-              <Form layout="vertical" size="small">
-                <Form.Item label="ModuleManager 地址">
-                  <Input value={LOWER_UPDATE_MOCK_TARGET.managerAddr} disabled />
-                </Form.Item>
-                <Form.Item label="上传账号">
-                  <Input value={LOWER_UPDATE_MOCK_TARGET.uploadAccount} disabled />
-                </Form.Item>
-                <Form.Item label="安装目录">
-                  <Input value={LOWER_UPDATE_MOCK_TARGET.installDir} disabled />
-                </Form.Item>
-              </Form>
+              <Text type="secondary">
+                上位机从静态源获取更新包，再下发到下位机安装。
+              </Text>
+              <Space wrap className="advanced-config-action-row">
+                <Button
+                  icon={<FileSearchOutlined />}
+                  onClick={handleMockCheckUpdate}
+                  disabled={hasTargetValidationError}
+                >
+                  检查更新
+                </Button>
+                <Button
+                  icon={<DownloadOutlined />}
+                  onClick={handleMockDownload}
+                  disabled={hasTargetValidationError || deliveryStatus === '未检查'}
+                >
+                  下载到上位机
+                </Button>
+                <Button
+                  type="primary"
+                  icon={<UploadOutlined />}
+                  onClick={handleMockDeploy}
+                  disabled={hasTargetValidationError || deliveryStatus !== '已下载到上位机'}
+                >
+                  下发并安装
+                </Button>
+              </Space>
             </div>
           </div>
         </Card>
 
-        <div className="advanced-config-status-grid">
-          <Card
-            size="small"
-            bordered
-            title={
-              <Space size={8}>
-                <SafetyCertificateOutlined />
-                <span>版本与校验</span>
-              </Space>
-            }
-          >
+        <Card
+          size="small"
+          bordered
+          title={
+            <Space size={8}>
+              <SafetyCertificateOutlined />
+              <span>版本与校验</span>
+            </Space>
+          }
+        >
+          <Descriptions size="small" column={2}>
+            <Descriptions.Item label="当前下位机版本">{currentLowerVersion}</Descriptions.Item>
+            <Descriptions.Item label="可用版本">{latestLowerVersion}</Descriptions.Item>
+            <Descriptions.Item label="安装包名称">{packageName}</Descriptions.Item>
+            <Descriptions.Item label="包大小">{packageSize}</Descriptions.Item>
+            <Descriptions.Item label="发布时间">{publishedAt}</Descriptions.Item>
+            <Descriptions.Item label="下发状态">
+              <Tag color={getDeliveryStatusColor(deliveryStatus)}>{deliveryStatus}</Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="SHA256" span={2}>
+              <Text code>{sha256}</Text>
+            </Descriptions.Item>
+          </Descriptions>
+        </Card>
+
+        <Modal
+          open={isDownloadModalOpen}
+          title="下载到上位机"
+          okText="完成"
+          cancelButtonProps={{ style: { display: 'none' } }}
+          onOk={() => setIsDownloadModalOpen(false)}
+          onCancel={() => setIsDownloadModalOpen(false)}
+        >
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Descriptions size="small" column={1}>
-              <Descriptions.Item label="当前下位机版本">{currentLowerVersion}</Descriptions.Item>
-              <Descriptions.Item label="可用版本">{latestLowerVersion}</Descriptions.Item>
-              <Descriptions.Item label="安装包名称">{packageName}</Descriptions.Item>
+              <Descriptions.Item label="安装包">{packageName}</Descriptions.Item>
               <Descriptions.Item label="包大小">{packageSize}</Descriptions.Item>
-              <Descriptions.Item label="发布时间">{publishedAt}</Descriptions.Item>
-              <Descriptions.Item label="SHA256">{sha256}</Descriptions.Item>
-              <Descriptions.Item label="下发状态">
-                <Tag color={getDeliveryStatusColor(deliveryStatus)}>{deliveryStatus}</Tag>
+              <Descriptions.Item label="校验文件">SHA256SUMS</Descriptions.Item>
+              <Descriptions.Item label="校验状态">
+                <Tag color="success">模拟校验通过</Tag>
               </Descriptions.Item>
             </Descriptions>
-            <Progress percent={deliveryProgress} size="small" className="advanced-config-progress" />
-          </Card>
+            <Progress percent={downloadModalProgress} status="success" />
+            <Text type="secondary">模拟下载已完成，真实接口接入后这里会显示实际下载进度。</Text>
+          </Space>
+        </Modal>
 
-          <Card size="small" bordered title="下发流程">
-            <Steps
-              size="small"
-              current={currentStep}
-              status={deliveryStatus === '模拟安装完成' ? 'finish' : 'process'}
-              items={stepItems}
-            />
-          </Card>
-        </div>
-
-        <Card size="small" bordered title="待下发资产">
-          <Table
-            rowKey="key"
-            columns={ASSET_COLUMNS}
-            dataSource={assets}
-            pagination={false}
-            size="small"
-          />
-        </Card>
+        <Modal
+          open={isInstallModalOpen}
+          title="下发并安装"
+          okText="完成"
+          cancelButtonProps={{ style: { display: 'none' } }}
+          onOk={() => setIsInstallModalOpen(false)}
+          onCancel={() => setIsInstallModalOpen(false)}
+        >
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Descriptions size="small" column={1}>
+              <Descriptions.Item label="目标下位机">{targetUploadAccount}</Descriptions.Item>
+              <Descriptions.Item label="安装目录">{targetInstallDir}</Descriptions.Item>
+              <Descriptions.Item label="安装包">{packageName}</Descriptions.Item>
+              <Descriptions.Item label="执行命令">
+                <Text code>{`cd ${targetInstallDir} && chmod +x ./${packageName} && ./${packageName} start`}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="安装状态">
+                <Tag color="success">模拟安装完成</Tag>
+              </Descriptions.Item>
+            </Descriptions>
+            <Progress percent={installModalProgress} status="success" />
+            <Text type="secondary">模拟下发与安装已完成，真实接口接入后这里会显示上传、执行和恢复验证进度。</Text>
+          </Space>
+        </Modal>
       </div>
     );
   }
