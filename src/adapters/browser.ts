@@ -23,6 +23,15 @@ import type {
   Iec104LinkInfo,
   Iec104Point,
   Iec104PointTable,
+  LowerUpdateChannel,
+  LowerUpdateDownloadProgress,
+  LowerUpdateDownloadResult,
+  LowerUpdateInstallRequest,
+  LowerUpdateInstallResult,
+  LowerUpdateManifest,
+  LowerUpdateUploadProgress,
+  LowerUpdateUploadRequest,
+  LowerUpdateUploadResult,
   ModbusLinkConfig,
   ModbusLinkInfo,
   ModbusMqttConfig,
@@ -32,6 +41,7 @@ import type {
   ModuleInfo,
   ModuleRunningInfo,
 } from './types';
+import { buildLowerUpdateLatestUrl } from './lower-update-source';
 
 const DEFAULT_MANAGER_ADDR = '127.0.0.1:17000';
 const MANAGER_ADDR_KEY = 'mskdsp_manager_addr';
@@ -40,6 +50,21 @@ let managerAddr = localStorage.getItem(MANAGER_ADDR_KEY) || DEFAULT_MANAGER_ADDR
 let nextConnId = 100;
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+function bytesToHex(bytes: ArrayBuffer): string {
+  return [...new Uint8Array(bytes)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function buildRemotePackagePath(installDir: string, packageName: string): string {
+  const normalizedDir = installDir.trim().replace(/\/+$/, '') || '/';
+  return normalizedDir === '/' ? `/${packageName}` : `${normalizedDir}/${packageName}`;
+}
 
 const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('ModuleManager'),
@@ -343,6 +368,108 @@ export const browserApi: typeof tauriApi = {
   },
   relaunchApp: async () => {},
   disposePendingAppUpdate: async () => {},
+  checkLowerUpdate: async (channel: LowerUpdateChannel): Promise<LowerUpdateManifest> => {
+    const response = await fetch(buildLowerUpdateLatestUrl(channel), { cache: 'no-store' });
+    if (!response.ok) {
+      throw new Error(`获取下位机更新清单失败: HTTP ${response.status}`);
+    }
+    return await response.json() as LowerUpdateManifest;
+  },
+  downloadLowerUpdate: async (
+    manifest: LowerUpdateManifest,
+    onProgress?: (progress: LowerUpdateDownloadProgress) => void,
+  ): Promise<LowerUpdateDownloadResult> => {
+    onProgress?.({
+      package_name: manifest.asset.name,
+      downloaded_bytes: 0,
+      total_bytes: manifest.asset.size,
+      percent: 0,
+      stage: 'started',
+    });
+
+    const response = await fetch(manifest.asset.url);
+    if (!response.ok) {
+      throw new Error(`下载下位机更新包失败: HTTP ${response.status}`);
+    }
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength !== manifest.asset.size) {
+      throw new Error(`下位机更新包大小不匹配: 期望 ${manifest.asset.size} 字节，实际 ${bytes.byteLength} 字节`);
+    }
+
+    onProgress?.({
+      package_name: manifest.asset.name,
+      downloaded_bytes: bytes.byteLength,
+      total_bytes: manifest.asset.size,
+      percent: 100,
+      stage: 'verifying',
+    });
+
+    const digest = bytesToHex(await crypto.subtle.digest('SHA-256', bytes));
+    if (digest.toLowerCase() !== manifest.asset.sha256.toLowerCase()) {
+      throw new Error(`下位机更新包校验失败: 期望 ${manifest.asset.sha256}，实际 ${digest}`);
+    }
+
+    onProgress?.({
+      package_name: manifest.asset.name,
+      downloaded_bytes: bytes.byteLength,
+      total_bytes: manifest.asset.size,
+      percent: 100,
+      stage: 'finished',
+    });
+    return {
+      package_name: manifest.asset.name,
+      package_path: `browser-cache://${manifest.asset.name}`,
+      downloaded_bytes: bytes.byteLength,
+      sha256: digest,
+    };
+  },
+  uploadLowerUpdatePackage: async (
+    request: LowerUpdateUploadRequest,
+    onProgress?: (progress: LowerUpdateUploadProgress) => void,
+  ): Promise<LowerUpdateUploadResult> => {
+    const remotePath = buildRemotePackagePath(request.install_dir, request.package_name);
+    const totalBytes = request.package_size;
+    onProgress?.({
+      package_name: request.package_name,
+      remote_path: remotePath,
+      uploaded_bytes: 0,
+      total_bytes: totalBytes,
+      percent: 0,
+      stage: 'started',
+    });
+
+    for (const percent of [25, 50, 75, 100]) {
+      await sleep(120);
+      onProgress?.({
+        package_name: request.package_name,
+        remote_path: remotePath,
+        uploaded_bytes: Math.round((totalBytes * percent) / 100),
+        total_bytes: totalBytes,
+        percent,
+        stage: percent === 100 ? 'finished' : 'uploading',
+      });
+    }
+
+    return {
+      package_name: request.package_name,
+      remote_path: remotePath,
+      uploaded_bytes: totalBytes,
+    };
+  },
+  installLowerUpdatePackage: async (request: LowerUpdateInstallRequest): Promise<LowerUpdateInstallResult> => {
+    const remotePath = buildRemotePackagePath(request.install_dir, request.package_name);
+    const command = `set -e; cd '${request.install_dir}' && chmod +x './${request.package_name}' && './${request.package_name}' start`;
+    await sleep(500);
+    return {
+      package_name: request.package_name,
+      remote_path: remotePath,
+      command,
+      success: true,
+      exit_code: 0,
+      stdout: 'browser-dev: install command simulated\n',
+      stderr: '',
+    };
+  },
 
   iec104UpsertLink: async (config: Iec104LinkConfig, createOnly: boolean) =>
     upsertByName(iec104Links, config.conn_name, createOnly, (connId, previous) => ({

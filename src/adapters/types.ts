@@ -53,6 +53,97 @@ export interface AppUpdateStatus {
   message: string;
 }
 
+export type LowerUpdateChannel = 'stable' | 'beta' | 'nightly' | 'ci';
+
+export interface LowerUpdateSource {
+  repository: string;
+  ref: string;
+  sha: string;
+}
+
+export interface LowerUpdateAsset {
+  name: string;
+  url: string;
+  sha256: string;
+  size: number;
+}
+
+export interface LowerUpdateChecksum {
+  name: string;
+  url: string;
+}
+
+export interface LowerUpdateManifest {
+  schema_version: number;
+  product: string;
+  channel: LowerUpdateChannel;
+  platform: string;
+  version: string;
+  package_version: string;
+  published_at: string;
+  source: LowerUpdateSource;
+  asset: LowerUpdateAsset;
+  checksum: LowerUpdateChecksum;
+}
+
+export type LowerUpdateDownloadStage = 'started' | 'downloading' | 'verifying' | 'finished';
+
+export interface LowerUpdateDownloadProgress {
+  package_name: string;
+  downloaded_bytes: number;
+  total_bytes: number;
+  percent: number;
+  stage: LowerUpdateDownloadStage;
+}
+
+export interface LowerUpdateDownloadResult {
+  package_name: string;
+  package_path: string;
+  downloaded_bytes: number;
+  sha256: string;
+}
+
+export type LowerUpdateUploadStage = 'started' | 'uploading' | 'finished';
+
+export interface LowerUpdateUploadRequest {
+  package_name: string;
+  package_path: string;
+  package_size: number;
+  upload_account: string;
+  install_dir: string;
+}
+
+export interface LowerUpdateUploadProgress {
+  package_name: string;
+  remote_path: string;
+  uploaded_bytes: number;
+  total_bytes: number;
+  percent: number;
+  stage: LowerUpdateUploadStage;
+}
+
+export interface LowerUpdateUploadResult {
+  package_name: string;
+  remote_path: string;
+  uploaded_bytes: number;
+}
+
+export interface LowerUpdateInstallRequest {
+  package_name: string;
+  upload_account: string;
+  install_dir: string;
+}
+
+export interface LowerUpdateInstallResult {
+  package_name: string;
+  remote_path: string;
+  command: string;
+  success: boolean;
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
 export interface Iec104Endpoint {
   ip: string;
   port: number;

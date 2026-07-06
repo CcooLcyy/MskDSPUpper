@@ -1,5 +1,6 @@
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
 import type {
@@ -25,6 +26,15 @@ import type {
   Iec104LinkInfo,
   Iec104Point,
   Iec104PointTable,
+  LowerUpdateChannel,
+  LowerUpdateDownloadProgress,
+  LowerUpdateDownloadResult,
+  LowerUpdateInstallRequest,
+  LowerUpdateInstallResult,
+  LowerUpdateManifest,
+  LowerUpdateUploadProgress,
+  LowerUpdateUploadRequest,
+  LowerUpdateUploadResult,
   ModbusLinkConfig,
   ModbusLinkInfo,
   ModbusMqttConfig,
@@ -34,10 +44,13 @@ import type {
   ModuleInfo,
   ModuleRunningInfo,
 } from './types';
+import { getLowerUpdateStaticBaseUrl } from './lower-update-source';
 
 type PendingAppUpdate = Awaited<ReturnType<typeof check>>;
 
 let pendingAppUpdate: PendingAppUpdate = null;
+const LOWER_UPDATE_DOWNLOAD_PROGRESS_EVENT = 'lower-update-download-progress';
+const LOWER_UPDATE_UPLOAD_PROGRESS_EVENT = 'lower-update-upload-progress';
 
 async function disposePendingAppUpdate() {
   if (!pendingAppUpdate) {
@@ -111,6 +124,45 @@ export const api = {
   },
   relaunchApp: () => relaunch(),
   disposePendingAppUpdate,
+  checkLowerUpdate: (channel: LowerUpdateChannel) =>
+    invoke<LowerUpdateManifest>('check_lower_update', {
+      channel,
+      baseUrl: getLowerUpdateStaticBaseUrl(),
+    }),
+  downloadLowerUpdate: async (
+    manifest: LowerUpdateManifest,
+    onProgress?: (progress: LowerUpdateDownloadProgress) => void,
+  ): Promise<LowerUpdateDownloadResult> => {
+    const unlisten = onProgress
+      ? await listen<LowerUpdateDownloadProgress>(LOWER_UPDATE_DOWNLOAD_PROGRESS_EVENT, (event) => {
+          onProgress(event.payload);
+        })
+      : null;
+
+    try {
+      return await invoke<LowerUpdateDownloadResult>('download_lower_update', { manifest });
+    } finally {
+      unlisten?.();
+    }
+  },
+  uploadLowerUpdatePackage: async (
+    request: LowerUpdateUploadRequest,
+    onProgress?: (progress: LowerUpdateUploadProgress) => void,
+  ): Promise<LowerUpdateUploadResult> => {
+    const unlisten = onProgress
+      ? await listen<LowerUpdateUploadProgress>(LOWER_UPDATE_UPLOAD_PROGRESS_EVENT, (event) => {
+          onProgress(event.payload);
+        })
+      : null;
+
+    try {
+      return await invoke<LowerUpdateUploadResult>('upload_lower_update_package', { request });
+    } finally {
+      unlisten?.();
+    }
+  },
+  installLowerUpdatePackage: (request: LowerUpdateInstallRequest) =>
+    invoke<LowerUpdateInstallResult>('install_lower_update_package', { request }),
 
   iec104UpsertLink: (config: Iec104LinkConfig, createOnly: boolean) =>
     invoke<Iec104LinkInfo>('iec104_upsert_link', { config, createOnly }),
