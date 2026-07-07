@@ -93,6 +93,15 @@ const UPDATE_CHANNEL_OPTIONS: Array<{ label: string; value: LowerUpdateChannel }
   { label: 'CI', value: 'ci' },
 ];
 
+const DEFAULT_LOWER_UPDATE_CHANNEL: LowerUpdateChannel = 'ci';
+const UPDATE_CHANNEL_LABELS: Record<LowerUpdateChannel, string> = UPDATE_CHANNEL_OPTIONS.reduce(
+  (labels, option) => ({
+    ...labels,
+    [option.value]: option.label,
+  }),
+  {} as Record<LowerUpdateChannel, string>,
+);
+
 const LOWER_UPDATE_MOCK_TARGET = {
   managerAddr: '192.168.1.219:17000',
   uploadAccount: 'root@192.168.1.219:22',
@@ -399,9 +408,18 @@ function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function formatLowerUpdateCheckError(channel: LowerUpdateChannel, error: unknown): string {
+  const message = formatErrorMessage(error);
+  if (/\bHTTP 404\b/i.test(message)) {
+    return `${UPDATE_CHANNEL_LABELS[channel]} 通道还没有发布下位机更新清单，请切换到已有清单的通道，或先发布该通道的下位机安装包`;
+  }
+
+  return message;
+}
+
 const AdvancedConfigPage: React.FC = () => {
   const [authorized, setAuthorized] = useState(isAdvancedConfigAuthorized);
-  const [channel, setChannel] = useState<LowerUpdateChannel>('stable');
+  const [channel, setChannel] = useState<LowerUpdateChannel>(DEFAULT_LOWER_UPDATE_CHANNEL);
   const [currentLowerVersion, setCurrentLowerVersion] = useState('0.2.3');
   const [latestLowerVersion, setLatestLowerVersion] = useState('-');
   const [packageName, setPackageName] = useState('-');
@@ -553,7 +571,7 @@ const AdvancedConfigPage: React.FC = () => {
       messageApi.success(`发现下位机版本 ${manifest.version}`);
     } catch (error) {
       setDeliveryStatus('检查失败');
-      messageApi.error(`检查更新失败: ${formatErrorMessage(error)}`);
+      messageApi.error(`检查更新失败: ${formatLowerUpdateCheckError(channel, error)}`);
     } finally {
       setIsCheckingLowerUpdate(false);
     }
