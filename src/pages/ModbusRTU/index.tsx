@@ -498,7 +498,7 @@ const ModbusRTU: React.FC = () => {
     } catch (error) {
       messageApi.error(`保存点位失败: ${error}`);
     }
-  }, [editingPointIndex, messageApi, pointForm, points, selectedConn, runSelectedLinkStopped]);
+  }, [editingPointIndex, isRegisterBoolPoint, messageApi, pointForm, points, selectedConn, runSelectedLinkStopped]);
 
   const handleDeletePoint = useCallback(async (index: number) => {
     if (!selectedConn) {

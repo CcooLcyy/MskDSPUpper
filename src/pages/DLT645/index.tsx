@@ -462,7 +462,7 @@ const DLT645: React.FC = () => {
     } catch (error) {
       messageApi.error(`保存点位失败: ${error}`);
     }
-  }, [blocks, editingPointIndex, messageApi, pointForm, points, selectedConn, runSelectedLinkStopped]);
+  }, [blocks, editingPointIndex, isPointBool, messageApi, pointForm, points, selectedConn, runSelectedLinkStopped]);
 
   const handleDeletePoint = useCallback(async (index: number) => {
     if (!selectedConn) {
