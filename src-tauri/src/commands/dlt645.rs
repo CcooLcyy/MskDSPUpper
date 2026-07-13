@@ -60,6 +60,8 @@ pub struct Dlt645PointDto {
     pub scale: f64,
     pub offset: f64,
     pub deadband: f64,
+    pub byte_index: Option<u32>,
+    pub bit_index: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -72,6 +74,8 @@ pub struct Dlt645BlockItemDto {
     pub offset: f64,
     pub deadband: f64,
     pub trim_right_space: Option<bool>,
+    pub byte_index: Option<u32>,
+    pub bit_index: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -155,6 +159,8 @@ impl From<Point> for Dlt645PointDto {
             scale: point.scale,
             offset: point.offset,
             deadband: point.deadband,
+            byte_index: point.byte_index,
+            bit_index: point.bit_index,
         }
     }
 }
@@ -170,6 +176,8 @@ impl From<BlockItem> for Dlt645BlockItemDto {
             offset: item.offset,
             deadband: item.deadband,
             trim_right_space: item.trim_right_space,
+            byte_index: item.byte_index,
+            bit_index: item.bit_index,
         }
     }
 }
@@ -253,6 +261,8 @@ impl Dlt645PointDto {
             scale: self.scale,
             offset: self.offset,
             deadband: self.deadband,
+            byte_index: self.byte_index,
+            bit_index: self.bit_index,
         }
     }
 }
@@ -268,6 +278,8 @@ impl Dlt645BlockItemDto {
             offset: self.offset,
             deadband: self.deadband,
             trim_right_space: self.trim_right_space,
+            byte_index: self.byte_index,
+            bit_index: self.bit_index,
         }
     }
 }

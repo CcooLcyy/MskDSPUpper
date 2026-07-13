@@ -350,6 +350,7 @@ const IEC104: React.FC = () => {
   const [pointForm] = Form.useForm();
   const linkRole = Form.useWatch('role', linkForm);
   const pointIoaCategory = Form.useWatch('ioa_category', pointForm) as IoaCategoryKey | undefined;
+  const pointType = Form.useWatch('point_type', pointForm);
 
   // ── Derived ──
 
@@ -1842,6 +1843,11 @@ const IEC104: React.FC = () => {
               </Form.Item>
             </Col>
           </Row>
+          {pointType === 2 ? (
+            <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+              单点遥信按 IEC104 SIQ bit0 解析，质量位按协议转换，无需配置 bit 索引。
+            </Text>
+          ) : null}
         </Form>
       </Modal>
 

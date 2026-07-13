@@ -92,6 +92,8 @@ const DLT645: React.FC = () => {
 
   const protocolVariant = Form.useWatch('protocol_variant', linkForm);
   const commMode = Form.useWatch('comm_mode', linkForm);
+  const pointDataType = Form.useWatch('data_type', pointForm);
+  const isPointBool = pointDataType === 1;
 
   // ── Data fetching ──
 
@@ -403,6 +405,8 @@ const DLT645: React.FC = () => {
       scale: 1,
       offset: 0,
       deadband: 0,
+      byte_index: null,
+      bit_index: null,
     });
     setPointModalOpen(true);
   }, [pointForm]);
@@ -419,6 +423,8 @@ const DLT645: React.FC = () => {
       scale: point.scale,
       offset: point.offset,
       deadband: point.deadband,
+      byte_index: point.byte_index ?? null,
+      bit_index: point.bit_index ?? null,
     });
     setPointModalOpen(true);
   }, [pointForm, points]);
@@ -434,10 +440,12 @@ const DLT645: React.FC = () => {
         di: values.di,
         data_len: values.data_len ?? 4,
         data_type: values.data_type ?? 6,
-        access: values.access ?? 1,
+        access: isPointBool && values.bit_index != null ? 1 : (values.access ?? 1),
         scale: values.scale ?? 1,
         offset: values.offset ?? 0,
         deadband: values.deadband ?? 0,
+        byte_index: isPointBool ? (values.byte_index ?? null) : null,
+        bit_index: isPointBool ? (values.bit_index ?? null) : null,
       };
       const newPoints = editingPointIndex !== null
         ? points.map((point, index) => (index === editingPointIndex ? newPoint : point))
@@ -521,6 +529,8 @@ const DLT645: React.FC = () => {
         offset: item.offset,
         deadband: item.deadband,
         trim_right_space: item.trim_right_space ?? true,
+        byte_index: item.byte_index ?? null,
+        bit_index: item.bit_index ?? null,
       })),
     });
     setBlockModalOpen(true);
@@ -539,11 +549,13 @@ const DLT645: React.FC = () => {
           tag: item.tag,
           data_len: item.data_len ?? 0,
           data_type: item.data_type ?? 6,
-          access: item.access ?? 1,
+          access: item.data_type === 1 && item.bit_index != null ? 1 : (item.access ?? 1),
           scale: item.scale ?? 1,
           offset: item.offset ?? 0,
           deadband: item.deadband ?? 0,
           trim_right_space: item.trim_right_space ?? null,
+          byte_index: item.byte_index ?? null,
+          bit_index: item.bit_index ?? null,
         })),
       };
       const newBlocks = editingBlockIndex !== null
@@ -785,6 +797,20 @@ const DLT645: React.FC = () => {
             </Form.Item>
           </Col>
         </Row>
+        {isPointBool ? (
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item label="字节索引" name="byte_index">
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item label="位索引" name="bit_index">
+                <InputNumber min={0} max={7} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+        ) : null}
       </Form>
     </Modal>
   );
@@ -797,7 +823,7 @@ const DLT645: React.FC = () => {
       open={blockModalOpen}
       onCancel={() => setBlockModalOpen(false)}
       onOk={() => void handleBlockSubmit()}
-      width={800}
+      width={960}
       destroyOnClose
     >
       <Form form={blockForm} layout="vertical" size="small">
@@ -823,7 +849,7 @@ const DLT645: React.FC = () => {
             <>
               {fields.map((field) => (
                 <Row gutter={8} key={field.key} align="middle">
-                  <Col span={4}>
+                  <Col span={3}>
                     <Form.Item
                       label={field.key === 0 ? '标签' : undefined}
                       name={[field.name, 'tag']}
@@ -832,7 +858,7 @@ const DLT645: React.FC = () => {
                       <Input placeholder="标签" />
                     </Form.Item>
                   </Col>
-                  <Col span={3}>
+                  <Col span={2}>
                     <Form.Item
                       label={field.key === 0 ? '长度' : undefined}
                       name={[field.name, 'data_len']}
@@ -841,7 +867,7 @@ const DLT645: React.FC = () => {
                       <InputNumber min={0} style={{ width: '100%' }} placeholder="长度" />
                     </Form.Item>
                   </Col>
-                  <Col span={4}>
+                  <Col span={3}>
                     <Form.Item
                       label={field.key === 0 ? '类型' : undefined}
                       name={[field.name, 'data_type']}
@@ -850,12 +876,28 @@ const DLT645: React.FC = () => {
                       <Select options={DATA_TYPE_OPTIONS} placeholder="类型" />
                     </Form.Item>
                   </Col>
-                  <Col span={3}>
+                  <Col span={2}>
                     <Form.Item
                       label={field.key === 0 ? '读写' : undefined}
                       name={[field.name, 'access']}
                     >
                       <Select options={ACCESS_MODE_OPTIONS} placeholder="读写" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={2}>
+                    <Form.Item
+                      label={field.key === 0 ? '字节' : undefined}
+                      name={[field.name, 'byte_index']}
+                    >
+                      <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={2}>
+                    <Form.Item
+                      label={field.key === 0 ? '位' : undefined}
+                      name={[field.name, 'bit_index']}
+                    >
+                      <InputNumber min={0} max={7} style={{ width: '100%' }} placeholder="0" />
                     </Form.Item>
                   </Col>
                   <Col span={3}>
@@ -894,7 +936,7 @@ const DLT645: React.FC = () => {
                   </Col>
                 </Row>
               ))}
-              <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add({ data_type: 6, access: 1, scale: 1, offset: 0, deadband: 0, trim_right_space: true })}>
+              <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add({ data_type: 6, access: 1, scale: 1, offset: 0, deadband: 0, trim_right_space: true, byte_index: null, bit_index: null })}>
                 添加子项
               </Button>
             </>

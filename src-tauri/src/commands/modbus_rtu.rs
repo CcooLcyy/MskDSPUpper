@@ -80,6 +80,7 @@ pub struct ModbusPointDto {
     pub reg_count: u32,
     pub word_order: i32,
     pub byte_order: i32,
+    pub bit_index: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -184,6 +185,7 @@ impl From<Point> for ModbusPointDto {
             reg_count: point.reg_count,
             word_order: point.word_order,
             byte_order: point.byte_order,
+            bit_index: point.bit_index,
         }
     }
 }
@@ -285,6 +287,7 @@ impl ModbusPointDto {
             reg_count: self.reg_count,
             word_order: self.word_order,
             byte_order: self.byte_order,
+            bit_index: self.bit_index,
         }
     }
 }

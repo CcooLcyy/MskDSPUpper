@@ -29,6 +29,13 @@ const ACCESS_MODE_LABELS: Record<number, string> = {
   3: '读写',
 };
 
+function renderBitPosition(record: { byte_index?: number | null; bit_index?: number | null }): React.ReactNode {
+  if (record.bit_index == null) {
+    return '-';
+  }
+  return `B${record.byte_index ?? 0}.b${record.bit_index}`;
+}
+
 interface Props {
   points: Dlt645Point[];
   blocks: Dlt645Block[];
@@ -70,6 +77,12 @@ const PointTable: React.FC<Props> = ({
     },
     { title: 'DI', dataIndex: 'di', key: 'di', width: 120 },
     { title: '数据长度', dataIndex: 'data_len', key: 'data_len', width: 80 },
+    {
+      title: '位解析',
+      key: 'bit_position',
+      width: 90,
+      render: (_value: unknown, record: Dlt645Point) => renderBitPosition(record),
+    },
     {
       title: '数据类型',
       dataIndex: 'data_type',
@@ -168,6 +181,12 @@ const PointTable: React.FC<Props> = ({
     { title: '标签', dataIndex: 'tag', key: 'tag', width: 140 },
     { title: '数据长度', dataIndex: 'data_len', key: 'data_len', width: 80 },
     {
+      title: '位解析',
+      key: 'bit_position',
+      width: 90,
+      render: (_value: unknown, record: Dlt645BlockItem) => renderBitPosition(record),
+    },
+    {
       title: '数据类型',
       dataIndex: 'data_type',
       key: 'data_type',
@@ -234,7 +253,7 @@ const PointTable: React.FC<Props> = ({
               loading={realtimeLoading}
               pagination={false}
               size="small"
-              scroll={{ x: 1010 }}
+              scroll={{ x: 1100 }}
               locale={{ emptyText: selectedConn ? '暂无点位' : '请先选择连接' }}
             />
           </div>

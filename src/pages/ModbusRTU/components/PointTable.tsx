@@ -74,6 +74,13 @@ const PointTable: React.FC<Props> = ({
     { title: '地址', dataIndex: 'address', key: 'address', width: 100 },
     { title: '寄存器数', dataIndex: 'reg_count', key: 'reg_count', width: 90 },
     {
+      title: '位索引',
+      dataIndex: 'bit_index',
+      key: 'bit_index',
+      width: 90,
+      render: (value: number | null | undefined) => value ?? '-',
+    },
+    {
       title: '数据类型',
       dataIndex: 'data_type',
       key: 'data_type',

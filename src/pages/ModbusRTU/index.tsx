@@ -96,6 +96,10 @@ const ModbusRTU: React.FC = () => {
 
   const transportType = Form.useWatch('transport_type', linkForm);
   const readPlanMode = Form.useWatch('read_plan_mode', linkForm);
+  const pointFunction = Form.useWatch('function', pointForm);
+  const pointDataType = Form.useWatch('data_type', pointForm);
+  const pointRegCount = Form.useWatch('reg_count', pointForm);
+  const isRegisterBoolPoint = pointDataType === 1 && (pointFunction === 2 || pointFunction === 3);
 
   const refreshLinks = useCallback(async () => {
     setLoading(true);
@@ -436,6 +440,7 @@ const ModbusRTU: React.FC = () => {
       deadband: 0,
       word_order: 0,
       byte_order: 0,
+      bit_index: null,
     });
     setPointModalOpen(true);
   }, [pointForm]);
@@ -454,6 +459,7 @@ const ModbusRTU: React.FC = () => {
       deadband: point.deadband,
       word_order: point.word_order,
       byte_order: point.byte_order,
+      bit_index: point.bit_index ?? null,
     });
     setPointModalOpen(true);
   }, [pointForm, points]);
@@ -475,6 +481,7 @@ const ModbusRTU: React.FC = () => {
         reg_count: values.reg_count ?? 0,
         word_order: values.word_order ?? 0,
         byte_order: values.byte_order ?? 0,
+        bit_index: isRegisterBoolPoint ? (values.bit_index ?? null) : null,
       };
       const newPoints = editingPointIndex !== null
         ? points.map((point, index) => (index === editingPointIndex ? newPoint : point))
@@ -780,6 +787,19 @@ const ModbusRTU: React.FC = () => {
             </Form.Item>
           </Col>
         </Row>
+        {isRegisterBoolPoint ? (
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item
+                label="位索引"
+                name="bit_index"
+                rules={[{ required: true, message: '请输入位索引' }]}
+              >
+                <InputNumber min={0} max={(pointRegCount ?? 1) === 2 ? 31 : 15} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+        ) : null}
       </Form>
     </Modal>
   );

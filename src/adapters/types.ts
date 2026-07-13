@@ -260,6 +260,7 @@ export interface ModbusPoint {
   reg_count: number;
   word_order: number;
   byte_order: number;
+  bit_index: number | null;
 }
 
 export interface ModbusPointTable {
@@ -319,6 +320,8 @@ export interface Dlt645Point {
   scale: number;
   offset: number;
   deadband: number;
+  byte_index: number | null;
+  bit_index: number | null;
 }
 
 export interface Dlt645BlockItem {
@@ -330,6 +333,8 @@ export interface Dlt645BlockItem {
   offset: number;
   deadband: number;
   trim_right_space: boolean | null;
+  byte_index: number | null;
+  bit_index: number | null;
 }
 
 export interface Dlt645Block {
