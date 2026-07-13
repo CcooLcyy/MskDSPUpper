@@ -160,3 +160,72 @@ test('promote-beta-tags dispatches an existing tag when its release is missing',
   assert.match(output, /^release_dispatch_count=1$/m);
   assert.match(output, /^release_dispatch_tags_json=\["v0\.1\.0"\]$/m);
 });
+
+test('promote-beta-tags deduplicates release dispatch tags', (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mskdsp-upper-promote-dedupe-'));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+
+  const remoteDir = path.join(tempRoot, 'remote.git');
+  const repoDir = path.join(tempRoot, 'repo');
+  run('git', ['init', '--bare', remoteDir], { cwd: tempRoot });
+  run('git', ['clone', remoteDir, repoDir], { cwd: tempRoot });
+  run('git', ['config', 'user.name', 'Test User'], { cwd: repoDir });
+  run('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repoDir });
+  fs.writeFileSync(path.join(repoDir, 'README.md'), 'seed\n', 'utf8');
+  run('git', ['add', 'README.md'], { cwd: repoDir });
+  run('git', ['commit', '-m', 'seed'], { cwd: repoDir });
+  const commitSha = run('git', ['rev-parse', 'HEAD'], { cwd: repoDir }).stdout.trim();
+
+  const inputPath = path.join(tempRoot, 'promotion.json');
+  fs.writeFileSync(
+    inputPath,
+    JSON.stringify(
+      {
+        thresholdHours: 72,
+        candidates: [
+          {
+            stableTag: 'v0.4.0',
+            branchRef: 'beta/0.4',
+            commitSha,
+            reason: 'eligible',
+          },
+          {
+            stableTag: 'v0.4.0',
+            branchRef: 'beta/0.4.0',
+            commitSha,
+            reason: 'eligible',
+          },
+        ],
+        releaseDispatches: [
+          {
+            stableTag: 'v0.4.0',
+            branchRef: 'beta/0.4',
+            commitSha,
+            reason: 'promoted',
+          },
+          {
+            stableTag: 'v0.4.0',
+            branchRef: 'beta/0.4.0',
+            commitSha,
+            reason: 'promoted',
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+
+  const githubOutput = path.join(tempRoot, 'github-output.txt');
+  run(
+    process.execPath,
+    [path.join(repoRoot, 'scripts', 'workflow', 'promote-beta-tags.mjs'), '--input', inputPath],
+    { cwd: repoDir, env: { GITHUB_OUTPUT: githubOutput } },
+  );
+
+  const output = fs.readFileSync(githubOutput, 'utf8');
+  assert.match(output, /^promoted_count=1$/m);
+  assert.match(output, /^release_dispatch_count=1$/m);
+  assert.match(output, /^release_dispatch_tags_json=\["v0\.4\.0"\]$/m);
+});

@@ -72,7 +72,13 @@ const releaseDispatches = [
       entry.reason === 'stable_tag_exists_release_missing' &&
       !promoted.some((candidate) => candidate.stableTag === entry.stableTag),
   ),
-];
+].filter((entry, index, entries) => {
+  if (!entry.stableTag) {
+    return false;
+  }
+
+  return entries.findIndex((candidate) => candidate.stableTag === entry.stableTag) === index;
+});
 
 logInfo('已完成 beta 自动晋升执行', {
   promoted: promoted.map((entry) => entry.stableTag),

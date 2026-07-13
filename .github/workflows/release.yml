@@ -12,7 +12,7 @@ on:
         type: string
 
 concurrency:
-  group: release-${{ github.event.inputs.release_tag || github.ref }}
+  group: release-${{ github.event.inputs.release_tag || github.ref_name || github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -53,12 +53,24 @@ jobs:
         id: release_target
         shell: pwsh
         run: |
-          $tag = git describe --tags --exact-match HEAD
+          $tag = "${{ github.event.inputs.release_tag || github.ref_name }}"
           if (-not $tag) {
-            throw "Current checkout is not on a tag."
+            throw "Release tag is required."
+          }
+          if ($tag -notmatch '^v') {
+            throw "Stable release tag must start with v, got $tag."
+          }
+          $tagRef = "refs/tags/$tag"
+          $tagSha = git rev-parse "$tagRef^{commit}" 2>$null
+          if ($LASTEXITCODE -ne 0 -or -not $tagSha) {
+            throw "Release tag $tag does not exist."
+          }
+          $releaseSha = git rev-parse HEAD
+          if ($tagSha.Trim() -ne $releaseSha.Trim()) {
+            throw "Current checkout $releaseSha does not match release tag $tag ($tagSha)."
           }
           "release_tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "release_sha=$(git rev-parse HEAD)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "release_sha=$releaseSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

@@ -97,9 +97,13 @@ test('rolling release tags are created from the build commit', () => {
 test('release workflow verifies existing stable tags and fetches beta refs before lineage checks', () => {
   const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8');
   const fetchBlock = extractStepBlock(fileText, 'Fetch beta refs for lineage check');
+  const resolveBlock = extractStepBlock(fileText, 'Resolve release target');
   const releaseBlock = extractStepBlock(fileText, 'Create or update GitHub Release');
 
   assert.match(fetchBlock, /git fetch origin '\+refs\/heads\/beta\/\*:refs\/remotes\/origin\/beta\/\*' --prune/);
+  assert.match(resolveBlock, /github\.event\.inputs\.release_tag \|\| github\.ref_name/);
+  assert.match(resolveBlock, /refs\/tags\/\$tag/);
+  assert.doesNotMatch(resolveBlock, /git describe/);
   assert.match(releaseBlock, /gh release create \$tag \$files --verify-tag --title \$title --generate-notes --latest/);
 });
 
