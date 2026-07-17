@@ -44,7 +44,8 @@ function createEmptyRealtimeState(): ProtocolRealtimeState {
 }
 
 function normalizeTags(tags: string[]): string[] {
-  return Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean)));
+  // Tags are DataCenter keys; preserve whitespace because it is part of the exact tag identity.
+  return Array.from(new Set(tags.filter((tag) => tag.length > 0)));
 }
 
 function hasTauriEventRuntime(): boolean {
