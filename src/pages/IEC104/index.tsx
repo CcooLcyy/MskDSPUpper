@@ -215,12 +215,12 @@ const buildUniqueImportedPointTag = (sourcePoint: DataBusEndpointOption, usedTag
 };
 
 const getNextAvailableIoa = (usedIoas: Set<number>) => {
-  const maxUsed = usedIoas.size > 0 ? Math.max(...usedIoas) : -1;
+  const maxUsed = usedIoas.size > 0 ? Math.max(...usedIoas) : 0;
   if (maxUsed < MAX_IOA) {
     return maxUsed + 1;
   }
 
-  for (let candidate = 0; candidate <= MAX_IOA; candidate += 1) {
+  for (let candidate = 1; candidate <= MAX_IOA; candidate += 1) {
     if (!usedIoas.has(candidate)) {
       return candidate;
     }
@@ -333,6 +333,9 @@ const getCreatePointInitialValues = (points: Iec104Point[]) => {
     point_type: lastPoint.point_type,
   };
 };
+
+const formatIoaHex = (ioa: number): string =>
+  `0x${ioa.toString(16).toUpperCase().padStart(6, '0')}`;
 
 const formatEndpoint = (ep: { ip: string; port: number } | null): string =>
   ep ? `${ep.ip}:${ep.port}` : '-';
@@ -1161,8 +1164,8 @@ const IEC104: React.FC = () => {
         messageApi.error(`请完善来源点位 ${draft.sourceLabel} 的标签`);
         return;
       }
-      if (!Number.isInteger(draft.ioa) || draft.ioa < 0 || draft.ioa > MAX_IOA) {
-        messageApi.error(`点位 ${tag} 的 IOA 必须为 0 ~ ${MAX_IOA} 的整数`);
+      if (!Number.isInteger(draft.ioa) || draft.ioa < 1 || draft.ioa > MAX_IOA) {
+        messageApi.error(`点位 ${tag} 的 IOA 必须为 1 ~ ${MAX_IOA} 的整数`);
         return;
       }
       if (!draft.point_type) {
@@ -1285,7 +1288,8 @@ const IEC104: React.FC = () => {
       title: 'IOA (信息体地址)',
       dataIndex: 'ioa',
       key: 'ioa',
-      width: 140,
+      width: 180,
+      render: (ioa: number) => `${ioa} (${formatIoaHex(ioa)})`,
     },
     {
       title: '类型 (Type)',
@@ -1389,7 +1393,7 @@ const IEC104: React.FC = () => {
       render: (value: number, record) => (
         <InputNumber
           size="small"
-          min={0}
+          min={1}
           max={MAX_IOA}
           style={{ width: '100%' }}
           value={value}
@@ -1668,7 +1672,7 @@ const IEC104: React.FC = () => {
                 loading={realtimeLoading}
                 pagination={false}
                 size="small"
-                scroll={{ x: 1040 }}
+                scroll={{ x: 1080 }}
                 locale={{ emptyText: selectedConn ? '暂无点位数据' : '请先选择连接' }}
               />
             </div>
