@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Card,
+  Checkbox,
   Descriptions,
   Form,
   Input,
@@ -35,11 +36,20 @@ import type {
   AgcMemberConfig,
   AgcSignalSpec,
   AgcValueSpec,
+  DcEndpoint,
 } from '../../adapters';
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
-import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
+import {
+  ControlGroupRoutesError,
+  buildControlDataBusRoutes,
+  saveControlGroupWithOptionalRoutes,
+} from '../../utils/control-auto-routing';
+import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
+import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 
 const { Text } = Typography;
+
+const AGC_MODULE_NAME = 'AGC';
 
 const STATE_MAP: Record<number, { label: string; color: string }> = {
   0: { label: 'UNSPECIFIED', color: 'default' },
@@ -221,6 +231,7 @@ type DataBusEndpointOption = {
   value: string;
   label: string;
   tag: string;
+  moduleName: string;
   connName: string;
 };
 
@@ -232,6 +243,17 @@ type DataBusConnectionOption = {
 
 type MemberTagPickerKey = 'p_meas' | 'p_set' | 'base_tag';
 
+type MemberRouteDraft = {
+  createRoutes: boolean;
+  endpoints: Partial<Record<MemberTagPickerKey, DcEndpoint>>;
+};
+
+const buildDataBusEndpointValue = (endpoint: DcEndpoint): string => JSON.stringify([
+  endpoint.module_name,
+  endpoint.conn_name,
+  endpoint.tag,
+]);
+
 const AGC: React.FC = () => {
   const [groups, setGroups] = useState<AgcGroupInfo[]>([]);
   const [selectedGroupName, setSelectedGroupName] = useState<string | null>(null);
@@ -241,10 +263,15 @@ const AGC: React.FC = () => {
   const [editingGroup, setEditingGroup] = useState<AgcGroupConfig | null>(null);
   const [editingMemberIndex, setEditingMemberIndex] = useState<number | null>(null);
   const [membersDraft, setMembersDraft] = useState<AgcMemberConfig[]>([]);
+  const [memberRouteDrafts, setMemberRouteDrafts] = useState<MemberRouteDraft[]>([]);
   const [dataBusConnectionOptions, setDataBusConnectionOptions] = useState<DataBusConnectionOption[]>([]);
   const [dataBusEndpointOptions, setDataBusEndpointOptions] = useState<DataBusEndpointOption[]>([]);
   const [dataBusEndpointLoading, setDataBusEndpointLoading] = useState(false);
   const [memberConnectionPickerValue, setMemberConnectionPickerValue] = useState<string>();
+  const [createMemberRoutes, setCreateMemberRoutes] = useState(false);
+  const [memberRouteEndpoints, setMemberRouteEndpoints] = useState<
+    Partial<Record<MemberTagPickerKey, DcEndpoint>>
+  >({});
   const [memberTagPickerValues, setMemberTagPickerValues] = useState<
     Partial<Record<MemberTagPickerKey, string>>
   >({});
@@ -329,9 +356,14 @@ const AGC: React.FC = () => {
           try {
             const connTags = await api.dcGetConnTags(connection.conn_id);
             return connTags.tags.map((tag) => ({
-              value: `${connection.conn_id}:${tag}`,
+              value: buildDataBusEndpointValue({
+                module_name: connection.module_name,
+                conn_name: connection.conn_name,
+                tag,
+              }),
               label: `${connection.module_name}/${connection.conn_name} : ${tag}`,
               tag,
+              moduleName: connection.module_name,
               connName: connection.conn_name,
             }));
           } catch {
@@ -379,10 +411,25 @@ const AGC: React.FC = () => {
   const handleSelectMemberEndpoint = useCallback(
     (picker: MemberTagPickerKey, endpointValue: string | undefined) => {
       setMemberTagPickerValues((prev) => ({ ...prev, [picker]: endpointValue }));
-      if (!endpointValue) return;
+      if (!endpointValue) {
+        setMemberRouteEndpoints((prev) => {
+          const next = { ...prev };
+          delete next[picker];
+          return next;
+        });
+        return;
+      }
 
       const selected = dataBusEndpointOptions.find((item) => item.value === endpointValue);
       if (!selected) return;
+      setMemberRouteEndpoints((prev) => ({
+        ...prev,
+        [picker]: {
+          module_name: selected.moduleName,
+          conn_name: selected.connName,
+          tag: selected.tag,
+        },
+      }));
       const memberName = String(memberForm.getFieldValue('member_name') ?? '').trim();
       if (!memberName) {
         memberForm.setFieldValue('member_name', selected.connName);
@@ -410,6 +457,7 @@ const AGC: React.FC = () => {
   const openCreateGroup = useCallback(() => {
     setEditingGroup(null);
     setMembersDraft([]);
+    setMemberRouteDrafts([]);
     groupForm.resetFields();
     groupForm.setFieldsValue(buildEmptyConfig());
     setGroupModalOpen(true);
@@ -426,6 +474,7 @@ const AGC: React.FC = () => {
     };
     setEditingGroup(config);
     setMembersDraft(config.members);
+    setMemberRouteDrafts(config.members.map(() => ({ createRoutes: false, endpoints: {} })));
     groupForm.resetFields();
     groupForm.setFieldsValue({
       group_name: config.group_name,
@@ -473,6 +522,7 @@ const AGC: React.FC = () => {
   }, [messageApi, refreshGroups, selectedGroupName]);
 
   const handleGroupSubmit = useCallback(async () => {
+    let submittedConfig: AgcGroupConfig | null = null;
     try {
       const values = await groupForm.validateFields();
       const config: AgcGroupConfig = {
@@ -491,12 +541,62 @@ const AGC: React.FC = () => {
         })),
         outputs: normalizeOutputs(values.outputs),
       };
+      submittedConfig = config;
       const duplicateTags = findDuplicateGroupEndpointTags(config);
       if (duplicateTags.length > 0) {
         throw new Error(`同一控制组内 DataBus tag 不能重复: ${duplicateTags.join('；')}`);
       }
+      const routeBindings = memberRouteDrafts.flatMap<ControlDataBusBinding>((routeDraft, index) => {
+        if (!routeDraft?.createRoutes) return [];
+        const member = config.members[index];
+        if (!member) return [];
+
+        const bindings: ControlDataBusBinding[] = [];
+        if (routeDraft.endpoints.p_meas && member.p_meas?.tag) {
+          bindings.push({
+            direction: 'input',
+            groupTag: member.p_meas.tag,
+            external: routeDraft.endpoints.p_meas,
+          });
+        }
+        if (member.controllable && routeDraft.endpoints.p_set && member.p_set?.signal?.tag) {
+          bindings.push({
+            direction: 'output',
+            groupTag: member.p_set.signal.tag,
+            external: routeDraft.endpoints.p_set,
+          });
+        }
+        if (
+          member.controllable
+          && routeDraft.endpoints.base_tag
+          && member.p_set?.mode === 2
+          && member.p_set.delta_base === 3
+          && member.p_set.base_tag
+        ) {
+          bindings.push({
+            direction: 'input',
+            groupTag: member.p_set.base_tag,
+            external: routeDraft.endpoints.base_tag,
+          });
+        }
+        return bindings;
+      });
+      const routes = buildControlDataBusRoutes({
+        moduleName: AGC_MODULE_NAME,
+        groupName: config.group_name,
+        bindings: routeBindings,
+      });
       const createOnly = !editingGroup;
-      const saveGroup = () => api.agcUpsertGroup(config, createOnly).then(() => undefined);
+      let routesSubmitted = 0;
+      const saveGroup = async () => {
+        const result = await saveControlGroupWithOptionalRoutes({
+          createRoutes: routes.length > 0,
+          routes,
+          saveGroup: () => api.agcUpsertGroup(config, createOnly),
+          saveRoutes: (nextRoutes) => api.dcUpsertRoutes(nextRoutes, false),
+        });
+        routesSubmitted = result.routesSubmitted;
+      };
       const restartResult = createOnly
         ? await runWithRuntimeRestart({
           initialState: null,
@@ -506,25 +606,83 @@ const AGC: React.FC = () => {
           failOnRestartError: false,
         })
         : await runSelectedGroupStopped(saveGroup, config.group_name);
+      console.info('AGC 控制组保存完成', {
+        groupName: config.group_name,
+        routeCount: routesSubmitted,
+      });
       if (restartResult.restartError) {
-        messageApi.warning(`控制组配置已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+        messageApi.warning(
+          routesSubmitted > 0
+            ? `控制组配置和 ${routesSubmitted} 条 DataCenter 路由已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`
+            : `控制组配置已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`,
+        );
       } else if (restartResult.stoppedBeforeRun) {
-        messageApi.success('控制组已更新并重新启动成功');
+        messageApi.success(
+          routesSubmitted > 0
+            ? `控制组已更新，提交 ${routesSubmitted} 条 DataCenter 路由并重新启动成功`
+            : '控制组已更新并重新启动成功',
+        );
       } else {
-        messageApi.success(createOnly ? '控制组创建成功' : '控制组更新成功');
+        const savedText = createOnly ? '控制组创建成功' : '控制组更新成功';
+        messageApi.success(
+          routesSubmitted > 0
+            ? `${savedText}，并提交 ${routesSubmitted} 条 DataCenter 路由`
+            : savedText,
+        );
       }
       setGroupModalOpen(false);
       await refreshGroups();
       setSelectedGroupName(config.group_name);
     } catch (e) {
+      const routeSaveError = e instanceof ControlGroupRoutesError
+        ? e
+        : e instanceof RuntimeRestartError && e.operationError instanceof ControlGroupRoutesError
+          ? e.operationError
+          : null;
+      if (routeSaveError) {
+        const restartError = e instanceof RuntimeRestartError ? e.restartError : null;
+        const formConfig = groupForm.getFieldsValue(true);
+        const groupName = submittedConfig?.group_name ?? String(formConfig.group_name ?? '').trim();
+        console.error('AGC 控制组已保存，但创建 DataCenter 路由失败', {
+          groupName,
+          error: routeSaveError.routeError,
+          restartError,
+        });
+        messageApi.error(`控制组已保存，路由创建失败: ${formatErrorText(routeSaveError.routeError)}`);
+        if (restartError) {
+          messageApi.warning(`控制组恢复运行失败: ${formatErrorText(restartError)}`);
+        }
+        if (submittedConfig) {
+          const savedConfig = submittedConfig;
+          setGroups((prev) => prev.map((group) => (
+            group.config?.group_name === groupName
+              ? { ...group, config: savedConfig }
+              : group
+          )));
+        }
+        setGroupModalOpen(false);
+        await refreshGroups();
+        setSelectedGroupName(groupName);
+        return;
+      }
       messageApi.error(`操作失败: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, [editingGroup, groupForm, membersDraft, messageApi, refreshGroups, runSelectedGroupStopped]);
+  }, [
+    editingGroup,
+    groupForm,
+    memberRouteDrafts,
+    membersDraft,
+    messageApi,
+    refreshGroups,
+    runSelectedGroupStopped,
+  ]);
 
   const openCreateMember = useCallback(() => {
     setEditingMemberIndex(null);
     setMemberConnectionPickerValue(undefined);
     setMemberTagPickerValues({});
+    setCreateMemberRoutes(false);
+    setMemberRouteEndpoints({});
     memberForm.resetFields();
     memberForm.setFieldsValue(cloneMember(DEFAULT_MEMBER));
     setMemberModalOpen(true);
@@ -534,14 +692,28 @@ const AGC: React.FC = () => {
   const openEditMember = useCallback((index: number) => {
     const member = membersDraft[index];
     if (!member) return;
+    const routeDraft = memberRouteDrafts[index];
+    const routeEndpoints = routeDraft?.endpoints ?? {};
     setEditingMemberIndex(index);
     setMemberConnectionPickerValue(undefined);
-    setMemberTagPickerValues({});
+    setMemberTagPickerValues({
+      p_meas: routeEndpoints.p_meas
+        ? buildDataBusEndpointValue(routeEndpoints.p_meas)
+        : undefined,
+      p_set: routeEndpoints.p_set
+        ? buildDataBusEndpointValue(routeEndpoints.p_set)
+        : undefined,
+      base_tag: routeEndpoints.base_tag
+        ? buildDataBusEndpointValue(routeEndpoints.base_tag)
+        : undefined,
+    });
+    setCreateMemberRoutes(routeDraft?.createRoutes ?? false);
+    setMemberRouteEndpoints(routeEndpoints);
     memberForm.resetFields();
     memberForm.setFieldsValue(cloneMember(member));
     setMemberModalOpen(true);
     void refreshDataBusEndpointOptions();
-  }, [memberForm, membersDraft, refreshDataBusEndpointOptions]);
+  }, [memberForm, memberRouteDrafts, membersDraft, refreshDataBusEndpointOptions]);
 
   const handleMemberSubmit = useCallback(async () => {
     try {
@@ -556,20 +728,33 @@ const AGC: React.FC = () => {
         p_meas: cloneSignal(values.p_meas),
         p_set: cloneValueSpec(values.p_set),
       };
+      const nextRouteDraft: MemberRouteDraft = {
+        createRoutes: createMemberRoutes,
+        endpoints: { ...memberRouteEndpoints },
+      };
       setMembersDraft((prev) => {
         if (editingMemberIndex === null) {
           return [...prev, nextMember];
         }
         return prev.map((member, index) => (index === editingMemberIndex ? nextMember : member));
       });
+      setMemberRouteDrafts((prev) => {
+        if (editingMemberIndex === null) {
+          return [...prev, nextRouteDraft];
+        }
+        const next = [...prev];
+        next[editingMemberIndex] = nextRouteDraft;
+        return next;
+      });
       setMemberModalOpen(false);
     } catch (e) {
       messageApi.error(`成员保存失败: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, [editingMemberIndex, memberForm, messageApi]);
+  }, [createMemberRoutes, editingMemberIndex, memberForm, memberRouteEndpoints, messageApi]);
 
   const handleDeleteMember = useCallback((index: number) => {
     setMembersDraft((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
+    setMemberRouteDrafts((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
   }, []);
 
   const memberColumns: ColumnsType<AgcMemberConfig> = [
@@ -1046,8 +1231,19 @@ const AGC: React.FC = () => {
       >
         <Form form={memberForm} layout="vertical" size="small">
           <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-            可从数据总线快速选择成员点位来回填 tag，方便配置；最终数据映射仍需在数据总线中设置，同名 tag 请以数据总线映射为准。
+            可从数据总线快速选择成员点位来回填 tag；未开启自动路由时，仍需在数据总线中手动设置最终映射。
           </Text>
+          <div style={{ marginBottom: 16 }}>
+            <Checkbox
+              checked={createMemberRoutes}
+              onChange={(event) => setCreateMemberRoutes(event.target.checked)}
+            >
+              保存控制组时自动创建 DataCenter 路由
+            </Checkbox>
+            <Text type="secondary" style={{ display: 'block', marginTop: 6 }}>
+              仅为本次从下方选择的点位增量创建路由：p_meas/base_tag → AGC，AGC p_set → 外部点位。已有路由不会自动删除。
+            </Text>
+          </div>
 
           <div style={{ display: 'flex', gap: 16 }}>
             <div style={{ flex: 1 }}>

@@ -36,13 +36,22 @@ import type {
   AvcSignalSpec,
   AvcValueSpec,
   AvcVoltageControlConfig,
+  DcEndpoint,
   DcPointUpdate,
 } from '../../adapters';
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
+import {
+  ControlGroupRoutesError,
+  buildControlDataBusRoutes,
+  saveControlGroupWithOptionalRoutes,
+} from '../../utils/control-auto-routing';
+import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
-import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
+import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 
 const { Paragraph, Text } = Typography;
+
+const AVC_MODULE_NAME = 'AVC';
 
 type AvcCommandMode = 'voltage' | 'q_total';
 
@@ -61,6 +70,7 @@ type DataBusEndpointOption = {
   value: string;
   label: string;
   tag: string;
+  moduleName: string;
   connName: string;
 };
 
@@ -72,6 +82,14 @@ type DataBusConnectionOption = {
 
 type GroupTagPickerKey = 'voltage_meas' | 'voltage_cmd' | 'q_total_cmd' | 'q_total_base_tag';
 type MemberTagPickerKey = 'q_meas' | 'q_set' | 'base_tag';
+
+type GroupRouteEndpoints = Partial<Record<GroupTagPickerKey, DcEndpoint>>;
+type MemberRouteEndpoints = Partial<Record<MemberTagPickerKey, DcEndpoint>>;
+
+type MemberRouteDraft = {
+  enabled: boolean;
+  endpoints: MemberRouteEndpoints;
+};
 
 const STATE_MAP: Record<number, { label: string; color: string }> = {
   0: { label: '未指定', color: 'default' },
@@ -438,11 +456,16 @@ const AVC: React.FC = () => {
   const [editingGroup, setEditingGroup] = useState<AvcGroupConfig | null>(null);
   const [editingMemberIndex, setEditingMemberIndex] = useState<number | null>(null);
   const [membersDraft, setMembersDraft] = useState<AvcMemberConfig[]>([]);
+  const [memberRouteDrafts, setMemberRouteDrafts] = useState<MemberRouteDraft[]>([]);
   const [dataBusConnectionOptions, setDataBusConnectionOptions] = useState<DataBusConnectionOption[]>([]);
   const [dataBusEndpointOptions, setDataBusEndpointOptions] = useState<DataBusEndpointOption[]>([]);
   const [dataBusEndpointLoading, setDataBusEndpointLoading] = useState(false);
+  const [groupAutoRouteEnabled, setGroupAutoRouteEnabled] = useState(false);
+  const [groupRouteEndpoints, setGroupRouteEndpoints] = useState<GroupRouteEndpoints>({});
   const [groupTagPickerValues, setGroupTagPickerValues] = useState<Partial<Record<GroupTagPickerKey, string>>>({});
   const [memberConnectionPickerValue, setMemberConnectionPickerValue] = useState<string>();
+  const [memberAutoRouteEnabled, setMemberAutoRouteEnabled] = useState(false);
+  const [memberRouteEndpoints, setMemberRouteEndpoints] = useState<MemberRouteEndpoints>({});
   const [memberTagPickerValues, setMemberTagPickerValues] = useState<
     Partial<Record<MemberTagPickerKey, string>>
   >({});
@@ -539,6 +562,7 @@ const AVC: React.FC = () => {
               value: `${connection.conn_id}:${tag}`,
               label: `${connection.module_name}/${connection.conn_name} : ${tag}`,
               tag,
+              moduleName: connection.module_name,
               connName: connection.conn_name,
             }));
           } catch {
@@ -616,13 +640,32 @@ const AVC: React.FC = () => {
     (picker: GroupTagPickerKey, endpointValue: string | undefined) => {
       setGroupTagPickerValues((prev) => ({ ...prev, [picker]: endpointValue }));
       if (!endpointValue) {
+        setGroupRouteEndpoints((prev) => {
+          const next = { ...prev };
+          delete next[picker];
+          return next;
+        });
         return;
       }
 
       const selected = dataBusEndpointOptions.find((item) => item.value === endpointValue);
       if (!selected) {
+        setGroupRouteEndpoints((prev) => {
+          const next = { ...prev };
+          delete next[picker];
+          return next;
+        });
         return;
       }
+
+      setGroupRouteEndpoints((prev) => ({
+        ...prev,
+        [picker]: {
+          module_name: selected.moduleName,
+          conn_name: selected.connName,
+          tag: selected.tag,
+        },
+      }));
 
       switch (picker) {
         case 'voltage_meas':
@@ -678,13 +721,32 @@ const AVC: React.FC = () => {
     (picker: MemberTagPickerKey, endpointValue: string | undefined) => {
       setMemberTagPickerValues((prev) => ({ ...prev, [picker]: endpointValue }));
       if (!endpointValue) {
+        setMemberRouteEndpoints((prev) => {
+          const next = { ...prev };
+          delete next[picker];
+          return next;
+        });
         return;
       }
 
       const selected = dataBusEndpointOptions.find((item) => item.value === endpointValue);
       if (!selected) {
+        setMemberRouteEndpoints((prev) => {
+          const next = { ...prev };
+          delete next[picker];
+          return next;
+        });
         return;
       }
+
+      setMemberRouteEndpoints((prev) => ({
+        ...prev,
+        [picker]: {
+          module_name: selected.moduleName,
+          conn_name: selected.connName,
+          tag: selected.tag,
+        },
+      }));
 
       const memberName = String(memberForm.getFieldValue('member_name') ?? '').trim();
       if (!memberName) {
@@ -711,6 +773,9 @@ const AVC: React.FC = () => {
   const openCreateGroupForm = useCallback(() => {
     setEditingGroup(null);
     setMembersDraft([]);
+    setMemberRouteDrafts([]);
+    setGroupAutoRouteEnabled(false);
+    setGroupRouteEndpoints({});
     setGroupTagPickerValues({});
     groupForm.resetFields();
     groupForm.setFieldsValue(buildEmptyGroupForm());
@@ -735,6 +800,9 @@ const AVC: React.FC = () => {
 
     setEditingGroup(selectedConfig);
     setMembersDraft(selectedConfig.members.map((member) => cloneMember(member)));
+    setMemberRouteDrafts(selectedConfig.members.map(() => ({ enabled: false, endpoints: {} })));
+    setGroupAutoRouteEnabled(false);
+    setGroupRouteEndpoints({});
     setGroupTagPickerValues({});
     groupForm.resetFields();
     groupForm.setFieldsValue(buildGroupFormValues(selectedConfig));
@@ -757,6 +825,8 @@ const AVC: React.FC = () => {
   const openCreateMember = useCallback(() => {
     setEditingMemberIndex(null);
     setMemberConnectionPickerValue(undefined);
+    setMemberAutoRouteEnabled(false);
+    setMemberRouteEndpoints({});
     setMemberTagPickerValues({});
     memberForm.resetFields();
     memberForm.setFieldsValue(cloneMember(DEFAULT_MEMBER));
@@ -770,14 +840,32 @@ const AVC: React.FC = () => {
         return;
       }
 
+      const routeDraft = memberRouteDrafts[index] ?? { enabled: false, endpoints: {} };
+      const pickerValues: Partial<Record<MemberTagPickerKey, string>> = {};
+      (Object.entries(routeDraft.endpoints) as Array<[MemberTagPickerKey, DcEndpoint]>).forEach(
+        ([picker, endpoint]) => {
+          const option = dataBusEndpointOptions.find(
+            (item) =>
+              item.moduleName === endpoint.module_name
+              && item.connName === endpoint.conn_name
+              && item.tag === endpoint.tag,
+          );
+          if (option) {
+            pickerValues[picker] = option.value;
+          }
+        },
+      );
+
       setEditingMemberIndex(index);
       setMemberConnectionPickerValue(undefined);
-      setMemberTagPickerValues({});
+      setMemberAutoRouteEnabled(routeDraft.enabled);
+      setMemberRouteEndpoints({ ...routeDraft.endpoints });
+      setMemberTagPickerValues(pickerValues);
       memberForm.resetFields();
       memberForm.setFieldsValue(cloneMember(member));
       setMemberModalOpen(true);
     },
-    [memberForm, membersDraft],
+    [dataBusEndpointOptions, memberForm, memberRouteDrafts, membersDraft],
   );
 
   const handleDeleteGroup = useCallback(
@@ -830,6 +918,9 @@ const AVC: React.FC = () => {
   }, [messageApi, refreshGroups, selectedGroupName]);
 
   const handleGroupSubmit = useCallback(async () => {
+    let savedGroup: AvcGroupInfo | null = null;
+    let savedGroupName = '';
+    let plannedRouteCount = 0;
     try {
       const values = await groupForm.validateFields();
       const config: AvcGroupConfig = {
@@ -852,9 +943,72 @@ const AVC: React.FC = () => {
       };
 
       validateGroupConfig(config);
+      savedGroupName = config.group_name;
 
+      const routeBindings: ControlDataBusBinding[] = [];
+      const addRouteBinding = (
+        direction: ControlDataBusBinding['direction'],
+        groupTag: string | null | undefined,
+        external: DcEndpoint | undefined,
+      ) => {
+        if (!groupTag?.trim() || !external) {
+          return;
+        }
+        routeBindings.push({ direction, groupTag: groupTag.trim(), external });
+      };
+
+      if (groupAutoRouteEnabled) {
+        addRouteBinding('input', config.voltage_meas?.tag, groupRouteEndpoints.voltage_meas);
+        if (config.voltage_cmd) {
+          addRouteBinding('input', config.voltage_cmd.tag, groupRouteEndpoints.voltage_cmd);
+        }
+        if (config.q_total_cmd) {
+          addRouteBinding('input', config.q_total_cmd.signal?.tag, groupRouteEndpoints.q_total_cmd);
+          if (config.q_total_cmd.mode === 2 && config.q_total_cmd.delta_base === 3) {
+            addRouteBinding(
+              'input',
+              config.q_total_cmd.base_tag,
+              groupRouteEndpoints.q_total_base_tag,
+            );
+          }
+        }
+      }
+
+      config.members.forEach((member, index) => {
+        const routeDraft = memberRouteDrafts[index];
+        if (!routeDraft?.enabled) {
+          return;
+        }
+
+        addRouteBinding('input', member.q_meas?.tag, routeDraft.endpoints.q_meas);
+        if (member.q_set) {
+          addRouteBinding('output', member.q_set.signal?.tag, routeDraft.endpoints.q_set);
+          if (member.q_set.mode === 2 && member.q_set.delta_base === 3) {
+            addRouteBinding('input', member.q_set.base_tag, routeDraft.endpoints.base_tag);
+          }
+        }
+      });
+
+      const routes = buildControlDataBusRoutes({
+        moduleName: AVC_MODULE_NAME,
+        groupName: config.group_name,
+        bindings: routeBindings,
+      });
+      plannedRouteCount = routes.length;
+      const createRoutes = groupAutoRouteEnabled || memberRouteDrafts.some((draft) => draft.enabled);
       const createOnly = !editingGroup;
-      const saveGroup = () => api.avcUpsertGroup(config, createOnly).then(() => undefined);
+      let routesSubmitted = 0;
+      const saveGroup = async () => {
+        const result = await saveControlGroupWithOptionalRoutes({
+          createRoutes,
+          routes,
+          saveGroup: async () => {
+            savedGroup = await api.avcUpsertGroup(config, createOnly);
+          },
+          saveRoutes: (nextRoutes) => api.dcUpsertRoutes(nextRoutes, false),
+        });
+        routesSubmitted = result.routesSubmitted;
+      };
       const restartResult = createOnly
         ? await runWithRuntimeRestart({
           initialState: null,
@@ -864,20 +1018,74 @@ const AVC: React.FC = () => {
           failOnRestartError: false,
         })
         : await runSelectedGroupStopped(saveGroup, config.group_name);
+      console.info('AVC 控制组保存完成', {
+        控制组: config.group_name,
+        操作: createOnly ? '创建' : '更新',
+        自动路由开关: createRoutes,
+        路由数量: routesSubmitted,
+      });
+      const routeSummary = routesSubmitted > 0 ? `，并提交 ${routesSubmitted} 条 DataCenter 路由` : '';
       if (restartResult.restartError) {
-        messageApi.warning(`AVC 控制组配置已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+        messageApi.warning(
+          `AVC 控制组配置已保存${routeSummary}，但重新启动失败: ${formatErrorText(restartResult.restartError)}`,
+        );
       } else if (restartResult.stoppedBeforeRun) {
-        messageApi.success('AVC 控制组已更新并重新启动成功');
+        messageApi.success(`AVC 控制组已更新并重新启动成功${routeSummary}`);
       } else {
-        messageApi.success(createOnly ? 'AVC 控制组创建成功' : 'AVC 控制组更新成功');
+        messageApi.success(`${createOnly ? 'AVC 控制组创建成功' : 'AVC 控制组更新成功'}${routeSummary}`);
       }
       setGroupModalOpen(false);
       await refreshGroups();
       setSelectedGroupName(config.group_name);
     } catch (error) {
+      const routeSaveError =
+        error instanceof ControlGroupRoutesError
+          ? error
+          : error instanceof RuntimeRestartError
+              && error.operationError instanceof ControlGroupRoutesError
+            ? error.operationError
+            : null;
+      if (routeSaveError) {
+        if (savedGroup) {
+          const savedGroupSnapshot = savedGroup;
+          setGroups((prev) => {
+            const existingIndex = prev.findIndex(
+              (item) => item.config?.group_name === savedGroupName,
+            );
+            if (existingIndex < 0) {
+              return [...prev, savedGroupSnapshot];
+            }
+            return prev.map((item, index) => (index === existingIndex ? savedGroupSnapshot : item));
+          });
+        }
+        setGroupModalOpen(false);
+        setSelectedGroupName(savedGroupName);
+        console.error('AVC 控制组已保存，但创建 DataCenter 路由失败', {
+          控制组: savedGroupName,
+          计划路由数量: plannedRouteCount,
+          错误: routeSaveError.routeError,
+        });
+        messageApi.error(`AVC 控制组已保存，路由创建失败: ${formatErrorText(routeSaveError.routeError)}`);
+        if (error instanceof RuntimeRestartError) {
+          messageApi.warning(`控制组恢复启动失败: ${formatErrorText(error.restartError)}`);
+        }
+        await refreshGroups();
+        setSelectedGroupName(savedGroupName);
+        return;
+      }
       messageApi.error(`保存 AVC 控制组失败: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [editingGroup, groupForm, membersDraft, messageApi, refreshGroups, runSelectedGroupStopped]);
+  }, [
+    editingGroup,
+    groupAutoRouteEnabled,
+    groupForm,
+    groupRouteEndpoints,
+    memberRouteDrafts,
+    membersDraft,
+    messageApi,
+    refreshGroups,
+    runSelectedGroupStopped,
+  ]);
 
   const handleRenameGroup = useCallback(async () => {
     try {
@@ -928,14 +1136,26 @@ const AVC: React.FC = () => {
 
         return prev.map((member, index) => (index === editingMemberIndex ? nextMember : member));
       });
+      const nextRouteDraft: MemberRouteDraft = {
+        enabled: memberAutoRouteEnabled,
+        endpoints: { ...memberRouteEndpoints },
+      };
+      setMemberRouteDrafts((prev) => {
+        if (editingMemberIndex === null) {
+          return [...prev, nextRouteDraft];
+        }
+
+        return prev.map((draft, index) => (index === editingMemberIndex ? nextRouteDraft : draft));
+      });
       setMemberModalOpen(false);
     } catch (error) {
       messageApi.error(`保存成员失败: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [editingMemberIndex, memberForm, messageApi]);
+  }, [editingMemberIndex, memberAutoRouteEnabled, memberForm, memberRouteEndpoints, messageApi]);
 
   const handleDeleteMember = useCallback((index: number) => {
     setMembersDraft((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
+    setMemberRouteDrafts((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
   }, []);
 
   const editDisabled = !selectedGroup || selectedGroup.state !== 1;
@@ -1387,6 +1607,16 @@ const AVC: React.FC = () => {
             </div>
           </div>
 
+          <div style={{ marginBottom: 16 }}>
+            <Space>
+              <Switch checked={groupAutoRouteEnabled} onChange={setGroupAutoRouteEnabled} />
+              <Text>保存时自动创建组级 DataCenter 路由</Text>
+            </Space>
+            <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
+              仅为本次从数据总线选择的组级点位增量创建路由，方向为外部点位 → AVC；已有路由不会自动删除。
+            </Text>
+          </div>
+
           <Card title="voltage_meas" size="small" bordered style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', gap: 16 }}>
               <div style={{ flex: 1 }}>
@@ -1631,9 +1861,15 @@ const AVC: React.FC = () => {
         destroyOnClose
       >
         <Form form={memberForm} layout="vertical" size="small">
-          <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-            可从数据总线快速选择成员点位来回填 tag。最终路由关系仍需在数据总线中配置。
-          </Text>
+          <div style={{ marginBottom: 16 }}>
+            <Space>
+              <Switch checked={memberAutoRouteEnabled} onChange={setMemberAutoRouteEnabled} />
+              <Text>保存控制组时自动创建该成员的 DataCenter 路由</Text>
+            </Space>
+            <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
+              q_meas 与 base_tag 为外部点位 → AVC，q_set 为 AVC → 外部点位；仅增量创建，不自动删除已有路由。
+            </Text>
+          </div>
 
           <div style={{ display: 'flex', gap: 16 }}>
             <div style={{ flex: 1 }}>
