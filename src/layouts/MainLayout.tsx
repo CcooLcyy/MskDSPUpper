@@ -6,8 +6,8 @@ import {
   AppstoreOutlined,
   ControlOutlined,
   DashboardOutlined,
+  EllipsisOutlined,
   NodeIndexOutlined,
-  SettingOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -68,8 +68,8 @@ const menuItems = [
   },
   {
     key: '/settings',
-    icon: <SettingOutlined />,
-    label: '设置',
+    icon: <EllipsisOutlined />,
+    label: '更多',
   },
 ];
 
@@ -87,7 +87,7 @@ const MainLayout: React.FC = () => {
               ...item,
               icon: (
                 <Badge dot={hasAvailableUpdate} offset={[2, 1]} className="main-layout-update-badge">
-                  <SettingOutlined />
+                  <EllipsisOutlined />
                 </Badge>
               ),
             }
