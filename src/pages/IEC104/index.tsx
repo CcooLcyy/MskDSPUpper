@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
   Form,
@@ -45,13 +47,23 @@ import {
   isNotFoundError,
 } from '../../utils/connection-copy';
 import { isValidIpv4Address } from '../../utils/network';
-import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
+import {
+  RuntimeRestartError,
+  formatErrorText,
+  runWithRuntimeRestart,
+} from '../../utils/runtime-restart';
 import type {
   DcConnectionInfo,
+  DcEndpoint,
   Iec104LinkConfig,
   Iec104LinkInfo,
   Iec104Point,
 } from '../../adapters';
+import {
+  ImportedPointRoutesError,
+  buildImportedPointRoutes,
+  saveImportedPointsWithOptionalRoutes,
+} from './import-routing';
 
 const { Text } = Typography;
 
@@ -65,6 +77,8 @@ const ROLE_LABELS: Record<number, string> = {
 
 const ROLE_SERVER = 1;
 const ROLE_CLIENT = 2;
+const STATION_ROLE_MASTER = 1;
+const IEC104_MODULE_NAME = 'IEC104';
 const DEFAULT_SERVER_LOCAL_IP = '0.0.0.0';
 const DEFAULT_IEC104_PORT = 2404;
 const IP_ADDRESS_ERROR_MESSAGE = '请输入合法的 IPv4 地址';
@@ -145,6 +159,7 @@ type ImportedPointDraft = Iec104Point & {
   key: string;
   sourceValue: string;
   sourceLabel: string;
+  sourceEndpoint: DcEndpoint;
   ioa_category: IoaCategoryKey;
 };
 
@@ -325,6 +340,14 @@ const formatEndpoint = (ep: { ip: string; port: number } | null): string =>
 const formatApci = (apci: { k: number; w: number; t0: number; t1: number; t2: number; t3: number } | null): string =>
   apci ? `k:${apci.k}, w:${apci.w}, t0:${apci.t0}, t1:${apci.t1}, t2:${apci.t2}, t3:${apci.t3}` : '-';
 
+const isMasterStationConfig = (config: Iec104LinkConfig | null | undefined): boolean =>
+  Boolean(
+    config && (
+      config.station_role === STATION_ROLE_MASTER
+      || (config.station_role === 0 && config.role === ROLE_CLIENT)
+    ),
+  );
+
 // ── Component ──
 
 const IEC104: React.FC = () => {
@@ -343,6 +366,7 @@ const IEC104: React.FC = () => {
   const [importSourceConnId, setImportSourceConnId] = useState<string>();
   const [selectedImportEndpointValues, setSelectedImportEndpointValues] = useState<string[]>([]);
   const [importPointDrafts, setImportPointDrafts] = useState<ImportedPointDraft[]>([]);
+  const [createImportRoutes, setCreateImportRoutes] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const [searchParams] = useSearchParams();
 
@@ -405,6 +429,7 @@ const IEC104: React.FC = () => {
         })),
     [dataBusEndpointOptions, importSourceConnId],
   );
+  const importRoutesTriggerCommands = createImportRoutes && isMasterStationConfig(selectedLink?.config);
 
   // ── Data Loading ──
 
@@ -874,6 +899,7 @@ const IEC104: React.FC = () => {
     setImportSourceConnId(undefined);
     setSelectedImportEndpointValues([]);
     setImportPointDrafts([]);
+    setCreateImportRoutes(false);
     setImportPointModalOpen(true);
     void refreshDataBusEndpointOptions();
   }, [refreshDataBusEndpointOptions]);
@@ -1032,6 +1058,12 @@ const IEC104: React.FC = () => {
             key: value,
             sourceValue: value,
             sourceLabel: sourcePoint.label,
+            sourceEndpoint: {
+              module_name: sourcePoint.moduleName,
+              conn_name: sourcePoint.connName,
+              tag: sourcePoint.tag,
+              conn_id: sourcePoint.connId,
+            },
             tag: buildUniqueImportedPointTag(sourcePoint, usedTags),
             ioa: nextIoa,
             ioa_category: 'custom',
@@ -1117,6 +1149,14 @@ const IEC104: React.FC = () => {
 
     for (const draft of importPointDrafts) {
       const tag = draft.tag.trim();
+      if (
+        createImportRoutes
+        && draft.sourceEndpoint.module_name === IEC104_MODULE_NAME
+        && draft.sourceEndpoint.conn_name === selectedConn
+      ) {
+        messageApi.error(`来源点位 ${draft.sourceLabel} 属于当前 IEC104 连接，不能创建自环路由`);
+        return;
+      }
       if (!tag) {
         messageApi.error(`请完善来源点位 ${draft.sourceLabel} 的标签`);
         return;
@@ -1154,21 +1194,82 @@ const IEC104: React.FC = () => {
       draftIoas.add(draft.ioa);
     }
 
+    const newPoints = [...points, ...normalizedPoints];
+    const importRoutes = buildImportedPointRoutes(
+      importPointDrafts.map((draft) => ({
+        source: draft.sourceEndpoint,
+        targetTag: draft.tag.trim(),
+      })),
+      {
+        moduleName: IEC104_MODULE_NAME,
+        connName: selectedConn,
+      },
+    );
+    let routesCreated = 0;
+
     try {
-      const newPoints = [...points, ...normalizedPoints];
-      const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
+      const restartResult = await runSelectedLinkStopped(async () => {
+        const saveResult = await saveImportedPointsWithOptionalRoutes({
+          createRoutes: createImportRoutes,
+          routes: importRoutes,
+          savePointTable: () => api.iec104UpsertPointTable(selectedConn, newPoints, true),
+          saveRoutes: (routes) => api.dcUpsertRoutes(routes, false),
+        });
+        routesCreated = saveResult.routesCreated;
+      });
       setPoints(newPoints);
       setImportPointModalOpen(false);
-      messageApi.success(`已导入 ${normalizedPoints.length} 个点位`);
+      console.info('IEC104 从现有点位添加完成', {
+        connName: selectedConn,
+        pointCount: normalizedPoints.length,
+        routeCount: routesCreated,
+      });
+      messageApi.success(
+        routesCreated > 0
+          ? `已导入 ${normalizedPoints.length} 个点位，并提交 ${routesCreated} 条 DataCenter 路由`
+          : `已导入 ${normalizedPoints.length} 个点位`,
+      );
       if (restartResult.restartError) {
         messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
       } else if (restartResult.stoppedBeforeRun) {
         messageApi.success('点表已保存并重新启动链路');
       }
     } catch (e) {
+      const routeSaveError =
+        e instanceof ImportedPointRoutesError
+          ? e
+          : e instanceof RuntimeRestartError && e.operationError instanceof ImportedPointRoutesError
+            ? e.operationError
+            : null;
+      if (routeSaveError) {
+        setPoints(newPoints);
+        setImportPointModalOpen(false);
+        console.error('IEC104 从现有点位添加时创建 DataCenter 路由失败，点表已保存', {
+          connName: selectedConn,
+          pointCount: normalizedPoints.length,
+          error: routeSaveError.routeError,
+        });
+        messageApi.error(`点表已保存，路由创建失败: ${formatErrorText(routeSaveError.routeError)}`);
+        if (e instanceof RuntimeRestartError) {
+          messageApi.warning(`链路恢复启动失败: ${formatErrorText(e.restartError)}`);
+        }
+        return;
+      }
+      console.error('IEC104 从现有点位添加失败', {
+        connName: selectedConn,
+        error: e,
+      });
       messageApi.error(`导入点位失败: ${e}`);
     }
-  }, [importPointDrafts, importReservedTagSet, messageApi, points, selectedConn, runSelectedLinkStopped]);
+  }, [
+    createImportRoutes,
+    importPointDrafts,
+    importReservedTagSet,
+    messageApi,
+    points,
+    runSelectedLinkStopped,
+    selectedConn,
+  ]);
 
   // ── Point Table Columns ──
 
@@ -1918,6 +2019,27 @@ const IEC104: React.FC = () => {
               </div>
             </Col>
           </Row>
+
+          <div>
+            <Checkbox
+              checked={createImportRoutes}
+              onChange={(event) => setCreateImportRoutes(event.target.checked)}
+            >
+              同时创建 DataCenter 路由（来源点位 → 当前 IEC104 点位）
+            </Checkbox>
+            <Text type="secondary" style={{ display: 'block', marginTop: 6 }}>
+              路由使用下方最终确认的 Tag，不会自动转换数据类型或工程量单位。
+            </Text>
+          </div>
+
+          {importRoutesTriggerCommands ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="当前 IEC104 连接为 MASTER"
+              description="来源点位到当前 IEC104 点位的路由可能触发遥控或遥调命令，请确认路由方向和点类型。"
+            />
+          ) : null}
 
           <div className="protocol-table-scroll">
             <Table

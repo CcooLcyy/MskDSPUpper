@@ -569,7 +569,24 @@ export const browserApi: typeof tauriApi = {
       return srcMatches && dstMatches && srcTagMatches && dstTagMatches;
     })),
   dcUpsertRoutes: async (nextRoutes: DcRoute[], replace: boolean) => {
-    routes = replace ? clone(nextRoutes) : clone([...routes, ...nextRoutes]);
+    const mergedRoutes = replace ? clone(nextRoutes) : [...routes, ...nextRoutes];
+    const uniqueRoutes = new Map<string, DcRoute>();
+    for (const route of mergedRoutes) {
+      const key = JSON.stringify({
+        src: {
+          module_name: route.src.module_name,
+          conn_name: route.src.conn_name,
+          tag: route.src.tag,
+        },
+        dst: {
+          module_name: route.dst.module_name,
+          conn_name: route.dst.conn_name,
+          tag: route.dst.tag,
+        },
+      });
+      uniqueRoutes.set(key, route);
+    }
+    routes = clone([...uniqueRoutes.values()]);
   },
   dcDeleteRoutes: async (deleteRoutes: DcRoute[]) => {
     const keys = new Set(deleteRoutes.map((route) => JSON.stringify(route)));
