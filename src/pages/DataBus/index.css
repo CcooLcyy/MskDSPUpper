@@ -1,0 +1,11 @@
+.data-bus-config-grid {
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .data-bus-config-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(260px, 0.75fr) minmax(360px, 1fr);
+    overflow: auto;
+  }
+}

@@ -3,32 +3,33 @@ import {
   Button,
   Card,
   Form,
+  Input,
   List,
   message,
   Modal,
   Popconfirm,
   Select,
   Space,
+  Switch,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from 'antd';
 import {
+  CheckCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SearchOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { api } from '../../adapters';
-import type {
-  DcConnectionInfo,
-  DcRoute,
-  DcPointUpdate,
-} from '../../adapters';
+import type { DcConnectionInfo, DcPointUpdate, DcRoute } from '../../adapters';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
+import './index.css';
 
 const { Text } = Typography;
-
-// ── Constants ──
 
 const QUALITY_MAP: Record<number, { label: string; color: string }> = {
   0: { label: '未指定', color: 'default' },
@@ -37,670 +38,259 @@ const QUALITY_MAP: Record<number, { label: string; color: string }> = {
   3: { label: '不确定', color: 'orange' },
 };
 
-// ── Helpers ──
-
-const resolveConnName = (connId: number, conns: DcConnectionInfo[]): string => {
-  const c = conns.find((item) => item.conn_id === connId);
-  return c ? c.conn_name : `连接_${connId}`;
-};
-
-type RouteEndpointOption = {
-  value: string;
-  label: string;
-  endpoint: DcRoute['src'];
-};
-
-const routeEndpointKey = (endpoint: DcRoute['src']): string =>
+const endpointKey = (endpoint: DcRoute['src']): string =>
   `${endpoint.module_name}\u0000${endpoint.conn_name}\u0000${endpoint.tag}`;
 
-const routeKey = (route: DcRoute): string =>
-  `${routeEndpointKey(route.src)}->${routeEndpointKey(route.dst)}`;
+const routeKey = (route: DcRoute): string => `${endpointKey(route.src)}->${endpointKey(route.dst)}`;
 
-const encodeRouteEndpointOption = (endpoint: DcRoute['src']): string =>
-  JSON.stringify(endpoint);
+const encodeEndpoint = (endpoint: DcRoute['src']): string => JSON.stringify(endpoint);
+const decodeEndpoint = (value: string): DcRoute['src'] => JSON.parse(value) as DcRoute['src'];
 
-const decodeRouteEndpointOption = (value: string): DcRoute['src'] =>
-  JSON.parse(value) as DcRoute['src'];
-
-const formatEndpointConnId = (endpoint: DcRoute['src']): string => {
-  if (endpoint.conn_id === undefined || endpoint.conn_id === 0) {
-    return '-';
-  }
-
-  return String(endpoint.conn_id);
-};
+const endpointLabel = (endpoint: DcRoute['src']): string =>
+  `${endpoint.module_name}/${endpoint.conn_name} : ${endpoint.tag}`;
 
 const formatTimestamp = (tsMs: number): string => {
   if (tsMs <= 0) return '-';
   const d = new Date(tsMs);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  const ms = String(d.getMilliseconds()).padStart(3, '0');
-  return `${hh}:${mm}:${ss}.${ms}`;
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 };
 
-const formatPointValue = (pv: DcPointUpdate['value']): string => {
-  if (!pv) return '-';
-  switch (pv.type) {
-    case 'Bool':
-      return pv.value ? '是' : '否';
-    case 'Int':
-      return String(pv.value);
-    case 'Double':
-      return formatAutoRealtimeNumber(pv.value);
-    case 'String':
-      return pv.value;
-    case 'Bytes':
-      return `[${pv.value.length} 字节]`;
-    default:
-      return '-';
+const formatAge = (tsMs: number): string => {
+  if (tsMs <= 0) return '-';
+  const age = Math.max(0, Date.now() - tsMs);
+  if (age < 1000) return '刚刚';
+  if (age < 60000) return `${Math.floor(age / 1000)} 秒前`;
+  return `${Math.floor(age / 60000)} 分钟前`;
+};
+
+const formatPointValue = (value: DcPointUpdate['value']): string => {
+  if (!value) return '-';
+  switch (value.type) {
+    case 'Bool': return value.value ? '是' : '否';
+    case 'Int': return String(value.value);
+    case 'Double': return formatAutoRealtimeNumber(value.value);
+    case 'String': return value.value;
+    case 'Bytes': return `[${value.value.length} 字节]`;
+    default: return '-';
   }
 };
-
-// ── Route Card Component ──
-
-const RouteCard: React.FC<{
-  route: DcRoute;
-  onDelete: () => void;
-}> = ({ route, onDelete }) => {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 0,
-        padding: '8px 0',
-      }}
-    >
-      {/* Source box */}
-      <div
-        style={{
-          background: '#37373d',
-          border: '1px solid #3e3e42',
-          borderRadius: 4,
-          padding: '6px 12px',
-          minWidth: 200,
-          flex: 1,
-        }}
-      >
-        <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-          源端
-        </Text>
-        <Text style={{ color: '#fff' }}>
-          {route.src.module_name}/{route.src.conn_name} : {route.src.tag}
-        </Text>
-        <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-          conn_id: {formatEndpointConnId(route.src)}
-        </Text>
-      </div>
-
-      {/* Arrow */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          padding: '0 8px',
-          minWidth: 56,
-        }}
-      >
-        <Text type="secondary" style={{ fontSize: 11 }}>转发</Text>
-        <svg width="40" height="12" viewBox="0 0 40 12">
-          <line
-            x1="0"
-            y1="6"
-            x2="32"
-            y2="6"
-            stroke="#007acc"
-            strokeWidth="2"
-          />
-          <polygon points="30,2 38,6 30,10" fill="#007acc" />
-        </svg>
-      </div>
-
-      {/* Destination box */}
-      <div
-        style={{
-          background: '#37373d',
-          border: '1px solid #3e3e42',
-          borderRadius: 4,
-          padding: '6px 12px',
-          minWidth: 200,
-          flex: 1,
-        }}
-      >
-        <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-          目标端
-        </Text>
-        <Text style={{ color: '#fff' }}>
-          {route.dst.module_name}/{route.dst.conn_name} : {route.dst.tag}
-        </Text>
-        <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-          conn_id: {formatEndpointConnId(route.dst)}
-        </Text>
-      </div>
-
-      {/* Delete button */}
-      <Popconfirm
-        title="确认删除该路由？"
-        onConfirm={onDelete}
-      >
-        <Button
-          danger
-          size="small"
-          style={{ marginLeft: 8 }}
-        >
-          删除
-        </Button>
-      </Popconfirm>
-    </div>
-  );
-};
-
-// ── Main Component ──
 
 const DataBus: React.FC = () => {
   const [connections, setConnections] = useState<DcConnectionInfo[]>([]);
   const [selectedConnId, setSelectedConnId] = useState<number | null>(null);
   const [connTags, setConnTags] = useState<string[]>([]);
+  const [allConnTags, setAllConnTags] = useState<Map<number, string[]>>(new Map());
   const [routes, setRoutes] = useState<DcRoute[]>([]);
   const [realtimeUpdates, setRealtimeUpdates] = useState<DcPointUpdate[]>([]);
   const [loading, setLoading] = useState(false);
+  const [realtimeLoading, setRealtimeLoading] = useState(false);
   const [routeModalOpen, setRouteModalOpen] = useState(false);
+  const [view, setView] = useState<'config' | 'monitor'>('config');
+  const [monitorConnId, setMonitorConnId] = useState<number | 'all'>('all');
+  const [monitorSearch, setMonitorSearch] = useState('');
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastRealtimeAt, setLastRealtimeAt] = useState(0);
   const [messageApi, contextHolder] = message.useMessage();
   const [routeForm] = Form.useForm();
-
-  // ── Data Loading ──
 
   const refreshConnections = useCallback(async () => {
     setLoading(true);
     try {
       const conns = await api.dcListConnections();
       setConnections(conns);
+      setSelectedConnId((current) => current === null && conns.length > 0 ? conns[0].conn_id : current);
     } catch (e) {
-      messageApi.error(`刷新连接注册表失败: ${e}`);
+      messageApi.error(`刷新连接列表失败: ${e}`);
     } finally {
       setLoading(false);
     }
   }, [messageApi]);
 
-  const loadConnTags = useCallback(async (connId: number) => {
-    try {
-      const ct = await api.dcGetConnTags(connId);
-      setConnTags(ct.tags);
-    } catch {
-      setConnTags([]);
-    }
-  }, []);
-
   const refreshRoutes = useCallback(async () => {
     try {
-      const r = await api.dcListRoutes(0, '', 0, '');
-      setRoutes(r);
+      setRoutes(await api.dcListRoutes(0, '', 0, ''));
     } catch (e) {
       messageApi.error(`刷新路由列表失败: ${e}`);
     }
   }, [messageApi]);
 
   const refreshRealtime = useCallback(async () => {
+    if (connections.length === 0) return;
+    setRealtimeLoading(true);
     try {
-      const allUpdates: DcPointUpdate[] = [];
-      for (const conn of connections) {
-        try {
-          const updates = await api.dcGetLatest(conn.conn_id, []);
-          allUpdates.push(...updates);
-        } catch {
-          // 某连接无数据，忽略
-        }
-      }
-      setRealtimeUpdates(allUpdates);
+      const updates = await Promise.all(
+        connections.map(async (conn) => {
+          try { return await api.dcGetLatest(conn.conn_id, []); } catch { return []; }
+        }),
+      );
+      setRealtimeUpdates(updates.flat());
+      setLastRealtimeAt(Date.now());
     } catch (e) {
-      messageApi.error(`刷新实时值失败: ${e}`);
+      messageApi.error(`刷新最新值失败: ${e}`);
+    } finally {
+      setRealtimeLoading(false);
     }
   }, [connections, messageApi]);
 
-  // ── Effects ──
+  const loadConnTags = useCallback(async (connId: number) => {
+    try { setConnTags((await api.dcGetConnTags(connId)).tags); } catch { setConnTags([]); }
+  }, []);
+
+  useEffect(() => { void refreshConnections(); void refreshRoutes(); }, [refreshConnections, refreshRoutes]);
 
   useEffect(() => {
-    void refreshConnections();
-    void refreshRoutes();
-  }, [refreshConnections, refreshRoutes]);
-
-  useEffect(() => {
-    if (selectedConnId !== null) {
-      void loadConnTags(selectedConnId);
-    } else {
-      setConnTags([]);
-    }
+    if (selectedConnId !== null) void loadConnTags(selectedConnId);
+    else setConnTags([]);
   }, [selectedConnId, loadConnTags]);
 
   useEffect(() => {
-    if (connections.length > 0) {
-      void refreshRealtime();
-    }
-  }, [connections, refreshRealtime]);
+    if (connections.length === 0) return;
+    const loadAll = async () => {
+      const entries = await Promise.all(connections.map(async (conn) => {
+        try { return [conn.conn_id, (await api.dcGetConnTags(conn.conn_id)).tags] as [number, string[]]; }
+        catch { return [conn.conn_id, [] as string[]] as [number, string[]]; }
+      }));
+      setAllConnTags(new Map(entries));
+    };
+    void loadAll();
+  }, [connections]);
 
-  // ── Route Handlers ──
+  useEffect(() => {
+    if (view !== 'monitor' || !autoRefresh) return undefined;
+    void refreshRealtime();
+    const timer = window.setInterval(() => void refreshRealtime(), 3000);
+    return () => window.clearInterval(timer);
+  }, [view, autoRefresh, refreshRealtime]);
 
-  const openCreateRoute = useCallback(() => {
-    routeForm.resetFields();
-    setRouteModalOpen(true);
-  }, [routeForm]);
+  const selectedConn = connections.find((conn) => conn.conn_id === selectedConnId) ?? null;
+  const endpointOptions = useMemo(() => connections.flatMap((conn) =>
+    (allConnTags.get(conn.conn_id) ?? []).map((tag) => {
+      const endpoint = { module_name: conn.module_name, conn_name: conn.conn_name, conn_id: conn.conn_id, tag };
+      return { value: encodeEndpoint(endpoint), label: `${endpointLabel(endpoint)}  (conn_id ${conn.conn_id})` };
+    })), [connections, allConnTags]);
+
+  const openCreateRoute = useCallback(() => { routeForm.resetFields(); setRouteModalOpen(true); }, [routeForm]);
 
   const handleRouteSubmit = useCallback(async () => {
     try {
       const values = await routeForm.validateFields();
-      const src = decodeRouteEndpointOption(values.source as string);
-      const dst = decodeRouteEndpointOption(values.destination as string);
-      const newRoute: DcRoute = {
-        src,
-        dst,
-      };
-      await api.dcUpsertRoutes([newRoute], false);
+      const src = decodeEndpoint(values.source as string);
+      const dst = decodeEndpoint(values.destination as string);
+      if (endpointKey(src) === endpointKey(dst)) throw new Error('源端点与目标端点不能相同');
+      const route: DcRoute = { src, dst };
+      if (routes.some((item) => routeKey(item) === routeKey(route))) throw new Error('该路由已存在');
+      await api.dcUpsertRoutes([route], false);
       messageApi.success('路由已添加');
       setRouteModalOpen(false);
       await refreshRoutes();
     } catch (e) {
       messageApi.error(`添加路由失败: ${e}`);
     }
-  }, [routeForm, messageApi, refreshRoutes]);
+  }, [messageApi, refreshRoutes, routeForm, routes]);
 
-  const handleDeleteRoute = useCallback(
-    async (route: DcRoute) => {
-      try {
-        await api.dcDeleteRoutes([route]);
-        messageApi.success('路由已删除');
-        await refreshRoutes();
-      } catch (e) {
-        messageApi.error(`删除路由失败: ${e}`);
-      }
-    },
-    [messageApi, refreshRoutes],
-  );
+  const handleDeleteRoute = useCallback(async (route: DcRoute) => {
+    try {
+      await api.dcDeleteRoutes([route]);
+      messageApi.success('路由已删除');
+      await refreshRoutes();
+    } catch (e) { messageApi.error(`删除路由失败: ${e}`); }
+  }, [messageApi, refreshRoutes]);
 
-  // ── Build endpoint options for route form ──
-
-  const [allConnTags, setAllConnTags] = useState<Map<number, string[]>>(new Map());
-
-  useEffect(() => {
-    const loadAll = async () => {
-      const map = new Map<number, string[]>();
-      for (const conn of connections) {
-        try {
-          const ct = await api.dcGetConnTags(conn.conn_id);
-          map.set(conn.conn_id, ct.tags);
-        } catch {
-          map.set(conn.conn_id, []);
-        }
-      }
-      setAllConnTags(map);
-    };
-    if (connections.length > 0) {
-      void loadAll();
-    }
-  }, [connections]);
-
-  const endpointOptions = useMemo<RouteEndpointOption[]>(() => {
-    const opts: RouteEndpointOption[] = [];
-    for (const conn of connections) {
-      const tags = allConnTags.get(conn.conn_id) ?? [];
-      for (const tag of tags) {
-        const endpoint: DcRoute['src'] = {
-          module_name: conn.module_name,
-          conn_name: conn.conn_name,
-          tag,
-          conn_id: conn.conn_id,
-        };
-
-        opts.push({
-          value: encodeRouteEndpointOption(endpoint),
-          label: `${conn.module_name}/${conn.conn_name} (${conn.conn_id}) : ${tag}`,
-          endpoint,
-        });
-      }
-    }
-    return opts;
-  }, [connections, allConnTags]);
-
-  // ── Derived ──
-
-  const selectedConn = connections.find((c) => c.conn_id === selectedConnId) ?? null;
-
-  // ── ConnTags Table (mockup: Tag / 数据类型 / 读写属性 / 描述) ──
-  // NOTE: proto ConnTags 目前只返回 tag 名列表，无元信息。
-  //       数据类型/读写属性/描述列显示占位 "-"，后续 proto 扩展后接入。
-
-  const connTagColumns: ColumnsType<{ tag: string; key: number }> = [
-    {
-      title: '标签',
-      dataIndex: 'tag',
-      key: 'tag',
-      width: 140,
-      ellipsis: true,
-      render: (v: string) => <Text strong>{v}</Text>,
-    },
-    {
-      title: '数据类型',
-      key: 'data_type',
-      width: 110,
-      render: () => <Text type="secondary">-</Text>,
-    },
-    {
-      title: '读写属性',
-      key: 'access',
-      width: 120,
-      render: () => <Text type="secondary">-</Text>,
-    },
-    {
-      title: '描述',
-      key: 'description',
-      width: 100,
-      render: () => <Text type="secondary">-</Text>,
-    },
+  const connTagColumns: ColumnsType<{ tag: string; key: string }> = [
+    { title: '标签', dataIndex: 'tag', key: 'tag', ellipsis: true, render: (tag: string) => <Text strong>{tag}</Text> },
+    { title: '来源', key: 'source', width: 86, render: () => <Tag color="blue">自动同步</Tag> },
   ];
 
-  const connTagData = useMemo(
-    () => connTags.map((tag, i) => ({ tag, key: i })),
-    [connTags],
-  );
-
-  // ── Realtime Columns ──
+  const routeColumns: ColumnsType<DcRoute & { key: string }> = [
+    {
+      title: '源端点', key: 'source', width: 300,
+      render: (_, route) => <div><Text strong>{endpointLabel(route.src)}</Text><Text type="secondary" style={{ display: 'block', fontSize: 12 }}>conn_id {route.src.conn_id ?? '-'}</Text></div>,
+    },
+    { title: '', key: 'direction', width: 54, align: 'center', render: () => <Text type="secondary" style={{ fontSize: 18 }}>→</Text> },
+    {
+      title: '目标端点', key: 'destination', width: 300,
+      render: (_, route) => <div><Text strong>{endpointLabel(route.dst)}</Text><Text type="secondary" style={{ display: 'block', fontSize: 12 }}>conn_id {route.dst.conn_id ?? '-'}</Text></div>,
+    },
+    { title: '状态', key: 'status', width: 100, render: () => <Tag color="green" icon={<CheckCircleOutlined />}>已配置</Tag> },
+    {
+      title: '操作', key: 'action', width: 74,
+      render: (_, route) => <Popconfirm title="确认删除该路由？" description={`${endpointLabel(route.src)} → ${endpointLabel(route.dst)}`} onConfirm={() => void handleDeleteRoute(route)}><Button danger type="text" size="small">删除</Button></Popconfirm>,
+    },
+  ];
 
   const realtimeColumns: ColumnsType<DcPointUpdate & { key: string }> = [
-    {
-      title: '连接编号 : 标签',
-      key: 'endpoint',
-      width: 240,
-      render: (_, record) => (
-        <Text>
-          {resolveConnName(record.dst_conn_id, connections)} : {record.dst_tag}
-        </Text>
-      ),
-    },
-    {
-      title: '当前值',
-      key: 'value',
-      width: 120,
-      render: (_, record) => formatPointValue(record.value),
-    },
-    {
-      title: '时间戳',
-      key: 'ts',
-      width: 160,
-      render: (_, record) => (
-        <Text style={{ fontFamily: '"Consolas", monospace', fontSize: 12 }}>
-          {formatTimestamp(record.ts_ms)}
-        </Text>
-      ),
-    },
-    {
-      title: '质量',
-      key: 'quality',
-      width: 110,
-      render: (_, record) => {
-        const q = QUALITY_MAP[record.quality] ?? QUALITY_MAP[0];
-        return <Tag color={q.color}>{q.label}</Tag>;
-      },
-    },
+    { title: '来源', key: 'source', width: 270, render: (_, item) => { const conn = connections.find((c) => c.conn_id === item.src_conn_id); return <Text>{conn ? `${conn.module_name}/${conn.conn_name}` : `连接_${item.src_conn_id}`} : {item.src_tag}</Text>; } },
+    { title: '', key: 'direction', width: 42, align: 'center', render: () => <Text type="secondary">→</Text> },
+    { title: '目标', key: 'destination', width: 270, render: (_, item) => { const conn = connections.find((c) => c.conn_id === item.dst_conn_id); return <Text>{conn ? `${conn.module_name}/${conn.conn_name}` : `连接_${item.dst_conn_id}`} : {item.dst_tag}</Text>; } },
+    { title: '当前值', key: 'value', width: 120, render: (_, item) => formatPointValue(item.value) },
+    { title: '数据时间', key: 'timestamp', width: 150, render: (_, item) => <Text style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{formatTimestamp(item.ts_ms)}</Text> },
+    { title: '新鲜度', key: 'age', width: 96, render: (_, item) => formatAge(item.ts_ms) },
+    { title: '质量', key: 'quality', width: 90, render: (_, item) => { const quality = QUALITY_MAP[item.quality] ?? QUALITY_MAP[0]; return <Tag color={quality.color}>{quality.label}</Tag>; } },
   ];
 
-  const realtimeData = useMemo(
-    () =>
-      realtimeUpdates.map((u, i) => ({
-        ...u,
-        key: `${u.dst_conn_id}:${u.dst_tag}-${i}`,
-      })),
-    [realtimeUpdates],
-  );
+  const filteredRealtimeData = useMemo(() => realtimeUpdates
+    .filter((item) => monitorConnId === 'all' || item.dst_conn_id === monitorConnId || item.src_conn_id === monitorConnId)
+    .filter((item) => {
+      const query = monitorSearch.trim().toLowerCase();
+      if (!query) return true;
+      return `${item.src_tag} ${item.dst_tag} ${item.src_conn_id} ${item.dst_conn_id}`.toLowerCase().includes(query);
+    })
+    .map((item, index) => ({ ...item, key: `${item.src_conn_id}:${item.src_tag}->${item.dst_conn_id}:${item.dst_tag}-${index}` })),
+  [monitorConnId, monitorSearch, realtimeUpdates]);
 
-  // ── Render ──
+  const routeData = routes.map((route, index) => ({ ...route, key: `${routeKey(route)}-${index}` }));
+  const connTagData = connTags.map((tag) => ({ tag, key: tag }));
 
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 16,
-        flex: 1,
-        minHeight: 0,
-        height: '100%',
-        overflow: 'hidden',
-      }}
+  const connectionPanel = (
+    <Card
+      title={<Space size={8}><span>连接与标签</span><Tag>{connections.length}</Tag></Space>}
+      size="small"
+      extra={<Button type="text" size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => void refreshConnections()} />}
+      styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', minHeight: 0 } }}
+      style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
     >
-      {contextHolder}
-
-      <div
-        style={{
-          display: 'flex',
-          gap: 16,
-          flex: 1,
-          minHeight: 0,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 16,
-            flex: '1 1 min(100%, 320px)',
-            minWidth: 0,
-            minHeight: 0,
-          }}
-        >
-          <Card
-            title="连接注册表"
-            size="small"
-            bordered
-            style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', minHeight: 0 }}
-            styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '8px 0' } }}
-            extra={
-              <Button
-                type="text"
-                size="small"
-                icon={<ReloadOutlined />}
-                loading={loading}
-                onClick={() => void refreshConnections()}
-              />
-            }
-          >
-            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-              <List
-                dataSource={connections}
-                locale={{ emptyText: '暂无连接' }}
-                renderItem={(item) => {
-                  const isActive = item.conn_id === selectedConnId;
-                  return (
-                    <List.Item
-                      onClick={() => setSelectedConnId(item.conn_id)}
-                      style={{
-                        cursor: 'pointer',
-                        padding: '8px 16px',
-                        background: isActive ? '#37373d' : 'transparent',
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          width: '100%',
-                          gap: 12,
-                        }}
-                      >
-                        <Text style={{ color: '#fff', flex: 1 }}>
-                          {item.conn_name}
-                        </Text>
-                        <Text type="secondary" style={{ fontSize: 12, minWidth: 80 }}>
-                          {item.module_name}
-                        </Text>
-                      </div>
-                    </List.Item>
-                  );
-                }}
-              />
+      <div style={{ padding: '10px 12px 6px' }}><Text type="secondary" style={{ fontSize: 12 }}>连接由协议/控制页面自动注册，本页只用于选择端点和诊断。</Text></div>
+      <div style={{ flex: 1, minHeight: 150, overflow: 'auto' }}>
+        <List dataSource={connections} locale={{ emptyText: '暂无已注册连接' }} renderItem={(item) => {
+          const active = item.conn_id === selectedConnId;
+          const tagCount = allConnTags.get(item.conn_id)?.length ?? 0;
+          return <List.Item onClick={() => setSelectedConnId(item.conn_id)} style={{ cursor: 'pointer', padding: '10px 14px', background: active ? '#37373d' : undefined, borderInlineStart: active ? '3px solid #1677ff' : '3px solid transparent' }}>
+            <div style={{ width: '100%' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><Text strong>{item.conn_name}</Text><Tag color="blue">{item.module_name}</Tag></div>
+              <Text type="secondary" style={{ fontSize: 12 }}>conn_id {item.conn_id} · {tagCount} 个标签</Text>
             </div>
-          </Card>
-
-          <Card
-            title={
-              <Space>
-                <span>连接标签注册表</span>
-                {selectedConn && (
-                  <Text type="secondary" style={{ fontSize: 13, fontWeight: 'normal' }}>
-                    当前选中: {selectedConn.conn_name}
-                  </Text>
-                )}
-              </Space>
-            }
-            size="small"
-            bordered
-            style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', minHeight: 0 }}
-            styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 } }}
-          >
-            <Table
-              rowKey="key"
-              columns={connTagColumns}
-              dataSource={connTagData}
-              pagination={false}
-              size="small"
-              tableLayout="fixed"
-              scroll={{ x: 480, y: 'calc(50vh - 260px)' }}
-              locale={{
-                emptyText: selectedConnId
-                  ? '该连接暂无标签'
-                  : '请先在上方选择连接',
-              }}
-            />
-            <div style={{ marginTop: 'auto', paddingTop: 12 }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                提示: 连接标签是数据中心视角的抽象标签，与底层协议点表中的具体地址定义解耦。
-              </Text>
-            </div>
-          </Card>
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 16,
-            flex: '2 1 min(100%, 640px)',
-            minWidth: 0,
-            minHeight: 0,
-          }}
-        >
-          <Card
-            title="路由管理"
-            size="small"
-            bordered
-            style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', minHeight: 0 }}
-            styles={{ body: { flex: 1, padding: 0, display: 'flex', flexDirection: 'column', minHeight: 0 } }}
-            extra={
-              <Button
-                size="small"
-                icon={<PlusOutlined />}
-                onClick={openCreateRoute}
-              >
-                新增路由
-              </Button>
-            }
-          >
-            {routes.length === 0 ? (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flex: 1,
-                  color: '#666',
-                }}
-              >
-                暂无路由配置
-              </div>
-            ) : (
-              <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '0 16px' }}>
-                {routes.map((route, index) => (
-                  <RouteCard
-                    key={`${routeKey(route)}-${index}`}
-                    route={route}
-                    onDelete={() => void handleDeleteRoute(route)}
-                  />
-                ))}
-              </div>
-            )}
-          </Card>
-
-          <Card
-            title="实时值监控"
-            size="small"
-            bordered
-            style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', minHeight: 0 }}
-            styles={{ body: { flex: 1, minHeight: 0 } }}
-            extra={
-              <Button
-                type="text"
-                size="small"
-                icon={<ReloadOutlined />}
-                onClick={() => void refreshRealtime()}
-              />
-            }
-          >
-            <Table
-              rowKey="key"
-              columns={realtimeColumns}
-              dataSource={realtimeData}
-              pagination={false}
-              size="small"
-              scroll={{ x: 720, y: 'calc(50vh - 220px)' }}
-              locale={{ emptyText: '暂无实时数据' }}
-            />
-          </Card>
-        </div>
+          </List.Item>;
+        }} />
       </div>
-
-      {/* ─── Route Modal ─── */}
-      <Modal
-        title="新增路由"
-        open={routeModalOpen}
-        onOk={() => void handleRouteSubmit()}
-        onCancel={() => setRouteModalOpen(false)}
-        width={560}
-        destroyOnClose
-      >
-        <Form form={routeForm} layout="vertical" size="small">
-          <Form.Item
-            name="source"
-            label="源端点"
-            rules={[{ required: true, message: '请选择源端点' }]}
-          >
-            <Select
-              showSearch
-              placeholder="选择源 连接:标签"
-              options={endpointOptions}
-              filterOption={(input, option) =>
-                (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-              }
-            />
-          </Form.Item>
-          <Form.Item
-            name="destination"
-            label="目标端点"
-            rules={[{ required: true, message: '请选择目标端点' }]}
-          >
-            <Select
-              showSearch
-              placeholder="选择目标 连接:标签"
-              options={endpointOptions}
-              filterOption={(input, option) =>
-                (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-              }
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
-    </div>
+      <div style={{ borderTop: '1px solid #3e3e42', padding: '12px 14px', minHeight: 180 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><Text strong>{selectedConn ? selectedConn.conn_name : '标签目录'}</Text>{selectedConn && <Tag color="blue">{connTags.length} 个标签</Tag>}</div>
+        <Table rowKey="key" columns={connTagColumns} dataSource={connTagData} pagination={false} size="small" scroll={{ y: 190 }} locale={{ emptyText: selectedConn ? '该连接暂无已同步标签' : '请选择一个连接' }} />
+      </div>
+    </Card>
   );
+
+  return <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    {contextHolder}
+    <Tabs activeKey={view} onChange={(key) => setView(key as 'config' | 'monitor')} items={[{ key: 'config', label: '拓扑配置' }, { key: 'monitor', label: '运行监视' }]} style={{ flex: 'none' }} />
+    {view === 'config' ? <div className="data-bus-config-grid" style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(280px, 0.32fr) minmax(0, 1fr)', gap: 16 }}>
+      <div style={{ minHeight: 0 }}>{connectionPanel}</div>
+      <Card title={<Space size={8}><span>路由配置</span><Tag color="blue">{routes.length}</Tag></Space>} size="small" extra={<Space><Button icon={<ReloadOutlined />} onClick={() => void refreshRoutes()}>刷新</Button><Button type="primary" icon={<PlusOutlined />} onClick={openCreateRoute}>新增路由</Button></Space>} styles={{ body: { padding: 0, minHeight: 0, height: '100%' } }} style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid #3e3e42' }}><Text type="secondary">单向转发绑定。源端点的最新值会转发到目标端点；双向链路需要分别配置两条路由。</Text></div>
+        <Table rowKey="key" columns={routeColumns} dataSource={routeData} pagination={false} size="middle" scroll={{ x: 880, y: 'calc(100vh - 330px)' }} locale={{ emptyText: '暂无路由配置，点击右上角新增第一条路由' }} />
+      </Card>
+    </div> : <Card title={<Space size={8}><span>实时值</span><Tag color={autoRefresh ? 'green' : 'default'} icon={autoRefresh ? <SyncOutlined spin /> : undefined}>{autoRefresh ? '自动刷新 3 秒' : '已暂停'}</Tag></Space>} size="small" extra={<Space><Text type="secondary" style={{ fontSize: 12 }}>{lastRealtimeAt ? `上次更新 ${formatTimestamp(lastRealtimeAt)}` : '尚未更新'}</Text><Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="暂停" onChange={setAutoRefresh} /><Button icon={<ReloadOutlined />} loading={realtimeLoading} onClick={() => void refreshRealtime()}>刷新</Button></Space>} styles={{ body: { padding: 0, minHeight: 0 } }} style={{ flex: 1, minHeight: 0 }}>
+      <div style={{ padding: '12px 16px', display: 'flex', gap: 12, borderBottom: '1px solid #3e3e42' }}><Select value={monitorConnId} onChange={setMonitorConnId} style={{ width: 220 }} options={[{ value: 'all', label: '全部连接' }, ...connections.map((conn) => ({ value: conn.conn_id, label: `${conn.module_name}/${conn.conn_name}` }))]} /><Input allowClear prefix={<SearchOutlined />} placeholder="筛选标签或连接编号" value={monitorSearch} onChange={(event) => setMonitorSearch(event.target.value)} style={{ maxWidth: 320 }} /><Text type="secondary" style={{ marginLeft: 'auto', alignSelf: 'center', fontSize: 12 }}>共 {filteredRealtimeData.length} 条快照</Text></div>
+      <Table rowKey="key" columns={realtimeColumns} dataSource={filteredRealtimeData} pagination={false} size="middle" scroll={{ x: 1100, y: 'calc(100vh - 290px)' }} locale={{ emptyText: connections.length ? '暂无最新值，请确认目标连接已启动并产生数据' : '暂无已注册连接' }} />
+    </Card>}
+    <Modal title="新增路由" open={routeModalOpen} onOk={() => void handleRouteSubmit()} onCancel={() => setRouteModalOpen(false)} width={620} destroyOnClose>
+      <Form form={routeForm} layout="vertical" size="small">
+        <Form.Item name="source" label="源端点（数据从这里发出）" rules={[{ required: true, message: '请选择源端点' }]}><Select showSearch placeholder="选择源连接与标签" options={endpointOptions} optionRender={(option) => <div><div>{option.label}</div><Text type="secondary" style={{ fontSize: 11 }}>源端点</Text></div>} filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} /></Form.Item>
+        <div style={{ textAlign: 'center', color: '#1677ff', margin: '-4px 0 8px' }}>↓ 单向转发 ↓</div>
+        <Form.Item name="destination" label="目标端点（值将写入这里）" rules={[{ required: true, message: '请选择目标端点' }]}><Select showSearch placeholder="选择目标连接与标签" options={endpointOptions} optionRender={(option) => <div><div>{option.label}</div><Text type="secondary" style={{ fontSize: 11 }}>目标端点</Text></div>} filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} /></Form.Item>
+        <Text type="secondary">提示：请确认源/目标方向和点位类型兼容；系统会阻止重复路由和源目标相同的自环。</Text>
+      </Form>
+    </Modal>
+  </div>;
 };
 
 export default DataBus;
