@@ -1,5 +1,5 @@
-import React from 'react';
-import { Button, Card, Popconfirm, Space, Table, Typography } from 'antd';
+import React, { useMemo, useState } from 'react';
+import { Button, Card, Popconfirm, Select, Space, Table, Typography } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { DcPointUpdate, ModbusPoint } from '../../../adapters';
@@ -56,6 +56,26 @@ const PointTable: React.FC<Props> = ({
   onDelete,
   onDeleteAll,
 }) => {
+  const [functionFilter, setFunctionFilter] = useState<number>();
+  const [dataTypeFilter, setDataTypeFilter] = useState<number>();
+
+  const visiblePoints = useMemo(
+    () => points.filter((point) => (
+      (functionFilter === undefined || point.function === functionFilter)
+      && (dataTypeFilter === undefined || point.data_type === dataTypeFilter)
+    )),
+    [dataTypeFilter, functionFilter, points],
+  );
+
+  const functionOptions = Object.entries(FUNCTION_CODE_LABELS).map(([value, label]) => ({
+    value: Number(value),
+    label,
+  }));
+  const dataTypeOptions = Object.entries(DATA_TYPE_LABELS).map(([value, label]) => ({
+    value: Number(value),
+    label,
+  }));
+
   const columns: ColumnsType<ModbusPoint> = [
     {
       title: '标签',
@@ -71,7 +91,13 @@ const PointTable: React.FC<Props> = ({
       width: 200,
       render: (value: number) => FUNCTION_CODE_LABELS[value] ?? '未指定',
     },
-    { title: '地址', dataIndex: 'address', key: 'address', width: 100 },
+    {
+      title: '地址',
+      dataIndex: 'address',
+      key: 'address',
+      width: 100,
+      sorter: (left, right) => left.address - right.address,
+    },
     { title: '寄存器数', dataIndex: 'reg_count', key: 'reg_count', width: 90 },
     {
       title: '位索引',
@@ -132,18 +158,24 @@ const PointTable: React.FC<Props> = ({
       title: '操作',
       key: 'action',
       width: 100,
-      render: (_value: unknown, _record: ModbusPoint, index: number) => (
-        <Space size={4}>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => onEdit(index)}>
-            编辑
-          </Button>
-          <Popconfirm title="确认删除该点位？" onConfirm={() => onDelete(index)}>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
+      render: (_value: unknown, record: ModbusPoint) => {
+        const originalIndex = points.indexOf(record);
+        if (originalIndex < 0) {
+          return null;
+        }
+        return (
+          <Space size={4}>
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => onEdit(originalIndex)}>
+              编辑
             </Button>
-          </Popconfirm>
-        </Space>
-      ),
+            <Popconfirm title="确认删除该点位？" onConfirm={() => onDelete(originalIndex)}>
+              <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -154,7 +186,27 @@ const PointTable: React.FC<Props> = ({
       bordered
       className="protocol-point-card"
       extra={(
-        <Space>
+        <Space wrap>
+          <Select<number>
+            allowClear
+            size="small"
+            placeholder="全部功能码"
+            value={functionFilter}
+            options={functionOptions}
+            onChange={setFunctionFilter}
+            disabled={!selectedConn || points.length === 0}
+            style={{ width: 170 }}
+          />
+          <Select<number>
+            allowClear
+            size="small"
+            placeholder="全部数据类型"
+            value={dataTypeFilter}
+            options={dataTypeOptions}
+            onChange={setDataTypeFilter}
+            disabled={!selectedConn || points.length === 0}
+            style={{ width: 130 }}
+          />
           <Popconfirm
             title="确认删除全部点位？"
             description={`当前连接的 ${points.length} 个点位将被清空`}
@@ -178,9 +230,9 @@ const PointTable: React.FC<Props> = ({
     >
       <div className="protocol-table-scroll">
         <Table<ModbusPoint>
-          rowKey={(record, index) => `${record.tag}-${record.address}-${index ?? 0}`}
+          rowKey={(record) => `${record.tag}-${record.address}-${points.indexOf(record)}`}
           columns={columns}
-          dataSource={points}
+          dataSource={visiblePoints}
           loading={realtimeLoading}
           pagination={false}
           size="small"

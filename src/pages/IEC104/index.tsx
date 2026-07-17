@@ -357,6 +357,7 @@ const IEC104: React.FC = () => {
   const [links, setLinks] = useState<Iec104LinkInfo[]>([]);
   const [selectedConn, setSelectedConn] = useState<string | null>(null);
   const [points, setPoints] = useState<Iec104Point[]>([]);
+  const [pointTypeFilter, setPointTypeFilter] = useState<number>();
   const [loading, setLoading] = useState(false);
   const [linkModalOpen, setLinkModalOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<Iec104LinkConfig | null>(null);
@@ -397,6 +398,10 @@ const IEC104: React.FC = () => {
   const { realtimeByTag, realtimeRevisionByTag, loading: realtimeLoading } = useProtocolShadowRealtime(
     selectedLink?.conn_id ?? null,
     realtimeTags,
+  );
+  const visiblePoints = useMemo(
+    () => points.filter((point) => pointTypeFilter === undefined || point.point_type === pointTypeFilter),
+    [pointTypeFilter, points],
   );
   const importReservedTagSet = useMemo(() => {
     const reservedTags = new Set<string>();
@@ -1290,6 +1295,7 @@ const IEC104: React.FC = () => {
       key: 'ioa',
       width: 180,
       render: (ioa: number) => `${ioa} (${formatIoaHex(ioa)})`,
+      sorter: (left, right) => left.ioa - right.ioa,
     },
     {
       title: '类型 (Type)',
@@ -1329,22 +1335,28 @@ const IEC104: React.FC = () => {
       title: '操作',
       key: 'action',
       width: 120,
-      render: (_: unknown, _record: Iec104Point, index: number) => (
-        <Space>
-          <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => openEditPoint(index)}
-          />
-          <Popconfirm
-            title="确认删除该点位？"
-            onConfirm={() => void handleDeletePoint(index)}
-          >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
-        </Space>
-      ),
+      render: (_: unknown, record: Iec104Point) => {
+        const originalIndex = points.indexOf(record);
+        if (originalIndex < 0) {
+          return null;
+        }
+        return (
+          <Space>
+            <Button
+              type="link"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => openEditPoint(originalIndex)}
+            />
+            <Popconfirm
+              title="确认删除该点位？"
+              onConfirm={() => void handleDeletePoint(originalIndex)}
+            >
+              <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -1633,7 +1645,20 @@ const IEC104: React.FC = () => {
             bordered
             className="protocol-point-card"
             extra={
-              <Space>
+              <Space wrap>
+                <Select<number>
+                  allowClear
+                  size="small"
+                  placeholder="全部点类型"
+                  value={pointTypeFilter}
+                  options={Object.entries(POINT_TYPE_LABELS).map(([value, label]) => ({
+                    value: Number(value),
+                    label,
+                  }))}
+                  onChange={setPointTypeFilter}
+                  disabled={!selectedConn || points.length === 0}
+                  style={{ width: 170 }}
+                />
                 <Popconfirm
                   title="确认删除全部点位？"
                   description={`当前连接的 ${points.length} 个点位将被清空`}
@@ -1666,9 +1691,9 @@ const IEC104: React.FC = () => {
           >
             <div className="protocol-table-scroll">
               <Table
-                rowKey={(_, index) => String(index)}
+                rowKey={(record) => `${record.tag}-${record.ioa}-${points.indexOf(record)}`}
                 columns={pointColumns}
-                dataSource={points}
+                dataSource={visiblePoints}
                 loading={realtimeLoading}
                 pagination={false}
                 size="small"
