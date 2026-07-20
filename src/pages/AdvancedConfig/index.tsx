@@ -1022,9 +1022,6 @@ const AdvancedConfigPage: React.FC = () => {
                     disabled={isDeployingLowerUpdate}
                     onChange={(value) => {
                       setLowerUpdateAuthMethod(value);
-                      if (value === 'certificate') {
-                        setTargetSshPassword('');
-                      }
                       resetUploadState();
                       if (downloadResult) {
                         setDeliveryStatus('已下载到上位机');
