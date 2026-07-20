@@ -327,11 +327,17 @@ pub async fn agc_upsert_group(
     create_only: bool,
 ) -> Result<GroupInfoDto, String> {
     validate_group_tag_uniqueness(&config)?;
+    let group_name = config.group_name.clone();
+    tracing::info!(control = "AGC", group_name = %group_name, create_only, "开始保存控制组配置");
     let client = AgcClient::new(&state.conn_manager);
     let group = client
         .upsert_group(config.to_proto(), create_only)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(control = "AGC", group_name = %group_name, error = %error, "保存控制组配置失败");
+            error.to_string()
+        })?;
+    tracing::info!(control = "AGC", group_name = %group_name, "保存控制组配置完成");
     Ok(group.into())
 }
 
@@ -342,16 +348,23 @@ pub async fn agc_get_group(
 ) -> Result<GroupInfoDto, String> {
     let client = AgcClient::new(&state.conn_manager);
     let group = client
-        .get_group(group_name)
+        .get_group(group_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(control = "AGC", group_name = %group_name, error = %error, "获取控制组失败");
+            error.to_string()
+        })?;
     Ok(group.into())
 }
 
 #[tauri::command]
 pub async fn agc_list_groups(state: State<'_, AppState>) -> Result<Vec<GroupInfoDto>, String> {
     let client = AgcClient::new(&state.conn_manager);
-    let groups = client.list_groups().await.map_err(|e| e.to_string())?;
+    let groups = client.list_groups().await.map_err(|error| {
+        tracing::error!(control = "AGC", error = %error, "获取控制组列表失败");
+        error.to_string()
+    })?;
+    tracing::info!(control = "AGC", group_count = groups.groups.len(), "获取控制组列表完成");
     Ok(groups
         .groups
         .into_iter()
@@ -364,30 +377,45 @@ pub async fn agc_delete_group(
     state: State<'_, AppState>,
     group_name: String,
 ) -> Result<(), String> {
+    tracing::info!(control = "AGC", group_name = %group_name, "开始删除控制组");
     let client = AgcClient::new(&state.conn_manager);
     client
-        .delete_group(group_name)
+        .delete_group(group_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(control = "AGC", group_name = %group_name, error = %error, "删除控制组失败");
+            error.to_string()
+        })?;
+    tracing::info!(control = "AGC", group_name = %group_name, "删除控制组完成");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn agc_start_group(state: State<'_, AppState>, group_name: String) -> Result<(), String> {
+    tracing::info!(control = "AGC", group_name = %group_name, "开始启动控制组");
     let client = AgcClient::new(&state.conn_manager);
     client
-        .start_group(group_name)
+        .start_group(group_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(control = "AGC", group_name = %group_name, error = %error, "启动控制组失败");
+            error.to_string()
+        })?;
+    tracing::info!(control = "AGC", group_name = %group_name, "启动控制组请求完成");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn agc_stop_group(state: State<'_, AppState>, group_name: String) -> Result<(), String> {
+    tracing::info!(control = "AGC", group_name = %group_name, "开始停止控制组");
     let client = AgcClient::new(&state.conn_manager);
     client
-        .stop_group(group_name)
+        .stop_group(group_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(control = "AGC", group_name = %group_name, error = %error, "停止控制组失败");
+            error.to_string()
+        })?;
+    tracing::info!(control = "AGC", group_name = %group_name, "停止控制组请求完成");
     Ok(())
 }

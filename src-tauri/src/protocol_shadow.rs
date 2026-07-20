@@ -244,7 +244,7 @@ async fn run_protocol_shadow_stream(app_handle: AppHandle, conn_manager: Arc<Con
         let shadow = match sync_all_protocol_shadow(conn_manager.as_ref()).await {
             Ok(shadow) => shadow,
             Err(error) => {
-                eprintln!("protocol shadow sync failed: {error}");
+                tracing::error!(error = %error, "协议实时数据流同步失败");
                 tokio::time::sleep(Duration::from_secs(retry_delay_secs)).await;
                 retry_delay_secs = (retry_delay_secs * 2).min(10);
                 continue;
@@ -269,21 +269,21 @@ async fn run_protocol_shadow_stream(app_handle: AppHandle, conn_manager: Arc<Con
                             if let Err(error) = app_handle
                                 .emit(PROTOCOL_SHADOW_UPDATE_EVENT, PointUpdateDto::from(update))
                             {
-                                eprintln!("protocol shadow emit failed: {error}");
+                                tracing::error!(error = %error, "协议实时数据流事件发送失败");
                             }
                         }
                         Ok(None) => {
                             break;
                         }
                         Err(error) => {
-                            eprintln!("protocol shadow stream failed: {error}");
+                            tracing::error!(error = %error, "协议实时数据流读取失败");
                             break;
                         }
                     }
                 }
             }
             Err(error) => {
-                eprintln!("protocol shadow subscribe failed: {error}");
+                tracing::error!(error = %error, "协议实时数据流订阅失败");
             }
         }
 

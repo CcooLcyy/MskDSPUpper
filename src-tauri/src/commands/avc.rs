@@ -503,11 +503,18 @@ pub async fn avc_upsert_group(
     create_only: bool,
 ) -> Result<GroupInfoDto, String> {
     validate_group_config(&config)?;
+    let group_name = config.group_name.clone();
+    tracing::info!(control = "AVC", group_name = %group_name, create_only, "开始保存控制组配置");
     let client = AvcClient::new(&state.conn_manager);
     let group = client
         .upsert_group(config.to_proto(), create_only)
         .await
-        .map_err(format_avc_error)?;
+        .map_err(|status| {
+            let error = format_avc_error(status);
+            tracing::error!(control = "AVC", group_name = %group_name, error = %error, "保存控制组配置失败");
+            error
+        })?;
+    tracing::info!(control = "AVC", group_name = %group_name, "保存控制组配置完成");
     Ok(group.into())
 }
 
@@ -518,6 +525,7 @@ pub async fn avc_rename_group(
     new_group_name: String,
 ) -> Result<GroupInfoDto, String> {
     validate_rename_group_arguments(&old_group_name, &new_group_name)?;
+    tracing::info!(control = "AVC", old_group_name = %old_group_name, new_group_name = %new_group_name, "开始重命名控制组");
     let client = AvcClient::new(&state.conn_manager);
     let group = client
         .rename_group(
@@ -525,7 +533,11 @@ pub async fn avc_rename_group(
             new_group_name.trim().to_string(),
         )
         .await
-        .map_err(format_avc_error)?;
+        .map_err(|status| {
+            let error = format_avc_error(status);
+            tracing::error!(control = "AVC", old_group_name = %old_group_name, new_group_name = %new_group_name, error = %error, "重命名控制组失败");
+            error
+        })?;
     Ok(group.into())
 }
 
@@ -539,14 +551,23 @@ pub async fn avc_get_group(
     let group = client
         .get_group(group_name.trim().to_string())
         .await
-        .map_err(format_avc_error)?;
+        .map_err(|status| {
+            let error = format_avc_error(status);
+            tracing::error!(control = "AVC", group_name = %group_name, error = %error, "获取控制组失败");
+            error
+        })?;
     Ok(group.into())
 }
 
 #[tauri::command]
 pub async fn avc_list_groups(state: State<'_, AppState>) -> Result<Vec<GroupInfoDto>, String> {
     let client = AvcClient::new(&state.conn_manager);
-    let groups = client.list_groups().await.map_err(format_avc_error)?;
+    let groups = client.list_groups().await.map_err(|status| {
+        let error = format_avc_error(status);
+        tracing::error!(control = "AVC", error = %error, "获取控制组列表失败");
+        error
+    })?;
+    tracing::info!(control = "AVC", group_count = groups.groups.len(), "获取控制组列表完成");
     Ok(groups.groups.into_iter().map(Into::into).collect())
 }
 
@@ -556,32 +577,50 @@ pub async fn avc_delete_group(
     group_name: String,
 ) -> Result<(), String> {
     validate_group_name_argument(&group_name)?;
+    tracing::info!(control = "AVC", group_name = %group_name, "开始删除控制组");
     let client = AvcClient::new(&state.conn_manager);
     client
         .delete_group(group_name.trim().to_string())
         .await
-        .map_err(format_avc_error)?;
+        .map_err(|status| {
+            let error = format_avc_error(status);
+            tracing::error!(control = "AVC", group_name = %group_name, error = %error, "删除控制组失败");
+            error
+        })?;
+    tracing::info!(control = "AVC", group_name = %group_name, "删除控制组完成");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn avc_start_group(state: State<'_, AppState>, group_name: String) -> Result<(), String> {
     validate_group_name_argument(&group_name)?;
+    tracing::info!(control = "AVC", group_name = %group_name, "开始启动控制组");
     let client = AvcClient::new(&state.conn_manager);
     client
         .start_group(group_name.trim().to_string())
         .await
-        .map_err(format_avc_error)?;
+        .map_err(|status| {
+            let error = format_avc_error(status);
+            tracing::error!(control = "AVC", group_name = %group_name, error = %error, "启动控制组失败");
+            error
+        })?;
+    tracing::info!(control = "AVC", group_name = %group_name, "启动控制组请求完成");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn avc_stop_group(state: State<'_, AppState>, group_name: String) -> Result<(), String> {
     validate_group_name_argument(&group_name)?;
+    tracing::info!(control = "AVC", group_name = %group_name, "开始停止控制组");
     let client = AvcClient::new(&state.conn_manager);
     client
         .stop_group(group_name.trim().to_string())
         .await
-        .map_err(format_avc_error)?;
+        .map_err(|status| {
+            let error = format_avc_error(status);
+            tracing::error!(control = "AVC", group_name = %group_name, error = %error, "停止控制组失败");
+            error
+        })?;
+    tracing::info!(control = "AVC", group_name = %group_name, "停止控制组请求完成");
     Ok(())
 }

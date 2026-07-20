@@ -204,16 +204,24 @@ pub async fn iec104_upsert_link(
     config: LinkConfigDto,
     create_only: bool,
 ) -> Result<LinkInfoDto, String> {
+    let conn_name = config.conn_name.clone();
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, create_only, "开始保存协议连接配置");
     let client = Iec104Client::new(&state.conn_manager);
     let link = client
         .upsert_link(config.to_proto(), create_only)
         .await
-        .map_err(|e| e.to_string())?;
-    let _ = protocol_shadow::sync_protocol_shadow_module(
+        .map_err(|error| {
+            tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "保存协议连接配置失败");
+            error.to_string()
+        })?;
+    if let Err(error) = protocol_shadow::sync_protocol_shadow_module(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Iec104,
     )
-    .await;
+    .await {
+        tracing::warn!(protocol = "IEC104", error = %error, "协议实时数据模块同步失败");
+    }
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, "保存协议连接配置完成");
     Ok(link.into())
 }
 
@@ -223,16 +231,23 @@ pub async fn iec104_rename_link(
     old_conn_name: String,
     new_conn_name: String,
 ) -> Result<LinkInfoDto, String> {
+    tracing::info!(protocol = "IEC104", old_conn_name = %old_conn_name, new_conn_name = %new_conn_name, "开始重命名协议连接");
     let client = Iec104Client::new(&state.conn_manager);
     let link = client
-        .rename_link(old_conn_name, new_conn_name)
+        .rename_link(old_conn_name.clone(), new_conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
-    let _ = protocol_shadow::sync_protocol_shadow_module(
+        .map_err(|error| {
+            tracing::error!(protocol = "IEC104", old_conn_name = %old_conn_name, new_conn_name = %new_conn_name, error = %error, "重命名协议连接失败");
+            error.to_string()
+        })?;
+    if let Err(error) = protocol_shadow::sync_protocol_shadow_module(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Iec104,
     )
-    .await;
+    .await {
+        tracing::warn!(protocol = "IEC104", error = %error, "协议实时数据模块同步失败");
+    }
+    tracing::info!(protocol = "IEC104", old_conn_name = %old_conn_name, new_conn_name = %new_conn_name, "重命名协议连接完成");
     Ok(link.into())
 }
 
@@ -243,16 +258,23 @@ pub async fn iec104_get_link(
 ) -> Result<LinkInfoDto, String> {
     let client = Iec104Client::new(&state.conn_manager);
     let link = client
-        .get_link(conn_name)
+        .get_link(conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "获取协议连接失败");
+            error.to_string()
+        })?;
     Ok(link.into())
 }
 
 #[tauri::command]
 pub async fn iec104_list_links(state: State<'_, AppState>) -> Result<Vec<LinkInfoDto>, String> {
     let client = Iec104Client::new(&state.conn_manager);
-    let links = client.list_links().await.map_err(|e| e.to_string())?;
+    let links = client.list_links().await.map_err(|error| {
+        tracing::error!(protocol = "IEC104", error = %error, "获取协议连接列表失败");
+        error.to_string()
+    })?;
+    tracing::info!(protocol = "IEC104", link_count = links.len(), "获取协议连接列表完成");
     Ok(links.into_iter().map(|link| link.into()).collect())
 }
 
@@ -261,16 +283,23 @@ pub async fn iec104_delete_link(
     state: State<'_, AppState>,
     conn_name: String,
 ) -> Result<(), String> {
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, "开始删除协议连接");
     let client = Iec104Client::new(&state.conn_manager);
     client
-        .delete_link(conn_name)
+        .delete_link(conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
-    let _ = protocol_shadow::sync_protocol_shadow_module(
+        .map_err(|error| {
+            tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "删除协议连接失败");
+            error.to_string()
+        })?;
+    if let Err(error) = protocol_shadow::sync_protocol_shadow_module(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Iec104,
     )
-    .await;
+    .await {
+        tracing::warn!(protocol = "IEC104", error = %error, "协议实时数据模块同步失败");
+    }
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, "删除协议连接完成");
     Ok(())
 }
 
@@ -279,21 +308,31 @@ pub async fn iec104_start_link(
     state: State<'_, AppState>,
     conn_name: String,
 ) -> Result<(), String> {
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, "开始启动协议连接");
     let client = Iec104Client::new(&state.conn_manager);
     client
-        .start_link(conn_name)
+        .start_link(conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "启动协议连接失败");
+            error.to_string()
+        })?;
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, "启动协议连接请求完成");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn iec104_stop_link(state: State<'_, AppState>, conn_name: String) -> Result<(), String> {
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, "开始停止协议连接");
     let client = Iec104Client::new(&state.conn_manager);
     client
-        .stop_link(conn_name)
+        .stop_link(conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "停止协议连接失败");
+            error.to_string()
+        })?;
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, "停止协议连接请求完成");
     Ok(())
 }
 
@@ -304,20 +343,27 @@ pub async fn iec104_upsert_point_table(
     points: Vec<PointDto>,
     replace: bool,
 ) -> Result<(), String> {
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, point_count = points.len(), replace, "开始保存协议点表");
     let client = Iec104Client::new(&state.conn_manager);
     client
         .upsert_point_table(
-            conn_name,
+            conn_name.clone(),
             points.into_iter().map(|point| point.to_proto()).collect(),
             replace,
         )
         .await
-        .map_err(|e| e.to_string())?;
-    let _ = protocol_shadow::sync_protocol_shadow_module(
+        .map_err(|error| {
+            tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "保存协议点表失败");
+            error.to_string()
+        })?;
+    if let Err(error) = protocol_shadow::sync_protocol_shadow_module(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Iec104,
     )
-    .await;
+    .await {
+        tracing::warn!(protocol = "IEC104", error = %error, "协议实时数据模块同步失败");
+    }
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, "保存协议点表完成");
     Ok(())
 }
 
@@ -328,9 +374,12 @@ pub async fn iec104_get_point_table(
 ) -> Result<PointTableDto, String> {
     let client = Iec104Client::new(&state.conn_manager);
     let table = client
-        .get_point_table(conn_name)
+        .get_point_table(conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "获取协议点表失败");
+            error.to_string()
+        })?;
     Ok(table.into())
 }
 
@@ -340,10 +389,15 @@ pub async fn iec104_send_time_sync(
     conn_name: String,
     ts_ms: i64,
 ) -> Result<(), String> {
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, timestamp_ms = ts_ms, "开始发送时间同步");
     let client = Iec104Client::new(&state.conn_manager);
     client
-        .send_time_sync(conn_name, ts_ms)
+        .send_time_sync(conn_name.clone(), ts_ms)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "发送时间同步失败");
+            error.to_string()
+        })?;
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, "发送时间同步请求完成");
     Ok(())
 }

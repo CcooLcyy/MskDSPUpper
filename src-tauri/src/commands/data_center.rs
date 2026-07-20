@@ -225,13 +225,18 @@ pub async fn dc_list_connections(
     state: State<'_, AppState>,
 ) -> Result<Vec<ConnectionInfoDto>, String> {
     let client = DataCenterClient::new(&state.conn_manager);
-    let resp = client.list_connections().await.map_err(|e| e.to_string())?;
-    Ok(resp
+    let resp = client.list_connections().await.map_err(|error| {
+        tracing::error!(error = %error, "获取 DataCenter 连接列表失败");
+        error.to_string()
+    })?;
+    let connections = resp
         .conns
         .into_iter()
         .filter(|conn| !is_protocol_shadow_connection(conn))
         .map(|c| c.into())
-        .collect())
+        .collect::<Vec<_>>();
+    tracing::info!(connection_count = connections.len(), "获取 DataCenter 连接列表完成");
+    Ok(connections)
 }
 
 #[tauri::command]
@@ -243,7 +248,10 @@ pub async fn dc_get_conn_tags(
     let ct = client
         .get_conn_tags(conn_id)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(conn_id, error = %error, "获取 DataCenter 连接标签失败");
+            error.to_string()
+        })?;
     Ok(ct.into())
 }
 
@@ -256,7 +264,10 @@ pub async fn dc_list_routes(
     dst_tag: String,
 ) -> Result<Vec<RouteDto>, String> {
     let client = DataCenterClient::new(&state.conn_manager);
-    let connections = client.list_connections().await.map_err(|e| e.to_string())?;
+    let connections = client.list_connections().await.map_err(|error| {
+        tracing::error!(error = %error, "获取 DataCenter 连接列表失败");
+        error.to_string()
+    })?;
     let mut connection_lookup = HashMap::new();
     let mut hidden_conn_ids = HashSet::new();
     let mut hidden_connection_keys = HashSet::new();
@@ -278,15 +289,20 @@ pub async fn dc_list_routes(
             dst_tag,
         })
         .await
-        .map_err(|e| e.to_string())?;
-    Ok(resp
+        .map_err(|error| {
+            tracing::error!(src_conn_id, dst_conn_id, error = %error, "获取 DataCenter 路由失败");
+            error.to_string()
+        })?;
+    let routes = resp
         .routes
         .into_iter()
         .filter(|route| {
             !route_uses_hidden_connection(route, &hidden_conn_ids, &hidden_connection_keys)
         })
         .map(|r| RouteDto::from_proto(r, &connection_lookup))
-        .collect())
+        .collect::<Vec<_>>();
+    tracing::info!(route_count = routes.len(), "获取 DataCenter 路由完成");
+    Ok(routes)
 }
 
 #[tauri::command]
@@ -295,11 +311,16 @@ pub async fn dc_upsert_routes(
     routes: Vec<RouteDto>,
     replace: bool,
 ) -> Result<(), String> {
+    tracing::info!(route_count = routes.len(), replace, "开始保存 DataCenter 路由");
     let client = DataCenterClient::new(&state.conn_manager);
     client
         .upsert_routes(routes.into_iter().map(|r| r.to_proto()).collect(), replace)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(error = %error, "保存 DataCenter 路由失败");
+            error.to_string()
+        })?;
+    tracing::info!("保存 DataCenter 路由完成");
     Ok(())
 }
 
@@ -308,11 +329,16 @@ pub async fn dc_delete_routes(
     state: State<'_, AppState>,
     routes: Vec<RouteDto>,
 ) -> Result<(), String> {
+    tracing::info!(route_count = routes.len(), "开始删除 DataCenter 路由");
     let client = DataCenterClient::new(&state.conn_manager);
     client
         .delete_routes(routes.into_iter().map(|r| r.to_proto()).collect())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(error = %error, "删除 DataCenter 路由失败");
+            error.to_string()
+        })?;
+    tracing::info!("删除 DataCenter 路由完成");
     Ok(())
 }
 
@@ -326,7 +352,10 @@ pub async fn dc_get_latest(
     let resp = client
         .get_latest(GetLatestRequest { conn_id, tags })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(conn_id, error = %error, "获取 DataCenter 最新点值失败");
+            error.to_string()
+        })?;
     Ok(resp.updates.into_iter().map(|u| u.into()).collect())
 }
 
@@ -335,10 +364,14 @@ pub async fn dc_start_protocol_shadow_stream(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let _ = protocol_shadow::sync_all_protocol_shadow(state.conn_manager.as_ref()).await;
+    tracing::info!("开始启动协议实时数据流");
+    if let Err(error) = protocol_shadow::sync_all_protocol_shadow(state.conn_manager.as_ref()).await {
+        tracing::warn!(error = %error, "同步协议实时数据流模块失败，将继续启动订阅");
+    }
     state
         .protocol_shadow
         .ensure_started(app_handle, state.conn_manager.clone());
+    tracing::info!("协议实时数据流启动请求完成");
     Ok(())
 }
 
@@ -354,7 +387,10 @@ pub async fn dc_get_protocol_shadow_latest(
         source_tags,
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| {
+        tracing::error!(source_conn_id, error = %error, "获取协议实时数据失败");
+        error.to_string()
+    })?;
 
     Ok(updates.into_iter().map(PointUpdateDto::from).collect())
 }

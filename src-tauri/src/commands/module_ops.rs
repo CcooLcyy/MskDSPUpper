@@ -201,10 +201,14 @@ fn is_valid_hostname(host: &str) -> bool {
 /// 设置 ModuleManager 连接地址
 #[tauri::command]
 pub async fn set_manager_addr(state: State<'_, AppState>, addr: String) -> Result<(), String> {
-    let normalized_addr = validate_manager_addr(&addr)?;
+    let normalized_addr = validate_manager_addr(&addr).map_err(|error| {
+        tracing::error!(manager_addr = %addr, error = %error, "ModuleManager 地址校验失败");
+        error
+    })?;
     state.protocol_shadow.stop();
     state.conn_manager.set_manager_addr(normalized_addr);
     state.conn_manager.clear_channels();
+    tracing::info!("ModuleManager 地址更新完成");
     Ok(())
 }
 
@@ -212,12 +216,17 @@ pub async fn set_manager_addr(state: State<'_, AppState>, addr: String) -> Resul
 #[tauri::command]
 pub async fn get_module_info(state: State<'_, AppState>) -> Result<Vec<ModuleInfoDto>, String> {
     let client = ModuleManagerClient::new(&state.conn_manager);
-    let infos = client.get_module_info().await.map_err(|e| e.to_string())?;
-    Ok(infos
+    let infos = client.get_module_info().await.map_err(|error| {
+        tracing::error!(error = %error, "获取模块信息失败");
+        error.to_string()
+    })?;
+    let filtered = infos
         .into_iter()
         .map(ModuleInfoDto::from)
         .filter(|m| is_upper_controlled_module_name(&m.module_name))
-        .collect())
+        .collect::<Vec<_>>();
+    tracing::info!(module_count = filtered.len(), "获取模块信息完成");
+    Ok(filtered)
 }
 
 /// 获取运行中模块信息（同时刷新地址缓存）
@@ -229,12 +238,17 @@ pub async fn get_running_module_info(
     let infos = client
         .get_running_module_info()
         .await
-        .map_err(|e| e.to_string())?;
-    Ok(infos
+        .map_err(|error| {
+            tracing::error!(error = %error, "获取运行中模块信息失败");
+            error.to_string()
+        })?;
+    let filtered = infos
         .into_iter()
         .map(ModuleRunningInfoDto::from)
         .filter(|m| is_upper_controlled_module_name(&m.module_name))
-        .collect())
+        .collect::<Vec<_>>();
+    tracing::info!(module_count = filtered.len(), "获取运行中模块信息完成");
+    Ok(filtered)
 }
 
 /// 启动模块
@@ -244,12 +258,17 @@ pub async fn start_module(
     module_info: ModuleInfoDto,
 ) -> Result<(), String> {
     reject_uncontrolled_module(&module_info.module_name)?;
+    let module_name = module_info.module_name.clone();
 
     let client = ModuleManagerClient::new(&state.conn_manager);
     client
         .start_module(module_info.to_proto())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(module = %module_name, error = %error, "启动模块失败");
+            error.to_string()
+        })?;
+    tracing::info!(module = %module_name, "启动模块请求完成");
     Ok(())
 }
 
@@ -260,12 +279,17 @@ pub async fn stop_module(
     module_info: ModuleInfoDto,
 ) -> Result<(), String> {
     reject_uncontrolled_module(&module_info.module_name)?;
+    let module_name = module_info.module_name.clone();
 
     let client = ModuleManagerClient::new(&state.conn_manager);
     client
         .stop_module(module_info.to_proto())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(module = %module_name, error = %error, "停止模块失败");
+            error.to_string()
+        })?;
+    tracing::info!(module = %module_name, "停止模块请求完成");
     Ok(())
 }
 

@@ -867,13 +867,21 @@ pub async fn save_full_config_export(
     file_path: String,
     snapshot: FullConfigExportSnapshotDto,
 ) -> Result<String, String> {
+    tracing::info!(file_path = %file_path, "开始导出上位机配置");
     let export = snapshot.to_proto()?;
     let final_path = ensure_export_path(&file_path)?;
 
     let mut bytes = Vec::with_capacity(export.encoded_len());
-    export.encode(&mut bytes).map_err(|err| err.to_string())?;
-    write_export_file(&final_path, &bytes)?;
+    export.encode(&mut bytes).map_err(|error| {
+        tracing::error!(error = %error, "编码上位机配置导出文件失败");
+        error.to_string()
+    })?;
+    write_export_file(&final_path, &bytes).map_err(|error| {
+        tracing::error!(file_path = %final_path.display(), error = %error, "写入上位机配置导出文件失败");
+        error
+    })?;
 
+    tracing::info!(file_path = %final_path.display(), bytes = bytes.len(), "上位机配置导出完成");
     Ok(final_path.to_string_lossy().into_owned())
 }
 
@@ -881,8 +889,14 @@ pub async fn save_full_config_export(
 pub async fn load_full_config_export(
     file_path: String,
 ) -> Result<FullConfigExportSnapshotDto, String> {
+    tracing::info!(file_path = %file_path, "开始导入上位机配置");
     let import_path = ensure_import_path(&file_path)?;
-    read_full_config_export_snapshot(&import_path)
+    let snapshot = read_full_config_export_snapshot(&import_path).map_err(|error| {
+        tracing::error!(file_path = %import_path.display(), error = %error, "读取上位机配置导入文件失败");
+        error
+    })?;
+    tracing::info!(file_path = %import_path.display(), "上位机配置导入文件读取完成");
+    Ok(snapshot)
 }
 
 #[cfg(test)]

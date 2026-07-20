@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod grpc;
+pub mod logging;
 pub mod proto;
 pub mod protocol_shadow;
 pub mod state;
@@ -8,6 +9,12 @@ use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    match logging::init() {
+        Ok(log_path) => tracing::info!(log_path = %log_path.display(), "上位机运行日志已初始化"),
+        Err(error) => eprintln!("上位机运行日志初始化失败: {error}"),
+    }
+
+    tracing::info!("上位机进程启动");
     let app_state = AppState::new("127.0.0.1:17000".to_string());
 
     tauri::Builder::default()
@@ -81,5 +88,11 @@ pub fn run() {
             commands::lower_update::install_lower_update_package,
         ])
         .run(tauri::generate_context!())
-        .expect("failed to start MskDSP Upper");
+        .map_err(|error| {
+            tracing::error!(error = %error, "上位机运行失败");
+            error
+        })
+        .expect("启动 MskDSP 上位机失败");
+
+    tracing::info!("上位机进程退出");
 }

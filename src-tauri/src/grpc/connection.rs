@@ -32,6 +32,7 @@ impl ConnectionManager {
 
     /// 设置 ModuleManager 地址
     pub fn set_manager_addr(&self, addr: String) {
+        tracing::info!(manager_addr = %addr, "更新 ModuleManager 地址");
         *self.manager_addr.write() = addr;
     }
 
@@ -80,15 +81,23 @@ impl ConnectionManager {
 
         // 创建新连接
         let endpoint = format!("http://{}", addr);
+        tracing::info!(address = %addr, "开始建立 gRPC 连接");
         let channel = Channel::from_shared(endpoint.clone())
-            .map_err(|e| anyhow!("无效的地址 {}: {}", addr, e))?
+            .map_err(|e| {
+                tracing::error!(address = %addr, error = %e, "gRPC 地址无效");
+                anyhow!("无效的地址 {}: {}", addr, e)
+            })?
             .connect()
             .await
-            .map_err(|e| anyhow!("连接 {} 失败: {}", addr, e))?;
+            .map_err(|e| {
+                tracing::error!(address = %addr, error = %e, "gRPC 连接失败");
+                anyhow!("连接 {} 失败: {}", addr, e)
+            })?;
 
         self.channels
             .write()
             .insert(addr.to_string(), channel.clone());
+        tracing::info!(address = %addr, "gRPC 连接建立完成");
         Ok(channel)
     }
 
@@ -102,12 +111,16 @@ impl ConnectionManager {
     pub async fn module_channel(&self, module_name: &str) -> Result<Channel> {
         let addr = self
             .get_module_addr(module_name)
-            .ok_or_else(|| anyhow!("模块 {} 地址未知，请先刷新运行信息", module_name))?;
+            .ok_or_else(|| {
+                tracing::error!(module = %module_name, "模块地址未知，无法建立 gRPC 连接");
+                anyhow!("模块 {} 地址未知，请先刷新运行信息", module_name)
+            })?;
         self.get_channel(&addr).await
     }
 
     /// 清除所有缓存的 Channel（用于断线重连场景）
     pub fn clear_channels(&self) {
+        tracing::info!("清理 gRPC 连接缓存");
         self.channels.write().clear();
     }
 }

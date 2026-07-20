@@ -299,11 +299,16 @@ pub async fn dlt645_update_config(
     state: State<'_, AppState>,
     mqtt: Dlt645MqttConfigDto,
 ) -> Result<Dlt645UpdateConfigResponseDto, String> {
+    tracing::info!(protocol = "DLT645", "开始更新 MQTT 配置");
     let client = Dlt645Client::new(&state.conn_manager);
     let resp = client
         .update_config(mqtt.to_proto())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(protocol = "DLT645", error = %error, "更新 MQTT 配置失败");
+            error.to_string()
+        })?;
+    tracing::info!(protocol = "DLT645", "更新 MQTT 配置完成");
     Ok(resp.into())
 }
 
@@ -313,16 +318,24 @@ pub async fn dlt645_upsert_link(
     config: Dlt645LinkConfigDto,
     create_only: bool,
 ) -> Result<Dlt645LinkInfoDto, String> {
+    let conn_name = config.conn_name.clone();
+    tracing::info!(protocol = "DLT645", conn_name = %conn_name, create_only, "开始保存协议连接配置");
     let client = Dlt645Client::new(&state.conn_manager);
     let link = client
         .upsert_link(config.to_proto(), create_only)
         .await
-        .map_err(|e| e.to_string())?;
-    let _ = protocol_shadow::sync_protocol_shadow_module(
+        .map_err(|error| {
+            tracing::error!(protocol = "DLT645", conn_name = %conn_name, error = %error, "保存协议连接配置失败");
+            error.to_string()
+        })?;
+    if let Err(error) = protocol_shadow::sync_protocol_shadow_module(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Dlt645,
     )
-    .await;
+    .await {
+        tracing::warn!(protocol = "DLT645", error = %error, "协议实时数据模块同步失败");
+    }
+    tracing::info!(protocol = "DLT645", conn_name = %conn_name, "保存协议连接配置完成");
     Ok(link.into())
 }
 
@@ -332,16 +345,23 @@ pub async fn dlt645_rename_link(
     old_conn_name: String,
     new_conn_name: String,
 ) -> Result<Dlt645LinkInfoDto, String> {
+    tracing::info!(protocol = "DLT645", old_conn_name = %old_conn_name, new_conn_name = %new_conn_name, "开始重命名协议连接");
     let client = Dlt645Client::new(&state.conn_manager);
     let link = client
-        .rename_link(old_conn_name, new_conn_name)
+        .rename_link(old_conn_name.clone(), new_conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
-    let _ = protocol_shadow::sync_protocol_shadow_module(
+        .map_err(|error| {
+            tracing::error!(protocol = "DLT645", old_conn_name = %old_conn_name, new_conn_name = %new_conn_name, error = %error, "重命名协议连接失败");
+            error.to_string()
+        })?;
+    if let Err(error) = protocol_shadow::sync_protocol_shadow_module(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Dlt645,
     )
-    .await;
+    .await {
+        tracing::warn!(protocol = "DLT645", error = %error, "协议实时数据模块同步失败");
+    }
+    tracing::info!(protocol = "DLT645", old_conn_name = %old_conn_name, new_conn_name = %new_conn_name, "重命名协议连接完成");
     Ok(link.into())
 }
 
@@ -352,9 +372,12 @@ pub async fn dlt645_get_link(
 ) -> Result<Dlt645LinkInfoDto, String> {
     let client = Dlt645Client::new(&state.conn_manager);
     let link = client
-        .get_link(conn_name)
+        .get_link(conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(protocol = "DLT645", conn_name = %conn_name, error = %error, "获取协议连接失败");
+            error.to_string()
+        })?;
     Ok(link.into())
 }
 
@@ -363,7 +386,11 @@ pub async fn dlt645_list_links(
     state: State<'_, AppState>,
 ) -> Result<Vec<Dlt645LinkInfoDto>, String> {
     let client = Dlt645Client::new(&state.conn_manager);
-    let links = client.list_links().await.map_err(|e| e.to_string())?;
+    let links = client.list_links().await.map_err(|error| {
+        tracing::error!(protocol = "DLT645", error = %error, "获取协议连接列表失败");
+        error.to_string()
+    })?;
+    tracing::info!(protocol = "DLT645", link_count = links.len(), "获取协议连接列表完成");
     Ok(links.into_iter().map(|link| link.into()).collect())
 }
 
@@ -372,16 +399,23 @@ pub async fn dlt645_delete_link(
     state: State<'_, AppState>,
     conn_name: String,
 ) -> Result<(), String> {
+    tracing::info!(protocol = "DLT645", conn_name = %conn_name, "开始删除协议连接");
     let client = Dlt645Client::new(&state.conn_manager);
     client
-        .delete_link(conn_name)
+        .delete_link(conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
-    let _ = protocol_shadow::sync_protocol_shadow_module(
+        .map_err(|error| {
+            tracing::error!(protocol = "DLT645", conn_name = %conn_name, error = %error, "删除协议连接失败");
+            error.to_string()
+        })?;
+    if let Err(error) = protocol_shadow::sync_protocol_shadow_module(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Dlt645,
     )
-    .await;
+    .await {
+        tracing::warn!(protocol = "DLT645", error = %error, "协议实时数据模块同步失败");
+    }
+    tracing::info!(protocol = "DLT645", conn_name = %conn_name, "删除协议连接完成");
     Ok(())
 }
 
@@ -390,21 +424,31 @@ pub async fn dlt645_start_link(
     state: State<'_, AppState>,
     conn_name: String,
 ) -> Result<(), String> {
+    tracing::info!(protocol = "DLT645", conn_name = %conn_name, "开始启动协议连接");
     let client = Dlt645Client::new(&state.conn_manager);
     client
-        .start_link(conn_name)
+        .start_link(conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(protocol = "DLT645", conn_name = %conn_name, error = %error, "启动协议连接失败");
+            error.to_string()
+        })?;
+    tracing::info!(protocol = "DLT645", conn_name = %conn_name, "启动协议连接请求完成");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn dlt645_stop_link(state: State<'_, AppState>, conn_name: String) -> Result<(), String> {
+    tracing::info!(protocol = "DLT645", conn_name = %conn_name, "开始停止协议连接");
     let client = Dlt645Client::new(&state.conn_manager);
     client
-        .stop_link(conn_name)
+        .stop_link(conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(protocol = "DLT645", conn_name = %conn_name, error = %error, "停止协议连接失败");
+            error.to_string()
+        })?;
+    tracing::info!(protocol = "DLT645", conn_name = %conn_name, "停止协议连接请求完成");
     Ok(())
 }
 
@@ -416,21 +460,28 @@ pub async fn dlt645_upsert_point_table(
     blocks: Vec<Dlt645BlockDto>,
     replace: bool,
 ) -> Result<(), String> {
+    tracing::info!(protocol = "DLT645", conn_name = %conn_name, point_count = points.len(), block_count = blocks.len(), replace, "开始保存协议点表");
     let client = Dlt645Client::new(&state.conn_manager);
     client
         .upsert_point_table(
-            conn_name,
+            conn_name.clone(),
             points.into_iter().map(|point| point.to_proto()).collect(),
             replace,
             blocks.into_iter().map(|block| block.to_proto()).collect(),
         )
         .await
-        .map_err(|e| e.to_string())?;
-    let _ = protocol_shadow::sync_protocol_shadow_module(
+        .map_err(|error| {
+            tracing::error!(protocol = "DLT645", conn_name = %conn_name, error = %error, "保存协议点表失败");
+            error.to_string()
+        })?;
+    if let Err(error) = protocol_shadow::sync_protocol_shadow_module(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Dlt645,
     )
-    .await;
+    .await {
+        tracing::warn!(protocol = "DLT645", error = %error, "协议实时数据模块同步失败");
+    }
+    tracing::info!(protocol = "DLT645", conn_name = %conn_name, "保存协议点表完成");
     Ok(())
 }
 
@@ -441,8 +492,11 @@ pub async fn dlt645_get_point_table(
 ) -> Result<Dlt645PointTableDto, String> {
     let client = Dlt645Client::new(&state.conn_manager);
     let table = client
-        .get_point_table(conn_name)
+        .get_point_table(conn_name.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            tracing::error!(protocol = "DLT645", conn_name = %conn_name, error = %error, "获取协议点表失败");
+            error.to_string()
+        })?;
     Ok(table.into())
 }
