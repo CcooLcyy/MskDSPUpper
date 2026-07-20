@@ -78,7 +78,8 @@ function toAppUpdateInfo(update: NonNullable<PendingAppUpdate>): AppUpdateInfo {
 }
 
 export const api = {
-  setManagerAddr: (addr: string) => invoke<void>('set_manager_addr', { addr }),
+  setManagerAddr: (addr: string, forceReconnect = false) =>
+    invoke<void>('set_manager_addr', { addr, forceReconnect }),
   getModuleInfo: () => invoke<ModuleInfo[]>('get_module_info'),
   getRunningModuleInfo: () => invoke<ModuleRunningInfo[]>('get_running_module_info'),
   startModule: (moduleInfo: ModuleInfo) => invoke<void>('start_module', { moduleInfo }),

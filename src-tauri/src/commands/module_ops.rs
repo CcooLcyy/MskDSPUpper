@@ -196,19 +196,36 @@ fn is_valid_hostname(host: &str) -> bool {
     })
 }
 
+fn should_reset_manager_runtime(address_changed: bool, force_reconnect: bool) -> bool {
+    address_changed || force_reconnect
+}
+
 // ── Tauri Commands ──
 
 /// 设置 ModuleManager 连接地址
 #[tauri::command]
-pub async fn set_manager_addr(state: State<'_, AppState>, addr: String) -> Result<(), String> {
+pub async fn set_manager_addr(
+    state: State<'_, AppState>,
+    addr: String,
+    force_reconnect: bool,
+) -> Result<(), String> {
     let normalized_addr = validate_manager_addr(&addr).map_err(|error| {
         tracing::error!(manager_addr = %addr, error = %error, "ModuleManager 地址校验失败");
         error
     })?;
-    state.protocol_shadow.stop();
-    state.conn_manager.set_manager_addr(normalized_addr);
-    state.conn_manager.clear_channels();
-    tracing::info!("ModuleManager 地址更新完成");
+    let address_changed = state.conn_manager.set_manager_addr(normalized_addr.clone());
+    let reset_runtime = should_reset_manager_runtime(address_changed, force_reconnect);
+    if reset_runtime {
+        state.protocol_shadow.stop();
+        state.conn_manager.clear_runtime_cache();
+    }
+    tracing::info!(
+        manager_addr = %normalized_addr,
+        address_changed,
+        force_reconnect,
+        reset_runtime,
+        "ModuleManager 地址设置完成"
+    );
     Ok(())
 }
 
@@ -296,7 +313,8 @@ pub async fn stop_module(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_upper_controlled_module_name, reject_uncontrolled_module, validate_manager_addr,
+        is_upper_controlled_module_name, reject_uncontrolled_module,
+        should_reset_manager_runtime, validate_manager_addr,
     };
 
     #[test]
@@ -331,5 +349,13 @@ mod tests {
         assert!(validate_manager_addr("127.0.0.1:70000").is_err());
         assert!(validate_manager_addr("module_manager:17000").is_err());
         assert!(validate_manager_addr("127.0.0.1").is_err());
+    }
+
+    #[test]
+    fn manager_runtime_reset_distinguishes_idempotent_init_and_forced_reconnect() {
+        assert!(!should_reset_manager_runtime(false, false));
+        assert!(should_reset_manager_runtime(true, false));
+        assert!(should_reset_manager_runtime(false, true));
+        assert!(should_reset_manager_runtime(true, true));
     }
 }

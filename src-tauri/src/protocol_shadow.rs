@@ -58,7 +58,10 @@ struct ShadowSource {
 impl ProtocolShadowRuntime {
     pub fn stop(&self) {
         if let Some(handle) = self.stream_task.lock().take() {
+            tracing::info!("停止协议实时数据流后台任务");
             handle.abort();
+        } else {
+            tracing::info!("协议实时数据流后台任务未运行，无需停止");
         }
     }
 
@@ -67,6 +70,7 @@ impl ProtocolShadowRuntime {
 
         if let Some(handle) = guard.as_ref() {
             if !handle.is_finished() {
+                tracing::info!("协议实时数据流后台任务已运行");
                 return;
             }
         }
@@ -75,6 +79,7 @@ impl ProtocolShadowRuntime {
             handle.abort();
         }
 
+        tracing::info!("创建协议实时数据流后台任务");
         *guard = Some(tokio::spawn(run_protocol_shadow_stream(
             app_handle,
             conn_manager,
@@ -83,7 +88,7 @@ impl ProtocolShadowRuntime {
 }
 
 pub async fn sync_all_protocol_shadow(conn_manager: &ConnectionManager) -> Result<ConnectionInfo> {
-    let _ = refresh_running_module_cache(conn_manager).await;
+    refresh_running_module_cache(conn_manager).await?;
 
     let shadow = ensure_protocol_shadow_connection(conn_manager).await?;
 
@@ -92,7 +97,13 @@ pub async fn sync_all_protocol_shadow(conn_manager: &ConnectionManager) -> Resul
         ProtocolShadowModule::ModbusRtu,
         ProtocolShadowModule::Dlt645,
     ] {
-        let _ = sync_protocol_shadow_module(conn_manager, module).await;
+        if let Err(error) = sync_protocol_shadow_module(conn_manager, module).await {
+            tracing::warn!(
+                module = module.module_name(),
+                error = %error,
+                "协议实时数据模块同步失败"
+            );
+        }
     }
 
     Ok(shadow)
@@ -245,6 +256,7 @@ async fn run_protocol_shadow_stream(app_handle: AppHandle, conn_manager: Arc<Con
             Ok(shadow) => shadow,
             Err(error) => {
                 tracing::error!(error = %error, "协议实时数据流同步失败");
+                tracing::info!(retry_delay_secs, "协议实时数据流等待重试");
                 tokio::time::sleep(Duration::from_secs(retry_delay_secs)).await;
                 retry_delay_secs = (retry_delay_secs * 2).min(10);
                 continue;
@@ -262,6 +274,7 @@ async fn run_protocol_shadow_stream(app_handle: AppHandle, conn_manager: Arc<Con
         {
             Ok(mut stream) => {
                 retry_delay_secs = 1;
+                tracing::info!(conn_id = shadow.conn_id, "协议实时数据流订阅建立完成");
 
                 loop {
                     match stream.message().await {
@@ -273,6 +286,7 @@ async fn run_protocol_shadow_stream(app_handle: AppHandle, conn_manager: Arc<Con
                             }
                         }
                         Ok(None) => {
+                            tracing::warn!(conn_id = shadow.conn_id, "协议实时数据流由服务端结束");
                             break;
                         }
                         Err(error) => {
@@ -287,6 +301,7 @@ async fn run_protocol_shadow_stream(app_handle: AppHandle, conn_manager: Arc<Con
             }
         }
 
+        tracing::info!(retry_delay_secs, "协议实时数据流等待重试");
         tokio::time::sleep(Duration::from_secs(retry_delay_secs)).await;
         retry_delay_secs = (retry_delay_secs * 2).min(10);
     }

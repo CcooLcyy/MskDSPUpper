@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tonic::transport::Channel;
 
 /// 模块运行时地址信息
@@ -19,6 +20,8 @@ pub struct ConnectionManager {
     module_addrs: RwLock<HashMap<String, String>>,
     /// 地址 -> Channel 缓存
     channels: RwLock<HashMap<String, Channel>>,
+    /// 运行时缓存代次，用于拒绝重连前发起的过期请求回写
+    runtime_generation: AtomicU64,
 }
 
 impl ConnectionManager {
@@ -27,13 +30,21 @@ impl ConnectionManager {
             manager_addr: RwLock::new(manager_addr),
             module_addrs: RwLock::new(HashMap::new()),
             channels: RwLock::new(HashMap::new()),
+            runtime_generation: AtomicU64::new(0),
         }
     }
 
-    /// 设置 ModuleManager 地址
-    pub fn set_manager_addr(&self, addr: String) {
-        tracing::info!(manager_addr = %addr, "更新 ModuleManager 地址");
-        *self.manager_addr.write() = addr;
+    /// 设置 ModuleManager 地址，返回地址是否发生变化
+    pub fn set_manager_addr(&self, addr: String) -> bool {
+        let mut current = self.manager_addr.write();
+        if *current == addr {
+            tracing::info!(manager_addr = %addr, "ModuleManager 地址未变化");
+            return false;
+        }
+
+        tracing::info!(old_manager_addr = %*current, manager_addr = %addr, "更新 ModuleManager 地址");
+        *current = addr;
+        true
     }
 
     /// 获取 ModuleManager 地址
@@ -59,9 +70,23 @@ impl ConnectionManager {
             .insert(module_name.to_string(), addr.to_string());
     }
 
-    /// 批量更新模块地址
-    pub fn update_module_addrs(&self, addrs: HashMap<String, String>) {
-        *self.module_addrs.write() = addrs;
+    /// 获取当前运行时缓存代次
+    pub fn runtime_generation(&self) -> u64 {
+        self.runtime_generation.load(Ordering::SeqCst)
+    }
+
+    /// 仅在请求代次仍有效时批量更新模块地址
+    pub fn update_module_addrs_if_generation(
+        &self,
+        expected_generation: u64,
+        addrs: HashMap<String, String>,
+    ) -> bool {
+        let mut module_addrs = self.module_addrs.write();
+        if self.runtime_generation() != expected_generation {
+            return false;
+        }
+        *module_addrs = addrs;
+        true
     }
 
     /// 查询模块地址
@@ -118,9 +143,75 @@ impl ConnectionManager {
         self.get_channel(&addr).await
     }
 
-    /// 清除所有缓存的 Channel（用于断线重连场景）
-    pub fn clear_channels(&self) {
-        tracing::info!("清理 gRPC 连接缓存");
-        self.channels.write().clear();
+    /// 清除模块地址和 Channel，供地址切换或强制重连使用
+    pub fn clear_runtime_cache(&self) {
+        let generation = self.runtime_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut module_addrs = self.module_addrs.write();
+        let mut channels = self.channels.write();
+        tracing::info!(
+            generation,
+            module_address_count = module_addrs.len(),
+            channel_count = channels.len(),
+            "清理 gRPC 运行时缓存"
+        );
+        module_addrs.clear();
+        channels.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConnectionManager;
+    use std::collections::HashMap;
+
+    #[test]
+    fn same_manager_address_preserves_module_address_cache() {
+        let manager = ConnectionManager::new("192.168.1.219:17000".to_string());
+        manager.update_module_addr("ModbusRTU", "192.168.1.219:17123");
+
+        assert!(!manager.set_manager_addr("192.168.1.219:17000".to_string()));
+        assert_eq!(
+            manager.get_module_addr("ModbusRTU").as_deref(),
+            Some("192.168.1.219:17123")
+        );
+    }
+
+    #[test]
+    fn changed_manager_address_is_reported_and_runtime_cache_can_be_cleared() {
+        let manager = ConnectionManager::new("127.0.0.1:17000".to_string());
+        manager.update_module_addr("IEC104", "127.0.0.1:17543");
+
+        assert!(manager.set_manager_addr("192.168.1.219:17000".to_string()));
+        manager.clear_runtime_cache();
+
+        assert_eq!(manager.manager_addr(), "192.168.1.219:17000");
+        assert!(manager.get_module_addr("IEC104").is_none());
+    }
+
+    #[test]
+    fn stale_runtime_generation_cannot_overwrite_module_addresses() {
+        let manager = ConnectionManager::new("192.168.1.219:17000".to_string());
+        let stale_generation = manager.runtime_generation();
+        manager.clear_runtime_cache();
+
+        let stale_addrs = HashMap::from([(
+            "ModbusRTU".to_string(),
+            "192.168.1.219:17001".to_string(),
+        )]);
+        assert!(!manager.update_module_addrs_if_generation(stale_generation, stale_addrs));
+        assert!(manager.get_module_addr("ModbusRTU").is_none());
+
+        let current_addrs = HashMap::from([(
+            "ModbusRTU".to_string(),
+            "192.168.1.219:17123".to_string(),
+        )]);
+        assert!(manager.update_module_addrs_if_generation(
+            manager.runtime_generation(),
+            current_addrs
+        ));
+        assert_eq!(
+            manager.get_module_addr("ModbusRTU").as_deref(),
+            Some("192.168.1.219:17123")
+        );
     }
 }

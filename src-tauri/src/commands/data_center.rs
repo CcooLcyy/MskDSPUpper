@@ -365,9 +365,6 @@ pub async fn dc_start_protocol_shadow_stream(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     tracing::info!("开始启动协议实时数据流");
-    if let Err(error) = protocol_shadow::sync_all_protocol_shadow(state.conn_manager.as_ref()).await {
-        tracing::warn!(error = %error, "同步协议实时数据流模块失败，将继续启动订阅");
-    }
     state
         .protocol_shadow
         .ensure_started(app_handle, state.conn_manager.clone());

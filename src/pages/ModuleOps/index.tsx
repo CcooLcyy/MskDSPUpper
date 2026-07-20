@@ -15,6 +15,7 @@ import { PlayCircleOutlined, ReloadOutlined, StopOutlined } from '@ant-design/ic
 import type { ColumnsType } from 'antd/es/table';
 import { api } from '../../adapters';
 import type { ModuleInfo, ModuleRunningInfo } from '../../adapters';
+import { reconnectManagerRuntime } from '../../utils/manager-connection';
 import { validateManagerAddress } from '../../utils/network';
 import './index.css';
 
@@ -65,10 +66,8 @@ const ModuleOps: React.FC = () => {
       setLoading(true);
 
       try {
-        const [moduleInfo, runningInfo] = await Promise.all([
-          api.getModuleInfo(),
-          api.getRunningModuleInfo(),
-        ]);
+        const runningInfo = await api.getRunningModuleInfo();
+        const moduleInfo = await api.getModuleInfo();
 
         setModules(moduleInfo);
         setRunningModules(runningInfo);
@@ -116,15 +115,17 @@ const ModuleOps: React.FC = () => {
     try {
       const normalizedAddr = normalizeManagerAddr(managerAddr);
 
-      await api.setManagerAddr(normalizedAddr);
-
       if (normalizedAddr !== managerAddr) {
         setManagerAddr(normalizedAddr);
       }
 
       localStorage.setItem(MANAGER_ADDR_KEY, normalizedAddr);
-      await refresh({ suppressError: true });
-      messageApi.success(`已连接到 ${normalizedAddr}`);
+      await reconnectManagerRuntime(normalizedAddr, {
+        setManagerAddr: api.setManagerAddr,
+        refreshManagerState: () => refresh({ suppressError: true }),
+        startRealtimeStream: api.dcStartProtocolShadowStream,
+      });
+      messageApi.success(`ModuleManager 已连接: ${normalizedAddr}`);
     } catch (error) {
       messageApi.error(`连接失败: ${error}`);
     }

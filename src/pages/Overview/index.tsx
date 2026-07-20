@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { api } from '../../adapters';
 import type { ModuleInfo, ModuleRunningInfo } from '../../adapters';
+import { loadDashboardAfterRunningModules } from '../../utils/dashboard-loading';
 
 const { Text } = Typography;
 
@@ -56,23 +57,23 @@ const Overview: React.FC = () => {
       const managerAddr = localStorage.getItem(MANAGER_ADDR_KEY) || DEFAULT_MANAGER_ADDR;
       await api.setManagerAddr(managerAddr);
 
-      const [
-        modulesResult,
-        runningModulesResult,
-        iec104LinksResult,
-        modbusLinksResult,
-        dlt645LinksResult,
-        agcGroupsResult,
-        routesResult,
-      ] = await Promise.allSettled([
-        api.getModuleInfo(),
-        api.getRunningModuleInfo(),
-        api.iec104ListLinks(),
-        api.modbusRtuListLinks(),
-        api.dlt645ListLinks(),
-        api.agcListGroups(),
-        api.dcListRoutes(0, '', 0, ''),
-      ]);
+      const {
+        modules: modulesResult,
+        runningModules: runningModulesResult,
+        iec104Links: iec104LinksResult,
+        modbusLinks: modbusLinksResult,
+        dlt645Links: dlt645LinksResult,
+        agcGroups: agcGroupsResult,
+        routes: routesResult,
+      } = await loadDashboardAfterRunningModules({
+        getModuleInfo: api.getModuleInfo,
+        getRunningModuleInfo: api.getRunningModuleInfo,
+        listIec104Links: api.iec104ListLinks,
+        listModbusLinks: api.modbusRtuListLinks,
+        listDlt645Links: api.dlt645ListLinks,
+        listAgcGroups: api.agcListGroups,
+        listRoutes: () => api.dcListRoutes(0, '', 0, ''),
+      });
 
       const modules = modulesResult.status === 'fulfilled' ? modulesResult.value : [];
       const runningModules = runningModulesResult.status === 'fulfilled' ? runningModulesResult.value : [];
