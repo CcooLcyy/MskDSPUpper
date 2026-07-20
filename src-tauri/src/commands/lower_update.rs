@@ -1,6 +1,7 @@
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
+    sync::Arc,
     time::Duration,
 };
 
@@ -12,6 +13,15 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::Command,
 };
+
+#[derive(Deserialize)]
+#[serde(tag = "method")]
+pub enum LowerUpdateSshAuthDto {
+    #[serde(rename = "password")]
+    Password { password: String },
+    #[serde(rename = "certificate")]
+    Certificate,
+}
 
 const DEFAULT_LOWER_UPDATE_BASE_URL: &str = "https://update.clsclear.top/mskdsp-lower";
 const LOWER_UPDATE_PLATFORM: &str = "linux-arm64";
@@ -73,13 +83,14 @@ pub struct LowerUpdateDownloadResultDto {
     pub sha256: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize)]
 pub struct LowerUpdateUploadRequestDto {
     pub package_name: String,
     pub package_path: String,
     pub package_size: u64,
     pub upload_account: String,
     pub install_dir: String,
+    pub auth: LowerUpdateSshAuthDto,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -99,11 +110,12 @@ pub struct LowerUpdateUploadResultDto {
     pub uploaded_bytes: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize)]
 pub struct LowerUpdateInstallRequestDto {
     pub package_name: String,
     pub upload_account: String,
     pub install_dir: String,
+    pub auth: LowerUpdateSshAuthDto,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -122,6 +134,185 @@ struct LowerUpdateUploadTarget {
     user: String,
     host: String,
     port: u16,
+}
+
+struct PasswordSshHandler {
+    host: String,
+    port: u16,
+}
+
+impl russh::client::Handler for PasswordSshHandler {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &russh::keys::ssh_key::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        match russh::keys::check_known_hosts(&self.host, self.port, server_public_key) {
+            Ok(true) => Ok(true),
+            Ok(false) => {
+                russh::keys::known_hosts::learn_known_hosts(
+                    &self.host,
+                    self.port,
+                    server_public_key,
+                )
+                .map_err(russh::Error::from)?;
+                Ok(true)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+async fn connect_password_ssh(
+    target: &LowerUpdateUploadTarget,
+    password: &str,
+) -> Result<russh::client::Handle<PasswordSshHandler>, String> {
+    if password.is_empty() {
+        return Err("SSH 密码不能为空".into());
+    }
+    let config = russh::client::Config {
+        inactivity_timeout: Some(Duration::from_secs(30)),
+        ..Default::default()
+    };
+    let mut session = russh::client::connect(
+        Arc::new(config),
+        (target.host.as_str(), target.port),
+        PasswordSshHandler {
+            host: target.host.clone(),
+            port: target.port,
+        },
+    )
+    .await
+    .map_err(|e| format!("SSH 密码连接失败: {e}"))?;
+    let auth = session
+        .authenticate_password(target.user.clone(), password.to_string())
+        .await
+        .map_err(|e| format!("SSH 密码认证失败: {e}"))?;
+    if !auth.success() {
+        return Err("SSH 用户名或密码错误，或下位机未启用密码认证".into());
+    }
+    if let Err(error) = save_password(target, password) {
+        tracing::warn!(%error, "保存下位机 SSH 密码失败，将继续本次更新");
+    }
+    Ok(session)
+}
+
+async fn upload_with_password_ssh(
+    app_handle: &AppHandle,
+    target: &LowerUpdateUploadTarget,
+    password: &str,
+    package_name: &str,
+    package_path: &Path,
+    remote_path: &str,
+    remote_command: &str,
+) -> Result<u64, String> {
+    let metadata = fs::metadata(package_path)
+        .await
+        .map_err(|e| format!("读取上位机更新包失败: {e}"))?;
+    let total_bytes = metadata.len();
+    let mut file = fs::File::open(package_path)
+        .await
+        .map_err(|e| format!("打开上位机更新包失败: {e}"))?;
+    let mut session = connect_password_ssh(target, password).await?;
+    let mut channel = session
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("打开 SSH 上传通道失败: {e}"))?;
+    channel
+        .exec(true, remote_command)
+        .await
+        .map_err(|e| format!("执行 SSH 上传命令失败: {e}"))?;
+
+    emit_upload_progress(app_handle, package_name, remote_path, 0, total_bytes, "started");
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut uploaded_bytes = 0_u64;
+    loop {
+        let read_bytes = file
+            .read(&mut buffer)
+            .await
+            .map_err(|e| format!("读取上位机更新包失败: {e}"))?;
+        if read_bytes == 0 {
+            break;
+        }
+        channel
+            .data_bytes(&buffer[..read_bytes])
+            .await
+            .map_err(|e| format!("SSH 写入更新包失败: {e}"))?;
+        uploaded_bytes = uploaded_bytes.saturating_add(read_bytes as u64);
+        emit_upload_progress(
+            app_handle,
+            package_name,
+            remote_path,
+            uploaded_bytes,
+            total_bytes,
+            "uploading",
+        );
+    }
+    channel
+        .eof()
+        .await
+        .map_err(|e| format!("结束 SSH 上传输入流失败: {e}"))?;
+
+    let mut exit_code = None;
+    while let Some(message) = channel.wait().await {
+        if let russh::ChannelMsg::ExitStatus { exit_status } = message {
+            exit_code = Some(exit_status);
+        }
+    }
+    if exit_code != Some(0) {
+        return Err(format!(
+            "上传下位机更新包失败: 远端命令退出码 {}",
+            exit_code.map_or_else(|| "未知".to_string(), |code| code.to_string())
+        ));
+    }
+    emit_upload_progress(
+        app_handle,
+        package_name,
+        remote_path,
+        uploaded_bytes,
+        total_bytes,
+        "finished",
+    );
+    let _ = session
+        .disconnect(russh::Disconnect::ByApplication, "", "English")
+        .await;
+    Ok(uploaded_bytes)
+}
+
+async fn install_with_password_ssh(
+    target: &LowerUpdateUploadTarget,
+    password: &str,
+    remote_command: &str,
+) -> Result<(bool, Option<i32>, String, String), String> {
+    let mut session = connect_password_ssh(target, password).await?;
+    let mut channel = session
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("打开 SSH 安装通道失败: {e}"))?;
+    channel
+        .exec(true, remote_command)
+        .await
+        .map_err(|e| format!("执行 SSH 安装命令失败: {e}"))?;
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut exit_code = None;
+    while let Some(message) = channel.wait().await {
+        match message {
+            russh::ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+            russh::ChannelMsg::ExtendedData { data, ext } if ext == 1 => {
+                stderr.extend_from_slice(&data)
+            }
+            russh::ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status),
+            _ => {}
+        }
+    }
+    let _ = session
+        .disconnect(russh::Disconnect::ByApplication, "", "English")
+        .await;
+    let exit_code_i32 = exit_code.map(|value| value as i32);
+    Ok((exit_code == Some(0), exit_code_i32, String::from_utf8_lossy(&stdout).into_owned(), String::from_utf8_lossy(&stderr).into_owned()))
 }
 
 fn normalize_channel(channel: &str) -> Result<String, String> {
@@ -207,6 +398,44 @@ fn parse_upload_account(value: &str) -> Result<LowerUpdateUploadTarget, String> 
         host: host.to_string(),
         port,
     })
+}
+
+fn credential_target(target: &LowerUpdateUploadTarget) -> String {
+    format!("{}@{}:{}", target.user, target.host, target.port)
+}
+
+fn save_password(target: &LowerUpdateUploadTarget, password: &str) -> Result<(), String> {
+    let target_name = credential_target(target);
+    let entry = keyring::Entry::new_with_target("mskdsp-lower-update", "ssh", &target_name)
+        .map_err(|e| format!("创建 SSH 凭据项失败: {e}"))?;
+    entry
+        .set_password(password)
+        .map_err(|e| format!("保存 SSH 密码失败: {e}"))
+}
+
+#[tauri::command]
+pub fn get_lower_update_password(upload_account: String) -> Result<Option<String>, String> {
+    let target = parse_upload_account(&upload_account)?;
+    let target_name = credential_target(&target);
+    let entry = keyring::Entry::new_with_target("mskdsp-lower-update", "ssh", &target_name)
+        .map_err(|e| format!("创建 SSH 凭据项失败: {e}"))?;
+    match entry.get_password() {
+        Ok(password) => Ok(Some(password)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("读取已保存 SSH 密码失败: {error}")),
+    }
+}
+
+#[tauri::command]
+pub fn clear_lower_update_password(upload_account: String) -> Result<(), String> {
+    let target = parse_upload_account(&upload_account)?;
+    let target_name = credential_target(&target);
+    let entry = keyring::Entry::new_with_target("mskdsp-lower-update", "ssh", &target_name)
+        .map_err(|e| format!("创建 SSH 凭据项失败: {e}"))?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!("清除已保存 SSH 密码失败: {error}")),
+    }
 }
 
 fn normalize_install_dir(value: &str) -> Result<String, String> {
@@ -614,6 +843,25 @@ pub async fn upload_lower_update_package(
         shell_quote(&remote_path),
         shell_quote(&remote_path)
     );
+
+    if let LowerUpdateSshAuthDto::Password { password } = &request.auth {
+        let uploaded_bytes = upload_with_password_ssh(
+            &app_handle,
+            &target,
+            password,
+            &request.package_name,
+            &package_path,
+            &remote_path,
+            &remote_command,
+        )
+        .await?;
+        return Ok(LowerUpdateUploadResultDto {
+            package_name: request.package_name,
+            remote_path,
+            uploaded_bytes,
+        });
+    }
+
     let remote_target = format!("{}@{}", target.user, target.host);
     tracing::info!(
         package = %request.package_name,
@@ -754,6 +1002,21 @@ pub async fn install_lower_update_package(
     let install_dir = normalize_install_dir(&request.install_dir)?;
     let remote_path = remote_package_path(&install_dir, &request.package_name);
     let remote_command = build_install_command(&install_dir, &request.package_name);
+
+    if let LowerUpdateSshAuthDto::Password { password } = &request.auth {
+        let (success, exit_code, stdout, stderr) =
+            install_with_password_ssh(&target, password, &remote_command).await?;
+        return Ok(LowerUpdateInstallResultDto {
+            package_name: request.package_name,
+            remote_path,
+            command: remote_command,
+            success,
+            exit_code,
+            stdout,
+            stderr,
+        });
+    }
+
     let remote_target = format!("{}@{}", target.user, target.host);
 
     tracing::info!(

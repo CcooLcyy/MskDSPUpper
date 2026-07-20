@@ -86,6 +86,8 @@ pub fn run() {
             commands::lower_update::download_lower_update,
             commands::lower_update::upload_lower_update_package,
             commands::lower_update::install_lower_update_package,
+            commands::lower_update::get_lower_update_password,
+            commands::lower_update::clear_lower_update_password,
         ])
         .run(tauri::generate_context!())
         .map_err(|error| {

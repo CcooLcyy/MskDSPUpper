@@ -470,6 +470,8 @@ export const browserApi: typeof tauriApi = {
       stderr: '',
     };
   },
+  getLowerUpdatePassword: async (): Promise<string | null> => null,
+  clearLowerUpdatePassword: async (): Promise<void> => {},
 
   iec104UpsertLink: async (config: Iec104LinkConfig, createOnly: boolean) =>
     upsertByName(iec104Links, config.conn_name, createOnly, (connId, previous) => ({

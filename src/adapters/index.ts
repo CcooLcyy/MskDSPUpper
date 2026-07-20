@@ -10,6 +10,7 @@ export type {
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
   LowerUpdateManifest,
+  LowerUpdateSshAuth,
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
   LowerUpdateUploadResult,

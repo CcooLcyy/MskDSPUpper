@@ -105,12 +105,17 @@ export interface LowerUpdateDownloadResult {
 
 export type LowerUpdateUploadStage = 'started' | 'uploading' | 'finished';
 
+export type LowerUpdateSshAuth =
+  | { method: 'password'; password: string }
+  | { method: 'certificate' };
+
 export interface LowerUpdateUploadRequest {
   package_name: string;
   package_path: string;
   package_size: number;
   upload_account: string;
   install_dir: string;
+  auth: LowerUpdateSshAuth;
 }
 
 export interface LowerUpdateUploadProgress {
@@ -132,6 +137,7 @@ export interface LowerUpdateInstallRequest {
   package_name: string;
   upload_account: string;
   install_dir: string;
+  auth: LowerUpdateSshAuth;
 }
 
 export interface LowerUpdateInstallResult {

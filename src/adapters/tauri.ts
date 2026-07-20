@@ -164,6 +164,10 @@ export const api = {
   },
   installLowerUpdatePackage: (request: LowerUpdateInstallRequest) =>
     invoke<LowerUpdateInstallResult>('install_lower_update_package', { request }),
+  getLowerUpdatePassword: (uploadAccount: string) =>
+    invoke<string | null>('get_lower_update_password', { uploadAccount }),
+  clearLowerUpdatePassword: (uploadAccount: string) =>
+    invoke<void>('clear_lower_update_password', { uploadAccount }),
 
   iec104UpsertLink: (config: Iec104LinkConfig, createOnly: boolean) =>
     invoke<Iec104LinkInfo>('iec104_upsert_link', { config, createOnly }),

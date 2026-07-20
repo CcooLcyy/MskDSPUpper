@@ -8,6 +8,7 @@ import {
   message,
   Modal,
   Progress,
+  Segmented,
   Select,
   Space,
   Tag,
@@ -35,6 +36,7 @@ import {
   type LowerUpdateDownloadResult,
   type LowerUpdateInstallResult,
   type LowerUpdateManifest,
+  type LowerUpdateSshAuth,
   type LowerUpdateUploadProgress,
   type LowerUpdateUploadResult,
   type ModuleInfo,
@@ -47,6 +49,8 @@ const { Text } = Typography;
 type AdvancedConfigAuthFormValues = {
   password: string;
 };
+
+type LowerUpdateAuthMethod = LowerUpdateSshAuth['method'];
 
 type LowerUpdateStatus =
   | '未检查'
@@ -94,6 +98,8 @@ const UPDATE_CHANNEL_OPTIONS: Array<{ label: string; value: LowerUpdateChannel }
 ];
 
 const DEFAULT_LOWER_UPDATE_CHANNEL: LowerUpdateChannel = 'ci';
+const DEFAULT_LOWER_UPDATE_AUTH_METHOD: LowerUpdateAuthMethod = 'password';
+const DEFAULT_LOWER_UPDATE_SSH_PASSWORD = 'Meg@admin123';
 const UPDATE_CHANNEL_LABELS: Record<LowerUpdateChannel, string> = UPDATE_CHANNEL_OPTIONS.reduce(
   (labels, option) => ({
     ...labels,
@@ -102,10 +108,15 @@ const UPDATE_CHANNEL_LABELS: Record<LowerUpdateChannel, string> = UPDATE_CHANNEL
   {} as Record<LowerUpdateChannel, string>,
 );
 
+const LOWER_UPDATE_AUTH_METHOD_LABELS: Record<LowerUpdateAuthMethod, string> = {
+  password: '密码',
+  certificate: '证书',
+};
+
 const LOWER_UPDATE_MOCK_TARGET = {
   managerAddr: '192.168.1.219:17000',
-  uploadAccount: 'root@192.168.1.219:22',
-  installDir: '/root',
+  uploadAccount: 'megsky@192.168.1.219:10022',
+  installDir: '/home/megsky',
 };
 
 function getDeliveryStatusColor(status: LowerUpdateStatus): string {
@@ -454,6 +465,10 @@ const AdvancedConfigPage: React.FC = () => {
   const [targetManagerAddr, setTargetManagerAddr] = useState(LOWER_UPDATE_MOCK_TARGET.managerAddr);
   const [targetUploadAccount, setTargetUploadAccount] = useState(LOWER_UPDATE_MOCK_TARGET.uploadAccount);
   const [targetInstallDir, setTargetInstallDir] = useState(LOWER_UPDATE_MOCK_TARGET.installDir);
+  const [targetSshPassword, setTargetSshPassword] = useState(DEFAULT_LOWER_UPDATE_SSH_PASSWORD);
+  const [lowerUpdateAuthMethod, setLowerUpdateAuthMethod] = useState<LowerUpdateAuthMethod>(
+    DEFAULT_LOWER_UPDATE_AUTH_METHOD,
+  );
   const [isCheckingLowerUpdate, setIsCheckingLowerUpdate] = useState(false);
   const [isDownloadingLowerUpdate, setIsDownloadingLowerUpdate] = useState(false);
   const [isUploadingLowerUpdate, setIsUploadingLowerUpdate] = useState(false);
@@ -465,15 +480,18 @@ const AdvancedConfigPage: React.FC = () => {
   const [installResult, setInstallResult] = useState<LowerUpdateInstallResult | null>(null);
   const [form] = Form.useForm<AdvancedConfigAuthFormValues>();
   const [messageApi, contextHolder] = message.useMessage();
+  const [isLoadingSavedSshPassword, setIsLoadingSavedSshPassword] = useState(false);
   const targetManagerAddrValidation = validateManagerAddress(targetManagerAddr);
   const targetUploadAccountValidation = validateUploadAccount(targetUploadAccount);
   const targetInstallDirValidation = validateInstallDir(targetInstallDir);
+  const hasSshPasswordValidationError = lowerUpdateAuthMethod === 'password' && targetSshPassword.length === 0;
   const hasTargetValidationError =
-    !targetManagerAddrValidation.ok || !targetUploadAccountValidation.ok || !targetInstallDirValidation.ok;
+    !targetManagerAddrValidation.ok
+    || !targetUploadAccountValidation.ok
+    || !targetInstallDirValidation.ok
+    || hasSshPasswordValidationError;
   const hasCheckedPackage = activeManifest !== null;
   const hasDownloadedPackage = downloadResult !== null;
-  const hasUploadedPackage = uploadResult !== null;
-  const hasInstalledPackage = installResult?.success === true;
   const isDeployingLowerUpdate = isUploadingLowerUpdate || isInstallingLowerUpdate || isVerifyingLowerUpdate;
   const deployTaskProgress = getDeployTaskProgress(deployTaskStep, uploadModalProgress);
   const isDeployTaskFailed =
@@ -483,6 +501,29 @@ const AdvancedConfigPage: React.FC = () => {
     || deployTaskStep === 'version_mismatch';
   const canReinstall = Boolean(downloadResult && uploadResult);
   const canReverifyVersion = installResult?.success === true;
+
+  React.useEffect(() => {
+    if (lowerUpdateAuthMethod !== 'password' || !targetUploadAccount.trim()) {
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingSavedSshPassword(true);
+    void api.getLowerUpdatePassword(targetUploadAccount.trim())
+      .then((password) => {
+        if (!cancelled && password !== null) {
+          setTargetSshPassword(password);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingSavedSshPassword(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lowerUpdateAuthMethod, targetUploadAccount]);
 
   const handleSubmit = ({ password }: AdvancedConfigAuthFormValues): void => {
     if (!isAdvancedConfigPasswordValid(password)) {
@@ -701,6 +742,9 @@ const AdvancedConfigPage: React.FC = () => {
           package_size: packageResult.downloaded_bytes,
           upload_account: targetUploadAccount.trim(),
           install_dir: targetInstallDir.trim(),
+          auth: lowerUpdateAuthMethod === 'password'
+            ? { method: 'password', password: targetSshPassword }
+            : { method: 'certificate' },
         },
         (progress) => {
           setUploadStage(progress.stage);
@@ -744,6 +788,9 @@ const AdvancedConfigPage: React.FC = () => {
         package_name: packageResult.package_name,
         upload_account: targetUploadAccount.trim(),
         install_dir: targetInstallDir.trim(),
+        auth: lowerUpdateAuthMethod === 'password'
+          ? { method: 'password', password: targetSshPassword }
+          : { method: 'certificate' },
       });
 
       setInstallResult(result);
@@ -897,6 +944,7 @@ const AdvancedConfigPage: React.FC = () => {
   const handleLogout = (): void => {
     revokeAdvancedConfigSession();
     setAuthorized(false);
+    setTargetSshPassword('');
     form.resetFields();
   };
 
@@ -911,10 +959,6 @@ const AdvancedConfigPage: React.FC = () => {
             <Text strong className="advanced-config-page-title">
               下位机更新下发
             </Text>
-            <Tag color="success">检查更新已接入</Tag>
-            <Tag color="success">下载校验已接入</Tag>
-            <Tag color={hasUploadedPackage ? 'success' : 'processing'}>上传已接入</Tag>
-            <Tag color={hasInstalledPackage ? 'success' : 'processing'}>安装已接入</Tag>
           </Space>
           <Button size="small" icon={<LogoutOutlined />} onClick={handleLogout}>
             退出
@@ -958,14 +1002,58 @@ const AdvancedConfigPage: React.FC = () => {
                     disabled={isDeployingLowerUpdate}
                     onChange={(event) => {
                       setTargetUploadAccount(event.target.value);
+                      setTargetSshPassword('');
                       resetUploadState();
                       if (downloadResult) {
                         setDeliveryStatus('已下载到上位机');
                       }
                     }}
-                    placeholder="例如 root@192.168.1.219:22"
+                    placeholder="例如 megsky@192.168.1.219:10022"
                   />
                 </Form.Item>
+                <Form.Item label="SSH 认证方式">
+                  <Segmented<LowerUpdateAuthMethod>
+                    block
+                    value={lowerUpdateAuthMethod}
+                    options={Object.entries(LOWER_UPDATE_AUTH_METHOD_LABELS).map(([value, label]) => ({
+                      value: value as LowerUpdateAuthMethod,
+                      label,
+                    }))}
+                    disabled={isDeployingLowerUpdate}
+                    onChange={(value) => {
+                      setLowerUpdateAuthMethod(value);
+                      if (value === 'certificate') {
+                        setTargetSshPassword('');
+                      }
+                      resetUploadState();
+                      if (downloadResult) {
+                        setDeliveryStatus('已下载到上位机');
+                      }
+                    }}
+                  />
+                </Form.Item>
+                {lowerUpdateAuthMethod === 'password' ? (
+                  <Form.Item
+                    label="SSH 密码"
+                    required
+                    validateStatus={hasSshPasswordValidationError ? 'error' : undefined}
+                    help={hasSshPasswordValidationError ? '请输入 SSH 登录密码' : undefined}
+                  >
+                    <Input.Password
+                      value={targetSshPassword}
+                      disabled={isDeployingLowerUpdate || isLoadingSavedSshPassword}
+                      autoComplete="current-password"
+                      onChange={(event) => {
+                        setTargetSshPassword(event.target.value);
+                        resetUploadState();
+                        if (downloadResult) {
+                          setDeliveryStatus('已下载到上位机');
+                        }
+                      }}
+                      placeholder="请输入 SSH 登录密码"
+                    />
+                  </Form.Item>
+                ) : null}
                 <Form.Item
                   label="安装目录"
                   validateStatus={targetInstallDirValidation.ok ? undefined : 'error'}
@@ -981,7 +1069,7 @@ const AdvancedConfigPage: React.FC = () => {
                         setDeliveryStatus('已下载到上位机');
                       }
                     }}
-                    placeholder="例如 /root"
+                    placeholder="例如 /home/megsky"
                   />
                 </Form.Item>
               </Form>
@@ -1126,6 +1214,9 @@ const AdvancedConfigPage: React.FC = () => {
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Descriptions size="small" column={1}>
               <Descriptions.Item label="目标下位机">{targetUploadAccount}</Descriptions.Item>
+              <Descriptions.Item label="SSH 认证方式">
+                {LOWER_UPDATE_AUTH_METHOD_LABELS[lowerUpdateAuthMethod]}
+              </Descriptions.Item>
               <Descriptions.Item label="安装目录">{targetInstallDir}</Descriptions.Item>
               <Descriptions.Item label="安装包">{packageName}</Descriptions.Item>
               <Descriptions.Item label="本地路径">{downloadResult?.package_path ?? '-'}</Descriptions.Item>
