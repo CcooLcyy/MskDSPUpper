@@ -117,11 +117,12 @@ const DLT645: React.FC = () => {
       const table = await api.dlt645GetPointTable(connName);
       setPoints(table.points);
       setBlocks(table.blocks);
-    } catch {
+    } catch (error) {
       setPoints([]);
       setBlocks([]);
+      messageApi.error(`加载 DLT645 点表失败: ${error}`);
     }
-  }, []);
+  }, [messageApi]);
 
   const getLinkState = useCallback(async (connName: string): Promise<number | null> => {
     const link = await api.dlt645GetLink(connName);

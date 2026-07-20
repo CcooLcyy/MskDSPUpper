@@ -497,5 +497,6 @@ pub async fn modbus_rtu_get_point_table(
             tracing::error!(protocol = "ModbusRTU", conn_name = %conn_name, error = %error, "获取协议点表失败");
             error.to_string()
         })?;
+    tracing::info!(protocol = "ModbusRTU", conn_name = %conn_name, point_count = table.points.len(), "获取协议点表完成");
     Ok(table.into())
 }

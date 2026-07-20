@@ -120,10 +120,11 @@ const ModbusRTU: React.FC = () => {
     try {
       const table = await api.modbusRtuGetPointTable(connName);
       setPoints(table.points);
-    } catch {
+    } catch (error) {
       setPoints([]);
+      messageApi.error(`加载 ModbusRTU 点表失败: ${error}`);
     }
-  }, []);
+  }, [messageApi]);
 
   const getLinkState = useCallback(async (connName: string): Promise<number | null> => {
     const link = await api.modbusRtuGetLink(connName);

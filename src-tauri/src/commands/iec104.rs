@@ -380,6 +380,7 @@ pub async fn iec104_get_point_table(
             tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "获取协议点表失败");
             error.to_string()
         })?;
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, point_count = table.points.len(), "获取协议点表完成");
     Ok(table.into())
 }
 

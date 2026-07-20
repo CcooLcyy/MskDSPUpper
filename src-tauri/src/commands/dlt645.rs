@@ -498,5 +498,12 @@ pub async fn dlt645_get_point_table(
             tracing::error!(protocol = "DLT645", conn_name = %conn_name, error = %error, "获取协议点表失败");
             error.to_string()
         })?;
+    tracing::info!(
+        protocol = "DLT645",
+        conn_name = %conn_name,
+        point_count = table.points.len(),
+        block_count = table.blocks.len(),
+        "获取协议点表完成"
+    );
     Ok(table.into())
 }

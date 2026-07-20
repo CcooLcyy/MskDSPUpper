@@ -458,11 +458,12 @@ const IEC104: React.FC = () => {
       try {
         const pt = await api.iec104GetPointTable(connName);
         setPoints(pt.points);
-      } catch {
+      } catch (error) {
         setPoints([]);
+        messageApi.error(`加载 IEC104 点表失败: ${error}`);
       }
     },
-    [],
+    [messageApi],
   );
 
   const getLinkState = useCallback(
