@@ -167,7 +167,13 @@ jobs:
       - name: Show sccache stats
         if: always()
         shell: pwsh
-        run: .\scripts\workflow\Show-SccacheStats.ps1
+        run: |
+          $statsScript = '.\scripts\workflow\Show-SccacheStats.ps1'
+          if (Test-Path -LiteralPath $statsScript) {
+            & $statsScript
+          } else {
+            Write-Warning "sccache stats helper is unavailable on ${{ needs.resolve-beta.outputs.beta_ref }}; skipping stats."
+          }
 
       - name: Collect diagnostics on failure
         if: failure()
@@ -286,7 +292,13 @@ jobs:
       - name: Show sccache stats
         if: always()
         shell: pwsh
-        run: .\scripts\workflow\Show-SccacheStats.ps1
+        run: |
+          $statsScript = '.\scripts\workflow\Show-SccacheStats.ps1'
+          if (Test-Path -LiteralPath $statsScript) {
+            & $statsScript
+          } else {
+            Write-Warning "sccache stats helper is unavailable on ${{ needs.resolve-beta.outputs.beta_ref }}; skipping stats."
+          }
 
       - name: Stage artifacts
         shell: pwsh

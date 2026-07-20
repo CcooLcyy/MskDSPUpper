@@ -82,6 +82,21 @@ test('beta workflow only triggers one-segment beta branch names', () => {
   assert.doesNotMatch(fileText, /^\s{6}- beta\/\*\*\s*$/m);
 });
 
+test('beta workflow tolerates target branches without the sccache stats helper', () => {
+  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/beta.yml'), 'utf8');
+  const statsBlocks = fileText
+    .split(/(?=^[ \t]+- name: )/m)
+    .filter((block) => block.trimStart().startsWith('- name: Show sccache stats'));
+
+  assert.equal(statsBlocks.length, 2);
+  for (const block of statsBlocks) {
+    assert.match(block, /\$statsScript = '\.\\scripts\\workflow\\Show-SccacheStats\.ps1'/);
+    assert.match(block, /if \(Test-Path -LiteralPath \$statsScript\) \{/);
+    assert.match(block, /& \$statsScript/);
+    assert.match(block, /skipping stats/);
+  }
+});
+
 test('rolling release tags are created from the build commit', () => {
   const nightlyText = fs.readFileSync(path.join(repoRoot, '.github/workflows/nightly.yml'), 'utf8');
   const betaText = fs.readFileSync(path.join(repoRoot, '.github/workflows/beta.yml'), 'utf8');

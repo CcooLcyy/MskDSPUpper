@@ -31,12 +31,14 @@ impl<'a> MakeWriter<'a> for SharedLogFile {
 impl Write for LogFileWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         let shared = SharedLogFile(Arc::clone(&self.0));
-        shared.lock()?.write(buffer)
+        let mut file = shared.lock()?;
+        file.write(buffer)
     }
 
     fn flush(&mut self) -> io::Result<()> {
         let shared = SharedLogFile(Arc::clone(&self.0));
-        shared.lock()?.flush()
+        let mut file = shared.lock()?;
+        file.flush()
     }
 }
 
