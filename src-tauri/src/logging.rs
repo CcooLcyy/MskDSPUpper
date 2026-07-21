@@ -262,11 +262,19 @@ mod tests {
         }
     }
 
+    fn open_test_metadata_file(path: &Path) -> io::Result<File> {
+        OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(path)
+    }
+
     #[test]
     fn rotates_before_a_write_would_exceed_the_limit() {
         let directory = TestDirectory::new();
         let log_path = directory.0.join(LOG_FILE_NAME);
-        let file = open_log_file(&log_path).unwrap();
+        let file = open_test_metadata_file(&log_path).unwrap();
         file.set_len(MAX_LOG_FILE_SIZE - 2).unwrap();
         drop(file);
 
@@ -320,12 +328,12 @@ mod tests {
     fn startup_rotation_only_rotates_logs_over_the_limit() {
         let directory = TestDirectory::new();
         let log_path = directory.0.join(LOG_FILE_NAME);
-        let file = open_log_file(&log_path).unwrap();
+        let file = open_test_metadata_file(&log_path).unwrap();
         file.set_len(MAX_LOG_FILE_SIZE).unwrap();
         drop(file);
         assert!(rotate_oversized_log(&log_path).unwrap().is_none());
 
-        let file = open_log_file(&log_path).unwrap();
+        let file = open_test_metadata_file(&log_path).unwrap();
         file.set_len(MAX_LOG_FILE_SIZE + 1).unwrap();
         drop(file);
         let archive = rotate_oversized_log(&log_path).unwrap().unwrap();
@@ -368,7 +376,7 @@ mod tests {
 
         let now = SystemTime::now();
         let expired_at = now - LOG_RETENTION - Duration::from_secs(1);
-        File::open(&expired)
+        open_test_metadata_file(&expired)
             .unwrap()
             .set_times(FileTimes::new().set_modified(expired_at))
             .unwrap();
