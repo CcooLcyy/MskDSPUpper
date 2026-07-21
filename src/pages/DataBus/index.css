@@ -2,10 +2,241 @@
   overflow: hidden;
 }
 
+.route-builder-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.route-connection-pickers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr);
+  align-items: end;
+  gap: 10px;
+}
+
+.route-direction-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.route-direction-toolbar .ant-tabs {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.route-direction-toolbar .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.route-direction-toolbar .app-view-tabs > .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.route-connection-arrow {
+  color: #1677ff;
+  text-align: center;
+  padding-bottom: 8px;
+  font-size: 18px;
+}
+
+.route-builder-panel,
+.route-pair-preview,
+.route-custom-builder,
+.route-submit-summary {
+  border: 1px solid #3e3e42;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.route-builder-panel,
+.route-pair-preview {
+  min-width: 0;
+}
+
+.route-builder-panel {
+  min-height: 360px;
+}
+
+.route-pair-preview {
+  grid-column: 1 / -1;
+  order: 3;
+}
+
+.route-builder-caption {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 12px;
+}
+
+.route-point-list {
+  height: 180px;
+  overflow: auto;
+  border: 1px solid #3e3e42;
+  border-radius: 4px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.route-point-option {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 7px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.route-point-option:hover,
+.route-point-option.selected {
+  background: rgba(22, 119, 255, 0.16);
+}
+
+.route-point-number {
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  line-height: 20px;
+  text-align: center;
+  border-radius: 50%;
+  background: #303038;
+  color: #aaa;
+  font-size: 12px;
+}
+
+.route-point-option.selected .route-point-number {
+  background: #1677ff;
+  color: #fff;
+}
+
+.route-selected-list {
+  margin-top: 10px;
+  min-height: 220px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.route-selected-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 3px 0;
+  font-size: 12px;
+  cursor: grab;
+}
+
+.route-selected-index {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  border-radius: 50%;
+  background: #1677ff;
+  color: #fff;
+  font-size: 12px;
+}
+
+.route-selected-item > span:not(.route-selected-index) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.route-selected-item > .route-selected-index {
+  flex: 0 0 22px;
+}
+
+.route-pair-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.route-pair-row,
+.route-summary-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  font-size: 12px;
+}
+
+.route-pair-index {
+  color: #888;
+  text-align: center;
+}
+
+.route-pair-row > span:not(.route-pair-index):not(.route-pair-arrow),
+.route-summary-row > span:not(.route-pair-arrow):not(:first-child) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-pair-arrow {
+  color: #1677ff;
+  text-align: center;
+}
+
+.route-custom-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.route-custom-header,
+.route-custom-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 8px;
+}
+
+.route-custom-header {
+  color: #aaa;
+  font-size: 12px;
+}
+
+.route-submit-summary {
+  max-height: 160px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 @media (max-width: 900px) {
   .data-bus-config-grid {
     grid-template-columns: minmax(0, 1fr) !important;
     grid-template-rows: minmax(260px, 0.75fr) minmax(360px, 1fr);
     overflow: auto;
   }
+
+  .route-builder-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .route-connection-pickers {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .route-connection-arrow {
+    display: none;
+  }
+
 }

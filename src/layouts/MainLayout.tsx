@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ControlHeaderViewSwitcher from '../components/control/ControlHeaderViewSwitcher';
+import DataBusHeaderViewSwitcher from '../components/data-bus/DataBusHeaderViewSwitcher';
 import { useAppUpdate } from '../components/app-update/app-update-context';
 import ProtocolHeaderViewSwitcher from '../components/protocol/ProtocolHeaderViewSwitcher';
 import { ADVANCED_CONFIG_PATH } from '../utils/advanced-config-auth';
@@ -109,6 +110,7 @@ const MainLayout: React.FC = () => {
     'MskDSP';
   const isProtocolPage = location.pathname.startsWith('/protocol/');
   const isControlPage = location.pathname.startsWith('/control');
+  const isDataBusPage = location.pathname.startsWith('/data-bus');
   const hasHeaderViewSwitcher = isProtocolPage || isControlPage;
   const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage || isControlPage ? 'hidden' : 'auto';
 
@@ -174,6 +176,7 @@ const MainLayout: React.FC = () => {
             ) : null}
             {isProtocolPage ? <ProtocolHeaderViewSwitcher /> : null}
             {isControlPage ? <ControlHeaderViewSwitcher /> : null}
+            {isDataBusPage ? <DataBusHeaderViewSwitcher /> : null}
           </div>
           <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
         </Header>
