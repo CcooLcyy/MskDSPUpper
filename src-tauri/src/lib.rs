@@ -11,10 +11,25 @@ use state::AppState;
 pub fn run() {
     match logging::init() {
         Ok(log_path) => tracing::info!(log_path = %log_path.display(), "上位机运行日志已初始化"),
-        Err(error) => eprintln!("上位机运行日志初始化失败: {error}"),
+        Err(error) => {
+            eprintln!("上位机运行日志初始化失败: {error}");
+            let _ = tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .with_ansi(false)
+                .with_target(false)
+                .with_max_level(tracing::Level::INFO)
+                .try_init();
+            tracing::error!(error = %error, "上位机运行日志文件不可用，已切换到标准错误输出");
+        }
     }
 
-    tracing::info!("上位机进程启动");
+    tracing::info!(
+        pid = std::process::id(),
+        app_version = env!("CARGO_PKG_VERSION"),
+        os = std::env::consts::OS,
+        arch = std::env::consts::ARCH,
+        "上位机进程启动"
+    );
     let app_state = AppState::new("127.0.0.1:17000".to_string());
 
     tauri::Builder::default()
