@@ -1,8 +1,7 @@
 $ErrorActionPreference = "Stop"
 $candidates = @(
     "__INSTALL_DIR__\logs",
-    "$env:LOCALAPPDATA\__PRODUCT_NAME__\logs",
-    "$env:APPDATA\__PRODUCT_NAME__\logs"
+    "$env:LOCALAPPDATA\__APP_IDENTIFIER__\logs"
 )
 
 Write-Host "__PRODUCT_NAME__ 日志目录探测结果:"

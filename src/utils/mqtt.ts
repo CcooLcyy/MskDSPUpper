@@ -55,23 +55,12 @@ const isMqttConfigLike = (value: unknown): value is BaseMqttConfig => {
 };
 
 export const loadStoredMqttConfig = <T extends BaseMqttConfig>(storageKey: string): T | null => {
-  try {
-    const raw = globalThis.localStorage?.getItem(storageKey);
-    if (!raw) {
-      return null;
-    }
-
-    const parsed: unknown = JSON.parse(raw);
-    return isMqttConfigLike(parsed) ? (parsed as T) : null;
-  } catch {
-    return null;
-  }
+  const value = getAppSetting<unknown>(storageKey);
+  return isMqttConfigLike(value) ? (value as T) : null;
 };
 
-export const saveStoredMqttConfig = <T extends BaseMqttConfig>(storageKey: string, config: T): void => {
-  try {
-    globalThis.localStorage?.setItem(storageKey, JSON.stringify(config));
-  } catch {
-    // Ignore storage failures and keep the UX functional.
-  }
-};
+export const saveStoredMqttConfig = <T extends BaseMqttConfig>(
+  storageKey: string,
+  config: T,
+): Promise<void> => saveAppSetting(storageKey, config);
+import { getAppSetting, saveAppSetting } from './app-settings';

@@ -102,6 +102,7 @@ const releaseTag =
 const metadata = {
   projectSlug,
   productName: tauriConfig.productName,
+  appIdentifier: tauriConfig.identifier,
   binaryName,
   channel,
   channelLabel,

@@ -53,6 +53,23 @@ export interface AppUpdateStatus {
   message: string;
 }
 
+export type AppSettingsMap = Record<string, unknown>;
+
+export interface RuntimePaths {
+  executable_dir: string;
+  data_dir: string;
+  cache_dir: string;
+  log_dir: string;
+  using_fallback: boolean;
+}
+
+export type RuntimeDirectoryKind = 'data' | 'cache' | 'logs';
+
+export interface CacheClearResult {
+  removed_files: number;
+  reclaimed_bytes: number;
+}
+
 export type LowerUpdateChannel = 'stable' | 'beta' | 'nightly' | 'ci';
 
 export interface LowerUpdateSource {

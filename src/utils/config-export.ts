@@ -990,7 +990,7 @@ async function syncModbusRtu(
   const replace = mode === 'replace';
   if (snapshot.config.modbus_rtu.mqtt) {
     await api.modbusRtuUpdateConfig(snapshot.config.modbus_rtu.mqtt);
-    saveStoredMqttConfig(MODBUS_MQTT_STORAGE_KEY, snapshot.config.modbus_rtu.mqtt);
+    await saveStoredMqttConfig(MODBUS_MQTT_STORAGE_KEY, snapshot.config.modbus_rtu.mqtt);
   }
 
   const targetNames = new Set(snapshot.config.modbus_rtu.links.map((task) => task.link.config.conn_name));
@@ -1038,7 +1038,7 @@ async function syncDlt645(
   const replace = mode === 'replace';
   if (snapshot.config.dlt645.mqtt) {
     await api.dlt645UpdateConfig(snapshot.config.dlt645.mqtt);
-    saveStoredMqttConfig(DLT645_MQTT_STORAGE_KEY, snapshot.config.dlt645.mqtt);
+    await saveStoredMqttConfig(DLT645_MQTT_STORAGE_KEY, snapshot.config.dlt645.mqtt);
   }
 
   const targetNames = new Set(snapshot.config.dlt645.links.map((task) => task.link.config.conn_name));

@@ -11,10 +11,10 @@ import {
 import { api } from '../../adapters';
 import type { ModuleInfo, ModuleRunningInfo } from '../../adapters';
 import { loadDashboardAfterRunningModules } from '../../utils/dashboard-loading';
+import { getStoredManagerAddress } from '../../utils/app-settings';
 
 const { Text } = Typography;
 
-const MANAGER_ADDR_KEY = 'mskdsp_manager_addr';
 const DEFAULT_MANAGER_ADDR = '127.0.0.1:17000';
 
 const CORE_MODULES = ['ModuleManager', 'DataCenter', 'IEC104', 'ModbusRTU', 'DLT645', 'AGC'] as const;
@@ -54,7 +54,7 @@ const Overview: React.FC = () => {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const managerAddr = localStorage.getItem(MANAGER_ADDR_KEY) || DEFAULT_MANAGER_ADDR;
+      const managerAddr = getStoredManagerAddress(DEFAULT_MANAGER_ADDR);
       await api.setManagerAddr(managerAddr);
 
       const {

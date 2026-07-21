@@ -1,17 +1,21 @@
 use std::{
+    ffi::OsString,
+    fs as std_fs, io,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
+use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, State};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
     process::Command,
+    sync::Mutex,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -48,6 +52,7 @@ const LOWER_UPDATE_RUNTIME_QUERY_COMMAND: &str = concat!(
 );
 pub const LOWER_UPDATE_DOWNLOAD_PROGRESS_EVENT: &str = "lower-update-download-progress";
 pub const LOWER_UPDATE_UPLOAD_PROGRESS_EVENT: &str = "lower-update-upload-progress";
+static LOWER_UPDATE_CACHE_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LowerUpdateSourceDto {
@@ -102,6 +107,12 @@ pub struct LowerUpdateDownloadResultDto {
     pub package_path: String,
     pub downloaded_bytes: u64,
     pub sha256: String,
+}
+
+#[derive(Debug, Default, Serialize, Clone, PartialEq, Eq)]
+pub struct LowerUpdateCacheCleanupResultDto {
+    pub removed_files: u64,
+    pub reclaimed_bytes: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -981,15 +992,197 @@ fn validate_manifest(
     Ok(())
 }
 
-fn cache_dir(app_handle: &AppHandle, manifest: &LowerUpdateManifestDto) -> Result<PathBuf, String> {
-    let app_cache_dir = app_handle
-        .path()
-        .app_cache_dir()
-        .map_err(|e| format!("获取上位机缓存目录失败: {e}"))?;
-    Ok(app_cache_dir
-        .join("lower-update")
-        .join(&manifest.channel)
-        .join(&manifest.platform))
+fn cache_dir(cache_root: &Path, manifest: &LowerUpdateManifestDto) -> PathBuf {
+    cache_root.join(&manifest.channel).join(&manifest.platform)
+}
+
+fn is_partial_download(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == "download")
+}
+
+fn ensure_cache_root(cache_root: &Path) -> io::Result<()> {
+    match std_fs::symlink_metadata(cache_root) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("缓存根路径不是普通目录: {}", cache_root.display()),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => std_fs::create_dir_all(cache_root),
+        Err(error) => Err(error),
+    }
+}
+
+fn ensure_cache_subdirectory(path: &Path) -> io::Result<()> {
+    match std_fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("缓存子路径不是普通目录: {}", path.display()),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => std_fs::create_dir(path),
+        Err(error) => Err(error),
+    }
+}
+
+fn ensure_download_cache_dir(output_dir: &Path) -> io::Result<()> {
+    let platform_parent = output_dir
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "缓存平台目录缺少父目录"))?;
+    let cache_root = platform_parent
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "缓存通道目录缺少父目录"))?;
+    ensure_cache_root(cache_root)?;
+    ensure_cache_subdirectory(platform_parent)?;
+    ensure_cache_subdirectory(output_dir)
+}
+
+fn record_removed_file(
+    path: &Path,
+    metadata: &std_fs::Metadata,
+    result: &mut LowerUpdateCacheCleanupResultDto,
+) -> io::Result<()> {
+    std_fs::remove_file(path)?;
+    result.removed_files = result.removed_files.saturating_add(1);
+    result.reclaimed_bytes = result.reclaimed_bytes.saturating_add(metadata.len());
+    Ok(())
+}
+
+fn remove_path(path: &Path, result: &mut LowerUpdateCacheCleanupResultDto) -> io::Result<()> {
+    let metadata = std_fs::symlink_metadata(path)?;
+    if metadata.file_type().is_dir() {
+        for entry in std_fs::read_dir(path)? {
+            remove_path(&entry?.path(), result)?;
+        }
+        std_fs::remove_dir(path)
+    } else {
+        record_removed_file(path, &metadata, result)
+    }
+}
+
+fn clear_cache_root_contents(cache_root: &Path) -> io::Result<LowerUpdateCacheCleanupResultDto> {
+    ensure_cache_root(cache_root)?;
+    let mut result = LowerUpdateCacheCleanupResultDto::default();
+    for entry in std_fs::read_dir(cache_root)? {
+        remove_path(&entry?.path(), &mut result)?;
+    }
+    std_fs::create_dir_all(cache_root)?;
+    Ok(result)
+}
+
+fn remove_partial_downloads_recursively(
+    directory: &Path,
+    result: &mut LowerUpdateCacheCleanupResultDto,
+) -> io::Result<()> {
+    for entry in std_fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = std_fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_dir() {
+            remove_partial_downloads_recursively(&path, result)?;
+        } else if is_partial_download(&path) {
+            record_removed_file(&path, &metadata, result)?;
+        }
+    }
+    Ok(())
+}
+
+fn regular_files(directory: &Path) -> io::Result<Vec<(PathBuf, SystemTime, OsString)>> {
+    let mut files = Vec::new();
+    for entry in std_fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = std_fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_file() {
+            files.push((path, metadata.modified()?, entry.file_name()));
+        }
+    }
+    Ok(files)
+}
+
+fn retain_only_regular_file(
+    directory: &Path,
+    keep_path: &Path,
+    result: &mut LowerUpdateCacheCleanupResultDto,
+) -> io::Result<()> {
+    for (path, _, _) in regular_files(directory)? {
+        if path != keep_path {
+            let metadata = std_fs::symlink_metadata(&path)?;
+            record_removed_file(&path, &metadata, result)?;
+        }
+    }
+    Ok(())
+}
+
+fn retain_latest_regular_file(
+    directory: &Path,
+    result: &mut LowerUpdateCacheCleanupResultDto,
+) -> io::Result<()> {
+    let files = regular_files(directory)?;
+    let latest = files
+        .iter()
+        .max_by(|left, right| left.1.cmp(&right.1).then_with(|| left.2.cmp(&right.2)))
+        .map(|(path, _, _)| path.clone());
+    if let Some(latest) = latest {
+        retain_only_regular_file(directory, &latest, result)?;
+    }
+    Ok(())
+}
+
+fn cleanup_cache_startup_in(cache_root: &Path) -> io::Result<LowerUpdateCacheCleanupResultDto> {
+    ensure_cache_root(cache_root)?;
+    let mut result = LowerUpdateCacheCleanupResultDto::default();
+    remove_partial_downloads_recursively(cache_root, &mut result)?;
+
+    for channel_entry in std_fs::read_dir(cache_root)? {
+        let channel_entry = channel_entry?;
+        if !channel_entry.file_type()?.is_dir() {
+            continue;
+        }
+        for platform_entry in std_fs::read_dir(channel_entry.path())? {
+            let platform_entry = platform_entry?;
+            if platform_entry.file_type()?.is_dir() {
+                retain_latest_regular_file(&platform_entry.path(), &mut result)?;
+            }
+        }
+    }
+    Ok(result)
+}
+
+async fn run_blocking_cache_cleanup<F>(
+    operation: F,
+) -> Result<LowerUpdateCacheCleanupResultDto, String>
+where
+    F: FnOnce() -> io::Result<LowerUpdateCacheCleanupResultDto> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("执行下位机更新缓存清理任务失败: {error}"))?
+        .map_err(|error| format!("清理下位机更新缓存失败: {error}"))
+}
+
+pub async fn cleanup_lower_update_cache_startup(
+    cache_root: &Path,
+) -> Result<LowerUpdateCacheCleanupResultDto, String> {
+    let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
+    let cache_root = cache_root.to_path_buf();
+    run_blocking_cache_cleanup(move || cleanup_cache_startup_in(&cache_root)).await
+}
+
+#[tauri::command]
+pub async fn clear_lower_update_cache(
+    state: State<'_, AppState>,
+) -> Result<LowerUpdateCacheCleanupResultDto, String> {
+    let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
+    let cache_root = state.runtime_paths.lower_update_dir();
+    let result = run_blocking_cache_cleanup(move || clear_cache_root_contents(&cache_root)).await?;
+    tracing::info!(
+        operation = "cache_clear",
+        removed_files = result.removed_files,
+        reclaimed_bytes = result.reclaimed_bytes,
+        "下位机更新缓存已清理"
+    );
+    Ok(result)
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -1227,6 +1420,7 @@ pub async fn get_lower_update_runtime_info(
 #[tauri::command]
 pub async fn download_lower_update(
     app_handle: AppHandle,
+    state: State<'_, AppState>,
     manifest: LowerUpdateManifestDto,
 ) -> Result<LowerUpdateDownloadResultDto, String> {
     let started_at = Instant::now();
@@ -1238,12 +1432,19 @@ pub async fn download_lower_update(
         "开始下载下位机更新包"
     );
     let result = async {
-        validate_manifest(&manifest, &manifest.channel)?;
+        let channel = normalize_channel(&manifest.channel)?;
+        validate_manifest(&manifest, &channel)?;
+        let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
 
-        let output_dir = cache_dir(&app_handle, &manifest)?;
-        fs::create_dir_all(&output_dir)
-            .await
-            .map_err(|e| format!("创建下位机更新缓存目录失败: {e}"))?;
+        let output_dir = cache_dir(&state.runtime_paths.lower_update_dir(), &manifest);
+        let cleanup_dir = output_dir.clone();
+        run_blocking_cache_cleanup(move || {
+            ensure_download_cache_dir(&cleanup_dir)?;
+            let mut result = LowerUpdateCacheCleanupResultDto::default();
+            remove_partial_downloads_recursively(&cleanup_dir, &mut result)?;
+            Ok(result)
+        })
+        .await?;
         let output_path = output_dir.join(&manifest.asset.name);
         let partial_path = output_dir.join(format!("{}.download", manifest.asset.name));
 
@@ -1256,6 +1457,14 @@ pub async fn download_lower_update(
                     cache_path = %output_path.display(),
                     "下位机更新包缓存命中"
                 );
+                let cleanup_dir = output_dir.clone();
+                let keep_path = output_path.clone();
+                run_blocking_cache_cleanup(move || {
+                    let mut result = LowerUpdateCacheCleanupResultDto::default();
+                    retain_only_regular_file(&cleanup_dir, &keep_path, &mut result)?;
+                    Ok(result)
+                })
+                .await?;
                 emit_download_progress(
                     &app_handle,
                     &manifest,
@@ -1356,6 +1565,14 @@ pub async fn download_lower_update(
         fs::rename(&partial_path, &output_path)
             .await
             .map_err(|e| format!("保存下位机更新包失败: {e}"))?;
+        let cleanup_dir = output_dir.clone();
+        let keep_path = output_path.clone();
+        run_blocking_cache_cleanup(move || {
+            let mut result = LowerUpdateCacheCleanupResultDto::default();
+            retain_only_regular_file(&cleanup_dir, &keep_path, &mut result)?;
+            Ok(result)
+        })
+        .await?;
         emit_download_progress(
             &app_handle,
             &manifest,
@@ -1795,11 +2012,43 @@ pub async fn install_lower_update_package(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_password_root_shell_command, build_user_upload_command,
-        format_upload_remote_error, parse_available_bytes,
+        build_password_root_shell_command, build_user_upload_command, cleanup_cache_startup_in,
+        clear_cache_root_contents, format_upload_remote_error, parse_available_bytes,
         parse_runtime_query_output, parse_upload_account, sudo_password_stdin,
         LOWER_UPDATE_CONTAINER_NAME,
     };
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let sequence = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "mskdsp-lower-update-test-{}-{sequence}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("应能创建测试目录");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn accepts_regular_ssh_account_for_lower_update() {
@@ -1916,5 +2165,50 @@ mod tests {
                 .expect_err("应拒绝包含额外字段的 Docker 查询结果");
 
         assert!(error.contains("格式不合法"));
+    }
+
+    #[test]
+    fn startup_cleanup_removes_partial_files_and_keeps_latest_package() {
+        let temp = TestDirectory::new();
+        let platform_dir = temp.path().join("stable/linux-arm64");
+        let nested_dir = platform_dir.join("nested");
+        fs::create_dir_all(&nested_dir).expect("应能创建缓存目录");
+        fs::write(platform_dir.join("a-old-package"), b"old").expect("应能写入旧包");
+        fs::write(platform_dir.join("z-latest-package"), b"latest").expect("应能写入新包");
+        fs::write(platform_dir.join("package.download"), b"partial").expect("应能写入临时包");
+        fs::write(nested_dir.join("nested.download"), b"nested").expect("应能写入嵌套临时包");
+
+        let result = cleanup_cache_startup_in(temp.path()).expect("启动清理应成功");
+
+        assert!(!platform_dir.join("a-old-package").exists());
+        assert!(platform_dir.join("z-latest-package").is_file());
+        assert!(!platform_dir.join("package.download").exists());
+        assert!(!nested_dir.join("nested.download").exists());
+        assert_eq!(result.removed_files, 3);
+        assert_eq!(result.reclaimed_bytes, 3 + 7 + 6);
+    }
+
+    #[test]
+    fn manual_cleanup_only_removes_cache_root_contents_and_recreates_root() {
+        let temp = TestDirectory::new();
+        let cache_root = temp.path().join("lower-update");
+        let sibling = temp.path().join("keep.txt");
+        fs::create_dir_all(cache_root.join("stable/linux-arm64")).expect("应能创建缓存目录");
+        fs::write(cache_root.join("stable/linux-arm64/package"), b"package")
+            .expect("应能写入缓存包");
+        fs::write(&sibling, b"keep").expect("应能写入同级文件");
+
+        let result = clear_cache_root_contents(&cache_root).expect("手动清理应成功");
+
+        assert!(cache_root.is_dir());
+        assert_eq!(
+            fs::read_dir(&cache_root)
+                .expect("应能读取缓存根目录")
+                .count(),
+            0
+        );
+        assert!(sibling.is_file());
+        assert_eq!(result.removed_files, 1);
+        assert_eq!(result.reclaimed_bytes, 7);
     }
 }

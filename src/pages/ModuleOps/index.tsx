@@ -17,11 +17,11 @@ import { api } from '../../adapters';
 import type { ModuleInfo, ModuleRunningInfo } from '../../adapters';
 import { reconnectManagerRuntime } from '../../utils/manager-connection';
 import { validateManagerAddress } from '../../utils/network';
+import { getStoredManagerAddress, saveManagerAddress } from '../../utils/app-settings';
 import './index.css';
 
 const { Text } = Typography;
 
-const MANAGER_ADDR_KEY = 'mskdsp_manager_addr';
 const DEFAULT_MANAGER_ADDR = '127.0.0.1:17000';
 
 type RefreshOptions = {
@@ -30,7 +30,7 @@ type RefreshOptions = {
 
 const ModuleOps: React.FC = () => {
   const [managerAddr, setManagerAddr] = useState(
-    () => localStorage.getItem(MANAGER_ADDR_KEY) || DEFAULT_MANAGER_ADDR,
+    () => getStoredManagerAddress(DEFAULT_MANAGER_ADDR),
   );
   const initialManagerAddrRef = useRef(managerAddr);
   const didAutoRefreshRef = useRef(false);
@@ -98,7 +98,7 @@ const ModuleOps: React.FC = () => {
         if (normalizedAddr !== initialManagerAddrRef.current) {
           initialManagerAddrRef.current = normalizedAddr;
           setManagerAddr(normalizedAddr);
-          localStorage.setItem(MANAGER_ADDR_KEY, normalizedAddr);
+          await saveManagerAddress(normalizedAddr);
         }
 
         await api.setManagerAddr(normalizedAddr);
@@ -119,7 +119,7 @@ const ModuleOps: React.FC = () => {
         setManagerAddr(normalizedAddr);
       }
 
-      localStorage.setItem(MANAGER_ADDR_KEY, normalizedAddr);
+      await saveManagerAddress(normalizedAddr);
       await reconnectManagerRuntime(normalizedAddr, {
         setManagerAddr: api.setManagerAddr,
         refreshManagerState: () => refresh({ suppressError: true }),

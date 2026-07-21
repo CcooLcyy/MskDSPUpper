@@ -3,6 +3,7 @@ import type {
   AgcGroupConfig,
   AgcGroupInfo,
   AppUpdateDownloadEvent,
+  AppSettingsMap,
   AvcDefaultPointInfo,
   AvcGroupConfig,
   AvcGroupInfo,
@@ -41,16 +42,30 @@ import type {
   ModbusUpdateConfigResponse,
   ModuleInfo,
   ModuleRunningInfo,
+  RuntimePaths,
 } from './types';
 import { buildLowerUpdateLatestUrl } from './lower-update-source';
 
 const DEFAULT_MANAGER_ADDR = '127.0.0.1:17000';
-const MANAGER_ADDR_KEY = 'mskdsp_manager_addr';
+const BROWSER_SETTINGS_KEY = 'mskdsp_browser_app_settings_v1';
 
-let managerAddr = localStorage.getItem(MANAGER_ADDR_KEY) || DEFAULT_MANAGER_ADDR;
+let managerAddr = DEFAULT_MANAGER_ADDR;
 let nextConnId = 100;
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+function loadBrowserSettings(): AppSettingsMap {
+  try {
+    const raw = localStorage.getItem(BROWSER_SETTINGS_KEY);
+    return raw ? JSON.parse(raw) as AppSettingsMap : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveBrowserSettings(settings: AppSettingsMap): void {
+  localStorage.setItem(BROWSER_SETTINGS_KEY, JSON.stringify(settings));
+}
 
 function bytesToHex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)]
@@ -347,9 +362,36 @@ function seedDemoData() {
 seedDemoData();
 
 export const browserApi: typeof tauriApi = {
+  loadAppSettings: async () => clone(loadBrowserSettings()),
+  migrateLegacyAppSettings: async (legacy: AppSettingsMap) => {
+    const settings = loadBrowserSettings();
+    for (const [key, value] of Object.entries(legacy)) {
+      if (!(key in settings)) {
+        settings[key] = clone(value);
+      }
+    }
+    saveBrowserSettings(settings);
+    return clone(settings);
+  },
+  saveAppSetting: async (key: string, value: unknown) => {
+    const settings = loadBrowserSettings();
+    settings[key] = clone(value);
+    saveBrowserSettings(settings);
+  },
+  getRuntimePaths: async (): Promise<RuntimePaths> => ({
+    executable_dir: 'browser-dev://',
+    data_dir: 'browser-dev://localStorage',
+    cache_dir: 'browser-dev://memory-cache',
+    log_dir: 'browser-dev://console',
+    using_fallback: false,
+  }),
+  openRuntimeDirectory: async () => {
+    throw new Error('浏览器开发模式不支持打开本地目录');
+  },
+  clearLowerUpdateCache: async () => ({ removed_files: 0, reclaimed_bytes: 0 }),
+
   setManagerAddr: async (addr: string) => {
     managerAddr = addr;
-    localStorage.setItem(MANAGER_ADDR_KEY, addr);
   },
   getModuleInfo: async () => clone(moduleInfos),
   getRunningModuleInfo: async () => [...runningModules].map(makeRunningInfo),

@@ -37,3 +37,7 @@ tracing-subscriber = "0.3"
 parking_lot = "0.12"
 russh = { version = "0.62.2", default-features = false, features = ["ring"] }
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
+dirs = "6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

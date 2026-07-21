@@ -30,7 +30,7 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
     const syncDefaultConfig = async (): Promise<void> => {
       try {
         await api.dlt645UpdateConfig(initialMqttConfig);
-        saveStoredMqttConfig(STORAGE_KEY, initialMqttConfig);
+        await saveStoredMqttConfig(STORAGE_KEY, initialMqttConfig);
       } catch (error) {
         console.warn('Failed to apply default DLT645 MQTT config automatically:', error);
       }
@@ -59,7 +59,7 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
       };
       const response = await api.dlt645UpdateConfig(payload);
       setMqttConfig(payload);
-      saveStoredMqttConfig(STORAGE_KEY, payload);
+      await saveStoredMqttConfig(STORAGE_KEY, payload);
       messageApi.success(response.message || 'MQTT 配置已保存');
       setModalOpen(false);
     } catch (error) {

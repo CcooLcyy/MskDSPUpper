@@ -21,6 +21,7 @@ test('create-delivery-bundle uses staged installer manifest and PowerShell env i
   const metadata = {
     projectSlug: 'mskdsp-upper',
     productName: 'MskDSP Upper',
+    appIdentifier: 'com.mskdsp.upper',
     binaryName: 'mskdsp-upper',
     channel: 'beta',
     channelLabel: 'beta-0.1.0',
@@ -73,10 +74,12 @@ test('create-delivery-bundle uses staged installer manifest and PowerShell env i
   const outDir = path.join(packageDir, 'out', metadata.channelLabel, metadata.platform);
   const installScript = fs.readFileSync(path.join(bundleRoot, 'install.ps1'), 'utf8');
   const startScript = fs.readFileSync(path.join(bundleRoot, 'start.ps1'), 'utf8');
+  const logsScript = fs.readFileSync(path.join(bundleRoot, 'logs.ps1'), 'utf8');
 
   assert.match(installScript, /payload\\mskdsp-upper-test-artifact\.exe/);
   assert.doesNotMatch(installScript, /payload\\mskdsp-upper\.exe/);
   assert.match(startScript, /\$env:LOCALAPPDATA\\Programs\\MskDSP Upper\\mskdsp-upper\.exe/);
+  assert.match(logsScript, /\$env:LOCALAPPDATA\\com\.mskdsp\.upper\\logs/);
   assert.equal(fs.existsSync(path.join(outDir, `${metadata.artifactBaseName}.exe`)), true);
   assert.equal(fs.existsSync(path.join(outDir, 'mskdsp-upper.exe')), false);
 });
@@ -88,5 +91,7 @@ test('build metadata schema requires workflow fields used by packaging helpers',
 
   assert.ok(schema.required.includes('targetTriple'));
   assert.ok(schema.required.includes('defaultInstallDir'));
+  assert.ok(schema.required.includes('appIdentifier'));
   assert.equal(schema.properties.defaultInstallDir.type, 'string');
+  assert.equal(schema.properties.appIdentifier.type, 'string');
 });

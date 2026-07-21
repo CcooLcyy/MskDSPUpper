@@ -1,4 +1,5 @@
 pub mod agc;
+pub mod app_storage;
 pub mod avc;
 pub mod data_center;
 pub mod dlt645;

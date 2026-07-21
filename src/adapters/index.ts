@@ -3,6 +3,8 @@ export type {
   AppUpdateInfo,
   AppUpdateStatus,
   AppUpdateStatusKind,
+  AppSettingsMap,
+  CacheClearResult,
   LowerUpdateChannel,
   LowerUpdateDownloadProgress,
   LowerUpdateDownloadResult,
@@ -21,6 +23,8 @@ export type {
   ModuleInfo,
   ModuleRunningInfo,
   ModuleVersion,
+  RuntimeDirectoryKind,
+  RuntimePaths,
 } from './types';
 export type {
   Iec104ApciParameters,

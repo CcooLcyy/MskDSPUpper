@@ -61,6 +61,7 @@ if (!installerName) {
 
 const replacements = {
   PRODUCT_NAME: metadata.productName,
+  APP_IDENTIFIER: metadata.appIdentifier,
   BINARY_NAME: metadata.binaryName,
   INSTALL_DIR: metadata.defaultInstallDir,
   INSTALLER_NAME: installerName,

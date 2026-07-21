@@ -2836,6 +2836,7 @@ name = "mskdsp-upper"
 version = "0.4.1"
 dependencies = [
  "anyhow",
+ "dirs",
  "keyring",
  "parking_lot",
  "prost",
@@ -2856,6 +2857,7 @@ dependencies = [
  "tonic-build",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

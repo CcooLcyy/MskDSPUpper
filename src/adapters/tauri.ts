@@ -8,6 +8,7 @@ import type {
   AgcGroupInfo,
   AppUpdateDownloadEvent,
   AppUpdateInfo,
+  AppSettingsMap,
   AvcGroupConfig,
   AvcGroupInfo,
   DcConnTags,
@@ -45,6 +46,9 @@ import type {
   ModbusUpdateConfigResponse,
   ModuleInfo,
   ModuleRunningInfo,
+  RuntimeDirectoryKind,
+  RuntimePaths,
+  CacheClearResult,
 } from './types';
 import { getLowerUpdateStaticBaseUrl } from './lower-update-source';
 
@@ -80,6 +84,16 @@ function toAppUpdateInfo(update: NonNullable<PendingAppUpdate>): AppUpdateInfo {
 }
 
 export const api = {
+  loadAppSettings: () => invoke<AppSettingsMap>('load_app_settings'),
+  migrateLegacyAppSettings: (legacy: AppSettingsMap) =>
+    invoke<AppSettingsMap>('migrate_legacy_app_settings', { legacy }),
+  saveAppSetting: (key: string, value: unknown) =>
+    invoke<void>('save_app_setting', { key, value }),
+  getRuntimePaths: () => invoke<RuntimePaths>('get_runtime_paths'),
+  openRuntimeDirectory: (kind: RuntimeDirectoryKind) =>
+    invoke<void>('open_runtime_directory', { kind }),
+  clearLowerUpdateCache: () => invoke<CacheClearResult>('clear_lower_update_cache'),
+
   setManagerAddr: (addr: string, forceReconnect = false) =>
     invoke<void>('set_manager_addr', { addr, forceReconnect }),
   getModuleInfo: () => invoke<ModuleInfo[]>('get_module_info'),

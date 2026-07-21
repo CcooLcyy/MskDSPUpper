@@ -1,6 +1,8 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Button, Card, message, Modal, Radio, Space, Typography } from 'antd';
-import type { ConfigExportSectionId } from '../../adapters';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button, Card, Descriptions, message, Modal, Popconfirm, Radio, Space, Typography } from 'antd';
+import { DeleteOutlined, FolderOpenOutlined } from '@ant-design/icons';
+import { api } from '../../adapters';
+import type { ConfigExportSectionId, RuntimeDirectoryKind, RuntimePaths } from '../../adapters';
 import {
   applyConfigImport,
   applyFullConfigImport,
@@ -61,6 +63,19 @@ function formatImportSummary(result: FullConfigImportResult): string {
   return parts.join(' / ');
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KiB`;
+  }
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+}
+
 const Settings: React.FC = () => {
   const [isExportingConfig, setIsExportingConfig] = useState(false);
   const [isImportingConfig, setIsImportingConfig] = useState(false);
@@ -77,6 +92,8 @@ const Settings: React.FC = () => {
   const [selectedImportSections, setSelectedImportSections] = useState<ConfigExportSectionId[]>([]);
   const [moduleImportSelection, setModuleImportSelection] = useState<FullConfigImportSelection | null>(null);
   const [moduleImportMode, setModuleImportMode] = useState<ConfigImportMode>(DEFAULT_IMPORT_MODE);
+  const [runtimePaths, setRuntimePaths] = useState<RuntimePaths | null>(null);
+  const [isClearingCache, setIsClearingCache] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
 
@@ -89,6 +106,32 @@ const Settings: React.FC = () => {
     () => (moduleImportSelection ? getConfigSectionOptions(moduleImportSelection.snapshot) : []),
     [moduleImportSelection],
   );
+
+  useEffect(() => {
+    void api.getRuntimePaths()
+      .then(setRuntimePaths)
+      .catch((error) => messageApi.error(`读取本地目录失败: ${error}`));
+  }, [messageApi]);
+
+  const handleOpenRuntimeDirectory = useCallback(async (kind: RuntimeDirectoryKind) => {
+    try {
+      await api.openRuntimeDirectory(kind);
+    } catch (error) {
+      messageApi.error(`打开目录失败: ${error}`);
+    }
+  }, [messageApi]);
+
+  const handleClearLowerUpdateCache = useCallback(async () => {
+    setIsClearingCache(true);
+    try {
+      const result = await api.clearLowerUpdateCache();
+      messageApi.success(`已清理 ${result.removed_files} 个文件，释放 ${formatBytes(result.reclaimed_bytes)}`);
+    } catch (error) {
+      messageApi.error(`清理更新缓存失败: ${error}`);
+    } finally {
+      setIsClearingCache(false);
+    }
+  }, [messageApi]);
 
   const showImportResult = useCallback(
     (result: FullConfigImportResult, successMessage: string) => {
@@ -300,6 +343,49 @@ const Settings: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {contextHolder}
       {modalContextHolder}
+
+      <Card title="本地数据" size="small" bordered loading={!runtimePaths}>
+        {runtimePaths ? (
+          <>
+            <Descriptions size="small" column={1} bordered>
+              <Descriptions.Item label="配置目录">
+                <Text code copyable>{runtimePaths.data_dir}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="日志目录">
+                <Text code copyable>{runtimePaths.log_dir}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="缓存目录">
+                <Text code copyable>{runtimePaths.cache_dir}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="存储位置">
+                {runtimePaths.using_fallback ? '当前用户 LocalAppData' : '上位机程序目录'}
+              </Descriptions.Item>
+            </Descriptions>
+            <Space wrap style={{ marginTop: 12 }}>
+              <Button icon={<FolderOpenOutlined />} onClick={() => void handleOpenRuntimeDirectory('data')}>
+                打开配置目录
+              </Button>
+              <Button icon={<FolderOpenOutlined />} onClick={() => void handleOpenRuntimeDirectory('logs')}>
+                打开日志目录
+              </Button>
+              <Button icon={<FolderOpenOutlined />} onClick={() => void handleOpenRuntimeDirectory('cache')}>
+                打开缓存目录
+              </Button>
+              <Popconfirm
+                title="清理下位机更新缓存"
+                description="将删除已下载的下位机更新包和未完成的下载文件。"
+                okText="清理"
+                cancelText="取消"
+                onConfirm={() => void handleClearLowerUpdateCache()}
+              >
+                <Button danger icon={<DeleteOutlined />} loading={isClearingCache}>
+                  清理更新缓存
+                </Button>
+              </Popconfirm>
+            </Space>
+          </>
+        ) : null}
+      </Card>
 
       <Card title="配置导入 / 导出" size="small" bordered>
         <Paragraph type="secondary" style={{ marginBottom: 12 }}>

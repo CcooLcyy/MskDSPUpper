@@ -6,6 +6,7 @@
   "required": [
     "projectSlug",
     "productName",
+    "appIdentifier",
     "binaryName",
     "channel",
     "channelLabel",
@@ -26,6 +27,7 @@
   "properties": {
     "projectSlug": { "type": "string" },
     "productName": { "type": "string" },
+    "appIdentifier": { "type": "string" },
     "binaryName": { "type": "string" },
     "channel": {
       "type": "string",

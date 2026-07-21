@@ -3,13 +3,17 @@ pub mod grpc;
 pub mod logging;
 pub mod proto;
 pub mod protocol_shadow;
+pub mod runtime_paths;
 pub mod state;
 
 use state::AppState;
+use std::time::Duration;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    match logging::init() {
+    let runtime_paths = runtime_paths::RuntimePaths::discover()
+        .unwrap_or_else(|error| panic!("初始化上位机运行目录失败: {error}"));
+    match logging::init(runtime_paths.log_dir()) {
         Ok(log_path) => tracing::info!(log_path = %log_path.display(), "上位机运行日志已初始化"),
         Err(error) => {
             eprintln!("上位机运行日志初始化失败: {error}");
@@ -30,7 +34,20 @@ pub fn run() {
         arch = std::env::consts::ARCH,
         "上位机进程启动"
     );
-    let app_state = AppState::new("127.0.0.1:17000".to_string());
+    match runtime_paths::cleanup_stale_updater_directories(Duration::from_secs(24 * 60 * 60)) {
+        Ok(removed) if removed > 0 => tracing::info!(removed, "已清理过期的上位机更新临时目录"),
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "清理上位机更新临时目录失败"),
+    }
+    let startup_cache_root = runtime_paths.lower_update_dir();
+    match runtime_paths::migrate_legacy_lower_update_cache(&startup_cache_root) {
+        Ok(migrated_files) if migrated_files > 0 => {
+            tracing::info!(migrated_files, "已迁移旧版下位机更新缓存")
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "迁移旧版下位机更新缓存失败"),
+    }
+    let app_state = AppState::new("127.0.0.1:17000".to_string(), runtime_paths);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -38,7 +55,28 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
+        .setup(move |_| {
+            let cache_root = startup_cache_root.clone();
+            tauri::async_runtime::spawn(async move {
+                match commands::lower_update::cleanup_lower_update_cache_startup(&cache_root).await
+                {
+                    Ok(result) if result.removed_files > 0 => tracing::info!(
+                        removed_files = result.removed_files,
+                        reclaimed_bytes = result.reclaimed_bytes,
+                        "已完成下位机更新缓存启动清理"
+                    ),
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(%error, "下位机更新缓存启动清理失败"),
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            commands::app_storage::load_app_settings,
+            commands::app_storage::save_app_setting,
+            commands::app_storage::migrate_legacy_app_settings,
+            commands::app_storage::get_runtime_paths,
+            commands::app_storage::open_runtime_directory,
             commands::module_ops::set_manager_addr,
             commands::module_ops::get_module_info,
             commands::module_ops::get_running_module_info,
@@ -104,6 +142,7 @@ pub fn run() {
             commands::lower_update::install_lower_update_package,
             commands::lower_update::get_lower_update_password,
             commands::lower_update::clear_lower_update_password,
+            commands::lower_update::clear_lower_update_cache,
         ])
         .run(tauri::generate_context!())
         .map_err(|error| {
