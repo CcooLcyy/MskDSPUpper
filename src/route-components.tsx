@@ -6,6 +6,7 @@ export const IEC104Page = lazy(() => import('./pages/IEC104'));
 export const ModbusRTUPage = lazy(() => import('./pages/ModbusRTU'));
 export const DLT645Page = lazy(() => import('./pages/DLT645'));
 export const DataBusPage = lazy(() => import('./pages/DataBus'));
+export const ControlPage = lazy(() => import('./pages/Control'));
 export const AGCPage = lazy(() => import('./pages/AGC'));
 export const AVCPage = lazy(() => import('./pages/AVC'));
 export const SettingsPage = lazy(() => import('./pages/Settings'));

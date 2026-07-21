@@ -39,6 +39,7 @@ import type {
   DcEndpoint,
 } from '../../adapters';
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
+import ControlEmptyState from '../../components/control/ControlEmptyState';
 import {
   ControlGroupRoutesError,
   buildControlDataBusRoutes,
@@ -46,22 +47,23 @@ import {
 } from '../../utils/control-auto-routing';
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
+import '../../components/control/control-modal.css';
 
 const { Text } = Typography;
 
 const AGC_MODULE_NAME = 'AGC';
 
 const STATE_MAP: Record<number, { label: string; color: string }> = {
-  0: { label: 'UNSPECIFIED', color: 'default' },
-  1: { label: 'STOPPED', color: 'red' },
-  2: { label: 'RUNNING', color: 'green' },
-  3: { label: 'PENDING_DELETE', color: 'orange' },
+  0: { label: '未指定', color: 'default' },
+  1: { label: '已停止', color: 'default' },
+  2: { label: '运行中', color: 'green' },
+  3: { label: '待删除', color: 'orange' },
 };
 
 const VALUE_MODE_LABELS: Record<number, string> = {
-  0: 'UNSPECIFIED',
-  1: 'ABSOLUTE (绝对值)',
-  2: 'DELTA (增量)',
+  0: '未指定',
+  1: '绝对值',
+  2: '增量值',
 };
 
 const DELTA_BASE_LABELS: Record<number, string> = {
@@ -772,25 +774,25 @@ const AGC: React.FC = () => {
       width: 90,
     },
     {
-      title: 'p_min (kW)',
+      title: '有功下限 (kW)',
       dataIndex: 'min_kw',
       key: 'min_kw',
       width: 110,
     },
     {
-      title: 'p_max (kW)',
+      title: '有功上限 (kW)',
       dataIndex: 'max_kw',
       key: 'max_kw',
       width: 110,
     },
     {
-      title: 'p_meas tag',
+      title: '测量点',
       key: 'p_meas',
       width: 180,
       render: (_, record) => record.p_meas?.tag || '-',
     },
     {
-      title: 'p_set tag',
+      title: '设定点',
       key: 'p_set',
       width: 180,
       render: (_, record) => record.p_set?.signal?.tag || '-',
@@ -801,7 +803,7 @@ const AGC: React.FC = () => {
       width: 100,
       render: (_, record) => (
         <Tag color={record.controllable ? 'green' : 'default'}>
-          {record.controllable ? 'YES' : 'NO'}
+          {record.controllable ? '是' : '否'}
         </Tag>
       ),
     },
@@ -868,7 +870,7 @@ const AGC: React.FC = () => {
             title="控制组列表"
             size="small"
             bordered
-            style={{ width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+            style={{ width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}
             styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', padding: '8px 0' } }}
             extra={
               <Button
@@ -887,7 +889,8 @@ const AGC: React.FC = () => {
                 renderItem={(item) => {
                   const groupName = item.config?.group_name ?? `group_${item.conn_id}`;
                   const isActive = groupName === selectedGroupName;
-                  const color = item.state === 2 ? '#4caf50' : item.state === 3 ? '#ff9800' : '#f44336';
+                  const color = item.state === 2 ? '#4caf50' : item.state === 3 ? '#ff9800' : '#9e9e9e';
+                  const commandMode = item.config?.p_cmd ? '有功目标' : '未配置';
                   return (
                     <List.Item
                       onClick={() => handleSelectGroup(groupName)}
@@ -897,22 +900,27 @@ const AGC: React.FC = () => {
                         background: isActive ? '#37373d' : 'transparent',
                       }}
                     >
-                      <Space size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
-                        <Space size={10}>
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              width: 8,
-                              height: 8,
-                              borderRadius: '50%',
-                              background: color,
-                            }}
-                          />
-                          <Text style={{ color: '#fff' }}>{groupName}</Text>
+                      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                        <Space size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
+                          <Space size={10}>
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                width: 8,
+                                height: 8,
+                                borderRadius: '50%',
+                                background: color,
+                              }}
+                            />
+                            <Text style={{ color: '#fff' }}>{groupName}</Text>
+                          </Space>
+                          <Tag color={STATE_MAP[item.state]?.color ?? 'default'} style={{ marginInlineEnd: 0 }}>
+                            {STATE_MAP[item.state]?.label ?? '未知'}
+                          </Tag>
                         </Space>
-                        <Tag color={STATE_MAP[item.state]?.color ?? 'default'} style={{ marginInlineEnd: 0 }}>
-                          {STATE_MAP[item.state]?.label ?? 'UNKNOWN'}
-                        </Tag>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          conn_id={item.conn_id} | {commandMode} | 成员 {item.config?.members.length ?? 0}
+                        </Text>
                       </Space>
                     </List.Item>
                   );
@@ -926,7 +934,9 @@ const AGC: React.FC = () => {
             </div>
           </Card>
 
-          <div
+          {!selectedConfig ? (
+            <ControlEmptyState moduleName="AGC" onCreate={openCreateGroup} />
+          ) : <div
             style={{
               flex: 1,
               display: 'flex',
@@ -937,12 +947,12 @@ const AGC: React.FC = () => {
               overflow: 'hidden',
             }}
           >
-            <div className="protocol-top-row" style={{ flex: '0 1 320px', minHeight: 220 }}>
+            <div className="protocol-top-row control-top-row" style={{ flex: '0 1 360px', minHeight: 240 }}>
               <Card
                 title="组配置"
                 size="small"
                 bordered
-                className="protocol-log-card"
+                className="protocol-log-card control-summary-card"
                 style={{ flex: 1, minHeight: 0 }}
                 extra={
                   selectedConfig ? (
@@ -965,24 +975,31 @@ const AGC: React.FC = () => {
                 <div className="protocol-log-scroll">
                   {selectedConfig ? (
                     <Descriptions size="small" column={2}>
-                      <Descriptions.Item label="group_name">{selectedConfig.group_name}</Descriptions.Item>
-                      <Descriptions.Item label="conn_id">{selectedGroup?.conn_id ?? '-'}</Descriptions.Item>
-                      <Descriptions.Item label="p_cmd" span={2}>{formatValueSpec(selectedConfig.p_cmd)}</Descriptions.Item>
-                      <Descriptions.Item label="strategy_type">
-                        {selectedConfig.strategy?.strategy_type ?? '-'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="enable state">
+                      <Descriptions.Item label="控制组名称">{selectedConfig.group_name}</Descriptions.Item>
+                      <Descriptions.Item label="连接 ID">{selectedGroup?.conn_id ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label="当前状态">
                         <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
                       </Descriptions.Item>
-                      <Descriptions.Item label="input description" span={2}>
-                        {selectedConfig.p_cmd?.signal?.tag
-                          ? `输入命令来自 ${selectedConfig.p_cmd.signal.tag}，按 ${VALUE_MODE_LABELS[selectedConfig.p_cmd.mode] ?? selectedConfig.p_cmd.mode} 方式解释。`
-                          : '-'}
+                      <Descriptions.Item label="策略类型">
+                        {selectedConfig.strategy?.strategy_type ?? '-'}
                       </Descriptions.Item>
-                      <Descriptions.Item label="output description" span={2}>
-                        {selectedConfig.outputs
-                          ? `总测量=${selectedConfig.outputs.p_total_meas?.tag || '-'}；总目标=${selectedConfig.outputs.p_total_target?.tag || '-'}；误差=${selectedConfig.outputs.p_total_error?.tag || '-'}。`
-                          : '-'}
+                      <Descriptions.Item label="命令模式">
+                        {VALUE_MODE_LABELS[selectedConfig.p_cmd?.mode ?? 0] ?? '未指定'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="成员数量">
+                        {selectedConfig.members.length}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="命令点" span={2}>
+                        <Text className="control-summary-value" title={formatValueSpec(selectedConfig.p_cmd)}>
+                          {selectedConfig.p_cmd?.signal?.tag || '-'}
+                        </Text>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="输出点" span={2}>
+                        <Text className="control-summary-value" title="总测量、总目标、总偏差">
+                          {selectedConfig.outputs
+                            ? `${selectedConfig.outputs.p_total_meas?.tag || '-'} / ${selectedConfig.outputs.p_total_target?.tag || '-'} / ${selectedConfig.outputs.p_total_error?.tag || '-'}`
+                            : '-'}
+                        </Text>
                       </Descriptions.Item>
                     </Descriptions>
                   ) : (
@@ -995,8 +1012,8 @@ const AGC: React.FC = () => {
                 title="运行状态"
                 size="small"
                 bordered
-                className="protocol-log-card"
-                style={{ width: 300, flexShrink: 0, minHeight: 0 }}
+                className="protocol-log-card control-runtime-card"
+                style={{ width: 360, flexShrink: 0, minHeight: 0 }}
               >
                 <div className="protocol-log-scroll">
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -1014,7 +1031,7 @@ const AGC: React.FC = () => {
                           disabled={!selectedGroupName}
                           onClick={() => void handleStartGroup()}
                         >
-                          启动
+                          启动控制组
                         </Button>
                         <Button
                           danger
@@ -1022,19 +1039,19 @@ const AGC: React.FC = () => {
                           disabled={!selectedGroupName}
                           onClick={() => void handleStopGroup()}
                         >
-                          停止
+                          停止控制组
                         </Button>
                       </Space>
                     </div>
                     {runtimeRows.map((item) => (
                       <div key={item.label}>
                         <Text type="secondary" style={{ display: 'block' }}>{item.label}</Text>
-                        <Text>{item.signal?.tag || '-'} — 接入实时数据后渲染</Text>
+                        <Text>{item.signal?.tag || '-'} — 暂无数据</Text>
                       </div>
                     ))}
                     <div>
-                      <Text type="secondary" style={{ display: 'block' }}>last_error</Text>
-                      <Text>{selectedGroup?.last_error || '— 接入实时数据后渲染'}</Text>
+                      <Text type="secondary" style={{ display: 'block' }}>最近错误</Text>
+                      <Text>{selectedGroup?.last_error || '无错误'}</Text>
                     </div>
                   </Space>
                 </div>
@@ -1058,7 +1075,7 @@ const AGC: React.FC = () => {
                 />
               </div>
             </Card>
-          </div>
+          </div>}
         </div>
       ) : (
         <Card
@@ -1083,7 +1100,9 @@ const AGC: React.FC = () => {
         open={groupModalOpen}
         onOk={() => void handleGroupSubmit()}
         onCancel={() => setGroupModalOpen(false)}
-        width={1080}
+        width={1100}
+        centered
+        className="control-config-modal control-group-modal"
         destroyOnClose
       >
         <Form form={groupForm} layout="vertical" size="small">
@@ -1227,6 +1246,8 @@ const AGC: React.FC = () => {
         onOk={() => void handleMemberSubmit()}
         onCancel={() => setMemberModalOpen(false)}
         width={920}
+        centered
+        className="control-config-modal control-member-modal"
         destroyOnClose
       >
         <Form form={memberForm} layout="vertical" size="small">

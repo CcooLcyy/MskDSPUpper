@@ -1,0 +1,95 @@
+.control-config-modal {
+  max-width: calc(100vw - 32px);
+}
+
+.control-config-modal .ant-modal-content {
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.control-config-modal .ant-modal-header {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.control-config-modal .ant-modal-close {
+  inset-block-start: 10px;
+  inset-inline-end: 12px;
+}
+
+.control-config-modal .ant-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px 20px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.control-config-modal .ant-modal-footer {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.control-config-modal .ant-form-item:last-child {
+  margin-bottom: 0;
+}
+
+.control-group-modal .ant-table-wrapper,
+.control-member-modal .ant-table-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+@media (max-width: 760px) {
+  .control-config-modal {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px);
+    margin: 8px auto;
+  }
+
+  .control-config-modal .ant-modal-content {
+    max-height: calc(100dvh - 16px);
+  }
+
+  .control-config-modal .ant-modal-header {
+    padding: 14px 16px 12px;
+  }
+
+  .control-config-modal .ant-modal-body {
+    padding: 14px 16px;
+  }
+
+  .control-config-modal .ant-modal-footer {
+    padding: 10px 16px;
+  }
+
+  .control-config-modal .ant-form > div[style*="display: flex"],
+  .control-config-modal .ant-card-body > div[style*="display: flex"] {
+    flex-wrap: wrap;
+  }
+
+  .control-config-modal .ant-form > div[style*="display: flex"] > div,
+  .control-config-modal .ant-card-body > div[style*="display: flex"] > div {
+    flex: 1 1 180px !important;
+    width: auto !important;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .control-config-modal .ant-form > div[style*="display: flex"] > div,
+  .control-config-modal .ant-card-body > div[style*="display: flex"] > div {
+    flex-basis: 100% !important;
+  }
+
+  .control-config-modal .ant-modal-footer .ant-btn {
+    min-width: 72px;
+  }
+}

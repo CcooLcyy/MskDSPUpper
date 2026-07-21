@@ -57,10 +57,6 @@ const menuItems = [
     key: '/control',
     icon: <ControlOutlined />,
     label: '控制策略',
-    children: [
-      { key: '/control/agc', label: 'AGC' },
-      { key: '/control/avc', label: 'AVC' },
-    ],
   },
   {
     key: ADVANCED_CONFIG_PATH,
@@ -79,7 +75,8 @@ const MainLayout: React.FC = () => {
   const location = useLocation();
   const { hasAvailableUpdate } = useAppUpdate();
   const [collapsed, setCollapsed] = useState(false);
-  const parentMenuKeys = new Set(['/protocol', '/control']);
+  // Protocol remains a navigation group; page-level view switchers live in the header.
+  const parentMenuKeys = new Set(['/protocol']);
   const renderedMenuItems = useMemo(
     () =>
       menuItems.map((item) =>
@@ -111,7 +108,7 @@ const MainLayout: React.FC = () => {
   const isProtocolPage = location.pathname.startsWith('/protocol/');
   const isControlPage = location.pathname.startsWith('/control');
   const isDataBusPage = location.pathname.startsWith('/data-bus');
-  const hasHeaderViewSwitcher = isProtocolPage || isControlPage;
+  const suppressHeaderTitle = isProtocolPage || isControlPage;
   const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage || isControlPage ? 'hidden' : 'auto';
 
   return (
@@ -168,8 +165,8 @@ const MainLayout: React.FC = () => {
             height: 48,
           }}
         >
-          <div className={`protocol-header-main${hasHeaderViewSwitcher ? ' is-protocol' : ''}`}>
-            {!hasHeaderViewSwitcher ? (
+          <div className={`protocol-header-main${suppressHeaderTitle ? ' is-protocol' : ''}`}>
+            {!suppressHeaderTitle ? (
               <Text strong className="protocol-header-title-text">
                 {currentLabel}
               </Text>

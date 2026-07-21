@@ -40,6 +40,7 @@ import type {
   DcPointUpdate,
 } from '../../adapters';
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
+import ControlEmptyState from '../../components/control/ControlEmptyState';
 import {
   ControlGroupRoutesError,
   buildControlDataBusRoutes,
@@ -48,6 +49,7 @@ import {
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
+import '../../components/control/control-modal.css';
 
 const { Paragraph, Text } = Typography;
 
@@ -1211,37 +1213,37 @@ const AVC: React.FC = () => {
       width: 90,
     },
     {
-      title: 'q_min (kVar)',
+      title: '无功下限 (kVar)',
       dataIndex: 'q_min_kvar',
       key: 'q_min_kvar',
       width: 120,
     },
     {
-      title: 'q_max (kVar)',
+      title: '无功上限 (kVar)',
       dataIndex: 'q_max_kvar',
       key: 'q_max_kvar',
       width: 120,
     },
     {
-      title: 'q_meas tag',
+      title: '测量点',
       key: 'q_meas',
       width: 180,
       render: (_, record) => record.q_meas?.tag || '-',
     },
     {
-      title: 'q_meas 最新值',
+      title: '测量值',
       key: 'q_meas_value',
       width: 140,
       render: (_, record) => formatPointValue(record.q_meas?.tag ? runtimeUpdates[record.q_meas.tag] : null),
     },
     {
-      title: 'q_set tag',
+      title: '设定点',
       key: 'q_set',
       width: 180,
       render: (_, record) => record.q_set?.signal?.tag || '-',
     },
     {
-      title: 'q_set 最新值',
+      title: '设定值',
       key: 'q_set_value',
       width: 140,
       render: (_, record) =>
@@ -1388,7 +1390,9 @@ const AVC: React.FC = () => {
             </div>
           </Card>
 
-          <div
+          {!selectedConfig ? (
+            <ControlEmptyState moduleName="AVC" onCreate={openCreateGroup} />
+          ) : <div
             style={{
               flex: 1,
               display: 'flex',
@@ -1399,12 +1403,12 @@ const AVC: React.FC = () => {
               overflow: 'hidden',
             }}
           >
-            <div className="protocol-top-row" style={{ flex: '0 1 360px', minHeight: 240 }}>
+            <div className="protocol-top-row control-top-row" style={{ flex: '0 1 360px', minHeight: 240 }}>
               <Card
                 title="组配置"
                 size="small"
                 bordered
-                className="protocol-log-card"
+                className="protocol-log-card control-summary-card"
                 style={{ flex: 1, minHeight: 0 }}
                 extra={
                   selectedConfig ? (
@@ -1430,8 +1434,8 @@ const AVC: React.FC = () => {
                 <div className="protocol-log-scroll">
                   {selectedConfig ? (
                     <Descriptions size="small" column={2}>
-                      <Descriptions.Item label="group_name">{selectedConfig.group_name}</Descriptions.Item>
-                      <Descriptions.Item label="conn_id">{selectedGroup?.conn_id ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label="控制组名称">{selectedConfig.group_name}</Descriptions.Item>
+                      <Descriptions.Item label="连接 ID">{selectedGroup?.conn_id ?? '-'}</Descriptions.Item>
                       <Descriptions.Item label="控制状态">
                         <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
                       </Descriptions.Item>
@@ -1444,21 +1448,26 @@ const AVC: React.FC = () => {
                       <Descriptions.Item label="成员数量">
                         {selectedConfig.members.length}
                       </Descriptions.Item>
-                      <Descriptions.Item label="voltage_meas" span={2}>
-                        {formatSignal(selectedConfig.voltage_meas)}
+                      <Descriptions.Item label="电压量测点" span={2}>
+                        <Text className="control-summary-value" title={formatSignal(selectedConfig.voltage_meas)}>
+                          {selectedConfig.voltage_meas?.tag || '-'}
+                        </Text>
                       </Descriptions.Item>
-                      <Descriptions.Item label="voltage_cmd / q_total_cmd" span={2}>
-                        {selectedConfig.voltage_cmd
-                          ? formatSignal(selectedConfig.voltage_cmd)
-                          : formatValueSpec(selectedConfig.q_total_cmd)}
+                      <Descriptions.Item label="命令点" span={2}>
+                        <Text
+                          className="control-summary-value"
+                          title={selectedConfig.voltage_cmd ? formatSignal(selectedConfig.voltage_cmd) : formatValueSpec(selectedConfig.q_total_cmd)}
+                        >
+                          {selectedConfig.voltage_cmd?.tag || selectedConfig.q_total_cmd?.signal?.tag || '-'}
+                        </Text>
                       </Descriptions.Item>
-                      <Descriptions.Item label="voltage_control" span={2}>
+                      <Descriptions.Item label="调节参数" span={2}>
                         {selectedConfig.voltage_control
                           ? `kp=${selectedConfig.voltage_control.kp}，deadband=${selectedConfig.voltage_control.deadband}`
                           : '当前模式下不使用'}
                       </Descriptions.Item>
-                      <Descriptions.Item label="last_error" span={2}>
-                        {selectedGroup?.last_error || '—'}
+                      <Descriptions.Item label="最近错误" span={2}>
+                        {selectedGroup?.last_error || '无错误'}
                       </Descriptions.Item>
                     </Descriptions>
                   ) : (
@@ -1471,7 +1480,7 @@ const AVC: React.FC = () => {
                 title="运行状态"
                 size="small"
                 bordered
-                className="protocol-log-card"
+                className="protocol-log-card control-runtime-card"
                 style={{ width: 360, flexShrink: 0, minHeight: 0 }}
                 extra={
                   <Button
@@ -1556,7 +1565,7 @@ const AVC: React.FC = () => {
                 />
               </div>
             </Card>
-          </div>
+          </div>}
         </div>
       ) : (
         <Card title="控制日志" size="small" bordered className="protocol-log-card">
@@ -1577,6 +1586,8 @@ const AVC: React.FC = () => {
         onOk={() => void handleGroupSubmit()}
         onCancel={() => setGroupModalOpen(false)}
         width={1100}
+        centered
+        className="control-config-modal control-group-modal"
         destroyOnClose
       >
         <Form form={groupForm} layout="vertical" size="small">
@@ -1833,6 +1844,8 @@ const AVC: React.FC = () => {
         onOk={() => void handleRenameGroup()}
         onCancel={() => setRenameModalOpen(false)}
         width={520}
+        centered
+        className="control-config-modal control-rename-modal"
         destroyOnClose
       >
         <Form form={renameForm} layout="vertical" size="small">
@@ -1858,6 +1871,8 @@ const AVC: React.FC = () => {
         onOk={() => void handleMemberSubmit()}
         onCancel={() => setMemberModalOpen(false)}
         width={920}
+        centered
+        className="control-config-modal control-member-modal"
         destroyOnClose
       >
         <Form form={memberForm} layout="vertical" size="small">

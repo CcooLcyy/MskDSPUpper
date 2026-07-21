@@ -3,8 +3,7 @@ import MainLayout from './layouts/MainLayout';
 import { ADVANCED_CONFIG_PATH } from './utils/advanced-config-auth';
 import {
   AdvancedConfigPage,
-  AGCPage,
-  AVCPage,
+  ControlPage,
   DataBusPage,
   DLT645Page,
   IEC104Page,
@@ -14,6 +13,16 @@ import {
   RouteSuspense,
   SettingsPage,
 } from './route-components';
+
+function redirectToControlModule(module: 'agc' | 'avc') {
+  return ({ request }: { request: Request }) => {
+    const url = new URL(request.url);
+    const params = new URLSearchParams(url.search);
+    params.set('module', module);
+    const search = params.toString();
+    throw redirect(`/control${search ? `?${search}` : ''}`);
+  };
+}
 
 export const router = createBrowserRouter([
   {
@@ -70,26 +79,19 @@ export const router = createBrowserRouter([
       },
       {
         path: 'control',
-        loader: ({ request }) => {
-          const url = new URL(request.url);
-          throw redirect(`/control/agc${url.search}`);
-        },
+        element: (
+          <RouteSuspense>
+            <ControlPage />
+          </RouteSuspense>
+        ),
       },
       {
         path: 'control/agc',
-        element: (
-          <RouteSuspense>
-            <AGCPage />
-          </RouteSuspense>
-        ),
+        loader: redirectToControlModule('agc'),
       },
       {
         path: 'control/avc',
-        element: (
-          <RouteSuspense>
-            <AVCPage />
-          </RouteSuspense>
-        ),
+        loader: redirectToControlModule('avc'),
       },
       {
         path: 'settings',
