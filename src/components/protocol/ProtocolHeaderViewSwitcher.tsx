@@ -34,7 +34,7 @@ const ProtocolHeaderViewSwitcher: React.FC = () => {
   return (
     <div className="protocol-header-view-switcher" aria-label="协议页面切换">
       <Tabs
-        className="protocol-header-tabs"
+        className="app-view-tabs protocol-header-tabs"
         activeKey={value}
         animated={false}
         items={PROTOCOL_VIEW_OPTIONS.map((option) => ({

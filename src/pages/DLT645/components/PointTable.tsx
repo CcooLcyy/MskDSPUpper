@@ -315,7 +315,7 @@ const PointTable: React.FC<Props> = ({
         </Space>
       )}
     >
-      <Tabs items={tabItems} size="small" />
+      <Tabs className="app-view-tabs" items={tabItems} size="small" />
     </Card>
   );
 };
