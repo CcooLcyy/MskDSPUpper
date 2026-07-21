@@ -10,7 +10,7 @@ export const ControlPage = lazy(() => import('./pages/Control'));
 export const AGCPage = lazy(() => import('./pages/AGC'));
 export const AVCPage = lazy(() => import('./pages/AVC'));
 export const SettingsPage = lazy(() => import('./pages/Settings'));
-export const AdvancedConfigPage = lazy(() => import('./pages/AdvancedConfig'));
+export const SoftwareUpdatePage = lazy(() => import('./pages/SoftwareUpdate'));
 
 function RouteLoading() {
   return (

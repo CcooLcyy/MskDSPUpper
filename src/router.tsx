@@ -2,7 +2,6 @@ import { createBrowserRouter, redirect } from 'react-router-dom';
 import MainLayout from './layouts/MainLayout';
 import { ADVANCED_CONFIG_PATH } from './utils/advanced-config-auth';
 import {
-  AdvancedConfigPage,
   ControlPage,
   DataBusPage,
   DLT645Page,
@@ -12,6 +11,7 @@ import {
   OverviewPage,
   RouteSuspense,
   SettingsPage,
+  SoftwareUpdatePage,
 } from './route-components';
 
 function redirectToControlModule(module: 'agc' | 'avc') {
@@ -102,6 +102,14 @@ export const router = createBrowserRouter([
         ),
       },
       {
+        path: 'software-update',
+        element: (
+          <RouteSuspense>
+            <SoftwareUpdatePage />
+          </RouteSuspense>
+        ),
+      },
+      {
         path: 'alerts-logs',
         element: (
           <div style={{ color: '#aaa', fontSize: 16, padding: 40, textAlign: 'center' }}>
@@ -111,17 +119,16 @@ export const router = createBrowserRouter([
       },
       {
         path: ADVANCED_CONFIG_PATH.slice(1),
-        element: (
-          <RouteSuspense>
-            <AdvancedConfigPage />
-          </RouteSuspense>
-        ),
+        loader: ({ request }) => {
+          const url = new URL(request.url);
+          throw redirect(`/software-update${url.search}`);
+        },
       },
       {
         path: 'debug-tools',
         loader: ({ request }) => {
           const url = new URL(request.url);
-          throw redirect(`${ADVANCED_CONFIG_PATH}${url.search}`);
+          throw redirect(`/software-update${url.search}`);
         },
       },
     ],

@@ -98,6 +98,7 @@ pub fn run() {
             commands::export_config::save_full_config_export,
             commands::export_config::load_full_config_export,
             commands::lower_update::check_lower_update,
+            commands::lower_update::get_lower_update_runtime_info,
             commands::lower_update::download_lower_update,
             commands::lower_update::upload_lower_update_package,
             commands::lower_update::install_lower_update_package,

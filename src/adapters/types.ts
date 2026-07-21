@@ -80,6 +80,7 @@ export interface LowerUpdateManifest {
   platform: string;
   version: string;
   package_version: string;
+  image_id?: string | null;
   published_at: string;
   source: LowerUpdateSource;
   asset: LowerUpdateAsset;
@@ -148,6 +149,18 @@ export interface LowerUpdateInstallResult {
   exit_code: number | null;
   stdout: string;
   stderr: string;
+}
+
+export interface LowerUpdateRuntimeInfoRequest {
+  upload_account: string;
+  auth: LowerUpdateSshAuth;
+}
+
+export interface LowerUpdateRuntimeInfo {
+  container_name: string;
+  exists: boolean;
+  running: boolean;
+  image_id: string | null;
 }
 
 export interface Iec104Endpoint {

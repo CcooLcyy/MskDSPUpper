@@ -32,6 +32,8 @@ import type {
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
   LowerUpdateManifest,
+  LowerUpdateRuntimeInfo,
+  LowerUpdateRuntimeInfoRequest,
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
   LowerUpdateUploadResult,
@@ -164,6 +166,8 @@ export const api = {
   },
   installLowerUpdatePackage: (request: LowerUpdateInstallRequest) =>
     invoke<LowerUpdateInstallResult>('install_lower_update_package', { request }),
+  getLowerUpdateRuntimeInfo: (request: LowerUpdateRuntimeInfoRequest) =>
+    invoke<LowerUpdateRuntimeInfo>('get_lower_update_runtime_info', { request }),
   getLowerUpdatePassword: (uploadAccount: string) =>
     invoke<string | null>('get_lower_update_password', { uploadAccount }),
   clearLowerUpdatePassword: (uploadAccount: string) =>

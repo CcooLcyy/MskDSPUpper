@@ -29,6 +29,7 @@ import type {
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
   LowerUpdateManifest,
+  LowerUpdateRuntimeInfo,
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
   LowerUpdateUploadResult,
@@ -89,6 +90,8 @@ const avcGroups = new Map<string, AvcGroupInfo>();
 let routes: DcRoute[] = [];
 let modbusMqtt: ModbusMqttConfig | null = null;
 let dlt645Mqtt: Dlt645MqttConfig | null = null;
+let browserLatestLowerManifest: LowerUpdateManifest | null = null;
+let browserRunningLowerImageId = `sha256:${'0'.repeat(64)}`;
 const exportSnapshots = new Map<string, FullConfigExportSnapshot>();
 
 function makeModuleInfo(moduleName: string): ModuleInfo {
@@ -373,8 +376,16 @@ export const browserApi: typeof tauriApi = {
     if (!response.ok) {
       throw new Error(`获取下位机更新清单失败: HTTP ${response.status}`);
     }
-    return await response.json() as LowerUpdateManifest;
+    const manifest = await response.json() as LowerUpdateManifest;
+    browserLatestLowerManifest = manifest;
+    return manifest;
   },
+  getLowerUpdateRuntimeInfo: async (): Promise<LowerUpdateRuntimeInfo> => ({
+    container_name: 'mskdsp',
+    exists: true,
+    running: true,
+    image_id: browserRunningLowerImageId,
+  }),
   downloadLowerUpdate: async (
     manifest: LowerUpdateManifest,
     onProgress?: (progress: LowerUpdateDownloadProgress) => void,
@@ -460,6 +471,9 @@ export const browserApi: typeof tauriApi = {
     const remotePath = buildRemotePackagePath(request.install_dir, request.package_name);
     const command = `set -e; cd '${request.install_dir}' && chmod +x './${request.package_name}' && './${request.package_name}' start`;
     await sleep(500);
+    if (browserLatestLowerManifest?.image_id) {
+      browserRunningLowerImageId = browserLatestLowerManifest.image_id;
+    }
     return {
       package_name: request.package_name,
       remote_path: remotePath,

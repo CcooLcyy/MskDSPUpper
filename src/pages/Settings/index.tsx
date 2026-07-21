@@ -1,8 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Button, Card, Descriptions, message, Modal, Progress, Radio, Space, Tag, Typography } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
-import type { AppUpdateStatusKind, ConfigExportSectionId } from '../../adapters';
-import { useAppUpdate } from '../../components/app-update/app-update-context';
+import { Button, Card, message, Modal, Radio, Space, Typography } from 'antd';
+import type { ConfigExportSectionId } from '../../adapters';
 import {
   applyConfigImport,
   applyFullConfigImport,
@@ -28,53 +26,6 @@ const { Paragraph, Text } = Typography;
 
 const DEFAULT_IMPORT_MODE: ConfigImportMode = 'merge';
 const IMPORT_MODE_OPTIONS: ConfigImportModeOption[] = getConfigImportModeOptions();
-
-function formatReleaseDate(value?: string) {
-  if (!value) {
-    return '-';
-  }
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-function getUpdateTagColor(kind: AppUpdateStatusKind) {
-  switch (kind) {
-    case 'checking':
-      return 'processing';
-    case 'up-to-date':
-      return 'success';
-    case 'available':
-      return 'gold';
-    case 'installing':
-      return 'blue';
-    case 'ready-to-restart':
-      return 'cyan';
-    case 'error':
-      return 'error';
-    default:
-      return 'default';
-  }
-}
-
-function getUpdateTagLabel(kind: AppUpdateStatusKind) {
-  switch (kind) {
-    case 'checking':
-      return '检查中';
-    case 'up-to-date':
-      return '已是最新';
-    case 'available':
-      return '发现更新';
-    case 'installing':
-      return '安装中';
-    case 'ready-to-restart':
-      return '待重启';
-    case 'error':
-      return '异常';
-    default:
-      return '未检查';
-  }
-}
 
 function formatSectionNames(sections: readonly ConfigExportSectionId[]): string {
   return sections.map((section) => getConfigSectionLabel(section)).join('、');
@@ -128,18 +79,6 @@ const Settings: React.FC = () => {
   const [moduleImportMode, setModuleImportMode] = useState<ConfigImportMode>(DEFAULT_IMPORT_MODE);
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
-  const {
-    appVersion,
-    availableUpdate,
-    updateStatus,
-    isCheckingUpdate,
-    isInstallingUpdate,
-    downloadedBytes,
-    totalBytes,
-    checkForUpdate,
-    installUpdate,
-    relaunchAfterUpdate,
-  } = useAppUpdate();
 
   const exportSectionOptions = useMemo(() => getConfigSectionOptions(), []);
   const fullImportSections = useMemo(
@@ -187,38 +126,6 @@ const Settings: React.FC = () => {
     },
     [messageApi, modal],
   );
-
-  const handleCheckUpdate = useCallback(async () => {
-    try {
-      const update = await checkForUpdate();
-
-      if (!update) {
-        messageApi.success('当前客户端已经是最新版本');
-        return;
-      }
-
-      messageApi.success(`发现客户端新版本 ${update.version}`);
-    } catch (error) {
-      messageApi.error(`检查更新失败: ${error}`);
-    }
-  }, [checkForUpdate, messageApi]);
-
-  const handleInstallUpdate = useCallback(async () => {
-    try {
-      const update = await installUpdate();
-      messageApi.success(`客户端 ${update.version} 已下载安装完成`);
-    } catch (error) {
-      messageApi.error(`安装更新失败: ${error}`);
-    }
-  }, [installUpdate, messageApi]);
-
-  const handleRelaunch = useCallback(async () => {
-    try {
-      await relaunchAfterUpdate();
-    } catch (error) {
-      messageApi.error(`重启客户端失败: ${error}`);
-    }
-  }, [messageApi, relaunchAfterUpdate]);
 
   const handleExportConfig = useCallback(async () => {
     setIsExportingConfig(true);
@@ -389,67 +296,10 @@ const Settings: React.FC = () => {
     }
   }, [messageApi, moduleImportMode, moduleImportSelection, selectedImportSections, showImportResult]);
 
-  const downloadPercent =
-    totalBytes && totalBytes > 0 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)) : 0;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {contextHolder}
       {modalContextHolder}
-
-      <Card title="应用更新" size="small" bordered>
-        <Descriptions size="small" column={2}>
-          <Descriptions.Item label="客户端版本">{appVersion}</Descriptions.Item>
-          <Descriptions.Item label="更新状态">
-            <Tag color={getUpdateTagColor(updateStatus.kind)}>{getUpdateTagLabel(updateStatus.kind)}</Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="可用版本">{availableUpdate?.version || '-'}</Descriptions.Item>
-          <Descriptions.Item label="发布时间">{formatReleaseDate(availableUpdate?.date)}</Descriptions.Item>
-        </Descriptions>
-
-        <Paragraph
-          type={updateStatus.kind === 'error' ? 'danger' : 'secondary'}
-          style={{ marginTop: 12, marginBottom: 12 }}
-        >
-          {updateStatus.message}
-        </Paragraph>
-
-        {availableUpdate?.body ? (
-          <Paragraph
-            style={{
-              whiteSpace: 'pre-wrap',
-              marginBottom: 12,
-            }}
-          >
-            {availableUpdate.body}
-          </Paragraph>
-        ) : null}
-
-        {isInstallingUpdate && totalBytes !== null ? (
-          <Progress percent={downloadPercent} size="small" status="active" style={{ marginBottom: 12 }} />
-        ) : null}
-
-        <Space wrap>
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => void handleCheckUpdate()}
-            loading={isCheckingUpdate}
-          >
-            检查客户端更新
-          </Button>
-          <Button
-            type="primary"
-            onClick={() => void handleInstallUpdate()}
-            disabled={!availableUpdate}
-            loading={isInstallingUpdate}
-          >
-            下载安装
-          </Button>
-          <Button onClick={() => void handleRelaunch()} disabled={updateStatus.kind !== 'ready-to-restart'}>
-            重启客户端
-          </Button>
-        </Space>
-      </Card>
 
       <Card title="配置导入 / 导出" size="small" bordered>
         <Paragraph type="secondary" style={{ marginBottom: 12 }}>

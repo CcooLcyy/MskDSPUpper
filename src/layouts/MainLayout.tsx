@@ -4,18 +4,18 @@ import {
   AlertOutlined,
   ApiOutlined,
   AppstoreOutlined,
+  CloudDownloadOutlined,
   ControlOutlined,
   DashboardOutlined,
   EllipsisOutlined,
   NodeIndexOutlined,
-  ToolOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ControlHeaderViewSwitcher from '../components/control/ControlHeaderViewSwitcher';
 import DataBusHeaderViewSwitcher from '../components/data-bus/DataBusHeaderViewSwitcher';
 import { useAppUpdate } from '../components/app-update/app-update-context';
+import SoftwareUpdateHeaderViewSwitcher from '../components/app-update/SoftwareUpdateHeaderViewSwitcher';
 import ProtocolHeaderViewSwitcher from '../components/protocol/ProtocolHeaderViewSwitcher';
-import { ADVANCED_CONFIG_PATH } from '../utils/advanced-config-auth';
 import './MainLayout.css';
 import '../components/protocol/protocol-page.css';
 
@@ -59,9 +59,9 @@ const menuItems = [
     label: '控制策略',
   },
   {
-    key: ADVANCED_CONFIG_PATH,
-    icon: <ToolOutlined />,
-    label: '高级配置',
+    key: '/software-update',
+    icon: <CloudDownloadOutlined />,
+    label: '软件更新',
   },
   {
     key: '/settings',
@@ -80,12 +80,12 @@ const MainLayout: React.FC = () => {
   const renderedMenuItems = useMemo(
     () =>
       menuItems.map((item) =>
-        item.key === '/settings'
+        item.key === '/software-update'
           ? {
               ...item,
               icon: (
                 <Badge dot={hasAvailableUpdate} offset={[2, 1]} className="main-layout-update-badge">
-                  <EllipsisOutlined />
+                  <CloudDownloadOutlined />
                 </Badge>
               ),
             }
@@ -108,6 +108,7 @@ const MainLayout: React.FC = () => {
   const isProtocolPage = location.pathname.startsWith('/protocol/');
   const isControlPage = location.pathname.startsWith('/control');
   const isDataBusPage = location.pathname.startsWith('/data-bus');
+  const isSoftwareUpdatePage = location.pathname.startsWith('/software-update');
   const suppressHeaderTitle = isProtocolPage || isControlPage;
   const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage || isControlPage ? 'hidden' : 'auto';
 
@@ -174,6 +175,7 @@ const MainLayout: React.FC = () => {
             {isProtocolPage ? <ProtocolHeaderViewSwitcher /> : null}
             {isControlPage ? <ControlHeaderViewSwitcher /> : null}
             {isDataBusPage ? <DataBusHeaderViewSwitcher /> : null}
+            {isSoftwareUpdatePage ? <SoftwareUpdateHeaderViewSwitcher /> : null}
           </div>
           <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
         </Header>

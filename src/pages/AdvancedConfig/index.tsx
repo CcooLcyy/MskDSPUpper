@@ -15,22 +15,15 @@ import {
   Typography,
 } from 'antd';
 import {
-  CloudDownloadOutlined,
   DownloadOutlined,
   FileSearchOutlined,
-  LogoutOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
 import {
-  authorizeAdvancedConfigSession,
-  isAdvancedConfigAuthorized,
-  isAdvancedConfigPasswordValid,
-  revokeAdvancedConfigSession,
-} from '../../utils/advanced-config-auth';
-import {
   api,
+  type AppUpdateStatusKind,
   type LowerUpdateChannel,
   type LowerUpdateDownloadProgress,
   type LowerUpdateDownloadResult,
@@ -39,16 +32,17 @@ import {
   type LowerUpdateSshAuth,
   type LowerUpdateUploadProgress,
   type LowerUpdateUploadResult,
-  type ModuleInfo,
 } from '../../adapters';
+import { useAppUpdate } from '../../components/app-update/app-update-context';
+import {
+  normalizeSoftwareUpdateView,
+  SOFTWARE_UPDATE_VIEW_QUERY_KEY,
+} from '../../components/app-update/update-view';
 import { validateManagerAddress } from '../../utils/network';
+import { useSearchParams } from 'react-router-dom';
 import './index.css';
 
-const { Text } = Typography;
-
-type AdvancedConfigAuthFormValues = {
-  password: string;
-};
+const { Paragraph, Text } = Typography;
 
 type LowerUpdateAuthMethod = LowerUpdateSshAuth['method'];
 
@@ -56,6 +50,8 @@ type LowerUpdateStatus =
   | '未检查'
   | '检查失败'
   | '发现更新'
+  | '已是最新'
+  | '无法确认'
   | '下载中'
   | '校验中'
   | '下载失败'
@@ -65,15 +61,15 @@ type LowerUpdateStatus =
   | '已上传到下位机'
   | '安装中'
   | '安装失败'
-  | '版本确认中'
-  | '版本不一致'
-  | '版本确认失败'
+  | '镜像确认中'
+  | '构建不一致'
+  | '镜像确认失败'
   | '升级完成';
 
 type DownloadStage = LowerUpdateDownloadProgress['stage'] | 'idle' | 'failed';
 type UploadStage = LowerUpdateUploadProgress['stage'] | 'idle' | 'failed';
 type InstallStage = 'idle' | 'running' | 'succeeded' | 'failed';
-type VersionVerifyStage = 'idle' | 'waiting' | 'querying' | 'succeeded' | 'mismatch' | 'failed';
+type ImageVerifyStage = 'idle' | 'waiting' | 'querying' | 'succeeded' | 'mismatch' | 'failed';
 type DeployTaskStep =
   | 'idle'
   | 'uploading'
@@ -84,7 +80,7 @@ type DeployTaskStep =
   | 'install_failed'
   | 'verifying'
   | 'verify_failed'
-  | 'version_mismatch'
+  | 'image_mismatch'
   | 'succeeded';
 
 const SSH_ACCOUNT_PATTERN = /^([A-Za-z_][A-Za-z0-9_-]*)@([^@:]+):(\d+)$/;
@@ -114,7 +110,6 @@ const LOWER_UPDATE_AUTH_METHOD_LABELS: Record<LowerUpdateAuthMethod, string> = {
 };
 
 const LOWER_UPDATE_MOCK_TARGET = {
-  managerAddr: '192.168.1.219:17000',
   uploadAccount: 'megsky@192.168.1.219:10022',
   installDir: '/home/megsky',
 };
@@ -123,18 +118,22 @@ function getDeliveryStatusColor(status: LowerUpdateStatus): string {
   switch (status) {
     case '发现更新':
       return 'gold';
+    case '已是最新':
+      return 'success';
+    case '无法确认':
+      return 'default';
     case '检查失败':
     case '下载失败':
     case '上传失败':
     case '安装失败':
-    case '版本不一致':
-    case '版本确认失败':
+    case '构建不一致':
+    case '镜像确认失败':
       return 'error';
     case '下载中':
     case '校验中':
     case '上传中':
     case '安装中':
-    case '版本确认中':
+    case '镜像确认中':
     case '已下载到上位机':
       return 'blue';
     case '已上传到下位机':
@@ -288,16 +287,16 @@ function getInstallStageTagColor(stage: InstallStage): string {
   }
 }
 
-function getVersionVerifyStageLabel(stage: VersionVerifyStage): string {
+function getImageVerifyStageLabel(stage: ImageVerifyStage): string {
   switch (stage) {
     case 'waiting':
       return '等待恢复';
     case 'querying':
-      return '查询版本中';
+      return '查询运行镜像中';
     case 'succeeded':
       return '确认成功';
     case 'mismatch':
-      return '版本不一致';
+      return '构建不一致';
     case 'failed':
       return '确认失败';
     default:
@@ -305,7 +304,7 @@ function getVersionVerifyStageLabel(stage: VersionVerifyStage): string {
   }
 }
 
-function getVersionVerifyStageTagColor(stage: VersionVerifyStage): string {
+function getImageVerifyStageTagColor(stage: ImageVerifyStage): string {
   switch (stage) {
     case 'succeeded':
       return 'success';
@@ -335,11 +334,11 @@ function getDeployTaskStepLabel(step: DeployTaskStep): string {
     case 'install_failed':
       return '安装失败';
     case 'verifying':
-      return '确认版本中';
+      return '确认运行镜像中';
     case 'verify_failed':
       return '确认失败';
-    case 'version_mismatch':
-      return '版本不一致';
+    case 'image_mismatch':
+      return '构建不一致';
     case 'succeeded':
       return '升级完成';
     default:
@@ -354,7 +353,7 @@ function getDeployTaskStepTagColor(step: DeployTaskStep): string {
     case 'upload_failed':
     case 'install_failed':
     case 'verify_failed':
-    case 'version_mismatch':
+    case 'image_mismatch':
       return 'error';
     case 'uploading':
     case 'installing':
@@ -387,19 +386,15 @@ function getDeployTaskProgress(step: DeployTaskStep, uploadProgress: number): nu
     case 'install_failed':
       return 65;
     case 'verify_failed':
-    case 'version_mismatch':
+    case 'image_mismatch':
       return 88;
     default:
       return 0;
   }
 }
 
-function normalizeVersionForCompare(version: string): string {
-  return version.trim().replace(/^v/i, '');
-}
-
-function isSameVersion(expectedVersion: string, actualVersion: string): boolean {
-  return normalizeVersionForCompare(expectedVersion) === normalizeVersionForCompare(actualVersion);
+function isSameImageId(expectedImageId: string, actualImageId: string): boolean {
+  return expectedImageId.trim().toLowerCase() === actualImageId.trim().toLowerCase();
 }
 
 function sleep(ms: number): Promise<void> {
@@ -419,6 +414,53 @@ function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function formatReleaseDate(value?: string): string {
+  if (!value) {
+    return '-';
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function getAppUpdateTagColor(kind: AppUpdateStatusKind): string {
+  switch (kind) {
+    case 'checking':
+      return 'processing';
+    case 'up-to-date':
+      return 'success';
+    case 'available':
+      return 'gold';
+    case 'installing':
+      return 'blue';
+    case 'ready-to-restart':
+      return 'cyan';
+    case 'error':
+      return 'error';
+    default:
+      return 'default';
+  }
+}
+
+function getAppUpdateTagLabel(kind: AppUpdateStatusKind): string {
+  switch (kind) {
+    case 'checking':
+      return '检查中';
+    case 'up-to-date':
+      return '已是最新';
+    case 'available':
+      return '发现更新';
+    case 'installing':
+      return '安装中';
+    case 'ready-to-restart':
+      return '待重启';
+    case 'error':
+      return '异常';
+    default:
+      return '未检查';
+  }
+}
+
 function formatLowerUpdateCheckError(channel: LowerUpdateChannel, error: unknown): string {
   const message = formatErrorMessage(error);
   if (/\bHTTP 404\b/i.test(message)) {
@@ -429,10 +471,11 @@ function formatLowerUpdateCheckError(channel: LowerUpdateChannel, error: unknown
 }
 
 const AdvancedConfigPage: React.FC = () => {
-  const [authorized, setAuthorized] = useState(isAdvancedConfigAuthorized);
+  const [searchParams] = useSearchParams();
+  const activeUpdateTab = normalizeSoftwareUpdateView(searchParams.get(SOFTWARE_UPDATE_VIEW_QUERY_KEY));
   const [channel, setChannel] = useState<LowerUpdateChannel>(DEFAULT_LOWER_UPDATE_CHANNEL);
-  const [currentLowerVersion, setCurrentLowerVersion] = useState('0.2.3');
-  const [latestLowerVersion, setLatestLowerVersion] = useState('-');
+  const [currentLowerImageId, setCurrentLowerImageId] = useState('-');
+  const [latestLowerImageId, setLatestLowerImageId] = useState('-');
   const [packageName, setPackageName] = useState('-');
   const [packageSize, setPackageSize] = useState('-');
   const [publishedAt, setPublishedAt] = useState('-');
@@ -457,12 +500,10 @@ const AdvancedConfigPage: React.FC = () => {
   const [installExitCode, setInstallExitCode] = useState<number | null>(null);
   const [installStdout, setInstallStdout] = useState('');
   const [installStderr, setInstallStderr] = useState('');
-  const [versionVerifyStage, setVersionVerifyStage] = useState<VersionVerifyStage>('idle');
-  const [versionVerifyModuleName, setVersionVerifyModuleName] = useState('ModuleManager');
-  const [expectedVerifyVersion, setExpectedVerifyVersion] = useState('-');
-  const [actualVerifyVersion, setActualVerifyVersion] = useState('-');
-  const [versionVerifyMessage, setVersionVerifyMessage] = useState('-');
-  const [targetManagerAddr, setTargetManagerAddr] = useState(LOWER_UPDATE_MOCK_TARGET.managerAddr);
+  const [imageVerifyStage, setImageVerifyStage] = useState<ImageVerifyStage>('idle');
+  const [expectedImageId, setExpectedImageId] = useState('-');
+  const [actualImageId, setActualImageId] = useState('-');
+  const [imageVerifyMessage, setImageVerifyMessage] = useState('-');
   const [targetUploadAccount, setTargetUploadAccount] = useState(LOWER_UPDATE_MOCK_TARGET.uploadAccount);
   const [targetInstallDir, setTargetInstallDir] = useState(LOWER_UPDATE_MOCK_TARGET.installDir);
   const [targetSshPassword, setTargetSshPassword] = useState(DEFAULT_LOWER_UPDATE_SSH_PASSWORD);
@@ -478,19 +519,27 @@ const AdvancedConfigPage: React.FC = () => {
   const [downloadResult, setDownloadResult] = useState<LowerUpdateDownloadResult | null>(null);
   const [uploadResult, setUploadResult] = useState<LowerUpdateUploadResult | null>(null);
   const [installResult, setInstallResult] = useState<LowerUpdateInstallResult | null>(null);
-  const [form] = Form.useForm<AdvancedConfigAuthFormValues>();
   const [messageApi, contextHolder] = message.useMessage();
   const [isLoadingSavedSshPassword, setIsLoadingSavedSshPassword] = useState(false);
-  const targetManagerAddrValidation = validateManagerAddress(targetManagerAddr);
+  const {
+    appVersion,
+    availableUpdate,
+    updateStatus,
+    isCheckingUpdate,
+    isInstallingUpdate,
+    downloadedBytes: appDownloadedBytes,
+    totalBytes: appTotalBytes,
+    checkForUpdate,
+    installUpdate,
+    relaunchAfterUpdate,
+  } = useAppUpdate();
   const targetUploadAccountValidation = validateUploadAccount(targetUploadAccount);
   const targetInstallDirValidation = validateInstallDir(targetInstallDir);
   const hasSshPasswordValidationError = lowerUpdateAuthMethod === 'password' && targetSshPassword.length === 0;
-  const hasTargetValidationError =
-    !targetManagerAddrValidation.ok
-    || !targetUploadAccountValidation.ok
-    || !targetInstallDirValidation.ok
-    || hasSshPasswordValidationError;
+  const hasRuntimeQueryValidationError = !targetUploadAccountValidation.ok || hasSshPasswordValidationError;
+  const hasDeployTargetValidationError = hasRuntimeQueryValidationError || !targetInstallDirValidation.ok;
   const hasCheckedPackage = activeManifest !== null;
+  const hasVerifiableManifest = Boolean(activeManifest?.image_id?.trim());
   const hasDownloadedPackage = downloadResult !== null;
   const isDeployingLowerUpdate = isUploadingLowerUpdate || isInstallingLowerUpdate || isVerifyingLowerUpdate;
   const deployTaskProgress = getDeployTaskProgress(deployTaskStep, uploadModalProgress);
@@ -498,9 +547,11 @@ const AdvancedConfigPage: React.FC = () => {
     deployTaskStep === 'upload_failed'
     || deployTaskStep === 'install_failed'
     || deployTaskStep === 'verify_failed'
-    || deployTaskStep === 'version_mismatch';
+    || deployTaskStep === 'image_mismatch';
   const canReinstall = Boolean(downloadResult && uploadResult);
-  const canReverifyVersion = installResult?.success === true;
+  const canReverifyImage = installResult?.success === true;
+  const appDownloadPercent =
+    appTotalBytes && appTotalBytes > 0 ? Math.min(100, Math.round((appDownloadedBytes / appTotalBytes) * 100)) : 0;
 
   React.useEffect(() => {
     if (lowerUpdateAuthMethod !== 'password' || !targetUploadAccount.trim()) {
@@ -525,23 +576,37 @@ const AdvancedConfigPage: React.FC = () => {
     };
   }, [lowerUpdateAuthMethod, targetUploadAccount]);
 
-  const handleSubmit = ({ password }: AdvancedConfigAuthFormValues): void => {
-    if (!isAdvancedConfigPasswordValid(password)) {
-      form.setFields([{ name: 'password', errors: ['密码不正确'] }]);
-      return;
+  const handleCheckAppUpdate = async (): Promise<void> => {
+    try {
+      const update = await checkForUpdate();
+      messageApi.success(update ? `发现客户端新版本 ${update.version}` : '当前客户端已经是最新版本');
+    } catch (error) {
+      messageApi.error(`检查更新失败: ${error}`);
     }
-
-    authorizeAdvancedConfigSession();
-    setAuthorized(true);
-    form.resetFields();
   };
 
-  const resetVersionVerifyState = (): void => {
-    setVersionVerifyStage('idle');
-    setVersionVerifyModuleName('ModuleManager');
-    setExpectedVerifyVersion('-');
-    setActualVerifyVersion('-');
-    setVersionVerifyMessage('-');
+  const handleInstallAppUpdate = async (): Promise<void> => {
+    try {
+      const update = await installUpdate();
+      messageApi.success(`客户端 ${update.version} 已下载安装完成`);
+    } catch (error) {
+      messageApi.error(`安装更新失败: ${error}`);
+    }
+  };
+
+  const handleRelaunchApp = async (): Promise<void> => {
+    try {
+      await relaunchAfterUpdate();
+    } catch (error) {
+      messageApi.error(`重启客户端失败: ${error}`);
+    }
+  };
+
+  const resetImageVerifyState = (): void => {
+    setImageVerifyStage('idle');
+    setExpectedImageId('-');
+    setActualImageId('-');
+    setImageVerifyMessage('-');
   };
 
   const resetInstallState = (): void => {
@@ -551,7 +616,7 @@ const AdvancedConfigPage: React.FC = () => {
     setInstallStdout('');
     setInstallStderr('');
     setInstallResult(null);
-    resetVersionVerifyState();
+    resetImageVerifyState();
   };
 
   const resetUploadState = (): void => {
@@ -567,8 +632,8 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const resetUpdateState = (): void => {
-    setCurrentLowerVersion('0.2.3');
-    setLatestLowerVersion('-');
+    setCurrentLowerImageId('-');
+    setLatestLowerImageId('-');
     setPackageName('-');
     setPackageSize('-');
     setPublishedAt('-');
@@ -586,8 +651,14 @@ const AdvancedConfigPage: React.FC = () => {
     setDownloadResult(null);
   };
 
+  const invalidateRuntimeCheck = (): void => {
+    setCurrentLowerImageId('-');
+    resetUploadState();
+    setDeliveryStatus(downloadResult ? '已下载到上位机' : '未检查');
+  };
+
   const applyLowerUpdateManifest = (manifest: LowerUpdateManifest): void => {
-    setLatestLowerVersion(manifest.version);
+    setLatestLowerImageId(manifest.image_id?.trim() || '-');
     setPackageName(manifest.asset.name);
     setPackageSize(formatPackageSize(manifest.asset.size));
     setPublishedAt(formatPublishedAt(manifest.published_at));
@@ -608,8 +679,55 @@ const AdvancedConfigPage: React.FC = () => {
       setDownloadedBytes(0);
       setDownloadTotalBytes(manifest.asset.size);
       resetUploadState();
-      setDeliveryStatus('发现更新');
-      messageApi.success(`发现下位机版本 ${manifest.version}`);
+
+      if (!manifest.image_id?.trim()) {
+        setCurrentLowerImageId('-');
+        setDeliveryStatus('无法确认');
+        messageApi.warning('已获取更新清单，但该清单未包含镜像 ID，无法确认目标机是否为最新构建');
+        return;
+      }
+
+      try {
+        const runtime = await api.getLowerUpdateRuntimeInfo({
+          upload_account: targetUploadAccount.trim(),
+          auth: lowerUpdateAuthMethod === 'password'
+            ? { method: 'password', password: targetSshPassword }
+            : { method: 'certificate' },
+        });
+        const actualImageId = runtime.image_id?.trim() || '-';
+
+        if (!runtime.exists) {
+          setCurrentLowerImageId('-');
+          setDeliveryStatus('无法确认');
+          messageApi.warning(`已获取更新清单，但目标机不存在 ${runtime.container_name} 容器`);
+          return;
+        }
+        if (!runtime.running) {
+          setCurrentLowerImageId('-');
+          setDeliveryStatus('无法确认');
+          messageApi.warning(`已获取更新清单，但目标机 ${runtime.container_name} 容器未运行`);
+          return;
+        }
+        if (actualImageId === '-') {
+          setCurrentLowerImageId('-');
+          setDeliveryStatus('无法确认');
+          messageApi.warning('已获取更新清单，但目标机未返回有效的运行镜像 ID');
+          return;
+        }
+
+        setCurrentLowerImageId(actualImageId);
+        if (isSameImageId(manifest.image_id, actualImageId)) {
+          setDeliveryStatus('已是最新');
+          messageApi.success(`目标机已经运行 ${UPDATE_CHANNEL_LABELS[channel]} 通道的最新构建`);
+        } else {
+          setDeliveryStatus('发现更新');
+          messageApi.info(`发现 ${UPDATE_CHANNEL_LABELS[channel]} 通道的新构建 ${manifest.version}`);
+        }
+      } catch (error) {
+        setCurrentLowerImageId('-');
+        setDeliveryStatus('无法确认');
+        messageApi.warning(`已获取更新清单，但查询目标机运行镜像失败: ${formatErrorMessage(error)}`);
+      }
     } catch (error) {
       setDeliveryStatus('检查失败');
       messageApi.error(`检查更新失败: ${formatLowerUpdateCheckError(channel, error)}`);
@@ -662,52 +780,49 @@ const AdvancedConfigPage: React.FC = () => {
     }
   };
 
-  const verifyInstalledVersion = async (expectedVersion: string): Promise<'succeeded' | 'mismatch' | 'failed'> => {
-    const moduleName = 'ModuleManager';
-    const managerAddrValidation = validateManagerAddress(targetManagerAddr);
-
-    if (!managerAddrValidation.ok) {
-      throw new Error(managerAddrValidation.error);
-    }
-
-    setVersionVerifyModuleName(moduleName);
-    setExpectedVerifyVersion(expectedVersion);
-    setActualVerifyVersion('-');
-    setVersionVerifyStage('waiting');
-    setVersionVerifyMessage('等待下位机服务恢复');
+  const verifyRunningImage = async (expectedImageId: string): Promise<'succeeded' | 'mismatch' | 'failed'> => {
+    setCurrentLowerImageId('-');
+    setExpectedImageId(expectedImageId);
+    setActualImageId('-');
+    setImageVerifyStage('waiting');
+    setImageVerifyMessage('等待下位机容器恢复');
     await sleep(5000);
 
     let lastError: unknown = null;
 
     for (let attempt = 1; attempt <= 6; attempt += 1) {
-      setVersionVerifyStage('querying');
-      setVersionVerifyMessage(`查询 ${moduleName} 版本中 (${attempt}/6)`);
+      setImageVerifyStage('querying');
+      setImageVerifyMessage(`查询运行镜像中 (${attempt}/6)`);
 
       try {
-        await api.setManagerAddr(managerAddrValidation.normalized);
-        const moduleInfo = await api.getModuleInfo();
-        const targetModule = moduleInfo.find((item: ModuleInfo) => item.module_name === moduleName);
+        const runtime = await api.getLowerUpdateRuntimeInfo({
+          upload_account: targetUploadAccount.trim(),
+          auth: lowerUpdateAuthMethod === 'password'
+            ? { method: 'password', password: targetSshPassword }
+            : { method: 'certificate' },
+        });
+        const runtimeImageId = runtime.image_id?.trim() || '-';
+        setActualImageId(runtimeImageId);
 
-        if (!targetModule) {
-          throw new Error(`未找到 ${moduleName} 模块`);
+        if (!runtime.exists) {
+          throw new Error(`未找到 ${runtime.container_name} 容器`);
+        }
+        if (!runtime.running) {
+          throw new Error(`${runtime.container_name} 容器未运行`);
+        }
+        if (runtimeImageId === '-') {
+          throw new Error(`${runtime.container_name} 容器未返回有效的镜像 ID`);
         }
 
-        const actualVersion = targetModule.version?.version?.trim() || '-';
-        setActualVerifyVersion(actualVersion);
-        setCurrentLowerVersion(actualVersion);
-
-        if (!targetModule.version || actualVersion === '-') {
-          throw new Error(`${moduleName} 未上报版本号`);
-        }
-
-        if (!isSameVersion(expectedVersion, actualVersion)) {
-          setVersionVerifyStage('mismatch');
-          setVersionVerifyMessage(`期望 ${expectedVersion}，实际 ${actualVersion}`);
+        setCurrentLowerImageId(runtimeImageId);
+        if (!isSameImageId(expectedImageId, runtimeImageId)) {
+          setImageVerifyStage('mismatch');
+          setImageVerifyMessage(`期望 ${expectedImageId}，实际 ${runtimeImageId}`);
           return 'mismatch';
         }
 
-        setVersionVerifyStage('succeeded');
-        setVersionVerifyMessage(`版本已确认: ${actualVersion}`);
+        setImageVerifyStage('succeeded');
+        setImageVerifyMessage(`运行镜像已确认: ${runtimeImageId}`);
         return 'succeeded';
       } catch (error) {
         lastError = error;
@@ -717,8 +832,8 @@ const AdvancedConfigPage: React.FC = () => {
       }
     }
 
-    setVersionVerifyStage('failed');
-    setVersionVerifyMessage(formatErrorMessage(lastError));
+    setImageVerifyStage('failed');
+    setImageVerifyMessage(formatErrorMessage(lastError));
     return 'failed';
   };
 
@@ -777,6 +892,7 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const runInstallStep = async (packageResult: LowerUpdateDownloadResult): Promise<boolean> => {
+    setCurrentLowerImageId('-');
     resetInstallState();
     setDeployTaskStep('installing');
     setDeliveryStatus('安装中');
@@ -822,38 +938,42 @@ const AdvancedConfigPage: React.FC = () => {
     }
   };
 
-  const runVersionVerifyStep = async (): Promise<boolean> => {
+  const runImageVerifyStep = async (): Promise<boolean> => {
     setDeployTaskStep('verifying');
-    setDeliveryStatus('版本确认中');
+    setDeliveryStatus('镜像确认中');
     setIsVerifyingLowerUpdate(true);
 
     try {
-      const expectedVersion = activeManifest?.version ?? latestLowerVersion;
-      const verifyResult = await verifyInstalledVersion(expectedVersion);
+      const expectedImageId = activeManifest?.image_id?.trim();
+      if (!expectedImageId) {
+        throw new Error('当前更新清单未包含镜像 ID，无法确认安装结果');
+      }
+      const verifyResult = await verifyRunningImage(expectedImageId);
       if (verifyResult === 'succeeded') {
         setDeployTaskStep('succeeded');
         setDeliveryStatus('升级完成');
-        messageApi.success('下位机版本已确认，升级完成');
+        messageApi.success('下位机运行镜像已确认，升级完成');
         return true;
       }
 
       if (verifyResult === 'mismatch') {
-        setDeployTaskStep('version_mismatch');
-        setDeliveryStatus('版本不一致');
-        messageApi.error('安装命令已执行，但下位机实际版本与清单版本不一致');
+        setDeployTaskStep('image_mismatch');
+        setDeliveryStatus('构建不一致');
+        messageApi.error('安装命令已执行，但下位机运行镜像与清单构建不一致');
         return false;
       }
 
       setDeployTaskStep('verify_failed');
-      setDeliveryStatus('版本确认失败');
-      messageApi.error('安装命令已执行，但版本确认失败');
+      setDeliveryStatus('镜像确认失败');
+      messageApi.error('安装命令已执行，但运行镜像确认失败');
       return false;
     } catch (error) {
-      setVersionVerifyStage('failed');
-      setVersionVerifyMessage(formatErrorMessage(error));
+      setCurrentLowerImageId('-');
+      setImageVerifyStage('failed');
+      setImageVerifyMessage(formatErrorMessage(error));
       setDeployTaskStep('verify_failed');
-      setDeliveryStatus('版本确认失败');
-      messageApi.error(`版本确认失败: ${formatErrorMessage(error)}`);
+      setDeliveryStatus('镜像确认失败');
+      messageApi.error(`运行镜像确认失败: ${formatErrorMessage(error)}`);
       return false;
     } finally {
       setIsVerifyingLowerUpdate(false);
@@ -863,6 +983,10 @@ const AdvancedConfigPage: React.FC = () => {
   const runDeployFlow = async ({ forceUpload = false }: { forceUpload?: boolean } = {}): Promise<void> => {
     if (!downloadResult) {
       messageApi.warning('请先下载到上位机');
+      return;
+    }
+    if (!activeManifest?.image_id?.trim()) {
+      messageApi.warning('当前更新清单未包含镜像 ID，不能执行无法验证结果的安装');
       return;
     }
 
@@ -896,7 +1020,7 @@ const AdvancedConfigPage: React.FC = () => {
       return;
     }
 
-    await runVersionVerifyStep();
+    await runImageVerifyStep();
   };
 
   const handleDeployPackage = async (): Promise<void> => {
@@ -927,43 +1051,77 @@ const AdvancedConfigPage: React.FC = () => {
 
     const installed = await runInstallStep(downloadResult);
     if (installed) {
-      await runVersionVerifyStep();
+      await runImageVerifyStep();
     }
   };
 
-  const handleReverifyVersion = async (): Promise<void> => {
+  const handleReverifyImage = async (): Promise<void> => {
     if (!installResult?.success) {
       messageApi.warning('请先完成安装命令');
       return;
     }
 
     setIsUploadModalOpen(true);
-    await runVersionVerifyStep();
+    await runImageVerifyStep();
   };
 
-  const handleLogout = (): void => {
-    revokeAdvancedConfigSession();
-    setAuthorized(false);
-    setTargetSshPassword('');
-    form.resetFields();
-  };
+  const renderAppUpdateCard = (): React.ReactNode => (
+    <Card title="上位机更新" size="small" bordered>
+      <Descriptions size="small" column={2}>
+        <Descriptions.Item label="客户端版本">{appVersion}</Descriptions.Item>
+        <Descriptions.Item label="更新状态">
+          <Tag color={getAppUpdateTagColor(updateStatus.kind)}>{getAppUpdateTagLabel(updateStatus.kind)}</Tag>
+        </Descriptions.Item>
+        <Descriptions.Item label="可用版本">{availableUpdate?.version || '-'}</Descriptions.Item>
+        <Descriptions.Item label="发布时间">{formatReleaseDate(availableUpdate?.date)}</Descriptions.Item>
+      </Descriptions>
 
-  if (authorized) {
-    return (
+      <Paragraph
+        type={updateStatus.kind === 'error' ? 'danger' : 'secondary'}
+        style={{ marginTop: 12, marginBottom: 12 }}
+      >
+        {updateStatus.message}
+      </Paragraph>
+
+      {availableUpdate?.body ? (
+        <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 12 }}>
+          {availableUpdate.body}
+        </Paragraph>
+      ) : null}
+
+      {isInstallingUpdate && appTotalBytes !== null ? (
+        <Progress percent={appDownloadPercent} size="small" status="active" style={{ marginBottom: 12 }} />
+      ) : null}
+
+      <Space wrap>
+        <Button
+          icon={<ReloadOutlined />}
+          onClick={() => void handleCheckAppUpdate()}
+          loading={isCheckingUpdate}
+        >
+          检查上位机更新
+        </Button>
+        <Button
+          type="primary"
+          onClick={() => void handleInstallAppUpdate()}
+          disabled={!availableUpdate}
+          loading={isInstallingUpdate}
+        >
+          下载安装
+        </Button>
+        <Button onClick={() => void handleRelaunchApp()} disabled={updateStatus.kind !== 'ready-to-restart'}>
+          重启上位机
+        </Button>
+      </Space>
+    </Card>
+  );
+
+  return (
       <>
         {contextHolder}
         <div className="advanced-config-page">
-        <div className="advanced-config-page-header">
-          <Space size={8}>
-            <CloudDownloadOutlined />
-            <Text strong className="advanced-config-page-title">
-              下位机更新下发
-            </Text>
-          </Space>
-          <Button size="small" icon={<LogoutOutlined />} onClick={handleLogout}>
-            退出
-          </Button>
-        </div>
+        {activeUpdateTab === 'upper' ? renderAppUpdateCard() : (
+          <>
 
         <Card
           size="small"
@@ -975,38 +1133,17 @@ const AdvancedConfigPage: React.FC = () => {
               <div className="advanced-config-section-title">目标下位机</div>
               <Form layout="vertical" size="small">
                 <Form.Item
-                  label="ModuleManager 地址"
-                  validateStatus={targetManagerAddrValidation.ok ? undefined : 'error'}
-                  help={targetManagerAddrValidation.ok ? undefined : targetManagerAddrValidation.error}
-                >
-                  <Input
-                    value={targetManagerAddr}
-                    disabled={isDeployingLowerUpdate}
-                    onChange={(event) => {
-                      setTargetManagerAddr(event.target.value);
-                      resetUploadState();
-                      if (downloadResult) {
-                        setDeliveryStatus('已下载到上位机');
-                      }
-                    }}
-                    placeholder="例如 192.168.1.219:17000"
-                  />
-                </Form.Item>
-                <Form.Item
                   label="上传账号"
                   validateStatus={targetUploadAccountValidation.ok ? undefined : 'error'}
                   help={targetUploadAccountValidation.ok ? undefined : targetUploadAccountValidation.error}
                 >
                   <Input
                     value={targetUploadAccount}
-                    disabled={isDeployingLowerUpdate}
+                    disabled={isCheckingLowerUpdate || isDeployingLowerUpdate}
                     onChange={(event) => {
                       setTargetUploadAccount(event.target.value);
                       setTargetSshPassword('');
-                      resetUploadState();
-                      if (downloadResult) {
-                        setDeliveryStatus('已下载到上位机');
-                      }
+                      invalidateRuntimeCheck();
                     }}
                     placeholder="例如 megsky@192.168.1.219:10022"
                   />
@@ -1019,13 +1156,10 @@ const AdvancedConfigPage: React.FC = () => {
                       value: value as LowerUpdateAuthMethod,
                       label,
                     }))}
-                    disabled={isDeployingLowerUpdate}
+                    disabled={isCheckingLowerUpdate || isDeployingLowerUpdate}
                     onChange={(value) => {
                       setLowerUpdateAuthMethod(value);
-                      resetUploadState();
-                      if (downloadResult) {
-                        setDeliveryStatus('已下载到上位机');
-                      }
+                      invalidateRuntimeCheck();
                     }}
                   />
                 </Form.Item>
@@ -1038,14 +1172,11 @@ const AdvancedConfigPage: React.FC = () => {
                   >
                     <Input.Password
                       value={targetSshPassword}
-                      disabled={isDeployingLowerUpdate || isLoadingSavedSshPassword}
+                      disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isLoadingSavedSshPassword}
                       autoComplete="current-password"
                       onChange={(event) => {
                         setTargetSshPassword(event.target.value);
-                        resetUploadState();
-                        if (downloadResult) {
-                          setDeliveryStatus('已下载到上位机');
-                        }
+                        invalidateRuntimeCheck();
                       }}
                       placeholder="请输入 SSH 登录密码"
                     />
@@ -1073,7 +1204,7 @@ const AdvancedConfigPage: React.FC = () => {
             </div>
 
             <div className="advanced-config-section">
-              <div className="advanced-config-section-title">版本来源</div>
+              <div className="advanced-config-section-title">发布来源</div>
               <Form layout="vertical" size="small">
                 <Form.Item label="发布通道">
                   <Select<LowerUpdateChannel>
@@ -1094,7 +1225,7 @@ const AdvancedConfigPage: React.FC = () => {
                 <Button
                   icon={<FileSearchOutlined />}
                   onClick={() => void handleCheckUpdate()}
-                  disabled={hasTargetValidationError}
+                  disabled={hasRuntimeQueryValidationError}
                   loading={isCheckingLowerUpdate}
                 >
                   检查更新
@@ -1103,8 +1234,7 @@ const AdvancedConfigPage: React.FC = () => {
                   icon={<DownloadOutlined />}
                   onClick={() => void handleDownload()}
                   disabled={
-                    hasTargetValidationError
-                    || !hasCheckedPackage
+                    !hasCheckedPackage
                     || isCheckingLowerUpdate
                     || isDownloadingLowerUpdate
                     || isDeployingLowerUpdate
@@ -1118,8 +1248,9 @@ const AdvancedConfigPage: React.FC = () => {
                   icon={<UploadOutlined />}
                   onClick={() => void handleDeployPackage()}
                   disabled={
-                    hasTargetValidationError
+                    hasDeployTargetValidationError
                     || !hasDownloadedPackage
+                    || !hasVerifiableManifest
                     || isCheckingLowerUpdate
                     || isDownloadingLowerUpdate
                     || isDeployingLowerUpdate
@@ -1139,13 +1270,17 @@ const AdvancedConfigPage: React.FC = () => {
           title={
             <Space size={8}>
               <SafetyCertificateOutlined />
-              <span>版本与校验</span>
+              <span>构建与校验</span>
             </Space>
           }
         >
           <Descriptions size="small" column={2}>
-            <Descriptions.Item label="当前下位机版本">{currentLowerVersion}</Descriptions.Item>
-            <Descriptions.Item label="可用版本">{latestLowerVersion}</Descriptions.Item>
+            <Descriptions.Item label="当前运行镜像 ID">
+              <Text code className="advanced-config-hash">{currentLowerImageId}</Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="可用镜像 ID">
+              <Text code className="advanced-config-hash">{latestLowerImageId}</Text>
+            </Descriptions.Item>
             <Descriptions.Item label="安装包名称">{packageName}</Descriptions.Item>
             <Descriptions.Item label="包大小">{packageSize}</Descriptions.Item>
             <Descriptions.Item label="发布时间">{publishedAt}</Descriptions.Item>
@@ -1153,7 +1288,7 @@ const AdvancedConfigPage: React.FC = () => {
               <Tag color={getDeliveryStatusColor(deliveryStatus)}>{deliveryStatus}</Tag>
             </Descriptions.Item>
             <Descriptions.Item label="SHA256" span={2}>
-              <Text code>{sha256}</Text>
+              <Text code className="advanced-config-hash">{sha256}</Text>
             </Descriptions.Item>
           </Descriptions>
         </Card>
@@ -1230,15 +1365,15 @@ const AdvancedConfigPage: React.FC = () => {
               <Descriptions.Item label="安装状态">
                 <Tag color={getInstallStageTagColor(installStage)}>{getInstallStageLabel(installStage)}</Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="确认模块">{versionVerifyModuleName}</Descriptions.Item>
-              <Descriptions.Item label="期望版本">{expectedVerifyVersion}</Descriptions.Item>
-              <Descriptions.Item label="实际版本">{actualVerifyVersion}</Descriptions.Item>
+              <Descriptions.Item label="确认目标">mskdsp 容器</Descriptions.Item>
+              <Descriptions.Item label="期望镜像 ID">{expectedImageId}</Descriptions.Item>
+              <Descriptions.Item label="实际镜像 ID">{actualImageId}</Descriptions.Item>
               <Descriptions.Item label="确认状态">
-                <Tag color={getVersionVerifyStageTagColor(versionVerifyStage)}>
-                  {getVersionVerifyStageLabel(versionVerifyStage)}
+                <Tag color={getImageVerifyStageTagColor(imageVerifyStage)}>
+                  {getImageVerifyStageLabel(imageVerifyStage)}
                 </Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="确认说明">{versionVerifyMessage}</Descriptions.Item>
+              <Descriptions.Item label="确认说明">{imageVerifyMessage}</Descriptions.Item>
               <Descriptions.Item label="退出码">{installExitCode ?? '-'}</Descriptions.Item>
               <Descriptions.Item label="执行命令">
                 <Text code>{installCommand}</Text>
@@ -1282,10 +1417,10 @@ const AdvancedConfigPage: React.FC = () => {
               <Button
                 size="small"
                 icon={<SafetyCertificateOutlined />}
-                onClick={() => void handleReverifyVersion()}
-                disabled={!canReverifyVersion || isDeployingLowerUpdate}
+                onClick={() => void handleReverifyImage()}
+                disabled={!canReverifyImage || isDeployingLowerUpdate}
               >
-                重新确认版本
+                重新确认镜像
               </Button>
             </Space>
             <Input.TextArea
@@ -1300,41 +1435,14 @@ const AdvancedConfigPage: React.FC = () => {
               autoSize={{ minRows: 2, maxRows: 4 }}
               placeholder="stderr"
             />
-            <Text type="secondary">安装命令执行成功后，会自动查询 ModuleManager 版本确认升级结果。</Text>
+            <Text type="secondary">安装命令执行成功后，会自动查询 mskdsp 容器的运行镜像 ID 确认升级结果。</Text>
           </Space>
         </Modal>
+          </>
+        )}
         </div>
       </>
     );
-  }
-
-  return (
-    <>
-      {contextHolder}
-      <div
-        style={{
-          minHeight: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <div style={{ width: 360, maxWidth: '100%' }}>
-          <Text strong style={{ display: 'block', color: '#fff', fontSize: 16, marginBottom: 16 }}>
-            高级配置验证
-          </Text>
-          <Form form={form} layout="vertical" onFinish={handleSubmit}>
-            <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
-              <Input.Password autoFocus autoComplete="current-password" placeholder="请输入密码" />
-            </Form.Item>
-            <Button type="primary" htmlType="submit" block>
-              进入
-            </Button>
-          </Form>
-        </div>
-      </div>
-    </>
-  );
 };
 
 export default AdvancedConfigPage;
