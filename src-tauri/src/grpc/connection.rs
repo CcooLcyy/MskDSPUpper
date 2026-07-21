@@ -134,12 +134,10 @@ impl ConnectionManager {
 
     /// 获取指定模块的 Channel
     pub async fn module_channel(&self, module_name: &str) -> Result<Channel> {
-        let addr = self
-            .get_module_addr(module_name)
-            .ok_or_else(|| {
-                tracing::error!(module = %module_name, "模块地址未知，无法建立 gRPC 连接");
-                anyhow!("模块 {} 地址未知，请先刷新运行信息", module_name)
-            })?;
+        let addr = self.get_module_addr(module_name).ok_or_else(|| {
+            tracing::error!(module = %module_name, "模块地址未知，无法建立 gRPC 连接");
+            anyhow!("模块 {} 地址未知，请先刷新运行信息", module_name)
+        })?;
         self.get_channel(&addr).await
     }
 
@@ -194,21 +192,16 @@ mod tests {
         let stale_generation = manager.runtime_generation();
         manager.clear_runtime_cache();
 
-        let stale_addrs = HashMap::from([(
-            "ModbusRTU".to_string(),
-            "192.168.1.219:17001".to_string(),
-        )]);
+        let stale_addrs =
+            HashMap::from([("ModbusRTU".to_string(), "192.168.1.219:17001".to_string())]);
         assert!(!manager.update_module_addrs_if_generation(stale_generation, stale_addrs));
         assert!(manager.get_module_addr("ModbusRTU").is_none());
 
-        let current_addrs = HashMap::from([(
-            "ModbusRTU".to_string(),
-            "192.168.1.219:17123".to_string(),
-        )]);
-        assert!(manager.update_module_addrs_if_generation(
-            manager.runtime_generation(),
-            current_addrs
-        ));
+        let current_addrs =
+            HashMap::from([("ModbusRTU".to_string(), "192.168.1.219:17123".to_string())]);
+        assert!(
+            manager.update_module_addrs_if_generation(manager.runtime_generation(), current_addrs)
+        );
         assert_eq!(
             manager.get_module_addr("ModbusRTU").as_deref(),
             Some("192.168.1.219:17123")

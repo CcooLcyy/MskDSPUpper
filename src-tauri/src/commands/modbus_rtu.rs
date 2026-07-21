@@ -330,7 +330,8 @@ pub async fn modbus_rtu_upsert_link(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::ModbusRtu,
     )
-    .await {
+    .await
+    {
         tracing::warn!(protocol = "ModbusRTU", error = %error, "协议实时数据模块同步失败");
     }
     tracing::info!(protocol = "ModbusRTU", conn_name = %conn_name, "保存协议连接配置完成");
@@ -356,7 +357,8 @@ pub async fn modbus_rtu_rename_link(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::ModbusRtu,
     )
-    .await {
+    .await
+    {
         tracing::warn!(protocol = "ModbusRTU", error = %error, "协议实时数据模块同步失败");
     }
     tracing::info!(protocol = "ModbusRTU", old_conn_name = %old_conn_name, new_conn_name = %new_conn_name, "重命名协议连接完成");
@@ -388,7 +390,11 @@ pub async fn modbus_rtu_list_links(
         tracing::error!(protocol = "ModbusRTU", error = %error, "获取协议连接列表失败");
         error.to_string()
     })?;
-    tracing::info!(protocol = "ModbusRTU", link_count = links.len(), "获取协议连接列表完成");
+    tracing::info!(
+        protocol = "ModbusRTU",
+        link_count = links.len(),
+        "获取协议连接列表完成"
+    );
     Ok(links.into_iter().map(|link| link.into()).collect())
 }
 
@@ -410,7 +416,8 @@ pub async fn modbus_rtu_delete_link(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::ModbusRtu,
     )
-    .await {
+    .await
+    {
         tracing::warn!(protocol = "ModbusRTU", error = %error, "协议实时数据模块同步失败");
     }
     tracing::info!(protocol = "ModbusRTU", conn_name = %conn_name, "删除协议连接完成");
@@ -477,7 +484,8 @@ pub async fn modbus_rtu_upsert_point_table(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::ModbusRtu,
     )
-    .await {
+    .await
+    {
         tracing::warn!(protocol = "ModbusRTU", error = %error, "协议实时数据模块同步失败");
     }
     tracing::info!(protocol = "ModbusRTU", conn_name = %conn_name, "保存协议点表完成");

@@ -567,7 +567,11 @@ pub async fn avc_list_groups(state: State<'_, AppState>) -> Result<Vec<GroupInfo
         tracing::error!(control = "AVC", error = %error, "获取控制组列表失败");
         error
     })?;
-    tracing::info!(control = "AVC", group_count = groups.groups.len(), "获取控制组列表完成");
+    tracing::info!(
+        control = "AVC",
+        group_count = groups.groups.len(),
+        "获取控制组列表完成"
+    );
     Ok(groups.groups.into_iter().map(Into::into).collect())
 }
 

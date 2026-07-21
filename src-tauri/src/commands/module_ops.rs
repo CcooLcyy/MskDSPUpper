@@ -252,13 +252,10 @@ pub async fn get_running_module_info(
     state: State<'_, AppState>,
 ) -> Result<Vec<ModuleRunningInfoDto>, String> {
     let client = ModuleManagerClient::new(&state.conn_manager);
-    let infos = client
-        .get_running_module_info()
-        .await
-        .map_err(|error| {
-            tracing::error!(error = %error, "获取运行中模块信息失败");
-            error.to_string()
-        })?;
+    let infos = client.get_running_module_info().await.map_err(|error| {
+        tracing::error!(error = %error, "获取运行中模块信息失败");
+        error.to_string()
+    })?;
     let filtered = infos
         .into_iter()
         .map(ModuleRunningInfoDto::from)
@@ -313,8 +310,8 @@ pub async fn stop_module(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_upper_controlled_module_name, reject_uncontrolled_module,
-        should_reset_manager_runtime, validate_manager_addr,
+        is_upper_controlled_module_name, reject_uncontrolled_module, should_reset_manager_runtime,
+        validate_manager_addr,
     };
 
     #[test]

@@ -364,7 +364,11 @@ pub async fn agc_list_groups(state: State<'_, AppState>) -> Result<Vec<GroupInfo
         tracing::error!(control = "AGC", error = %error, "获取控制组列表失败");
         error.to_string()
     })?;
-    tracing::info!(control = "AGC", group_count = groups.groups.len(), "获取控制组列表完成");
+    tracing::info!(
+        control = "AGC",
+        group_count = groups.groups.len(),
+        "获取控制组列表完成"
+    );
     Ok(groups
         .groups
         .into_iter()

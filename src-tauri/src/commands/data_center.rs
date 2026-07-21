@@ -235,7 +235,10 @@ pub async fn dc_list_connections(
         .filter(|conn| !is_protocol_shadow_connection(conn))
         .map(|c| c.into())
         .collect::<Vec<_>>();
-    tracing::info!(connection_count = connections.len(), "获取 DataCenter 连接列表完成");
+    tracing::info!(
+        connection_count = connections.len(),
+        "获取 DataCenter 连接列表完成"
+    );
     Ok(connections)
 }
 
@@ -245,13 +248,10 @@ pub async fn dc_get_conn_tags(
     conn_id: u32,
 ) -> Result<ConnTagsDto, String> {
     let client = DataCenterClient::new(&state.conn_manager);
-    let ct = client
-        .get_conn_tags(conn_id)
-        .await
-        .map_err(|error| {
-            tracing::error!(conn_id, error = %error, "获取 DataCenter 连接标签失败");
-            error.to_string()
-        })?;
+    let ct = client.get_conn_tags(conn_id).await.map_err(|error| {
+        tracing::error!(conn_id, error = %error, "获取 DataCenter 连接标签失败");
+        error.to_string()
+    })?;
     Ok(ct.into())
 }
 
@@ -311,7 +311,11 @@ pub async fn dc_upsert_routes(
     routes: Vec<RouteDto>,
     replace: bool,
 ) -> Result<(), String> {
-    tracing::info!(route_count = routes.len(), replace, "开始保存 DataCenter 路由");
+    tracing::info!(
+        route_count = routes.len(),
+        replace,
+        "开始保存 DataCenter 路由"
+    );
     let client = DataCenterClient::new(&state.conn_manager);
     client
         .upsert_routes(routes.into_iter().map(|r| r.to_proto()).collect(), replace)

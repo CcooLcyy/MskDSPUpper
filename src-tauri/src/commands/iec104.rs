@@ -218,7 +218,8 @@ pub async fn iec104_upsert_link(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Iec104,
     )
-    .await {
+    .await
+    {
         tracing::warn!(protocol = "IEC104", error = %error, "协议实时数据模块同步失败");
     }
     tracing::info!(protocol = "IEC104", conn_name = %conn_name, "保存协议连接配置完成");
@@ -244,7 +245,8 @@ pub async fn iec104_rename_link(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Iec104,
     )
-    .await {
+    .await
+    {
         tracing::warn!(protocol = "IEC104", error = %error, "协议实时数据模块同步失败");
     }
     tracing::info!(protocol = "IEC104", old_conn_name = %old_conn_name, new_conn_name = %new_conn_name, "重命名协议连接完成");
@@ -274,7 +276,11 @@ pub async fn iec104_list_links(state: State<'_, AppState>) -> Result<Vec<LinkInf
         tracing::error!(protocol = "IEC104", error = %error, "获取协议连接列表失败");
         error.to_string()
     })?;
-    tracing::info!(protocol = "IEC104", link_count = links.len(), "获取协议连接列表完成");
+    tracing::info!(
+        protocol = "IEC104",
+        link_count = links.len(),
+        "获取协议连接列表完成"
+    );
     Ok(links.into_iter().map(|link| link.into()).collect())
 }
 
@@ -296,7 +302,8 @@ pub async fn iec104_delete_link(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Iec104,
     )
-    .await {
+    .await
+    {
         tracing::warn!(protocol = "IEC104", error = %error, "协议实时数据模块同步失败");
     }
     tracing::info!(protocol = "IEC104", conn_name = %conn_name, "删除协议连接完成");
@@ -360,7 +367,8 @@ pub async fn iec104_upsert_point_table(
         state.conn_manager.as_ref(),
         ProtocolShadowModule::Iec104,
     )
-    .await {
+    .await
+    {
         tracing::warn!(protocol = "IEC104", error = %error, "协议实时数据模块同步失败");
     }
     tracing::info!(protocol = "IEC104", conn_name = %conn_name, "保存协议点表完成");
