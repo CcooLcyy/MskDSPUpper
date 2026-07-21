@@ -11,6 +11,7 @@ import {
   Segmented,
   Select,
   Space,
+  Switch,
   Tag,
   Typography,
 } from 'antd';
@@ -39,6 +40,7 @@ import {
   SOFTWARE_UPDATE_VIEW_QUERY_KEY,
 } from '../../components/app-update/update-view';
 import { validateManagerAddress } from '../../utils/network';
+import { resolveLowerUpdateSudoPassword } from '../../utils/lower-update-auth';
 import { useSearchParams } from 'react-router-dom';
 import './index.css';
 
@@ -507,6 +509,8 @@ const AdvancedConfigPage: React.FC = () => {
   const [targetUploadAccount, setTargetUploadAccount] = useState(LOWER_UPDATE_MOCK_TARGET.uploadAccount);
   const [targetInstallDir, setTargetInstallDir] = useState(LOWER_UPDATE_MOCK_TARGET.installDir);
   const [targetSshPassword, setTargetSshPassword] = useState(DEFAULT_LOWER_UPDATE_SSH_PASSWORD);
+  const [reuseSshPasswordForSudo, setReuseSshPasswordForSudo] = useState(true);
+  const [targetSudoPassword, setTargetSudoPassword] = useState('');
   const [lowerUpdateAuthMethod, setLowerUpdateAuthMethod] = useState<LowerUpdateAuthMethod>(
     DEFAULT_LOWER_UPDATE_AUTH_METHOD,
   );
@@ -536,7 +540,15 @@ const AdvancedConfigPage: React.FC = () => {
   const targetUploadAccountValidation = validateUploadAccount(targetUploadAccount);
   const targetInstallDirValidation = validateInstallDir(targetInstallDir);
   const hasSshPasswordValidationError = lowerUpdateAuthMethod === 'password' && targetSshPassword.length === 0;
-  const hasRuntimeQueryValidationError = !targetUploadAccountValidation.ok || hasSshPasswordValidationError;
+  const resolvedSudoPassword = resolveLowerUpdateSudoPassword({
+    sshAuthMethod: lowerUpdateAuthMethod,
+    sshPassword: targetSshPassword,
+    reuseSshPassword: reuseSshPasswordForSudo,
+    sudoPassword: targetSudoPassword,
+  });
+  const hasSudoPasswordValidationError = resolvedSudoPassword.length === 0;
+  const hasRuntimeQueryValidationError =
+    !targetUploadAccountValidation.ok || hasSshPasswordValidationError || hasSudoPasswordValidationError;
   const hasDeployTargetValidationError = hasRuntimeQueryValidationError || !targetInstallDirValidation.ok;
   const hasCheckedPackage = activeManifest !== null;
   const hasVerifiableManifest = Boolean(activeManifest?.image_id?.trim());
@@ -693,6 +705,7 @@ const AdvancedConfigPage: React.FC = () => {
           auth: lowerUpdateAuthMethod === 'password'
             ? { method: 'password', password: targetSshPassword }
             : { method: 'certificate' },
+          sudo_password: resolvedSudoPassword,
         });
         const actualImageId = runtime.image_id?.trim() || '-';
 
@@ -800,6 +813,7 @@ const AdvancedConfigPage: React.FC = () => {
           auth: lowerUpdateAuthMethod === 'password'
             ? { method: 'password', password: targetSshPassword }
             : { method: 'certificate' },
+          sudo_password: resolvedSudoPassword,
         });
         const runtimeImageId = runtime.image_id?.trim() || '-';
         setActualImageId(runtimeImageId);
@@ -860,6 +874,7 @@ const AdvancedConfigPage: React.FC = () => {
           auth: lowerUpdateAuthMethod === 'password'
             ? { method: 'password', password: targetSshPassword }
             : { method: 'certificate' },
+          sudo_password: resolvedSudoPassword,
         },
         (progress) => {
           setUploadStage(progress.stage);
@@ -907,6 +922,7 @@ const AdvancedConfigPage: React.FC = () => {
         auth: lowerUpdateAuthMethod === 'password'
           ? { method: 'password', password: targetSshPassword }
           : { method: 'certificate' },
+        sudo_password: resolvedSudoPassword,
       });
 
       setInstallResult(result);
@@ -1143,6 +1159,7 @@ const AdvancedConfigPage: React.FC = () => {
                     onChange={(event) => {
                       setTargetUploadAccount(event.target.value);
                       setTargetSshPassword('');
+                      setTargetSudoPassword('');
                       invalidateRuntimeCheck();
                     }}
                     placeholder="例如 megsky@192.168.1.219:10022"
@@ -1179,6 +1196,42 @@ const AdvancedConfigPage: React.FC = () => {
                         invalidateRuntimeCheck();
                       }}
                       placeholder="请输入 SSH 登录密码"
+                    />
+                  </Form.Item>
+                ) : null}
+                <Form.Item label="sudo 密码">
+                  <Space>
+                    <Switch
+                      checked={lowerUpdateAuthMethod === 'password' && reuseSshPasswordForSudo}
+                      disabled={
+                        lowerUpdateAuthMethod === 'certificate'
+                        || isCheckingLowerUpdate
+                        || isDeployingLowerUpdate
+                      }
+                      onChange={(checked) => {
+                        setReuseSshPasswordForSudo(checked);
+                        invalidateRuntimeCheck();
+                      }}
+                    />
+                    <Text>与 SSH 密码相同</Text>
+                  </Space>
+                </Form.Item>
+                {lowerUpdateAuthMethod === 'certificate' || !reuseSshPasswordForSudo ? (
+                  <Form.Item
+                    label="独立 sudo 密码"
+                    required
+                    validateStatus={hasSudoPasswordValidationError ? 'error' : undefined}
+                    help={hasSudoPasswordValidationError ? '请输入 sudo 密码' : undefined}
+                  >
+                    <Input.Password
+                      value={targetSudoPassword}
+                      disabled={isCheckingLowerUpdate || isDeployingLowerUpdate}
+                      autoComplete="new-password"
+                      onChange={(event) => {
+                        setTargetSudoPassword(event.target.value);
+                        invalidateRuntimeCheck();
+                      }}
+                      placeholder="请输入 sudo 密码"
                     />
                   </Form.Item>
                 ) : null}

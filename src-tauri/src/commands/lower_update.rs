@@ -29,6 +29,11 @@ const LOWER_UPDATE_PRODUCT: &str = "mskdsp-lower";
 const LOWER_UPDATE_SCHEMA_VERSION: u32 = 1;
 const LOWER_UPDATE_CONTAINER_NAME: &str = "mskdsp";
 const LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+const LOWER_UPDATE_PRECHECK_TIMEOUT: Duration = Duration::from_secs(30);
+const LOWER_UPDATE_SSH_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const LOWER_UPDATE_UPLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(60);
+const LOWER_UPDATE_UPLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const LOWER_UPDATE_INSTALL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const LOWER_UPDATE_RUNTIME_QUERY_COMMAND: &str = concat!(
     "set -e; ",
     "if ! command -v docker >/dev/null 2>&1; then ",
@@ -107,6 +112,7 @@ pub struct LowerUpdateUploadRequestDto {
     pub upload_account: String,
     pub install_dir: String,
     pub auth: LowerUpdateSshAuthDto,
+    pub sudo_password: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -132,6 +138,7 @@ pub struct LowerUpdateInstallRequestDto {
     pub upload_account: String,
     pub install_dir: String,
     pub auth: LowerUpdateSshAuthDto,
+    pub sudo_password: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -149,6 +156,7 @@ pub struct LowerUpdateInstallResultDto {
 pub struct LowerUpdateRuntimeInfoRequestDto {
     pub upload_account: String,
     pub auth: LowerUpdateSshAuthDto,
+    pub sudo_password: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -208,7 +216,7 @@ async fn connect_password_ssh(
         return Err("SSH 密码不能为空".into());
     }
     let config = russh::client::Config {
-        inactivity_timeout: Some(Duration::from_secs(30)),
+        inactivity_timeout: Some(LOWER_UPDATE_SSH_INACTIVITY_TIMEOUT),
         ..Default::default()
     };
     let mut session = russh::client::connect(
@@ -251,7 +259,7 @@ async fn upload_with_password_ssh(
         .await
         .map_err(|e| format!("打开上位机更新包失败: {e}"))?;
     let session = connect_password_ssh(target, password).await?;
-    let mut channel = session
+    let channel = session
         .channel_open_session()
         .await
         .map_err(|e| format!("打开 SSH 上传通道失败: {e}"))?;
@@ -260,139 +268,160 @@ async fn upload_with_password_ssh(
         .await
         .map_err(|e| format!("执行 SSH 上传命令失败: {e}"))?;
 
-    emit_upload_progress(
-        app_handle,
-        package_name,
-        remote_path,
-        0,
-        total_bytes,
-        "started",
-    );
-    let mut buffer = vec![0_u8; 1024 * 1024];
-    let mut uploaded_bytes = 0_u64;
-    loop {
-        let read_bytes = file
-            .read(&mut buffer)
-            .await
-            .map_err(|e| format!("读取上位机更新包失败: {e}"))?;
-        if read_bytes == 0 {
-            break;
+    let (mut reader, writer) = channel.split();
+    let transfer_result = async {
+        emit_upload_progress(
+            app_handle,
+            package_name,
+            remote_path,
+            0,
+            total_bytes,
+            "started",
+        );
+        let mut buffer = vec![0_u8; 1024 * 1024];
+        let mut uploaded_bytes = 0_u64;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut exit_code = None;
+
+        loop {
+            let read_bytes = file
+                .read(&mut buffer)
+                .await
+                .map_err(|e| format!("读取上位机更新包失败: {e}"))?;
+            if read_bytes == 0 {
+                break;
+            }
+
+            let send = writer.data_bytes(buffer[..read_bytes].to_vec());
+            tokio::pin!(send);
+            let stall = tokio::time::sleep(LOWER_UPDATE_UPLOAD_STALL_TIMEOUT);
+            tokio::pin!(stall);
+            loop {
+                tokio::select! {
+                    result = &mut send => {
+                        result.map_err(|e| format!("SSH 写入更新包失败: {e}"))?;
+                        break;
+                    }
+                    message = reader.wait() => {
+                        match message {
+                            Some(russh::ChannelMsg::Data { data }) => stdout.extend_from_slice(&data),
+                            Some(russh::ChannelMsg::ExtendedData { data, ext }) if ext == 1 => stderr.extend_from_slice(&data),
+                            Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                                exit_code = Some(exit_status);
+                                return Err(format_upload_remote_error(exit_code, &stdout, &stderr, uploaded_bytes));
+                            }
+                            Some(russh::ChannelMsg::Close) | None => {
+                                return Err(format!("上传下位机更新包失败: 远端 SSH 通道提前关闭，已发送 {} 字节", uploaded_bytes));
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                    _ = &mut stall => {
+                        return Err(format!("上传下位机更新包失败: {} 秒无上传进度，已发送 {} 字节", LOWER_UPDATE_UPLOAD_STALL_TIMEOUT.as_secs(), uploaded_bytes));
+                    }
+                }
+            }
+
+            uploaded_bytes = uploaded_bytes.saturating_add(read_bytes as u64);
+            emit_upload_progress(
+                app_handle,
+                package_name,
+                remote_path,
+                uploaded_bytes,
+                total_bytes,
+                "uploading",
+            );
         }
-        channel
-            .data_bytes(buffer[..read_bytes].to_vec())
+
+        tokio::time::timeout(LOWER_UPDATE_UPLOAD_STALL_TIMEOUT, writer.eof())
             .await
-            .map_err(|e| format!("SSH 写入更新包失败: {e}"))?;
-        uploaded_bytes = uploaded_bytes.saturating_add(read_bytes as u64);
+            .map_err(|_| "结束 SSH 上传输入流超时".to_string())?
+            .map_err(|e| format!("结束 SSH 上传输入流失败: {e}"))?;
+
+        loop {
+            let message = tokio::time::timeout(LOWER_UPDATE_UPLOAD_STALL_TIMEOUT, reader.wait())
+                .await
+                .map_err(|_| "等待 SSH 上传结果超时".to_string())?;
+            match message {
+                Some(russh::ChannelMsg::Data { data }) => stdout.extend_from_slice(&data),
+                Some(russh::ChannelMsg::ExtendedData { data, ext }) if ext == 1 => stderr.extend_from_slice(&data),
+                Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                    exit_code = Some(exit_status);
+                    break;
+                }
+                Some(russh::ChannelMsg::Close) | None => break,
+                Some(_) => {}
+            }
+        }
+        if exit_code != Some(0) {
+            return Err(format_upload_remote_error(exit_code, &stdout, &stderr, uploaded_bytes));
+        }
         emit_upload_progress(
             app_handle,
             package_name,
             remote_path,
             uploaded_bytes,
             total_bytes,
-            "uploading",
+            "finished",
         );
+        Ok(uploaded_bytes)
     }
-    channel
-        .eof()
-        .await
-        .map_err(|e| format!("结束 SSH 上传输入流失败: {e}"))?;
-
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let mut exit_code = None;
-    while let Some(message) = channel.wait().await {
-        match message {
-            russh::ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-            russh::ChannelMsg::ExtendedData { data, ext } if ext == 1 => {
-                stderr.extend_from_slice(&data)
-            }
-            russh::ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status),
-            _ => {}
-        }
-    }
-    if exit_code != Some(0) {
-        let stderr = String::from_utf8_lossy(&stderr);
-        let stdout = String::from_utf8_lossy(&stdout);
-        let detail = if !stderr.trim().is_empty() {
-            stderr.trim()
-        } else if !stdout.trim().is_empty() {
-            stdout.trim()
-        } else {
-            "远端命令未返回错误详情"
-        };
-        return Err(format!(
-            "上传下位机更新包失败: 远端命令退出码 {}: {detail}",
-            exit_code.map_or_else(|| "未知".to_string(), |code| code.to_string()),
-        ));
-    }
-    emit_upload_progress(
-        app_handle,
-        package_name,
-        remote_path,
-        uploaded_bytes,
-        total_bytes,
-        "finished",
-    );
+    .await;
     let _ = session
         .disconnect(russh::Disconnect::ByApplication, "", "English")
         .await;
-    Ok(uploaded_bytes)
+    transfer_result
 }
 
-async fn install_with_password_ssh(
-    target: &LowerUpdateUploadTarget,
-    password: &str,
-    remote_command: &str,
-) -> Result<(bool, Option<i32>, String, String), String> {
-    let session = connect_password_ssh(target, password).await?;
-    let mut channel = session
-        .channel_open_session()
-        .await
-        .map_err(|e| format!("打开 SSH 安装通道失败: {e}"))?;
-    channel
-        .exec(true, remote_command)
-        .await
-        .map_err(|e| format!("执行 SSH 安装命令失败: {e}"))?;
-
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let mut exit_code = None;
-    while let Some(message) = channel.wait().await {
-        match message {
-            russh::ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-            russh::ChannelMsg::ExtendedData { data, ext } if ext == 1 => {
-                stderr.extend_from_slice(&data)
-            }
-            russh::ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status),
-            _ => {}
-        }
-    }
-    let _ = session
-        .disconnect(russh::Disconnect::ByApplication, "", "English")
-        .await;
-    let exit_code_i32 = exit_code.map(|value| value as i32);
-    Ok((
-        exit_code == Some(0),
-        exit_code_i32,
-        String::from_utf8_lossy(&stdout).into_owned(),
-        String::from_utf8_lossy(&stderr).into_owned(),
-    ))
+fn format_upload_remote_error(
+    exit_code: Option<u32>,
+    stdout: &[u8],
+    stderr: &[u8],
+    uploaded_bytes: u64,
+) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stdout = String::from_utf8_lossy(stdout);
+    let detail = if !stderr.trim().is_empty() {
+        stderr.trim()
+    } else if !stdout.trim().is_empty() {
+        stdout.trim()
+    } else {
+        "远端命令未返回错误详情"
+    };
+    format!(
+        "上传下位机更新包失败: 远端命令退出码 {}，已发送 {} 字节: {detail}",
+        exit_code.map_or_else(|| "未知".to_string(), |code| code.to_string()),
+        uploaded_bytes,
+    )
 }
 
 async fn execute_password_ssh_command(
     target: &LowerUpdateUploadTarget,
     password: &str,
     remote_command: &str,
+    stdin: Option<&[u8]>,
 ) -> Result<RemoteCommandOutput, String> {
     let session = connect_password_ssh(target, password).await?;
     let mut channel = session
         .channel_open_session()
         .await
-        .map_err(|e| format!("打开 SSH 查询通道失败: {e}"))?;
+        .map_err(|e| format!("打开 SSH 命令通道失败: {e}"))?;
     channel
         .exec(true, remote_command)
         .await
-        .map_err(|e| format!("执行 SSH 查询命令失败: {e}"))?;
+        .map_err(|e| format!("执行 SSH 命令失败: {e}"))?;
+
+    if let Some(stdin) = stdin {
+        channel
+            .data_bytes(stdin.to_vec())
+            .await
+            .map_err(|e| format!("发送远端命令输入失败: {e}"))?;
+        channel
+            .eof()
+            .await
+            .map_err(|e| format!("结束远端命令输入失败: {e}"))?;
+    }
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -420,9 +449,10 @@ async fn execute_password_ssh_command(
 async fn execute_certificate_ssh_command(
     target: &LowerUpdateUploadTarget,
     remote_command: &str,
+    stdin: Option<&[u8]>,
 ) -> Result<RemoteCommandOutput, String> {
     let remote_target = format!("{}@{}", target.user, target.host);
-    let output = Command::new("ssh")
+    let mut child = Command::new("ssh")
         .arg("-T")
         .arg("-p")
         .arg(target.port.to_string())
@@ -435,17 +465,89 @@ async fn execute_certificate_ssh_command(
         .arg(remote_target)
         .arg(remote_command)
         .kill_on_drop(true)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
+        .map_err(|e| format!("启动 SSH 命令失败，请确认上位机已安装 OpenSSH 客户端: {e}"))?;
+
+    let mut child_stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "创建 SSH 命令输入流失败".to_string())?;
+    if let Some(stdin) = stdin {
+        child_stdin
+            .write_all(stdin)
+            .await
+            .map_err(|e| format!("发送远端命令输入失败: {e}"))?;
+    }
+    child_stdin
+        .shutdown()
         .await
-        .map_err(|e| format!("启动 SSH 查询失败，请确认上位机已安装 OpenSSH 客户端: {e}"))?;
+        .map_err(|e| format!("结束远端命令输入失败: {e}"))?;
+    drop(child_stdin);
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("等待 SSH 命令结果失败: {e}"))?;
 
     Ok(RemoteCommandOutput {
         exit_code: output.status.code().map(|value| value as u32),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })
+}
+
+async fn execute_user_ssh_command(
+    target: &LowerUpdateUploadTarget,
+    auth: &LowerUpdateSshAuthDto,
+    remote_command: &str,
+) -> Result<RemoteCommandOutput, String> {
+    match auth {
+        LowerUpdateSshAuthDto::Password { password } => {
+            execute_password_ssh_command(target, password, remote_command, None).await
+        }
+        LowerUpdateSshAuthDto::Certificate => {
+            execute_certificate_ssh_command(target, remote_command, None).await
+        }
+    }
+}
+
+async fn execute_root_ssh_command(
+    target: &LowerUpdateUploadTarget,
+    auth: &LowerUpdateSshAuthDto,
+    sudo_password: &str,
+    command: &str,
+) -> Result<RemoteCommandOutput, String> {
+    let sudo_stdin = sudo_password_stdin(sudo_password)?;
+    let remote_command = build_password_root_shell_command(command);
+    match auth {
+        LowerUpdateSshAuthDto::Password { password } => {
+            execute_password_ssh_command(target, password, &remote_command, Some(&sudo_stdin)).await
+        }
+        LowerUpdateSshAuthDto::Certificate => {
+            execute_certificate_ssh_command(target, &remote_command, Some(&sudo_stdin)).await
+        }
+    }
+}
+
+fn format_remote_command_error(context: &str, output: &RemoteCommandOutput) -> String {
+    let stderr = output.stderr.trim();
+    let stdout = output.stdout.trim();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "远端命令未返回错误详情"
+    };
+    format!(
+        "{context}: 退出码 {}: {detail}",
+        output
+            .exit_code
+            .map_or_else(|| "未知".to_string(), |code| code.to_string())
+    )
 }
 
 fn normalize_channel(channel: &str) -> Result<String, String> {
@@ -584,6 +686,61 @@ fn credential_target(target: &LowerUpdateUploadTarget) -> String {
     format!("{}@{}:{}", target.user, target.host, target.port)
 }
 
+fn ssh_credential_entry(target_name: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new("mskdsp-lower-update:ssh", target_name)
+        .map_err(|e| format!("创建 SSH 凭据项失败: {e}"))
+}
+
+#[cfg(target_os = "windows")]
+fn migrate_legacy_ssh_password(target_name: &str) -> Result<Option<String>, String> {
+    let legacy = keyring::Entry::new_with_target("mskdsp-lower-update", "ssh", target_name)
+        .map_err(|e| format!("创建旧版 SSH 凭据项失败: {e}"))?;
+    let password = match legacy.get_password() {
+        Ok(password) => password,
+        Err(keyring::Error::NoEntry) => return Ok(None),
+        Err(error) => return Err(format!("读取旧版 SSH 密码失败: {error}")),
+    };
+    let attributes = legacy
+        .get_attributes()
+        .map_err(|error| format!("读取旧版 SSH 凭据属性失败: {error}"))?;
+    if attributes.get("username").map(String::as_str) != Some(target_name) {
+        return Ok(None);
+    }
+    ssh_credential_entry(target_name)?
+        .set_password(&password)
+        .map_err(|error| format!("迁移 SSH 密码失败: {error}"))?;
+    let _ = legacy.delete_credential();
+    Ok(Some(password))
+}
+
+#[cfg(target_os = "windows")]
+fn delete_legacy_ssh_password_if_matching(target_name: &str) -> Result<(), String> {
+    let legacy = keyring::Entry::new_with_target("mskdsp-lower-update", "ssh", target_name)
+        .map_err(|e| format!("创建旧版 SSH 凭据项失败: {e}"))?;
+    let attributes = match legacy.get_attributes() {
+        Ok(attributes) => attributes,
+        Err(keyring::Error::NoEntry) => return Ok(()),
+        Err(error) => return Err(format!("读取旧版 SSH 凭据属性失败: {error}")),
+    };
+    if attributes.get("username").map(String::as_str) == Some(target_name) {
+        match legacy.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(error) => return Err(format!("清除旧版 SSH 密码失败: {error}")),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn migrate_legacy_ssh_password(_target_name: &str) -> Result<Option<String>, String> {
+    Ok(None)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn delete_legacy_ssh_password_if_matching(_target_name: &str) -> Result<(), String> {
+    Ok(())
+}
+
 fn auth_method(auth: &LowerUpdateSshAuthDto) -> &'static str {
     match auth {
         LowerUpdateSshAuthDto::Password { .. } => "password",
@@ -624,9 +781,7 @@ fn log_detail(value: &str) -> String {
 
 fn save_password(target: &LowerUpdateUploadTarget, password: &str) -> Result<(), String> {
     let target_name = credential_target(target);
-    let entry = keyring::Entry::new_with_target("mskdsp-lower-update", "ssh", &target_name)
-        .map_err(|e| format!("创建 SSH 凭据项失败: {e}"))?;
-    entry
+    ssh_credential_entry(&target_name)?
         .set_password(password)
         .map_err(|e| format!("保存 SSH 密码失败: {e}"))
 }
@@ -635,11 +790,9 @@ fn save_password(target: &LowerUpdateUploadTarget, password: &str) -> Result<(),
 pub fn get_lower_update_password(upload_account: String) -> Result<Option<String>, String> {
     let target = parse_upload_account(&upload_account)?;
     let target_name = credential_target(&target);
-    let entry = keyring::Entry::new_with_target("mskdsp-lower-update", "ssh", &target_name)
-        .map_err(|e| format!("创建 SSH 凭据项失败: {e}"))?;
-    match entry.get_password() {
+    match ssh_credential_entry(&target_name)?.get_password() {
         Ok(password) => Ok(Some(password)),
-        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(keyring::Error::NoEntry) => migrate_legacy_ssh_password(&target_name),
         Err(error) => {
             tracing::warn!(
                 operation = "credential_read",
@@ -656,10 +809,10 @@ pub fn get_lower_update_password(upload_account: String) -> Result<Option<String
 pub fn clear_lower_update_password(upload_account: String) -> Result<(), String> {
     let target = parse_upload_account(&upload_account)?;
     let target_name = credential_target(&target);
-    let entry = keyring::Entry::new_with_target("mskdsp-lower-update", "ssh", &target_name)
-        .map_err(|e| format!("创建 SSH 凭据项失败: {e}"))?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+    match ssh_credential_entry(&target_name)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => {
+            delete_legacy_ssh_password_if_matching(&target_name)
+        }
         Err(error) => {
             tracing::warn!(
                 operation = "credential_clear",
@@ -711,8 +864,51 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn build_root_shell_command(command: &str) -> String {
-    format!("sudo -n -- sh -c {}", shell_quote(command))
+fn build_password_root_shell_command(command: &str) -> String {
+    format!("sudo -S -p '' -- sh -c {}", shell_quote(command))
+}
+
+fn sudo_password_stdin(password: &str) -> Result<Vec<u8>, String> {
+    if password.is_empty() {
+        return Err("sudo 密码不能为空".into());
+    }
+    if password.contains(['\r', '\n']) {
+        return Err("sudo 密码不能包含换行".into());
+    }
+    let mut input = password.as_bytes().to_vec();
+    input.push(b'\n');
+    Ok(input)
+}
+
+fn build_user_upload_command(install_dir: &str, package_name: &str) -> String {
+    let remote_path = remote_package_path(install_dir, package_name);
+    let remote_tmp_path = format!("{remote_path}.uploading");
+    format!(
+        "set -e; tmp={tmp}; cleanup() {{ rm -f -- \"$tmp\"; }}; trap cleanup EXIT HUP INT TERM; mkdir -p {dir}; rm -f -- \"$tmp\"; cat > \"$tmp\"; chmod +x -- \"$tmp\"; mv -f -- \"$tmp\" {path}; trap - EXIT HUP INT TERM",
+        dir = shell_quote(install_dir),
+        tmp = shell_quote(&remote_tmp_path),
+        path = shell_quote(&remote_path),
+    )
+}
+
+fn build_upload_preflight_command(install_dir: &str) -> String {
+    format!(
+        "set -e; mkdir -p {dir}; test -w {dir}; df -Pk {dir} | awk 'NR == 2 {{ print \"__MSKDSP_AVAILABLE_KIB__=\" $4 }}'",
+        dir = shell_quote(install_dir),
+    )
+}
+
+fn parse_available_bytes(output: &str) -> Result<u64, String> {
+    let value = output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("__MSKDSP_AVAILABLE_KIB__="))
+        .ok_or_else(|| "预检未返回磁盘可用空间".to_string())?;
+    let kib = value
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| "预检返回的磁盘可用空间格式不合法".to_string())?;
+    kib.checked_mul(1024)
+        .ok_or_else(|| "预检返回的磁盘可用空间超出范围".to_string())
 }
 
 fn build_install_command(install_dir: &str, package_name: &str) -> String {
@@ -965,21 +1161,17 @@ pub async fn get_lower_update_runtime_info(
 
     let result = async {
         let target = parse_upload_account(&request.upload_account)?;
-        let remote_command = build_root_shell_command(LOWER_UPDATE_RUNTIME_QUERY_COMMAND);
-        let output = match &request.auth {
-            LowerUpdateSshAuthDto::Password { password } => tokio::time::timeout(
-                LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT,
-                execute_password_ssh_command(&target, password, &remote_command),
-            )
-            .await
-            .map_err(|_| "查询下位机运行镜像超时".to_string())??,
-            LowerUpdateSshAuthDto::Certificate => tokio::time::timeout(
-                LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT,
-                execute_certificate_ssh_command(&target, &remote_command),
-            )
-            .await
-            .map_err(|_| "查询下位机运行镜像超时".to_string())??,
-        };
+        let output = tokio::time::timeout(
+            LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT,
+            execute_root_ssh_command(
+                &target,
+                &request.auth,
+                &request.sudo_password,
+                LOWER_UPDATE_RUNTIME_QUERY_COMMAND,
+            ),
+        )
+        .await
+        .map_err(|_| "查询下位机运行镜像超时".to_string())??;
 
         if output.exit_code != Some(0) {
             let stderr = output.stderr.trim();
@@ -1217,7 +1409,6 @@ async fn upload_lower_update_package_inner(
     let target = parse_upload_account(&request.upload_account)?;
     let install_dir = normalize_install_dir(&request.install_dir)?;
     let remote_path = remote_package_path(&install_dir, &request.package_name);
-    let remote_tmp_path = format!("{remote_path}.uploading");
     let package_path = PathBuf::from(request.package_path.trim());
     let metadata = fs::metadata(&package_path)
         .await
@@ -1237,14 +1428,55 @@ async fn upload_lower_update_package_inner(
         .await
         .map_err(|e| format!("打开上位机更新包失败: {e}"))?;
 
-    let upload_command = format!(
-        "set -e; mkdir -p {}; tmp={}; cat > \"$tmp\"; mv -f \"$tmp\" {}; chmod +x {}",
-        shell_quote(&install_dir),
-        shell_quote(&remote_tmp_path),
-        shell_quote(&remote_path),
-        shell_quote(&remote_path)
+    tracing::info!(
+        operation = "upload_preflight",
+        target = %log_detail(&request.upload_account),
+        remote_path = %remote_path,
+        package_bytes = total_bytes,
+        "开始下位机更新上传预检"
     );
-    let remote_command = build_root_shell_command(&upload_command);
+    let preflight_command = build_upload_preflight_command(&install_dir);
+    let preflight = tokio::time::timeout(
+        LOWER_UPDATE_PRECHECK_TIMEOUT,
+        execute_user_ssh_command(&target, &request.auth, &preflight_command),
+    )
+    .await
+    .map_err(|_| "上传前检查目录超时".to_string())??;
+    if preflight.exit_code != Some(0) {
+        return Err(format_remote_command_error(
+            "上传前检查目录失败",
+            &preflight,
+        ));
+    }
+    let available_bytes = parse_available_bytes(&preflight.stdout)?;
+    if available_bytes < total_bytes {
+        return Err(format!(
+            "下位机磁盘空间不足: 需要 {} 字节，可用 {} 字节",
+            total_bytes, available_bytes
+        ));
+    }
+
+    let sudo_check = tokio::time::timeout(
+        LOWER_UPDATE_PRECHECK_TIMEOUT,
+        execute_root_ssh_command(&target, &request.auth, &request.sudo_password, "true"),
+    )
+    .await
+    .map_err(|_| "下位机 sudo 预检超时".to_string())??;
+    if sudo_check.exit_code != Some(0) {
+        return Err(format_remote_command_error(
+            "下位机 sudo 预检失败",
+            &sudo_check,
+        ));
+    }
+    tracing::info!(
+        operation = "upload_preflight",
+        target = %log_detail(&request.upload_account),
+        remote_path = %remote_path,
+        available_bytes,
+        "下位机更新上传预检完成"
+    );
+
+    let remote_command = build_user_upload_command(&install_dir, &request.package_name);
 
     if let LowerUpdateSshAuthDto::Password { password } = &request.auth {
         let uploaded_bytes = upload_with_password_ssh(
@@ -1312,11 +1544,17 @@ async fn upload_lower_update_package_inner(
             break;
         }
 
-        if let Err(error) = child_stdin.write_all(&buffer[..read_bytes]).await {
+        let write_result = tokio::time::timeout(
+            LOWER_UPDATE_UPLOAD_STALL_TIMEOUT,
+            child_stdin.write_all(&buffer[..read_bytes]),
+        )
+        .await;
+        if let Err(error) = write_result
+            .map_err(|_| "上传下位机更新包失败: SSH 写入 60 秒无进度".to_string())
+            .and_then(|result| result.map_err(|error| error.to_string()))
+        {
             let _ = child.kill().await;
-            return Err(format!(
-                "上传下位机更新包失败，SSH 写入中断: {error}。请确认 SSH 密钥或配置可免交互登录"
-            ));
+            return Err(format!("上传下位机更新包失败，SSH 写入中断: {error}"));
         }
 
         uploaded_bytes = uploaded_bytes.saturating_add(read_bytes as u64);
@@ -1389,53 +1627,28 @@ async fn install_lower_update_package_inner(
     let install_dir = normalize_install_dir(&request.install_dir)?;
     let remote_path = remote_package_path(&install_dir, &request.package_name);
     let install_command = build_install_command(&install_dir, &request.package_name);
-    let remote_command = build_root_shell_command(&install_command);
 
-    if let LowerUpdateSshAuthDto::Password { password } = &request.auth {
-        let (success, exit_code, stdout, stderr) =
-            install_with_password_ssh(&target, password, &remote_command).await?;
-        return Ok(LowerUpdateInstallResultDto {
-            package_name: request.package_name,
-            remote_path,
-            command: remote_command,
-            success,
-            exit_code,
-            stdout,
-            stderr,
-        });
-    }
+    let output = tokio::time::timeout(
+        LOWER_UPDATE_INSTALL_TIMEOUT,
+        execute_root_ssh_command(
+            &target,
+            &request.auth,
+            &request.sudo_password,
+            &install_command,
+        ),
+    )
+    .await
+    .map_err(|_| "下位机更新安装整体超时".to_string())??;
 
-    let remote_target = format!("{}@{}", target.user, target.host);
-
-    let output = Command::new("ssh")
-        .arg("-T")
-        .arg("-p")
-        .arg(target.port.to_string())
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg("-o")
-        .arg("ConnectTimeout=10")
-        .arg("-o")
-        .arg("StrictHostKeyChecking=accept-new")
-        .arg(remote_target)
-        .arg(&remote_command)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| {
-            format!("执行下位机更新安装命令失败，请确认上位机已安装 OpenSSH 客户端: {e}")
-        })?;
-
-    let success = output.status.success();
-    let exit_code = output.status.code();
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let success = output.exit_code == Some(0);
+    let exit_code = output.exit_code.map(|value| value as i32);
+    let stdout = output.stdout;
+    let stderr = output.stderr;
 
     Ok(LowerUpdateInstallResultDto {
         package_name: request.package_name,
         remote_path,
-        command: remote_command,
+        command: build_password_root_shell_command(&install_command),
         success,
         exit_code,
         stdout,
@@ -1467,7 +1680,18 @@ pub async fn upload_lower_update_package(
         remote_path = ?remote_path,
         "开始上传下位机更新包"
     );
-    let result = upload_lower_update_package_inner(app_handle, request).await;
+    let result = tokio::time::timeout(
+        LOWER_UPDATE_UPLOAD_TOTAL_TIMEOUT,
+        upload_lower_update_package_inner(app_handle, request),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "上传下位机更新包整体超时: {} 秒",
+            LOWER_UPDATE_UPLOAD_TOTAL_TIMEOUT.as_secs()
+        )
+    })
+    .and_then(|result| result);
     match result {
         Ok(result) => {
             tracing::info!(
@@ -1571,7 +1795,9 @@ pub async fn install_lower_update_package(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_root_shell_command, parse_runtime_query_output, parse_upload_account,
+        build_password_root_shell_command, build_user_upload_command,
+        format_upload_remote_error, parse_available_bytes,
+        parse_runtime_query_output, parse_upload_account, sudo_password_stdin,
         LOWER_UPDATE_CONTAINER_NAME,
     };
 
@@ -1586,13 +1812,61 @@ mod tests {
     }
 
     #[test]
-    fn wraps_remote_command_in_non_interactive_root_shell() {
-        let command = build_root_shell_command("printf '%s\\n' 'ready'");
+    fn wraps_remote_command_in_password_root_shell_without_exposing_password() {
+        let command = build_password_root_shell_command("printf '%s\\n' 'ready'");
 
         assert_eq!(
             command,
-            "sudo -n -- sh -c 'printf '\\''%s\\n'\\'' '\\''ready'\\'''"
+            "sudo -S -p '' -- sh -c 'printf '\\''%s\\n'\\'' '\\''ready'\\'''"
         );
+        assert!(!command.contains("sudo-secret"));
+        assert_eq!(
+            sudo_password_stdin("sudo-secret").expect("应接受单行 sudo 密码"),
+            b"sudo-secret\n"
+        );
+    }
+
+    #[test]
+    fn rejects_multiline_sudo_password() {
+        let error = sudo_password_stdin("first\nsecond").expect_err("应拒绝多行 sudo 密码");
+
+        assert!(error.contains("换行"));
+    }
+
+    #[test]
+    fn builds_user_upload_command_without_sudo_and_cleans_partial_file() {
+        let command = build_user_upload_command("/home/megsky", "mskdsp-package");
+
+        assert!(!command.contains("sudo"));
+        assert!(command.contains("mskdsp-package.uploading"));
+        assert!(command.contains("trap"));
+        assert!(command.contains("cat >"));
+        assert!(command.contains("chmod +x"));
+    }
+
+    #[test]
+    fn parses_preflight_available_space_in_bytes() {
+        let available =
+            parse_available_bytes("__MSKDSP_AVAILABLE_KIB__=153600\n").expect("应解析预检可用空间");
+
+        assert_eq!(available, 153600 * 1024);
+    }
+
+    #[test]
+    fn rejects_invalid_preflight_available_space() {
+        let error = parse_available_bytes("unexpected\n").expect_err("应拒绝无效预检输出");
+
+        assert!(error.contains("可用空间"));
+    }
+
+    #[test]
+    fn reports_remote_upload_error_without_password_data() {
+        let error =
+            format_upload_remote_error(Some(1), b"", b"sudo: a password is required\n", 1024);
+
+        assert!(error.contains("退出码 1"));
+        assert!(error.contains("已发送 1024 字节"));
+        assert!(!error.contains("sudo-secret"));
     }
 
     #[test]

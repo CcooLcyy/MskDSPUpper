@@ -117,6 +117,7 @@ export interface LowerUpdateUploadRequest {
   upload_account: string;
   install_dir: string;
   auth: LowerUpdateSshAuth;
+  sudo_password: string;
 }
 
 export interface LowerUpdateUploadProgress {
@@ -139,6 +140,7 @@ export interface LowerUpdateInstallRequest {
   upload_account: string;
   install_dir: string;
   auth: LowerUpdateSshAuth;
+  sudo_password: string;
 }
 
 export interface LowerUpdateInstallResult {
@@ -154,6 +156,7 @@ export interface LowerUpdateInstallResult {
 export interface LowerUpdateRuntimeInfoRequest {
   upload_account: string;
   auth: LowerUpdateSshAuth;
+  sudo_password: string;
 }
 
 export interface LowerUpdateRuntimeInfo {
