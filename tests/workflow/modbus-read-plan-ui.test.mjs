@@ -26,33 +26,73 @@ test('ModbusRTU 连接弹窗不再渲染读取策略或读取区间编辑器', (
   assert.doesNotMatch(linkModalSource, /read_plan_blocks/);
 });
 
-// 点表工作区应承载逐点/区间策略切换、按点位生成区间以及覆盖情况反馈。
-test('ModbusRTU PointTable 暴露读取策略和区间覆盖工作流', () => {
-  assert.ok(
-    /读取策略|readPlanMode|read_plan_mode|onReadPlanModeChange/.test(pointTableSource),
-    'PointTable 应提供读取策略控件或对应受控接口',
+// 新交互用显式动作表达读取策略，避免同时暴露“逐点/区间”模式下拉和隐式保存。
+test('ModbusRTU PointTable 暴露批量方案工作流', () => {
+  assert.match(pointTableSource, /生成批量方案/);
+  assert.match(pointTableSource, /启用批量读取/);
+  assert.match(pointTableSource, /恢复逐点读取/);
+  assert.match(pointTableSource, /候选|预览/);
+  assert.match(
+    pointTableSource,
+    /读取区间[^\n]*(?:过期|失效)|(?:过期|失效)[^\n]*读取区间|readPlan(?:Stale|Outdated)/i,
   );
-  assert.match(pointTableSource, /逐点读取/);
-  assert.match(pointTableSource, /区间读取/);
-  assert.ok(
-    /生成读取区间|根据点位生成|添加读取区间|generate.*block|onGenerate.*Block/i.test(pointTableSource),
-    'PointTable 应提供生成或添加读取区间的操作',
-  );
-  assert.ok(
-    /覆盖|未覆盖|coverage|covered/i.test(pointTableSource),
-    'PointTable 应显示点位被读取区间覆盖的状态',
+  assert.match(pointTableSource, /已覆盖/);
+  assert.match(pointTableSource, /未覆盖/);
+  assert.match(pointTableSource, /重新生成区间/);
+});
+
+function getArrowFunctionSource(functionName) {
+  const start = pointTableSource.indexOf(`const ${functionName} =`);
+  assert.notEqual(start, -1, `PointTable 应提供 ${functionName} 操作处理函数`);
+  const end = pointTableSource.indexOf('\n  };', start);
+  assert.notEqual(end, -1, `${functionName} 操作处理函数应完整闭合`);
+  return pointTableSource.slice(start, end);
+}
+
+function getButtonHandlerForLabel(label) {
+  const labelIndex = pointTableSource.lastIndexOf(label);
+  assert.notEqual(labelIndex, -1, `PointTable 应提供“${label}”按钮`);
+  const handlerStart = pointTableSource.lastIndexOf('onClick={', labelIndex);
+  assert.notEqual(handlerStart, -1, `“${label}”按钮应绑定明确动作`);
+  const handlerMatch = pointTableSource.slice(handlerStart, labelIndex + label.length)
+    .match(/onClick=\{([A-Za-z_$][\w$]*)\}/);
+  assert.ok(handlerMatch, `“${label}”按钮应绑定命名动作`);
+  return handlerMatch[1];
+}
+
+test('ModbusRTU 生成批量方案只更新候选预览，不直接保存', () => {
+  const buttonIndex = pointTableSource.indexOf('生成批量方案');
+  assert.notEqual(buttonIndex, -1);
+  const buttonSource = pointTableSource.slice(Math.max(0, buttonIndex - 500), buttonIndex + 80);
+  const handlerMatch = buttonSource.match(/onClick=\{([A-Za-z_$][\w$]*)\}/);
+  assert.ok(handlerMatch, '生成批量方案按钮应绑定明确的本地预览动作');
+
+  const previewSource = getArrowFunctionSource(handlerMatch[1]);
+  assert.match(previewSource, /buildReadPlanBlocks\(points\)/);
+  assert.match(previewSource, /set(?:ReadPlanBlocks|ReadPlanMode)\(/);
+  assert.doesNotMatch(
+    previewSource,
+    /requestReadPlanApply|persistReadPlan|onReadPlanSave/,
+    '生成批量方案只能更新候选状态，不得直接保存读取策略',
   );
 });
 
-test('ModbusRTU 读取策略切换与区间应用职责分开', () => {
-  assert.match(pointTableSource, /onChange=\{handleReadPlanModeChange\}/);
-  assert.match(pointTableSource, /应用区间/);
-  assert.match(pointTableSource, /requestReadPlanApply/);
-  assert.match(pointTableSource, /Modal\.confirm/);
-  assert.match(pointTableSource, /mode: 1, blocks: readPlanBlocks\.map/);
-  assert.match(pointTableSource, /mode: 2, blocks: nextBlocks/);
-  assert.doesNotMatch(pointTableSource, /setReadPlanBlocks\(\[\]\)/);
-  assert.doesNotMatch(pointTableSource, /保存读取策略/);
+test('ModbusRTU 应用批量或恢复逐点读取必须显式保存', () => {
+  const batchApplySource = getArrowFunctionSource(getButtonHandlerForLabel('启用批量读取'));
+  assert.match(batchApplySource, /requestReadPlanApply|persistReadPlan|onReadPlanSave/);
+
+  const restoreApplySource = getArrowFunctionSource(getButtonHandlerForLabel('恢复逐点读取'));
+  assert.match(restoreApplySource, /requestReadPlanApply|persistReadPlan|onReadPlanSave/);
+});
+
+test('ModbusRTU 区间应用对未覆盖点位提供确认语义', () => {
+  assert.match(pointTableSource, /uncoveredPoints\.length/);
+  assert.match(
+    pointTableSource,
+    /(?:uncoveredPoints\.length|coveredTags\.length)[\s\S]{0,260}(?:disabled|确认|confirm|warning|警告)/i,
+    '应用批量方案应根据覆盖情况禁用或明确确认/警告',
+  );
+  assert.match(pointTableSource, /on(?:Click|Confirm)=\{(?:applyReadPlan|restorePointReadPlan)\}/);
 });
 
 // 无论连接新建还是点表首次进入，默认策略必须保持 POINT（逐点读取，协议值 1）。

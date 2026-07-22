@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Card, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tooltip, Typography } from 'antd';
 import { CopyOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { DcPointUpdate, ModbusPoint, ModbusReadPlan } from '../../../adapters';
@@ -86,10 +86,6 @@ const PointTable: React.FC<Props> = ({
   const [readPlanMode, setReadPlanMode] = useState(savedReadPlan.mode || 1);
   const [readPlanBlocks, setReadPlanBlocks] = useState(savedReadPlan.blocks.map((block) => ({ ...block })));
 
-  const readPlanModeOptions = [
-    { value: 1, label: '逐点读取' },
-    { value: 2, label: '区间读取（批量寄存器）' },
-  ];
   const registerPoints = useMemo(
     () => points.filter((point) => isExplicitReadFunction(point.function)),
     [points],
@@ -103,8 +99,8 @@ const PointTable: React.FC<Props> = ({
     () => ({ mode: readPlanMode, blocks: readPlanBlocks }),
     [readPlanBlocks, readPlanMode],
   );
-  const readPlanDirty = readPlanMode === 2
-    && JSON.stringify(currentReadPlan) !== JSON.stringify(savedReadPlan);
+  const readPlanStale = readPlanMode === 2 && uncoveredPoints.length > 0;
+  const readPlanDirty = JSON.stringify(currentReadPlan) !== JSON.stringify(savedReadPlan) || readPlanStale;
 
   const persistReadPlan = async (nextReadPlan: ModbusReadPlan) => {
     const saved = await onReadPlanSave(nextReadPlan);
@@ -129,35 +125,6 @@ const PointTable: React.FC<Props> = ({
     apply();
   };
 
-  const handleReadPlanModeChange = (mode: number) => {
-    if (mode === readPlanMode) {
-      return;
-    }
-
-    if (mode === 2) {
-      const nextBlocks = readPlanBlocks.length > 0
-        ? readPlanBlocks.map((block) => ({ ...block }))
-        : buildReadPlanBlocks(points);
-
-      if (nextBlocks.length > 0) {
-        requestReadPlanApply(
-          { mode: 2, blocks: nextBlocks },
-          '应用区间读取策略？',
-        );
-        return;
-      }
-
-      setReadPlanMode(mode);
-      setReadPlanBlocks(nextBlocks);
-      return;
-    }
-
-    requestReadPlanApply(
-      { mode: 1, blocks: readPlanBlocks.map((block) => ({ ...block })) },
-      '应用逐点读取策略？',
-    );
-  };
-
   const updateReadPlanBlock = (index: number, patch: Partial<ModbusReadPlan['blocks'][number]>) => {
     setReadPlanBlocks((current) => current.map((block, blockIndex) => (
       blockIndex === index ? { ...block, ...patch } : block
@@ -166,6 +133,38 @@ const PointTable: React.FC<Props> = ({
 
   const generateReadPlan = () => {
     setReadPlanBlocks(buildReadPlanBlocks(points));
+  };
+
+  const openReadPlanPreview = () => {
+    setReadPlanBlocks(buildReadPlanBlocks(points));
+    setReadPlanMode(2);
+  };
+
+  const restorePointReadPlan = () => {
+    requestReadPlanApply(
+      { mode: 1, blocks: readPlanBlocks.map((block) => ({ ...block })) },
+      '恢复逐点读取？',
+    );
+  };
+
+  const applyReadPlan = () => {
+    const apply = () => requestReadPlanApply(
+      currentReadPlan,
+      readPlanMode === 2 ? '应用区间读取策略？' : '应用逐点读取策略？',
+    );
+
+    if (readPlanStale) {
+      Modal.confirm({
+        title: '仍有寄存器点位未覆盖',
+        content: `当前区间未覆盖 ${uncoveredPoints.length} 个寄存器点位，应用后这些点位不会从批量响应中解析。`,
+        okText: '仍然应用',
+        cancelText: '返回调整',
+        onOk: apply,
+      });
+      return;
+    }
+
+    apply();
   };
 
   const visiblePoints = useMemo(
@@ -396,17 +395,44 @@ const PointTable: React.FC<Props> = ({
       <div className="protocol-read-plan-toolbar">
         <div className="protocol-read-plan-heading">
           <Text strong>读取策略</Text>
-          <Select<number>
-            size="small"
-            value={readPlanMode}
-            options={readPlanModeOptions}
-            disabled={!selectedConn || actionsDisabled}
-            onChange={handleReadPlanModeChange}
-            style={{ width: 220 }}
-          />
-          <Text type="secondary">
-            {readPlanMode === 1 ? '按点位逐条读取，适合地址分散的设备。' : '按寄存器区间批量读取，适合地址连续的设备。'}
-          </Text>
+          {readPlanMode === 1 ? (
+            <>
+              <Text type="secondary">逐点读取</Text>
+              <Text type="secondary">按点位逐条读取，适合地址分散的设备。</Text>
+              <Button
+                size="small"
+                disabled={actionsDisabled || points.length === 0}
+                onClick={openReadPlanPreview}
+              >
+                生成批量方案
+              </Button>
+            </>
+          ) : (
+            <>
+              <Text type={readPlanDirty ? 'warning' : 'success'}>
+                {readPlanDirty ? '批量读取预览' : '批量读取已启用'}
+              </Text>
+              <Text type="secondary">按寄存器区间批量读取，适合地址连续的设备。</Text>
+              <Button
+                size="small"
+                disabled={actionsDisabled}
+                onClick={restorePointReadPlan}
+              >
+                恢复逐点读取
+              </Button>
+              {readPlanDirty ? (
+                <Button
+                  type="primary"
+                  size="small"
+                  disabled={actionsDisabled || readPlanBlocks.length === 0}
+                  loading={readPlanSaving}
+                  onClick={applyReadPlan}
+                >
+                  {savedReadPlan.mode === 2 ? '应用批量方案' : '启用批量读取'}
+                </Button>
+              ) : null}
+            </>
+          )}
         </div>
 
         {readPlanMode === 2 ? (
@@ -418,6 +444,15 @@ const PointTable: React.FC<Props> = ({
                 {uncoveredPoints.length > 0 ? `，未覆盖 ${uncoveredPoints.length} 个` : ''}
               </Text>
             </div>
+            {readPlanStale ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="读取区间已过期"
+                description="建议重新生成区间，或手工补齐后再应用。"
+                className="protocol-read-plan-alert"
+              />
+            ) : null}
             {readPlanBlocks.map((block, index) => (
               <div className="protocol-read-plan-block" key={`read-plan-block-${index}`}>
                 <Select<number>
@@ -482,18 +517,18 @@ const PointTable: React.FC<Props> = ({
                 >
                   添加读取区间
                 </Button>
-                <Button size="small" disabled={actionsDisabled || points.length === 0} onClick={generateReadPlan}>
-                  根据点位生成区间
-                </Button>
-                <Button
-                  type="primary"
-                  size="small"
-                  disabled={actionsDisabled || !readPlanDirty || (readPlanMode === 2 && readPlanBlocks.length === 0)}
-                  loading={readPlanSaving}
-                  onClick={() => requestReadPlanApply(currentReadPlan, '应用区间读取策略？')}
+                <Popconfirm
+                  title="重新生成区间？"
+                  description="这会替换当前手工编辑的区间。"
+                  okText="重新生成"
+                  cancelText="取消"
+                  onConfirm={generateReadPlan}
+                  disabled={actionsDisabled || points.length === 0}
                 >
-                  应用区间
-                </Button>
+                  <Button size="small" disabled={actionsDisabled || points.length === 0}>
+                    重新生成区间
+                  </Button>
+                </Popconfirm>
               </Space>
             </div>
           </div>
