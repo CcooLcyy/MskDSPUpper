@@ -1,6 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import { Alert, Button, Card, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tooltip, Typography } from 'antd';
-import { CopyOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import {
+  CopyOutlined,
+  DeleteOutlined,
+  DownOutlined,
+  EditOutlined,
+  PlusOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { DcPointUpdate, ModbusPoint, ModbusReadPlan } from '../../../adapters';
 import {
@@ -39,6 +46,7 @@ const DATA_TYPE_LABELS: Record<number, string> = {
 
 const WORD_ORDER_LABELS: Record<number, string> = { 0: '默认 (HL)', 1: 'HL', 2: 'LH' };
 const BYTE_ORDER_LABELS: Record<number, string> = { 0: '默认 (AB)', 1: 'AB', 2: 'BA' };
+const READ_PLAN_COLLAPSE_THRESHOLD = 4;
 
 interface Props {
   points: ModbusPoint[];
@@ -85,6 +93,9 @@ const PointTable: React.FC<Props> = ({
   const savedReadPlan = readPlan ?? { mode: 1, blocks: [] };
   const [readPlanMode, setReadPlanMode] = useState(savedReadPlan.mode || 1);
   const [readPlanBlocks, setReadPlanBlocks] = useState(savedReadPlan.blocks.map((block) => ({ ...block })));
+  const [readPlanEditorExpanded, setReadPlanEditorExpanded] = useState(
+    savedReadPlan.blocks.length <= READ_PLAN_COLLAPSE_THRESHOLD,
+  );
 
   const registerPoints = useMemo(
     () => points.filter((point) => isExplicitReadFunction(point.function)),
@@ -138,6 +149,7 @@ const PointTable: React.FC<Props> = ({
   const openReadPlanPreview = () => {
     setReadPlanBlocks(buildReadPlanBlocks(points));
     setReadPlanMode(2);
+    setReadPlanEditorExpanded(true);
   };
 
   const restorePointReadPlan = () => {
@@ -438,11 +450,24 @@ const PointTable: React.FC<Props> = ({
         {readPlanMode === 2 ? (
           <div className="protocol-read-plan-editor">
             <div className="protocol-read-plan-summary">
-              <Text strong>批量读取区间</Text>
-              <Text type={uncoveredPoints.length > 0 ? 'warning' : 'secondary'}>
-                已覆盖 {coveredTags.length}/{registerPoints.length} 个寄存器点位
-                {uncoveredPoints.length > 0 ? `，未覆盖 ${uncoveredPoints.length} 个` : ''}
-              </Text>
+              <Space size={10} wrap>
+                <Text strong>批量读取区间</Text>
+                <Text type="secondary">共 {readPlanBlocks.length} 个</Text>
+                <Text type={uncoveredPoints.length > 0 ? 'warning' : 'secondary'}>
+                  已覆盖 {coveredTags.length}/{registerPoints.length} 个寄存器点位
+                  {uncoveredPoints.length > 0 ? `，未覆盖 ${uncoveredPoints.length} 个` : ''}
+                </Text>
+              </Space>
+              <Button
+                type="text"
+                size="small"
+                icon={<DownOutlined rotate={readPlanEditorExpanded ? 180 : 0} />}
+                aria-expanded={readPlanEditorExpanded}
+                aria-controls="modbus-read-plan-blocks"
+                onClick={() => setReadPlanEditorExpanded((expanded) => !expanded)}
+              >
+                {readPlanEditorExpanded ? '收起区间编辑' : '展开区间编辑'}
+              </Button>
             </div>
             {readPlanStale ? (
               <Alert
@@ -453,53 +478,59 @@ const PointTable: React.FC<Props> = ({
                 className="protocol-read-plan-alert"
               />
             ) : null}
-            {readPlanBlocks.map((block, index) => (
-              <div className="protocol-read-plan-block" key={`read-plan-block-${index}`}>
-                <Select<number>
-                  size="small"
-                  value={block.function}
-                  options={[
-                    { value: MODBUS_FUNCTION.READ_HOLDING_REGISTERS, label: '0x03 保持寄存器' },
-                    { value: MODBUS_FUNCTION.READ_INPUT_REGISTERS, label: '0x04 输入寄存器' },
-                  ]}
-                  disabled={actionsDisabled}
-                  onChange={(value) => updateReadPlanBlock(index, { function: value })}
-                  style={{ width: 190 }}
-                />
-                <InputNumber
-                  size="small"
-                  min={getMinimumAddress(addressBase)}
-                  max={65535}
-                  precision={0}
-                  value={block.start}
-                  disabled={actionsDisabled}
-                  onChange={(value) => updateReadPlanBlock(index, { start: value ?? getMinimumAddress(addressBase) })}
-                  addonBefore="起始"
-                />
-                <InputNumber
-                  size="small"
-                  min={1}
-                  max={125}
-                  precision={0}
-                  value={block.quantity}
-                  disabled={actionsDisabled}
-                  onChange={(value) => updateReadPlanBlock(index, { quantity: value ?? 1 })}
-                  addonBefore="数量"
-                />
-                <Tooltip title="删除读取区间">
-                  <Button
-                    type="text"
-                    danger
+            <div
+              className="protocol-read-plan-block-list"
+              id="modbus-read-plan-blocks"
+              hidden={!readPlanEditorExpanded}
+            >
+              {readPlanBlocks.map((block, index) => (
+                <div className="protocol-read-plan-block" key={`read-plan-block-${index}`}>
+                  <Select<number>
                     size="small"
-                    icon={<DeleteOutlined />}
-                    aria-label={`删除第 ${index + 1} 个读取区间`}
+                    value={block.function}
+                    options={[
+                      { value: MODBUS_FUNCTION.READ_HOLDING_REGISTERS, label: '0x03 保持寄存器' },
+                      { value: MODBUS_FUNCTION.READ_INPUT_REGISTERS, label: '0x04 输入寄存器' },
+                    ]}
                     disabled={actionsDisabled}
-                    onClick={() => setReadPlanBlocks((current) => current.filter((_item, itemIndex) => itemIndex !== index))}
+                    onChange={(value) => updateReadPlanBlock(index, { function: value })}
+                    style={{ width: 190 }}
                   />
-                </Tooltip>
-              </div>
-            ))}
-            <div className="protocol-read-plan-actions">
+                  <InputNumber
+                    size="small"
+                    min={getMinimumAddress(addressBase)}
+                    max={65535}
+                    precision={0}
+                    value={block.start}
+                    disabled={actionsDisabled}
+                    onChange={(value) => updateReadPlanBlock(index, { start: value ?? getMinimumAddress(addressBase) })}
+                    addonBefore="起始"
+                  />
+                  <InputNumber
+                    size="small"
+                    min={1}
+                    max={125}
+                    precision={0}
+                    value={block.quantity}
+                    disabled={actionsDisabled}
+                    onChange={(value) => updateReadPlanBlock(index, { quantity: value ?? 1 })}
+                    addonBefore="数量"
+                  />
+                  <Tooltip title="删除读取区间">
+                    <Button
+                      type="text"
+                      danger
+                      size="small"
+                      icon={<DeleteOutlined />}
+                      aria-label={`删除第 ${index + 1} 个读取区间`}
+                      disabled={actionsDisabled}
+                      onClick={() => setReadPlanBlocks((current) => current.filter((_item, itemIndex) => itemIndex !== index))}
+                    />
+                  </Tooltip>
+                </div>
+              ))}
+            </div>
+            <div className="protocol-read-plan-actions" hidden={!readPlanEditorExpanded}>
               <Space wrap>
                 <Button
                   type="dashed"

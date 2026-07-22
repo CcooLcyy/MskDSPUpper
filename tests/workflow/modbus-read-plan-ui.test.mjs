@@ -7,6 +7,10 @@ const pointTableSource = readFileSync(
   new URL('../../src/pages/ModbusRTU/components/PointTable.tsx', import.meta.url),
   'utf8',
 );
+const protocolPageCssSource = readFileSync(
+  new URL('../../src/components/protocol/protocol-page.css', import.meta.url),
+  'utf8',
+);
 
 function getLinkModalSource() {
   const start = pageSource.indexOf('const renderLinkModal');
@@ -39,6 +43,16 @@ test('ModbusRTU PointTable 暴露批量方案工作流', () => {
   assert.match(pointTableSource, /已覆盖/);
   assert.match(pointTableSource, /未覆盖/);
   assert.match(pointTableSource, /重新生成区间/);
+});
+
+test('ModbusRTU 批量读取区间支持折叠并限制列表高度', () => {
+  assert.match(pointTableSource, /readPlanEditorExpanded/);
+  assert.match(pointTableSource, /aria-expanded=\{readPlanEditorExpanded\}/);
+  assert.match(pointTableSource, /hidden=\{!readPlanEditorExpanded\}/);
+  assert.match(pointTableSource, /收起区间编辑/);
+  assert.match(pointTableSource, /展开区间编辑/);
+  assert.match(protocolPageCssSource, /\.protocol-read-plan-block-list[\s\S]*max-height:\s*min\(30vh, 240px\)/);
+  assert.match(protocolPageCssSource, /\.protocol-read-plan-block-list[\s\S]*overflow-y:\s*auto/);
 });
 
 function getArrowFunctionSource(functionName) {
