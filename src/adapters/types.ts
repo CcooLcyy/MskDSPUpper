@@ -154,6 +154,7 @@ export interface LowerUpdateUploadResult {
 
 export interface LowerUpdateInstallRequest {
   package_name: string;
+  expected_image_id: string;
   upload_account: string;
   install_dir: string;
   auth: LowerUpdateSshAuth;
@@ -164,6 +165,7 @@ export interface LowerUpdateInstallResult {
   package_name: string;
   remote_path: string;
   command: string;
+  already_current: boolean;
   success: boolean;
   exit_code: number | null;
   stdout: string;

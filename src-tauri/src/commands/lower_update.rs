@@ -146,6 +146,7 @@ pub struct LowerUpdateUploadResultDto {
 #[derive(Serialize, Deserialize)]
 pub struct LowerUpdateInstallRequestDto {
     pub package_name: String,
+    pub expected_image_id: String,
     pub upload_account: String,
     pub install_dir: String,
     pub auth: LowerUpdateSshAuthDto,
@@ -157,6 +158,7 @@ pub struct LowerUpdateInstallResultDto {
     pub package_name: String,
     pub remote_path: String,
     pub command: String,
+    pub already_current: bool,
     pub success: bool,
     pub exit_code: Option<i32>,
     pub stdout: String,
@@ -543,6 +545,33 @@ async fn execute_root_ssh_command(
     }
 }
 
+async fn query_lower_update_runtime_info(
+    target: &LowerUpdateUploadTarget,
+    auth: &LowerUpdateSshAuthDto,
+    sudo_password: &str,
+) -> Result<LowerUpdateRuntimeInfoDto, String> {
+    let output = tokio::time::timeout(
+        LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT,
+        execute_root_ssh_command(
+            target,
+            auth,
+            sudo_password,
+            LOWER_UPDATE_RUNTIME_QUERY_COMMAND,
+        ),
+    )
+    .await
+    .map_err(|_| "查询下位机运行镜像超时".to_string())??;
+
+    if output.exit_code != Some(0) {
+        return Err(format_remote_command_error(
+            "查询下位机运行镜像失败",
+            &output,
+        ));
+    }
+
+    parse_runtime_query_output(&output.stdout)
+}
+
 fn format_remote_command_error(context: &str, output: &RemoteCommandOutput) -> String {
     let stderr = output.stderr.trim();
     let stdout = output.stdout.trim();
@@ -639,6 +668,25 @@ fn parse_runtime_query_output(stdout: &str) -> Result<LowerUpdateRuntimeInfoDto,
         running,
         image_id: Some(image_id),
     })
+}
+
+fn should_skip_install(
+    expected_image_id: &str,
+    runtime: &LowerUpdateRuntimeInfoDto,
+) -> Result<bool, String> {
+    let expected = normalize_image_id(expected_image_id)
+        .ok_or_else(|| "下位机安装请求缺少有效的期望镜像 ID".to_string())?;
+
+    if !runtime.exists || !runtime.running {
+        return Ok(false);
+    }
+
+    let actual = runtime
+        .image_id
+        .as_deref()
+        .and_then(normalize_image_id)
+        .ok_or_else(|| "目标机运行容器未返回有效的镜像 ID".to_string())?;
+    Ok(expected == actual)
 }
 
 fn is_safe_file_name(value: &str) -> bool {
@@ -1354,36 +1402,7 @@ pub async fn get_lower_update_runtime_info(
 
     let result = async {
         let target = parse_upload_account(&request.upload_account)?;
-        let output = tokio::time::timeout(
-            LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT,
-            execute_root_ssh_command(
-                &target,
-                &request.auth,
-                &request.sudo_password,
-                LOWER_UPDATE_RUNTIME_QUERY_COMMAND,
-            ),
-        )
-        .await
-        .map_err(|_| "查询下位机运行镜像超时".to_string())??;
-
-        if output.exit_code != Some(0) {
-            let stderr = output.stderr.trim();
-            let stdout = output.stdout.trim();
-            let detail = if !stderr.is_empty() { stderr } else { stdout };
-            let detail = if detail.is_empty() {
-                "SSH 查询命令未返回错误详情"
-            } else {
-                detail
-            };
-            return Err(format!(
-                "查询下位机运行镜像失败: 退出码 {}: {detail}",
-                output
-                    .exit_code
-                    .map_or_else(|| "未知".to_string(), |code| code.to_string())
-            ));
-        }
-
-        parse_runtime_query_output(&output.stdout)
+        query_lower_update_runtime_info(&target, &request.auth, &request.sudo_password).await
     }
     .await;
 
@@ -1845,6 +1864,29 @@ async fn install_lower_update_package_inner(
     let remote_path = remote_package_path(&install_dir, &request.package_name);
     let install_command = build_install_command(&install_dir, &request.package_name);
 
+    let runtime =
+        query_lower_update_runtime_info(&target, &request.auth, &request.sudo_password).await?;
+    if should_skip_install(&request.expected_image_id, &runtime)? {
+        tracing::info!(
+            operation = "install_preflight",
+            target = %log_detail(&request.upload_account),
+            package = %log_detail(&request.package_name),
+            expected_image_id = %request.expected_image_id,
+            actual_image_id = ?runtime.image_id,
+            "目标机已运行待安装构建，跳过重复安装"
+        );
+        return Ok(LowerUpdateInstallResultDto {
+            package_name: request.package_name,
+            remote_path,
+            command: "未执行安装命令，目标机已运行待安装构建".to_string(),
+            already_current: true,
+            success: true,
+            exit_code: Some(0),
+            stdout: "目标机已运行待安装构建，已跳过重复安装\n".to_string(),
+            stderr: String::new(),
+        });
+    }
+
     let output = tokio::time::timeout(
         LOWER_UPDATE_INSTALL_TIMEOUT,
         execute_root_ssh_command(
@@ -1866,6 +1908,7 @@ async fn install_lower_update_package_inner(
         package_name: request.package_name,
         remote_path,
         command: build_password_root_shell_command(&install_command),
+        already_current: false,
         success,
         exit_code,
         stdout,
@@ -1960,13 +2003,26 @@ pub async fn install_lower_update_package(
         auth_method,
         target = %target,
         package = %package,
+        expected_image_id = %log_detail(&request.expected_image_id),
         remote_path = ?remote_path,
         "开始执行下位机更新安装"
     );
+    let expected_image_id = request.expected_image_id.clone();
     let result = install_lower_update_package_inner(request).await;
     match result {
         Ok(result) => {
-            if result.success {
+            if result.already_current {
+                tracing::info!(
+                    operation = "install",
+                    auth_method,
+                    target = %target,
+                    package = %result.package_name,
+                    remote_path = %result.remote_path,
+                    expected_image_id = %log_detail(&expected_image_id),
+                    elapsed_ms = started_at.elapsed().as_millis() as u64,
+                    "目标机已是最新构建，跳过下位机更新安装"
+                );
+            } else if result.success {
                 tracing::info!(
                     operation = "install",
                     auth_method,
@@ -2014,8 +2070,8 @@ mod tests {
     use super::{
         build_password_root_shell_command, build_user_upload_command, cleanup_cache_startup_in,
         clear_cache_root_contents, format_upload_remote_error, parse_available_bytes,
-        parse_runtime_query_output, parse_upload_account, sudo_password_stdin,
-        LOWER_UPDATE_CONTAINER_NAME,
+        parse_runtime_query_output, parse_upload_account, should_skip_install, sudo_password_stdin,
+        LowerUpdateRuntimeInfoDto, LOWER_UPDATE_CONTAINER_NAME,
     };
     use std::{
         fs,
@@ -2156,6 +2212,52 @@ mod tests {
             .expect_err("应拒绝无效的 Docker 镜像 ID");
 
         assert!(error.contains("镜像 ID"));
+    }
+
+    // 验证目标机已运行相同镜像时安装前置检查会短路。
+    #[test]
+    fn skips_install_when_running_image_matches_expected_image() {
+        let runtime = LowerUpdateRuntimeInfoDto {
+            container_name: LOWER_UPDATE_CONTAINER_NAME.to_string(),
+            exists: true,
+            running: true,
+            image_id: Some(format!("sha256:{}", "A".repeat(64))),
+        };
+
+        assert!(
+            should_skip_install(&format!("sha256:{}", "a".repeat(64)), &runtime)
+                .expect("相同镜像应允许跳过安装")
+        );
+    }
+
+    // 验证目标机运行不同镜像时不能短路安装。
+    #[test]
+    fn continues_install_when_running_image_differs() {
+        let runtime = LowerUpdateRuntimeInfoDto {
+            container_name: LOWER_UPDATE_CONTAINER_NAME.to_string(),
+            exists: true,
+            running: true,
+            image_id: Some(format!("sha256:{}", "b".repeat(64))),
+        };
+
+        assert!(
+            !should_skip_install(&format!("sha256:{}", "a".repeat(64)), &runtime)
+                .expect("不同镜像应继续安装")
+        );
+    }
+
+    // 验证安装请求缺少合法期望镜像时会被拒绝。
+    #[test]
+    fn rejects_invalid_expected_image_for_install_preflight() {
+        let runtime = LowerUpdateRuntimeInfoDto {
+            container_name: LOWER_UPDATE_CONTAINER_NAME.to_string(),
+            exists: true,
+            running: true,
+            image_id: Some(format!("sha256:{}", "a".repeat(64))),
+        };
+
+        let error = should_skip_install("-", &runtime).expect_err("无效期望镜像应被拒绝");
+        assert!(error.contains("期望镜像"));
     }
 
     #[test]

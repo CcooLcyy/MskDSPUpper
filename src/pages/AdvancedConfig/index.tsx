@@ -30,6 +30,7 @@ import {
   type LowerUpdateDownloadResult,
   type LowerUpdateInstallResult,
   type LowerUpdateManifest,
+  type LowerUpdateRuntimeInfo,
   type LowerUpdateSshAuth,
   type LowerUpdateUploadProgress,
   type LowerUpdateUploadResult,
@@ -41,6 +42,7 @@ import {
 } from '../../components/app-update/update-view';
 import { validateManagerAddress } from '../../utils/network';
 import { resolveLowerUpdateSudoPassword } from '../../utils/lower-update-auth';
+import { compareLowerUpdateImages } from '../../utils/lower-update-deploy';
 import { useSearchParams } from 'react-router-dom';
 import './index.css';
 
@@ -396,7 +398,7 @@ function getDeployTaskProgress(step: DeployTaskStep, uploadProgress: number): nu
 }
 
 function isSameImageId(expectedImageId: string, actualImageId: string): boolean {
-  return expectedImageId.trim().toLowerCase() === actualImageId.trim().toLowerCase();
+  return compareLowerUpdateImages(expectedImageId, actualImageId) === 'same';
 }
 
 function sleep(ms: number): Promise<void> {
@@ -677,6 +679,46 @@ const AdvancedConfigPage: React.FC = () => {
     setSha256(manifest.asset.sha256);
   };
 
+  const queryLowerUpdateRuntimeInfo = async (): Promise<LowerUpdateRuntimeInfo> => api.getLowerUpdateRuntimeInfo({
+    upload_account: targetUploadAccount.trim(),
+    auth: lowerUpdateAuthMethod === 'password'
+      ? { method: 'password', password: targetSshPassword }
+      : { method: 'certificate' },
+    sudo_password: resolvedSudoPassword,
+  });
+
+  const checkLowerUpdateTargetBeforeDeploy = async (expectedImageId: string): Promise<boolean> => {
+    setDeliveryStatus('镜像确认中');
+    setIsVerifyingLowerUpdate(true);
+    setImageVerifyStage('querying');
+    setImageVerifyMessage('下发前查询目标机运行镜像');
+    try {
+      const runtime = await queryLowerUpdateRuntimeInfo();
+      const actualImageId = runtime.image_id?.trim() || '-';
+      setCurrentLowerImageId(actualImageId);
+
+      if (runtime.exists && runtime.running && compareLowerUpdateImages(expectedImageId, actualImageId) === 'same') {
+        setExpectedImageId(expectedImageId);
+        setActualImageId(actualImageId);
+        setImageVerifyStage('succeeded');
+        setImageVerifyMessage('目标机已运行待下发构建，无需重复安装');
+        setDeployTaskStep('succeeded');
+        setDeliveryStatus('已是最新');
+        messageApi.success('目标机已经运行待下发构建，已跳过上传和安装');
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      setCurrentLowerImageId('-');
+      setDeliveryStatus('无法确认');
+      messageApi.error(`下发前查询目标机运行镜像失败: ${formatErrorMessage(error)}`);
+      return false;
+    } finally {
+      setIsVerifyingLowerUpdate(false);
+    }
+  };
+
   const handleCheckUpdate = async (): Promise<void> => {
     setIsCheckingLowerUpdate(true);
     try {
@@ -700,13 +742,7 @@ const AdvancedConfigPage: React.FC = () => {
       }
 
       try {
-        const runtime = await api.getLowerUpdateRuntimeInfo({
-          upload_account: targetUploadAccount.trim(),
-          auth: lowerUpdateAuthMethod === 'password'
-            ? { method: 'password', password: targetSshPassword }
-            : { method: 'certificate' },
-          sudo_password: resolvedSudoPassword,
-        });
+        const runtime = await queryLowerUpdateRuntimeInfo();
         const actualImageId = runtime.image_id?.trim() || '-';
 
         if (!runtime.exists) {
@@ -808,13 +844,7 @@ const AdvancedConfigPage: React.FC = () => {
       setImageVerifyMessage(`查询运行镜像中 (${attempt}/6)`);
 
       try {
-        const runtime = await api.getLowerUpdateRuntimeInfo({
-          upload_account: targetUploadAccount.trim(),
-          auth: lowerUpdateAuthMethod === 'password'
-            ? { method: 'password', password: targetSshPassword }
-            : { method: 'certificate' },
-          sudo_password: resolvedSudoPassword,
-        });
+        const runtime = await queryLowerUpdateRuntimeInfo();
         const runtimeImageId = runtime.image_id?.trim() || '-';
         setActualImageId(runtimeImageId);
 
@@ -906,7 +936,7 @@ const AdvancedConfigPage: React.FC = () => {
     }
   };
 
-  const runInstallStep = async (packageResult: LowerUpdateDownloadResult): Promise<boolean> => {
+  const runInstallStep = async (packageResult: LowerUpdateDownloadResult): Promise<LowerUpdateInstallResult | null> => {
     setCurrentLowerImageId('-');
     resetInstallState();
     setDeployTaskStep('installing');
@@ -915,8 +945,13 @@ const AdvancedConfigPage: React.FC = () => {
     setIsInstallingLowerUpdate(true);
 
     try {
+      const expectedImageId = activeManifest?.image_id?.trim();
+      if (!expectedImageId) {
+        throw new Error('当前更新清单未包含有效的期望镜像 ID');
+      }
       const result = await api.installLowerUpdatePackage({
         package_name: packageResult.package_name,
+        expected_image_id: expectedImageId,
         upload_account: targetUploadAccount.trim(),
         install_dir: targetInstallDir.trim(),
         auth: lowerUpdateAuthMethod === 'password'
@@ -937,18 +972,28 @@ const AdvancedConfigPage: React.FC = () => {
         setDeployTaskStep('install_failed');
         setDeliveryStatus('安装失败');
         messageApi.error(`安装命令执行失败，退出码: ${result.exit_code ?? '-'}`);
-        return false;
+        return null;
       }
 
       setInstallStage('succeeded');
       setDeployTaskStep('installed');
-      return true;
+      if (result.already_current) {
+        setCurrentLowerImageId(expectedImageId);
+        setExpectedImageId(expectedImageId);
+        setActualImageId(expectedImageId);
+        setImageVerifyStage('succeeded');
+        setImageVerifyMessage('安装前复核确认目标机已运行待下发构建');
+        setDeployTaskStep('succeeded');
+        setDeliveryStatus('已是最新');
+        messageApi.info('目标机已运行待下发构建，安装接口跳过了重复安装');
+      }
+      return result;
     } catch (error) {
       setInstallStage('failed');
       setDeployTaskStep('install_failed');
       setDeliveryStatus('安装失败');
       messageApi.error(`安装失败: ${formatErrorMessage(error)}`);
-      return false;
+      return null;
     } finally {
       setIsInstallingLowerUpdate(false);
     }
@@ -1006,6 +1051,11 @@ const AdvancedConfigPage: React.FC = () => {
       return;
     }
 
+    const shouldContinueLowerUpdateDeploy = await checkLowerUpdateTargetBeforeDeploy(activeManifest.image_id);
+    if (!shouldContinueLowerUpdateDeploy) {
+      return;
+    }
+
     setIsUploadModalOpen(true);
 
     let activeUploadResult = forceUpload ? null : uploadResult;
@@ -1031,8 +1081,8 @@ const AdvancedConfigPage: React.FC = () => {
       setDeployTaskStep('uploaded');
     }
 
-    const installed = await runInstallStep(downloadResult);
-    if (!installed) {
+    const installResult = await runInstallStep(downloadResult);
+    if (!installResult || installResult.already_current) {
       return;
     }
 
@@ -1056,6 +1106,10 @@ const AdvancedConfigPage: React.FC = () => {
       messageApi.warning('请先完成上传');
       return;
     }
+    if (!activeManifest?.image_id?.trim()) {
+      messageApi.warning('当前更新清单未包含镜像 ID，不能执行无法验证结果的安装');
+      return;
+    }
 
     setIsUploadModalOpen(true);
     setUploadedRemotePath(uploadResult.remote_path);
@@ -1065,8 +1119,13 @@ const AdvancedConfigPage: React.FC = () => {
     setUploadStage('finished');
     setDeployTaskStep('uploaded');
 
-    const installed = await runInstallStep(downloadResult);
-    if (installed) {
+    const shouldContinueLowerUpdateDeploy = await checkLowerUpdateTargetBeforeDeploy(activeManifest.image_id);
+    if (!shouldContinueLowerUpdateDeploy) {
+      return;
+    }
+
+    const installResult = await runInstallStep(downloadResult);
+    if (installResult && !installResult.already_current) {
       await runImageVerifyStep();
     }
   };

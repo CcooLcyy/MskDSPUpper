@@ -513,6 +513,18 @@ export const browserApi: typeof tauriApi = {
     const remotePath = buildRemotePackagePath(request.install_dir, request.package_name);
     const command = `set -e; cd '${request.install_dir}' && chmod +x './${request.package_name}' && './${request.package_name}' start`;
     await sleep(500);
+    if (browserRunningLowerImageId.trim().toLowerCase() === request.expected_image_id.trim().toLowerCase()) {
+      return {
+        package_name: request.package_name,
+        remote_path: remotePath,
+        command: '未执行安装命令，目标机已运行待安装构建',
+        already_current: true,
+        success: true,
+        exit_code: 0,
+        stdout: 'browser-dev: target already runs expected image\n',
+        stderr: '',
+      };
+    }
     if (browserLatestLowerManifest?.image_id) {
       browserRunningLowerImageId = browserLatestLowerManifest.image_id;
     }
@@ -520,6 +532,7 @@ export const browserApi: typeof tauriApi = {
       package_name: request.package_name,
       remote_path: remotePath,
       command,
+      already_current: false,
       success: true,
       exit_code: 0,
       stdout: 'browser-dev: install command simulated\n',
