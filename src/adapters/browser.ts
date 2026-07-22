@@ -562,7 +562,7 @@ export const browserApi: typeof tauriApi = {
     upsertByName(modbusLinks, config.conn_name, createOnly, (connId, previous) => ({
       config: clone(config),
       conn_id: connId,
-      state: previous?.state ?? 0,
+      state: previous?.state ?? 1,
       last_error: modbusMqtt ? '' : '浏览器开发模式 mock 未连接真实 MQTT',
     })),
   modbusRtuRenameLink: async (oldConnName: string, newConnName: string) =>
@@ -574,8 +574,8 @@ export const browserApi: typeof tauriApi = {
   },
   modbusRtuListLinks: async () => clone([...modbusLinks.values()]),
   modbusRtuDeleteLink: async (connName: string) => deleteByName(modbusLinks, connName),
-  modbusRtuStartLink: async (connName: string) => setLinkState(modbusLinks, connName, 1),
-  modbusRtuStopLink: async (connName: string) => setLinkState(modbusLinks, connName, 0),
+  modbusRtuStartLink: async (connName: string) => setLinkState(modbusLinks, connName, 2),
+  modbusRtuStopLink: async (connName: string) => setLinkState(modbusLinks, connName, 1),
   modbusRtuUpsertPointTable: async (connName: string, points: ModbusPoint[], replace: boolean) => {
     const previous = modbusTables.get(connName)?.points ?? [];
     modbusTables.set(connName, { conn_name: connName, points: replace ? clone(points) : mergeByTag(previous, points) });

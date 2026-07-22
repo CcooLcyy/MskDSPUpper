@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 package
+scripts/mskdsp-upper.exe
 *.local
 src-tauri/target
 src-tauri/gen/

@@ -34,6 +34,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
+import ResizableSplit from '../../components/layout/ResizableSplit';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import {
   renderProtocolRealtimeQualityCell,
@@ -1517,10 +1518,17 @@ const IEC104: React.FC = () => {
 
       {currentView === 'config' ? (
         <div className="protocol-config-view">
-          <div className="protocol-top-row">
+          <ResizableSplit
+            className="protocol-top-row"
+            defaultSize={240}
+            minSize={200}
+            maxSize={420}
+            storageKey="mskdsp.layout.iec104.connection"
+          >
             <ProtocolConnectionList
               title={'\u8fde\u63a5\u5217\u8868'}
               addButtonText={'\u65b0\u589e\u8fde\u63a5'}
+              width="100%"
               loading={loading}
               links={links}
               selectedConn={selectedConn}
@@ -1533,7 +1541,8 @@ const IEC104: React.FC = () => {
               getDeleteTitle={(connName) => `\u786e\u8ba4\u5220\u9664 ${connName}\uff1f`}
             />
 
-            <Card
+            <div className="protocol-detail-shell">
+              <Card
               title="连接配置"
               size="small"
               bordered
@@ -1585,7 +1594,7 @@ const IEC104: React.FC = () => {
               )}
             </Card>
 
-            <div className="protocol-side-column">
+              <div className="protocol-side-column">
               <Card title="运行状态" size="small" bordered>
                 <Space direction="vertical" style={{ width: '100%' }}>
                   <div>
@@ -1637,8 +1646,9 @@ const IEC104: React.FC = () => {
                   </Tooltip>
                 </Space>
               </Card>
+              </div>
             </div>
-          </div>
+          </ResizableSplit>
 
           <Card
             title="点表配置 (Tag ↔ IOA)"
@@ -1700,8 +1710,8 @@ const IEC104: React.FC = () => {
                 size="small"
                 scroll={{ x: 1080 }}
                 locale={{ emptyText: selectedConn ? '暂无点位数据' : '请先选择连接' }}
-              />
-            </div>
+          />
+        </div>
           </Card>
         </div>
       ) : (

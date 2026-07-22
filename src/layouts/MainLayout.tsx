@@ -181,7 +181,7 @@ const MainLayout: React.FC = () => {
         </Header>
         <Content
           style={{
-            padding: 20,
+            padding: 0,
             overflow: contentOverflow,
             display: 'flex',
             flexDirection: 'column',

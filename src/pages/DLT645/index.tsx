@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import type { Dlt645LinkConfig, Dlt645LinkInfo, Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
+import ResizableSplit from '../../components/layout/ResizableSplit';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
 import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
@@ -955,10 +956,17 @@ const DLT645: React.FC = () => {
 
       {currentView === 'config' ? (
         <div className="protocol-config-view">
-          <div className="protocol-top-row">
+          <ResizableSplit
+            className="protocol-top-row"
+            defaultSize={240}
+            minSize={200}
+            maxSize={420}
+            storageKey="mskdsp.layout.dlt645.connection"
+          >
             <ProtocolConnectionList
               title={'\u8fde\u63a5\u5217\u8868'}
               addButtonText={'\u65b0\u589e\u8fde\u63a5'}
+              width="100%"
               links={links}
               selectedConn={selectedConn}
               loading={loading}
@@ -971,11 +979,12 @@ const DLT645: React.FC = () => {
               getDeleteTitle={(connName) => `\u786e\u8ba4\u5220\u9664 ${connName}\uff1f`}
             />
 
-            <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
-              <ConnectionConfig link={selectedLink} onEdit={openEditLink} />
-            </div>
+            <div className="protocol-detail-shell">
+              <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+                <ConnectionConfig link={selectedLink} onEdit={openEditLink} />
+              </div>
 
-            <div className="protocol-side-column">
+              <div className="protocol-side-column">
               <StatusPanel link={selectedLink} />
               <OperationsPanel
                 selectedConn={selectedConn}
@@ -983,8 +992,9 @@ const DLT645: React.FC = () => {
                 onStop={() => void handleStopLink()}
                 extraAction={<MqttConfigPanel block />}
               />
+              </div>
             </div>
-          </div>
+          </ResizableSplit>
 
           <PointTable
             points={points}

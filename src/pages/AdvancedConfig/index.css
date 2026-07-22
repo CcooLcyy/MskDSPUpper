@@ -1,14 +1,14 @@
 .advanced-config-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
   min-width: 0;
 }
 
 .advanced-config-parameter-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 0;
 }
 
 .advanced-config-section {

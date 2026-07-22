@@ -2,6 +2,26 @@
   overflow: hidden;
 }
 
+.route-filter-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #3e3e42;
+}
+
+.route-filter-search {
+  flex: 1 1 240px;
+  min-width: 200px;
+  max-width: 360px;
+}
+
+.route-filter-count {
+  margin-left: auto;
+  font-size: 12px;
+}
+
 .route-builder-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -222,9 +242,11 @@
 
 @media (max-width: 900px) {
   .data-bus-config-grid {
-    grid-template-columns: minmax(0, 1fr) !important;
-    grid-template-rows: minmax(260px, 0.75fr) minmax(360px, 1fr);
     overflow: auto;
+  }
+
+  .route-filter-count {
+    margin-left: 0;
   }
 
   .route-builder-grid {

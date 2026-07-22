@@ -24,7 +24,7 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -33,9 +33,17 @@
 .protocol-top-row {
   display: flex;
   flex-shrink: 0;
-  gap: 16px;
+  gap: 0;
   align-items: stretch;
   min-width: 0;
+}
+
+.protocol-detail-shell {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Control strategy pages keep the summary flexible and the runtime panel stable. */
@@ -89,7 +97,7 @@
   width: 300px;
   flex-shrink: 0;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
 }
 
 .protocol-point-card,
@@ -147,6 +155,37 @@
 
 .protocol-realtime-cell--pulse {
   animation: protocol-realtime-pulse 720ms ease-out;
+}
+
+.protocol-connection-item {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 68px 10px 12px;
+  border: 1px solid #3d3d45;
+  border-radius: 6px;
+  background: #2b2b31;
+}
+
+.protocol-connection-item.is-selected {
+  background: #37373d;
+}
+
+.protocol-connection-item-main {
+  min-width: 0;
+  cursor: pointer;
+}
+
+.protocol-connection-item-main:focus-visible {
+  outline: 2px solid #1890ff;
+  outline-offset: 2px;
+}
+
+.protocol-connection-item-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
 }
 
 @keyframes protocol-realtime-pulse {
@@ -207,6 +246,237 @@
 .protocol-log-line--hint {
   margin-top: 8px;
   color: #666;
+}
+
+.modbus-page .protocol-config-view {
+  overflow: hidden;
+}
+
+.modbus-page .protocol-top-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.modbus-page .modbus-connection-shell {
+  display: flex;
+  min-width: 0;
+}
+
+.modbus-page .modbus-connection-card {
+  width: 100%;
+  min-width: 0;
+}
+
+.modbus-connection-card .ant-card-head {
+  min-height: 52px;
+}
+
+.modbus-connection-card .ant-card-extra {
+  max-width: 72%;
+}
+
+.modbus-connection-actions {
+  justify-content: flex-end;
+}
+
+.modbus-connection-empty {
+  display: grid;
+  min-height: 126px;
+  place-items: center;
+}
+
+.modbus-last-error {
+  margin-top: 14px;
+}
+
+.modbus-page .protocol-point-card .ant-card-extra {
+  max-width: 72%;
+}
+
+.modbus-page .protocol-point-card .ant-card-extra > .ant-space {
+  justify-content: flex-end;
+}
+
+.protocol-read-plan-toolbar {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.protocol-read-plan-heading,
+.protocol-read-plan-summary,
+.protocol-read-plan-block,
+.protocol-read-plan-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.protocol-read-plan-heading {
+  flex-wrap: wrap;
+}
+
+.protocol-read-plan-heading > .ant-typography-secondary {
+  font-size: 12px;
+}
+
+.protocol-read-plan-editor {
+  padding-top: 10px;
+  margin-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.protocol-read-plan-summary {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.protocol-read-plan-block {
+  padding: 8px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+
+.protocol-read-plan-block .ant-input-number {
+  min-width: 150px;
+}
+
+.protocol-read-plan-actions {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.modbus-form-section {
+  padding: 4px 0 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.modbus-form-section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.modbus-form-section-title {
+  display: block;
+  margin: 2px 0 12px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.modbus-form-section-hint {
+  display: block;
+  margin: -6px 0 12px;
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
+.modbus-read-block {
+  padding: 10px 12px 0;
+  margin-bottom: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.modbus-config-modal {
+  max-width: calc(100vw - 32px);
+}
+
+.modbus-config-modal .ant-modal-content {
+  display: flex;
+  max-height: calc(100dvh - 48px);
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.modbus-config-modal .ant-modal-header {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.modbus-config-modal .ant-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px 20px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.modbus-config-modal .ant-modal-footer {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.modbus-config-modal .ant-form-item:last-child {
+  margin-bottom: 12px;
+}
+
+@media (max-width: 1200px) {
+  .modbus-page .protocol-config-view {
+    overflow: auto;
+  }
+
+  .modbus-page .modbus-connection-card .ant-card-extra,
+  .modbus-page .protocol-point-card .ant-card-extra {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .modbus-config-modal {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px);
+    margin: 8px auto;
+  }
+
+  .modbus-config-modal .ant-modal-content {
+    max-height: calc(100dvh - 16px);
+  }
+
+  .modbus-config-modal .ant-modal-header,
+  .modbus-config-modal .ant-modal-body,
+  .modbus-config-modal .ant-modal-footer {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .modbus-connection-card .ant-card-extra,
+  .modbus-page .protocol-point-card .ant-card-extra {
+    width: 100%;
+  }
+
+  .protocol-read-plan-block {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .protocol-read-plan-block .ant-select,
+  .protocol-read-plan-block .ant-input-number {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  .modbus-connection-actions,
+  .modbus-page .protocol-point-card .ant-card-extra > .ant-space {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .modbus-config-modal .ant-modal-footer .ant-btn {
+    min-width: 84px;
+  }
 }
 
 .protocol-header-main {

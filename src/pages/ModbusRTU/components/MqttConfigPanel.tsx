@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { Button, Form, Input, InputNumber, Modal, Switch, message } from 'antd';
-import { EditOutlined } from '@ant-design/icons';
+import React, { useState } from 'react';
+import { Button, Col, Form, Input, InputNumber, Modal, Row, Switch, message } from 'antd';
+import { SettingOutlined } from '@ant-design/icons';
 import { api } from '../../../adapters';
 import type { ModbusMqttConfig } from '../../../adapters';
 import { createDefaultMqttConfig, loadStoredMqttConfig, saveStoredMqttConfig } from '../../../utils/mqtt';
@@ -23,21 +23,9 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
   );
   const [mqttConfig, setMqttConfig] = useState<ModbusMqttConfig>(() => initialMqttConfig);
   const [modalOpen, setModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const [form] = Form.useForm<ModbusMqttConfig>();
-
-  useEffect(() => {
-    const syncDefaultConfig = async (): Promise<void> => {
-      try {
-        await api.modbusRtuUpdateConfig(initialMqttConfig);
-        await saveStoredMqttConfig(STORAGE_KEY, initialMqttConfig);
-      } catch (error) {
-        console.warn('Failed to apply default Modbus MQTT config automatically:', error);
-      }
-    };
-
-    void syncDefaultConfig();
-  }, [initialMqttConfig]);
 
   const openModal = (): void => {
     form.setFieldsValue(mqttConfig);
@@ -45,8 +33,15 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
   };
 
   const handleSubmit = async (): Promise<void> => {
+    let values: ModbusMqttConfig;
     try {
-      const values = await form.validateFields();
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
+
+    setSubmitting(true);
+    try {
       const payload: ModbusMqttConfig = {
         host: values.host,
         port: values.port,
@@ -64,14 +59,16 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
       setModalOpen(false);
     } catch (error) {
       messageApi.error(`保存 MQTT 配置失败: ${error}`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
     <>
       {contextHolder}
-      <Button block={block} icon={<EditOutlined />} onClick={openModal} style={{ whiteSpace: 'nowrap' }}>
-        编辑 MQTT 全局配置
+      <Button block={block} icon={<SettingOutlined />} onClick={openModal} style={{ whiteSpace: 'nowrap' }}>
+        MQTT 全局配置
       </Button>
 
       <Modal
@@ -79,33 +76,63 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         onOk={() => void handleSubmit()}
+        okText="保存配置"
+        cancelText="取消"
+        confirmLoading={submitting}
+        maskClosable={!submitting}
+        closable={!submitting}
+        className="modbus-config-modal"
         destroyOnClose
       >
-        <Form form={form} layout="vertical" size="small">
-          <Form.Item label="主机地址" name="host" rules={[{ required: true, message: '请输入主机地址' }]}>
-            <Input placeholder="127.0.0.1" />
-          </Form.Item>
-          <Form.Item label="端口" name="port" rules={[{ required: true, message: '请输入端口' }]}>
-            <InputNumber min={1} max={65535} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label="客户端标识" name="client_id" rules={[{ required: true, message: '请输入客户端标识' }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item label="用户名" name="username">
-            <Input />
-          </Form.Item>
-          <Form.Item label="密码" name="password">
-            <Input.Password />
-          </Form.Item>
-          <Form.Item label="保活时间（秒）" name="keepalive_sec">
-            <InputNumber min={0} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label="清理会话" name="clean_session" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item label="连接超时（毫秒）" name="connect_timeout_ms">
-            <InputNumber min={0} style={{ width: '100%' }} />
-          </Form.Item>
+        <Form form={form} layout="vertical">
+          <Row gutter={16}>
+            <Col xs={24} sm={16}>
+              <Form.Item label="主机地址" name="host" rules={[{ required: true, message: '请输入主机地址' }]}>
+                <Input placeholder="127.0.0.1" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={8}>
+              <Form.Item label="端口" name="port" rules={[{ required: true, message: '请输入端口' }]}>
+                <InputNumber min={1} max={65535} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col xs={24} sm={12}>
+              <Form.Item label="客户端标识" name="client_id" rules={[{ required: true, message: '请输入客户端标识' }]}>
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item label="保活时间（秒）" name="keepalive_sec">
+                <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col xs={24} sm={12}>
+              <Form.Item label="用户名" name="username">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item label="密码" name="password">
+                <Input.Password />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col xs={24} sm={12}>
+              <Form.Item label="连接超时（毫秒）" name="connect_timeout_ms">
+                <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item label="清理会话" name="clean_session" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       </Modal>
     </>

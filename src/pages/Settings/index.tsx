@@ -340,7 +340,7 @@ const Settings: React.FC = () => {
   }, [messageApi, moduleImportMode, moduleImportSelection, selectedImportSections, showImportResult]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       {contextHolder}
       {modalContextHolder}
 

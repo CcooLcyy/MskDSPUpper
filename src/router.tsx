@@ -112,7 +112,7 @@ export const router = createBrowserRouter([
       {
         path: 'alerts-logs',
         element: (
-          <div style={{ color: '#aaa', fontSize: 16, padding: 40, textAlign: 'center' }}>
+          <div style={{ color: '#aaa', fontSize: 16, padding: 0, textAlign: 'center' }}>
             {'\u544a\u8b66\u4e0e\u65e5\u5fd7\u529f\u80fd\u5f00\u53d1\u4e2d'}
           </div>
         ),

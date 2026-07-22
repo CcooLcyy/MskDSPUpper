@@ -1,63 +1,66 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select } from 'antd';
-import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Typography } from 'antd';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import type { ModbusLinkConfig, ModbusLinkInfo, ModbusPoint, ModbusReadPlan, ModbusSerialConfig } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
+import ResizableSplit from '../../components/layout/ResizableSplit';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
 import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import ConnectionConfig from './components/ConnectionConfig';
-import StatusPanel from './components/StatusPanel';
-import OperationsPanel from './components/OperationsPanel';
 import PointTable from './components/PointTable';
 import MqttConfigPanel from './components/MqttConfigPanel';
 import { useProtocolShadowRealtime } from '../../components/protocol/protocol-realtime';
+import {
+  MODBUS_ADDRESS_BASE,
+  MODBUS_DATA_TYPE,
+  MODBUS_FUNCTION,
+  buildDuplicatePointTag,
+  createDefaultModbusPoint,
+  getAllowedDataTypes,
+  getAllowedRegCounts,
+  getDefaultRegCount,
+  getNextDuplicatePointAddress,
+  getMinimumAddress,
+} from './modbus-form-rules';
+import type { ModbusPointFormValues } from './modbus-form-rules';
+
+const { Text } = Typography;
 
 const TRANSPORT_TYPE_OPTIONS = [
-  { value: 1, label: '串口 (Serial)' },
-  { value: 2, label: 'MQTT 透传 (MQTT_UART)' },
+  { value: 1, label: '本地串口' },
+  { value: 2, label: 'MQTT 透传' },
 ];
 const ADDRESS_BASE_OPTIONS = [
   { value: 1, label: '0 基 (协议偏移)' },
   { value: 2, label: '1 基 (人类编号)' },
 ];
 const PARITY_OPTIONS = [
-  { value: 1, label: 'None' },
-  { value: 2, label: 'Odd' },
-  { value: 3, label: 'Even' },
+  { value: 1, label: '无校验' },
+  { value: 2, label: '奇校验' },
+  { value: 3, label: '偶校验' },
 ];
 const STOP_BITS_OPTIONS = [
   { value: 1, label: '1' },
   { value: 2, label: '2' },
 ];
-const READ_PLAN_MODE_OPTIONS = [
-  { value: 1, label: '逐点抄读 (POINT)' },
-  { value: 2, label: '区间抄读 (EXPLICIT)' },
-];
 const READ_FUNCTION_CODE_OPTIONS = [
-  { value: 1, label: '0x01 读线圈' },
   { value: 2, label: '0x03 读保持寄存器' },
   { value: 3, label: '0x04 读输入寄存器' },
 ];
 const ALL_FUNCTION_CODE_OPTIONS = [
+  { value: 1, label: '0x01 读线圈' },
   ...READ_FUNCTION_CODE_OPTIONS,
   { value: 4, label: '0x06 写单寄存器' },
   { value: 5, label: '0x10 写多寄存器' },
 ];
 const LIST_STATE_COLOR_MAP: Record<number, string> = {
+  0: '#8c8c8c',
   1: '#f44336',
   2: '#4caf50',
   3: '#ff9800',
 };
-const DATA_TYPE_OPTIONS = [
-  { value: 1, label: 'BOOL' },
-  { value: 2, label: 'UINT16' },
-  { value: 3, label: 'UINT32' },
-  { value: 4, label: 'INT16' },
-  { value: 5, label: 'INT32' },
-];
 const WORD_ORDER_OPTIONS = [
   { value: 0, label: '默认 (HL)' },
   { value: 1, label: 'HL' },
@@ -69,19 +72,60 @@ const BYTE_ORDER_OPTIONS = [
   { value: 2, label: 'BA' },
 ];
 
+const LINK_STATE_LABELS: Record<number, string> = {
+  0: '状态未知',
+  1: '已停止',
+  2: '运行中',
+  3: '待删除',
+};
+
+
+const MODBUS_DATA_TYPE_LABELS: Record<number, string> = {
+  1: 'BOOL',
+  2: 'UINT16',
+  3: 'UINT32',
+  4: 'INT16',
+  5: 'INT32',
+};
+
+interface LinkFormValues {
+  conn_name: string;
+  transport_type: number;
+  device_id: number;
+  poll_interval_ms: number;
+  address_base: number;
+  serial_device: string;
+  baud_rate: number;
+  data_bits: number;
+  parity: number;
+  stop_bits: number;
+  read_timeout_ms: number;
+  serial_port: string;
+  request_timeout_ms: number;
+  serial_byte_timeout_ms: number;
+  serial_frame_timeout_ms: number;
+  serial_est_size: number;
+}
+
 const ModbusRTU: React.FC = () => {
   const [links, setLinks] = useState<ModbusLinkInfo[]>([]);
   const [selectedConn, setSelectedConn] = useState<string | null>(null);
   const [points, setPoints] = useState<ModbusPoint[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pointsLoading, setPointsLoading] = useState(false);
   const [linkModalOpen, setLinkModalOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<ModbusLinkConfig | null>(null);
+  const [linkSubmitting, setLinkSubmitting] = useState(false);
   const [pointModalOpen, setPointModalOpen] = useState(false);
   const [editingPointIndex, setEditingPointIndex] = useState<number | null>(null);
+  const [pointSubmitting, setPointSubmitting] = useState(false);
+  const [readPlanSaving, setReadPlanSaving] = useState(false);
+  const [runtimeAction, setRuntimeAction] = useState<'start' | 'stop' | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
-  const [linkForm] = Form.useForm();
-  const [pointForm] = Form.useForm();
+  const [linkForm] = Form.useForm<LinkFormValues>();
+  const [pointForm] = Form.useForm<ModbusPointFormValues & { address_base: number }>();
   const [searchParams] = useSearchParams();
+  const pointLoadRequestRef = useRef(0);
 
   const selectedLink = links.find((l) => l.config?.conn_name === selectedConn) ?? null;
   const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY));
@@ -95,34 +139,62 @@ const ModbusRTU: React.FC = () => {
   );
 
   const transportType = Form.useWatch('transport_type', linkForm);
-  const readPlanMode = Form.useWatch('read_plan_mode', linkForm);
   const pointFunction = Form.useWatch('function', pointForm);
   const pointDataType = Form.useWatch('data_type', pointForm);
   const pointRegCount = Form.useWatch('reg_count', pointForm);
-  const isRegisterBoolPoint = pointDataType === 1 && (pointFunction === 2 || pointFunction === 3);
+  const pointAddressBase = Form.useWatch('address_base', pointForm);
+  const isCoilPoint = pointFunction === MODBUS_FUNCTION.READ_COILS;
+  const isRegisterBoolPoint = pointDataType === MODBUS_DATA_TYPE.BOOL
+    && (pointFunction === MODBUS_FUNCTION.READ_HOLDING_REGISTERS || pointFunction === MODBUS_FUNCTION.READ_INPUT_REGISTERS);
+  const pointDataTypeOptions = getAllowedDataTypes(pointFunction ?? MODBUS_FUNCTION.READ_HOLDING_REGISTERS)
+    .map((value) => ({ value, label: MODBUS_DATA_TYPE_LABELS[value] }));
+  const pointRegCountOptions = (isCoilPoint ? [1] : getAllowedRegCounts(pointDataType ?? MODBUS_DATA_TYPE.UINT16))
+    .map((value) => ({ value, label: `${value} 个寄存器` }));
+  const pointBitMax = (pointRegCount ?? 1) * 16 - 1;
+  const actionsDisabled = pointsLoading || pointSubmitting || linkSubmitting || readPlanSaving || runtimeAction !== null;
 
-  const refreshLinks = useCallback(async () => {
-    setLoading(true);
+  const refreshLinks = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setLoading(true);
+    }
     try {
       const list = await api.modbusRtuListLinks();
       setLinks(list);
       if (selectedConn && !list.some((item) => item.config?.conn_name === selectedConn)) {
         setSelectedConn(null);
+      } else if (!selectedConn && list.length === 1 && list[0].config?.conn_name) {
+        setSelectedConn(list[0].config.conn_name);
       }
     } catch (error) {
       messageApi.error(`刷新连接列表失败: ${error}`);
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   }, [messageApi, selectedConn]);
 
   const loadPoints = useCallback(async (connName: string) => {
+    const requestId = pointLoadRequestRef.current + 1;
+    pointLoadRequestRef.current = requestId;
+    setPoints([]);
+    setPointsLoading(true);
     try {
       const table = await api.modbusRtuGetPointTable(connName);
+      if (requestId !== pointLoadRequestRef.current) {
+        return;
+      }
       setPoints(table.points);
     } catch (error) {
+      if (requestId !== pointLoadRequestRef.current) {
+        return;
+      }
       setPoints([]);
       messageApi.error(`加载 ModbusRTU 点表失败: ${error}`);
+    } finally {
+      if (requestId === pointLoadRequestRef.current) {
+        setPointsLoading(false);
+      }
     }
   }, [messageApi]);
 
@@ -172,7 +244,7 @@ const ModbusRTU: React.FC = () => {
     linkForm.resetFields();
     linkForm.setFieldsValue({
       conn_name: '',
-      transport_type: 1,
+      transport_type: 2,
       device_id: 1,
       poll_interval_ms: 1000,
       address_base: 1,
@@ -182,12 +254,10 @@ const ModbusRTU: React.FC = () => {
       parity: 1,
       stop_bits: 1,
       read_timeout_ms: 0,
-      read_plan_mode: 1,
-      read_plan_blocks: [],
       serial_port: 'RS485-1',
-      request_timeout_ms: 1000,
-      serial_byte_timeout_ms: 2000,
-      serial_frame_timeout_ms: 3000,
+      request_timeout_ms: 3000,
+      serial_byte_timeout_ms: 100,
+      serial_frame_timeout_ms: 100,
       serial_est_size: 256,
     });
     setLinkModalOpen(true);
@@ -216,16 +286,21 @@ const ModbusRTU: React.FC = () => {
       serial_est_size: c.serial_est_size,
       poll_interval_ms: c.poll_interval_ms,
       address_base: c.address_base || 1,
-      read_plan_mode: c.read_plan?.mode ?? 1,
-      read_plan_blocks: c.read_plan?.blocks ?? [],
     });
     setLinkModalOpen(true);
   }, [selectedLink, linkForm]);
 
   const handleLinkSubmit = useCallback(async () => {
     let renameCompleted = false;
+    let values: LinkFormValues;
     try {
-      const values = await linkForm.validateFields();
+      values = await linkForm.validateFields();
+    } catch {
+      return;
+    }
+
+    setLinkSubmitting(true);
+    try {
       const serial: ModbusSerialConfig | null = values.transport_type === 1
         ? {
           device: values.serial_device || '',
@@ -246,21 +321,15 @@ const ModbusRTU: React.FC = () => {
             }
             : null);
 
-      const readPlan: ModbusReadPlan | null = values.read_plan_mode
+      const readPlan: ModbusReadPlan = editingLink?.read_plan
         ? {
-          mode: values.read_plan_mode,
-          blocks: values.read_plan_mode === 2
-            ? (values.read_plan_blocks || []).map((block: { function: number; start: number; quantity: number }) => ({
-              function: block.function,
-              start: block.start,
-              quantity: block.quantity,
-            }))
-            : [],
+          mode: editingLink.read_plan.mode,
+          blocks: editingLink.read_plan.blocks.map((block) => ({ ...block })),
         }
-        : null;
+        : { mode: 1, blocks: [] };
 
       const config: ModbusLinkConfig = {
-        conn_name: values.conn_name,
+        conn_name: String(values.conn_name).trim(),
         serial,
         device_id: values.device_id ?? 1,
         poll_interval_ms: values.poll_interval_ms ?? 1000,
@@ -268,9 +337,9 @@ const ModbusRTU: React.FC = () => {
         read_plan: readPlan,
         transport_type: values.transport_type ?? 1,
         serial_port: values.serial_port || 'RS485-1',
-        request_timeout_ms: values.request_timeout_ms ?? 1000,
-        serial_byte_timeout_ms: values.serial_byte_timeout_ms ?? 2000,
-        serial_frame_timeout_ms: values.serial_frame_timeout_ms ?? 3000,
+        request_timeout_ms: values.request_timeout_ms ?? 3000,
+        serial_byte_timeout_ms: values.serial_byte_timeout_ms ?? 100,
+        serial_frame_timeout_ms: values.serial_frame_timeout_ms ?? 100,
         serial_est_size: values.serial_est_size ?? 256,
       };
 
@@ -323,8 +392,43 @@ const ModbusRTU: React.FC = () => {
         return;
       }
       messageApi.error(`保存连接失败: ${error}`);
+    } finally {
+      setLinkSubmitting(false);
     }
   }, [editingLink, linkForm, messageApi, refreshLinks, runSelectedLinkStopped]);
+
+  const handleReadPlanSave = useCallback(async (readPlan: ModbusReadPlan): Promise<boolean> => {
+    if (!selectedLink?.config || !selectedConn) {
+      return false;
+    }
+    setReadPlanSaving(true);
+    try {
+      const config: ModbusLinkConfig = {
+        ...selectedLink.config,
+        read_plan: {
+          mode: readPlan.mode,
+          blocks: readPlan.blocks.map((block) => ({ ...block })),
+        },
+      };
+      const restartResult = await runSelectedLinkStopped(
+        () => api.modbusRtuUpsertLink(config, false).then(() => undefined),
+      );
+      await refreshLinks({ silent: true });
+      if (restartResult.restartError) {
+        messageApi.warning(`读取策略已应用，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('读取策略已应用并重新启动连接');
+      } else {
+        messageApi.success('读取策略已应用');
+      }
+      return true;
+    } catch (error) {
+      messageApi.error(`应用读取策略失败: ${error}`);
+      return false;
+    } finally {
+      setReadPlanSaving(false);
+    }
+  }, [messageApi, refreshLinks, runSelectedLinkStopped, selectedConn, selectedLink]);
 
   const handleDeleteLink = useCallback(async (connName: string) => {
     try {
@@ -398,79 +502,124 @@ const ModbusRTU: React.FC = () => {
   }, [links, messageApi, refreshLinks]);
 
   const handleStartLink = useCallback(async () => {
-    if (!selectedConn) {
+    if (!selectedConn || runtimeAction !== null || selectedLink?.state !== 1) {
       return;
     }
+    setRuntimeAction('start');
     try {
       await api.modbusRtuStartLink(selectedConn);
       messageApi.success('启动请求已发送');
-      window.setTimeout(() => {
-        void refreshLinks();
-      }, 1000);
+      await refreshLinks({ silent: true });
+      window.setTimeout(() => void refreshLinks({ silent: true }), 1000);
     } catch (error) {
       messageApi.error(`启动失败: ${error}`);
+    } finally {
+      setRuntimeAction(null);
     }
-  }, [messageApi, refreshLinks, selectedConn]);
+  }, [messageApi, refreshLinks, runtimeAction, selectedConn, selectedLink?.state]);
 
   const handleStopLink = useCallback(async () => {
-    if (!selectedConn) {
+    if (!selectedConn || runtimeAction !== null || selectedLink?.state !== 2) {
       return;
     }
+    setRuntimeAction('stop');
     try {
       await api.modbusRtuStopLink(selectedConn);
       messageApi.success('停止请求已发送');
-      window.setTimeout(() => {
-        void refreshLinks();
-      }, 1000);
+      await refreshLinks({ silent: true });
+      window.setTimeout(() => void refreshLinks({ silent: true }), 1000);
     } catch (error) {
       messageApi.error(`停止失败: ${error}`);
+    } finally {
+      setRuntimeAction(null);
     }
-  }, [messageApi, refreshLinks, selectedConn]);
+  }, [messageApi, refreshLinks, runtimeAction, selectedConn, selectedLink?.state]);
 
   const openCreatePoint = useCallback(() => {
     setEditingPointIndex(null);
     pointForm.resetFields();
     pointForm.setFieldsValue({
-      tag: '',
-      function: 1,
-      address: 0,
-      reg_count: 1,
-      data_type: 2,
-      scale: 1,
-      offset: 0,
-      deadband: 0,
-      word_order: 0,
-      byte_order: 0,
-      bit_index: null,
+      ...createDefaultModbusPoint(selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO),
+      address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
     });
     setPointModalOpen(true);
-  }, [pointForm]);
+  }, [pointForm, selectedLink?.config?.address_base]);
 
   const openEditPoint = useCallback((index: number) => {
     const point = points[index];
     setEditingPointIndex(index);
     pointForm.setFieldsValue({
       tag: point.tag,
-      function: point.function,
+      function: point.function as ModbusPointFormValues['function'],
       address: point.address,
       reg_count: point.reg_count,
-      data_type: point.data_type,
+      data_type: point.data_type as ModbusPointFormValues['data_type'],
       scale: point.scale,
       offset: point.offset,
       deadband: point.deadband,
       word_order: point.word_order,
       byte_order: point.byte_order,
       bit_index: point.bit_index ?? null,
+      address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
     });
     setPointModalOpen(true);
-  }, [pointForm, points]);
+  }, [pointForm, points, selectedLink?.config?.address_base]);
+
+  const openCopyPoint = useCallback((index: number) => {
+    const point = points[index];
+    if (!point) {
+      return;
+    }
+
+    setEditingPointIndex(null);
+    pointForm.resetFields();
+    pointForm.setFieldsValue({
+      tag: buildDuplicatePointTag(point.tag, points.map((item) => item.tag)),
+      function: point.function as ModbusPointFormValues['function'],
+      address: getNextDuplicatePointAddress(point, points),
+      reg_count: point.reg_count,
+      data_type: point.data_type as ModbusPointFormValues['data_type'],
+      scale: point.scale,
+      offset: point.offset,
+      deadband: point.deadband,
+      word_order: point.word_order,
+      byte_order: point.byte_order,
+      bit_index: point.bit_index ?? null,
+      address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
+    });
+    setPointModalOpen(true);
+  }, [pointForm, points, selectedLink?.config?.address_base]);
 
   const handlePointSubmit = useCallback(async () => {
     if (!selectedConn) {
       return;
     }
+    let values: ModbusPointFormValues & { address_base: number };
     try {
-      const values = await pointForm.validateFields();
+      values = await pointForm.validateFields();
+    } catch {
+      return;
+    }
+
+    const allowedDataTypes = getAllowedDataTypes(values.function);
+    const allowedRegCounts = values.function === MODBUS_FUNCTION.READ_COILS
+      ? [1]
+      : getAllowedRegCounts(values.data_type);
+    if (!allowedDataTypes.includes(values.data_type) || !allowedRegCounts.includes(values.reg_count)) {
+      messageApi.error('功能码、数据类型和寄存器数不匹配');
+      return;
+    }
+    if (values.address < getMinimumAddress(values.address_base)) {
+      messageApi.error('点位地址不符合当前地址基准');
+      return;
+    }
+    if (values.address > 65535 || (values.reg_count > 1 && values.address >= 65535)) {
+      messageApi.error('点位地址超出寄存器可用范围');
+      return;
+    }
+
+    setPointSubmitting(true);
+    try {
       const newPoint: ModbusPoint = {
         tag: values.tag,
         function: values.function,
@@ -479,10 +628,13 @@ const ModbusRTU: React.FC = () => {
         scale: values.scale ?? 1,
         offset: values.offset ?? 0,
         deadband: values.deadband ?? 0,
-        reg_count: values.reg_count ?? 0,
+        reg_count: values.reg_count ?? getDefaultRegCount(values.data_type) ?? 1,
         word_order: values.word_order ?? 0,
         byte_order: values.byte_order ?? 0,
-        bit_index: isRegisterBoolPoint ? (values.bit_index ?? null) : null,
+        bit_index: values.data_type === MODBUS_DATA_TYPE.BOOL
+          && (values.function === MODBUS_FUNCTION.READ_HOLDING_REGISTERS || values.function === MODBUS_FUNCTION.READ_INPUT_REGISTERS)
+          ? (values.bit_index ?? null)
+          : null,
       };
       const newPoints = editingPointIndex !== null
         ? points.map((point, index) => (index === editingPointIndex ? newPoint : point))
@@ -498,13 +650,16 @@ const ModbusRTU: React.FC = () => {
       }
     } catch (error) {
       messageApi.error(`保存点位失败: ${error}`);
+    } finally {
+      setPointSubmitting(false);
     }
-  }, [editingPointIndex, isRegisterBoolPoint, messageApi, pointForm, points, selectedConn, runSelectedLinkStopped]);
+  }, [editingPointIndex, messageApi, pointForm, points, runSelectedLinkStopped, selectedConn]);
 
   const handleDeletePoint = useCallback(async (index: number) => {
-    if (!selectedConn) {
+    if (!selectedConn || pointSubmitting) {
       return;
     }
+    setPointSubmitting(true);
     try {
       const newPoints = points.filter((_point, pointIndex) => pointIndex !== index);
       const restartResult = await runSelectedLinkStopped(() => api.modbusRtuUpsertPointTable(selectedConn, newPoints, true));
@@ -517,13 +672,16 @@ const ModbusRTU: React.FC = () => {
       }
     } catch (error) {
       messageApi.error(`删除点位失败: ${error}`);
+    } finally {
+      setPointSubmitting(false);
     }
-  }, [messageApi, points, selectedConn, runSelectedLinkStopped]);
+  }, [messageApi, pointSubmitting, points, selectedConn, runSelectedLinkStopped]);
 
   const handleDeleteAllPoints = useCallback(async () => {
-    if (!selectedConn) {
+    if (!selectedConn || pointSubmitting) {
       return;
     }
+    setPointSubmitting(true);
     try {
       const restartResult = await runSelectedLinkStopped(() => api.modbusRtuUpsertPointTable(selectedConn, [], true));
       setPoints([]);
@@ -535,18 +693,26 @@ const ModbusRTU: React.FC = () => {
       }
     } catch (error) {
       messageApi.error(`删除全部点位失败: ${error}`);
+    } finally {
+      setPointSubmitting(false);
     }
-  }, [messageApi, selectedConn, runSelectedLinkStopped]);
+  }, [messageApi, pointSubmitting, selectedConn, runSelectedLinkStopped]);
 
   useEffect(() => {
     void refreshLinks();
+    const refreshTimer = window.setInterval(() => {
+      void refreshLinks({ silent: true });
+    }, 5000);
+    return () => window.clearInterval(refreshTimer);
   }, [refreshLinks]);
 
   useEffect(() => {
     if (selectedConn) {
       void loadPoints(selectedConn);
     } else {
+      pointLoadRequestRef.current += 1;
       setPoints([]);
+      setPointsLoading(false);
     }
   }, [selectedConn, loadPoints]);
 
@@ -556,168 +722,149 @@ const ModbusRTU: React.FC = () => {
       open={linkModalOpen}
       onCancel={() => setLinkModalOpen(false)}
       onOk={() => void handleLinkSubmit()}
-      width={720}
+      okText={editingLink ? '保存修改' : '创建连接'}
+      cancelText="取消"
+      confirmLoading={linkSubmitting}
+      maskClosable={!linkSubmitting}
+      closable={!linkSubmitting}
+      width={840}
+      className="modbus-config-modal"
       destroyOnClose
     >
-      <Form form={linkForm} layout="vertical" size="small" autoComplete="off">
-        <Row gutter={16}>
-          <Col span={8}>
-            <Form.Item label="连接名称" name="conn_name" rules={[{ required: true, message: '请输入连接名称' }]}>
-              <Input autoComplete="off" />
-            </Form.Item>
-          </Col>
-          <Col span={8}>
-            <Form.Item label="传输类型" name="transport_type" rules={[{ required: true, message: '请选择传输类型' }]}>
-              <Select options={TRANSPORT_TYPE_OPTIONS} placeholder="请选择传输类型" />
-            </Form.Item>
-          </Col>
-          <Col span={8}>
-            <Form.Item label="设备地址" name="device_id" rules={[{ required: true, message: '请输入设备地址' }]}>
-              <InputNumber min={1} max={247} style={{ width: '100%' }} />
-            </Form.Item>
-          </Col>
-        </Row>
-
-        {transportType === 1 ? (
-          <>
-            <Row gutter={16}>
-              <Col span={6}>
-                <Form.Item label="串口设备" name="serial_device" rules={[{ required: true, message: '请输入串口设备' }]}>
-                  <Input placeholder="/dev/ttyUSB0" />
-                </Form.Item>
-              </Col>
-              <Col span={4}>
-                <Form.Item label="波特率" name="baud_rate" rules={[{ required: true, message: '请输入波特率' }]}>
-                  <InputNumber style={{ width: '100%' }} placeholder="9600" />
-                </Form.Item>
-              </Col>
-              <Col span={4}>
-                <Form.Item label="数据位" name="data_bits" rules={[{ required: true, message: '请输入数据位' }]}>
-                  <InputNumber min={5} max={8} style={{ width: '100%' }} />
-                </Form.Item>
-              </Col>
-              <Col span={5}>
-                <Form.Item label="校验位" name="parity" rules={[{ required: true, message: '请选择校验位' }]}>
-                  <Select options={PARITY_OPTIONS} />
-                </Form.Item>
-              </Col>
-              <Col span={5}>
-                <Form.Item label="停止位" name="stop_bits" rules={[{ required: true, message: '请选择停止位' }]}>
-                  <Select options={STOP_BITS_OPTIONS} />
-                </Form.Item>
-              </Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={6}>
-                <Form.Item label="读超时（毫秒）" name="read_timeout_ms">
-                  <InputNumber min={0} style={{ width: '100%' }} placeholder="0=默认" />
-                </Form.Item>
-              </Col>
-            </Row>
-          </>
-        ) : null}
-
-        {transportType === 2 ? (
+      <Form form={linkForm} layout="vertical" autoComplete="off">
+        <div className="modbus-form-section">
+          <Text className="modbus-form-section-title">基础信息</Text>
           <Row gutter={16}>
-            <Col span={6}>
-              <Form.Item label="远端串口标识" name="serial_port" rules={[{ required: true, message: '请输入远端串口标识' }]}>
-                <Input placeholder="RS485-1" />
+            <Col xs={24} sm={12} lg={8}>
+              <Form.Item
+                label="连接名称"
+                name="conn_name"
+                rules={[
+                  { required: true, message: '请输入连接名称' },
+                  { max: 64, message: '连接名称不能超过 64 个字符' },
+                  {
+                    validator: async (_, value: string) => {
+                      const name = value?.trim();
+                      if (!name) {
+                        throw new Error('连接名称不能只包含空格');
+                      }
+                      if (links.some((item) => item.config?.conn_name === name && item.config?.conn_name !== editingLink?.conn_name)) {
+                        throw new Error('连接名称已存在');
+                      }
+                    },
+                  },
+                ]}
+              >
+                <Input autoComplete="off" placeholder="例如：电表-1" />
               </Form.Item>
             </Col>
-            <Col span={6}>
-              <Form.Item label="请求超时（毫秒）" name="request_timeout_ms" rules={[{ required: true, message: '请输入请求超时' }]}>
-                <InputNumber min={0} style={{ width: '100%' }} />
+            <Col xs={24} sm={12} lg={8}>
+              <Form.Item label="传输方式" name="transport_type" rules={[{ required: true, message: '请选择传输方式' }]}>
+                <Select options={TRANSPORT_TYPE_OPTIONS} />
               </Form.Item>
             </Col>
-            <Col span={6}>
-              <Form.Item label="字节超时（毫秒）" name="serial_byte_timeout_ms" rules={[{ required: true, message: '请输入字节超时' }]}>
-                <InputNumber min={0} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={6}>
-              <Form.Item label="帧超时（毫秒）" name="serial_frame_timeout_ms" rules={[{ required: true, message: '请输入帧超时' }]}>
-                <InputNumber min={0} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={6}>
-              <Form.Item label="估算帧长度" name="serial_est_size" rules={[{ required: true, message: '请输入估算帧长度' }]}>
-                <InputNumber min={0} style={{ width: '100%' }} />
+            <Col xs={24} sm={12} lg={8}>
+              <Form.Item
+                label="从站地址（1-247）"
+                name="device_id"
+                rules={[{ required: true, message: '请输入 1 到 247 的从站地址' }]}
+              >
+                <InputNumber min={1} max={247} precision={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
+        </div>
+
+        <div className="modbus-form-section">
+          <Text className="modbus-form-section-title">串口通信参数</Text>
+          <Text className="modbus-form-section-hint">
+            MQTT 透传模式下，这些参数表示远端 uartManager 的串口配置。
+          </Text>
+          <Row gutter={16}>
+            <Col xs={24} sm={12} lg={8}>
+              <Form.Item
+                label={transportType === 2 ? '远端串口标识' : '本地串口设备'}
+                name={transportType === 2 ? 'serial_port' : 'serial_device'}
+                rules={[{ required: true, message: transportType === 2 ? '请输入远端串口标识' : '请输入本地串口设备' }]}
+              >
+                {transportType === 2 ? <Input placeholder="例如：RS485-1" /> : <Input placeholder="例如：/dev/ttyUSB0" />}
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <Form.Item label="波特率" name="baud_rate" rules={[{ required: true, message: '请输入波特率' }]}>
+                <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="9600" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <Form.Item label="数据位" name="data_bits" rules={[{ required: true, message: '请选择数据位' }]}>
+                <InputNumber min={5} max={8} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <Form.Item label="校验位" name="parity" rules={[{ required: true, message: '请选择校验位' }]}>
+                <Select options={PARITY_OPTIONS} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <Form.Item label="停止位" name="stop_bits" rules={[{ required: true, message: '请选择停止位' }]}>
+                <Select options={STOP_BITS_OPTIONS} />
+              </Form.Item>
+            </Col>
+            {transportType === 1 ? (
+              <Col xs={24} sm={12} lg={8}>
+                <Form.Item label="读取超时（毫秒）" name="read_timeout_ms">
+                  <InputNumber min={0} precision={0} style={{ width: '100%' }} addonAfter="ms" />
+                </Form.Item>
+              </Col>
+            ) : null}
+          </Row>
+        </div>
+
+        {transportType === 2 ? (
+          <div className="modbus-form-section">
+            <Text className="modbus-form-section-title">透传超时参数</Text>
+            <Text className="modbus-form-section-hint">填 0 表示使用模块默认值。</Text>
+            <Row gutter={16}>
+              <Col xs={24} sm={12} lg={8}>
+                <Form.Item label="请求超时（毫秒）" name="request_timeout_ms" rules={[{ required: true, message: '请输入请求超时' }]}>
+                  <InputNumber min={0} precision={0} style={{ width: '100%' }} addonAfter="ms" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12} lg={8}>
+                <Form.Item label="字节超时（毫秒）" name="serial_byte_timeout_ms" rules={[{ required: true, message: '请输入字节超时' }]}>
+                  <InputNumber min={0} precision={0} style={{ width: '100%' }} addonAfter="ms" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12} lg={8}>
+                <Form.Item label="帧超时（毫秒）" name="serial_frame_timeout_ms" rules={[{ required: true, message: '请输入帧超时' }]}>
+                  <InputNumber min={0} precision={0} style={{ width: '100%' }} addonAfter="ms" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12} lg={8}>
+                <Form.Item label="预计最大响应字节数" name="serial_est_size" rules={[{ required: true, message: '请输入预计最大响应字节数' }]}>
+                  <InputNumber min={1} precision={0} style={{ width: '100%' }} addonAfter="字节" />
+                </Form.Item>
+              </Col>
+            </Row>
+          </div>
         ) : null}
 
-        <Row gutter={16}>
-          <Col span={8}>
-            <Form.Item label="轮询间隔（毫秒）" name="poll_interval_ms" rules={[{ required: true, message: '请输入轮询间隔' }]}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
-          </Col>
-          <Col span={8}>
-            <Form.Item label="地址基准" name="address_base" rules={[{ required: true, message: '请选择地址基准' }]}>
-              <Select options={ADDRESS_BASE_OPTIONS} />
-            </Form.Item>
-          </Col>
-          <Col span={8}>
-            <Form.Item label="抄读模式" name="read_plan_mode" rules={[{ required: true, message: '请选择抄读模式' }]}>
-              <Select options={READ_PLAN_MODE_OPTIONS} />
-            </Form.Item>
-          </Col>
-        </Row>
+        <div className="modbus-form-section">
+          <Text className="modbus-form-section-title">采集基础参数</Text>
+          <Row gutter={16}>
+            <Col xs={24} sm={12} lg={8}>
+              <Form.Item label="轮询周期（毫秒）" name="poll_interval_ms" rules={[{ required: true, message: '请输入轮询周期' }]}>
+                <InputNumber min={1} precision={0} style={{ width: '100%' }} addonAfter="ms" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={8}>
+              <Form.Item label="地址基准" name="address_base" rules={[{ required: true, message: '请选择地址基准' }]}>
+                <Select options={ADDRESS_BASE_OPTIONS} />
+              </Form.Item>
+            </Col>
+          </Row>
+        </div>
 
-        {readPlanMode === 2 ? (
-          <Form.List name="read_plan_blocks">
-            {(fields, { add, remove }) => (
-              <>
-                {fields.map((field) => (
-                  <Row gutter={16} key={field.key} align="middle">
-                    <Col span={8}>
-                      <Form.Item
-                        label="功能码"
-                        name={[field.name, 'function']}
-                        rules={[{ required: true, message: '请选择功能码' }]}
-                      >
-                        <Select options={READ_FUNCTION_CODE_OPTIONS} />
-                      </Form.Item>
-                    </Col>
-                    <Col span={6}>
-                      <Form.Item
-                        label="起始地址"
-                        name={[field.name, 'start']}
-                        rules={[{ required: true, message: '请输入起始地址' }]}
-                      >
-                        <InputNumber min={0} style={{ width: '100%' }} />
-                      </Form.Item>
-                    </Col>
-                    <Col span={6}>
-                      <Form.Item
-                        label="数量"
-                        name={[field.name, 'quantity']}
-                        rules={[{ required: true, message: '请输入数量' }]}
-                      >
-                        <InputNumber min={1} style={{ width: '100%' }} />
-                      </Form.Item>
-                    </Col>
-                    <Col span={4}>
-                      <Button
-                        danger
-                        type="text"
-                        icon={<MinusCircleOutlined />}
-                        style={{ marginTop: 30 }}
-                        onClick={() => remove(field.name)}
-                      >
-                        删除
-                      </Button>
-                    </Col>
-                  </Row>
-                ))}
-                <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add()}>
-                  添加区间
-                </Button>
-              </>
-            )}
-          </Form.List>
-        ) : null}
       </Form>
     </Modal>
   );
@@ -728,132 +875,238 @@ const ModbusRTU: React.FC = () => {
       open={pointModalOpen}
       onCancel={() => setPointModalOpen(false)}
       onOk={() => void handlePointSubmit()}
-      width={640}
+      okText={editingPointIndex !== null ? '保存修改' : '添加点位'}
+      cancelText="取消"
+      confirmLoading={pointSubmitting}
+      maskClosable={!pointSubmitting}
+      closable={!pointSubmitting}
+      width={720}
+      className="modbus-config-modal"
       destroyOnClose
     >
-      <Form form={pointForm} layout="vertical" size="small">
+      <Form form={pointForm} layout="vertical">
+        <Form.Item name="address_base" hidden>
+          <InputNumber />
+        </Form.Item>
         <Row gutter={16}>
-          <Col span={8}>
-            <Form.Item label="标签" name="tag" rules={[{ required: true, message: '请输入标签' }]}>
-              <Input />
+          <Col xs={24} sm={12} lg={8}>
+            <Form.Item
+              label="Tag"
+              name="tag"
+              rules={[
+                { required: true, message: '请输入 Tag' },
+                { max: 128, message: 'Tag 不能超过 128 个字符' },
+                {
+                  validator: async (_, value: string) => {
+                    const tag = value?.trim();
+                    if (!tag) {
+                      throw new Error('Tag 不能只包含空格');
+                    }
+                    if (points.some((point, index) => point.tag === tag && index !== editingPointIndex)) {
+                      throw new Error('Tag 已存在');
+                    }
+                  },
+                },
+              ]}
+            >
+              <Input placeholder="例如：active_power" />
             </Form.Item>
           </Col>
-          <Col span={8}>
+          <Col xs={24} sm={12} lg={8}>
             <Form.Item label="功能码" name="function" rules={[{ required: true, message: '请选择功能码' }]}>
-              <Select options={ALL_FUNCTION_CODE_OPTIONS} />
+              <Select
+                options={ALL_FUNCTION_CODE_OPTIONS}
+                onChange={(value: number) => {
+                  const allowedTypes = getAllowedDataTypes(value);
+                  const currentType = pointForm.getFieldValue('data_type');
+                  const nextType = allowedTypes.includes(currentType) ? currentType : allowedTypes[0];
+                  const registerBool = nextType === MODBUS_DATA_TYPE.BOOL
+                    && (value === MODBUS_FUNCTION.READ_HOLDING_REGISTERS || value === MODBUS_FUNCTION.READ_INPUT_REGISTERS);
+                  pointForm.setFieldsValue({
+                    data_type: nextType,
+                    reg_count: value === MODBUS_FUNCTION.READ_COILS
+                      ? 1
+                      : (getDefaultRegCount(nextType) ?? 1),
+                    bit_index: registerBool ? (pointForm.getFieldValue('bit_index') ?? 0) : null,
+                  });
+                }}
+              />
             </Form.Item>
           </Col>
-          <Col span={8}>
-            <Form.Item label="地址" name="address" rules={[{ required: true, message: '请输入地址' }]}>
-              <InputNumber min={0} style={{ width: '100%' }} />
+          <Col xs={24} sm={12} lg={8}>
+            <Form.Item
+              label={`地址（${pointAddressBase === MODBUS_ADDRESS_BASE.ONE ? '1 基' : '0 基'}）`}
+              name="address"
+              rules={[{ required: true, message: '请输入地址' }]}
+            >
+              <InputNumber
+                min={getMinimumAddress(pointAddressBase)}
+                max={65535}
+                precision={0}
+                style={{ width: '100%' }}
+              />
             </Form.Item>
           </Col>
         </Row>
         <Row gutter={16}>
-          <Col span={6}>
-            <Form.Item label="寄存器数" name="reg_count">
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
-          </Col>
-          <Col span={6}>
+          <Col xs={24} sm={12} lg={8}>
             <Form.Item label="数据类型" name="data_type" rules={[{ required: true, message: '请选择数据类型' }]}>
-              <Select options={DATA_TYPE_OPTIONS} />
+              <Select
+                options={pointDataTypeOptions}
+                onChange={(value: number) => {
+                  const registerBool = value === MODBUS_DATA_TYPE.BOOL
+                    && (pointFunction === MODBUS_FUNCTION.READ_HOLDING_REGISTERS || pointFunction === MODBUS_FUNCTION.READ_INPUT_REGISTERS);
+                  pointForm.setFieldsValue({
+                    reg_count: pointFunction === MODBUS_FUNCTION.READ_COILS
+                      ? 1
+                      : (getDefaultRegCount(value) ?? 1),
+                    bit_index: registerBool ? 0 : null,
+                  });
+                }}
+              />
             </Form.Item>
           </Col>
-          <Col span={6}>
-            <Form.Item label="缩放系数" name="scale">
-              <InputNumber step={0.01} style={{ width: '100%' }} />
+          <Col xs={24} sm={12} lg={8}>
+            <Form.Item label="寄存器数" name="reg_count" rules={[{ required: true, message: '请选择寄存器数' }]}>
+              <Select options={pointRegCountOptions} />
             </Form.Item>
           </Col>
-          <Col span={6}>
-            <Form.Item label="偏移量" name="offset">
-              <InputNumber step={0.01} style={{ width: '100%' }} />
-            </Form.Item>
-          </Col>
-        </Row>
-        <Row gutter={16}>
-          <Col span={8}>
-            <Form.Item label="死区" name="deadband">
-              <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
-            </Form.Item>
-          </Col>
-          <Col span={8}>
-            <Form.Item label="字序" name="word_order">
-              <Select options={WORD_ORDER_OPTIONS} />
-            </Form.Item>
-          </Col>
-          <Col span={8}>
-            <Form.Item label="字节序" name="byte_order">
-              <Select options={BYTE_ORDER_OPTIONS} />
-            </Form.Item>
-          </Col>
-        </Row>
-        {isRegisterBoolPoint ? (
-          <Row gutter={16}>
-            <Col span={8}>
+          {isRegisterBoolPoint ? (
+            <Col xs={24} sm={12} lg={8}>
               <Form.Item
                 label="位索引"
                 name="bit_index"
                 rules={[{ required: true, message: '请输入位索引' }]}
               >
-                <InputNumber min={0} max={(pointRegCount ?? 1) === 2 ? 31 : 15} style={{ width: '100%' }} />
+                <InputNumber min={0} max={pointBitMax} precision={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
-          </Row>
+          ) : null}
+        </Row>
+        {pointDataType !== MODBUS_DATA_TYPE.BOOL ? (
+          <div className="modbus-form-section">
+            <Text className="modbus-form-section-title">工程量换算</Text>
+            <Row gutter={16}>
+              <Col xs={24} sm={12} lg={8}>
+                <Form.Item label="缩放系数" name="scale">
+                  <InputNumber step={0.01} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12} lg={8}>
+                <Form.Item label="偏移量" name="offset">
+                  <InputNumber step={0.01} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              {pointFunction !== MODBUS_FUNCTION.WRITE_SINGLE_REGISTER
+                && pointFunction !== MODBUS_FUNCTION.WRITE_MULTIPLE_REGISTERS ? (
+                  <Col xs={24} sm={12} lg={8}>
+                    <Form.Item label="死区" name="deadband">
+                      <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                ) : null}
+              {(pointDataType === MODBUS_DATA_TYPE.UINT32 || pointDataType === MODBUS_DATA_TYPE.INT32) ? (
+                <Col xs={24} sm={12} lg={8}>
+                  <Form.Item label="字序" name="word_order">
+                    <Select options={WORD_ORDER_OPTIONS} />
+                  </Form.Item>
+                </Col>
+              ) : null}
+              <Col xs={24} sm={12} lg={8}>
+                <Form.Item label="字节序" name="byte_order">
+                  <Select options={BYTE_ORDER_OPTIONS} />
+                </Form.Item>
+              </Col>
+            </Row>
+          </div>
         ) : null}
       </Form>
     </Modal>
   );
 
   return (
-    <div className="protocol-page">
+    <div className="protocol-page modbus-page">
       {contextHolder}
 
       {currentView === 'config' ? (
-        <div className="protocol-config-view">
-          <div className="protocol-top-row">
+        <ResizableSplit
+          className="protocol-config-view"
+          orientation="vertical"
+          defaultSize={360}
+          minSize={240}
+          maxSize={620}
+          storageKey="mskdsp.layout.modbus-rtu.config"
+        >
+          <ResizableSplit
+            className="protocol-top-row"
+            defaultSize={240}
+            minSize={200}
+            maxSize={420}
+            storageKey="mskdsp.layout.modbus-rtu.connection"
+          >
             <ProtocolConnectionList
               title={'\u8fde\u63a5\u5217\u8868'}
               addButtonText={'\u65b0\u589e\u8fde\u63a5'}
+              width="100%"
               links={links}
               selectedConn={selectedConn}
               loading={loading}
-              onSelect={setSelectedConn}
+              actionsDisabled={actionsDisabled}
+              onSelect={(connName) => {
+                if (!actionsDisabled) {
+                  setSelectedConn(connName);
+                }
+              }}
               onCreate={openCreateLink}
               onCopy={(connName) => void handleCopyLink(connName)}
               onDelete={(connName) => void handleDeleteLink(connName)}
               onRefresh={() => void refreshLinks()}
               getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
+              getDescription={(item) => {
+                const config = item.config;
+                if (!config) {
+                  return LINK_STATE_LABELS[item.state] ?? '状态未知';
+                }
+                const transport = config.transport_type === 2 ? 'MQTT 透传' : '本地串口';
+                return `${LINK_STATE_LABELS[item.state] ?? '状态未知'} · ${transport} · 从站 ${config.device_id}`;
+              }}
               getDeleteTitle={(connName) => `\u786e\u8ba4\u5220\u9664 ${connName}\uff1f`}
             />
 
-            <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
-              <ConnectionConfig link={selectedLink} onEdit={openEditLink} />
-            </div>
-
-            <div className="protocol-side-column">
-              <StatusPanel link={selectedLink} />
-              <OperationsPanel
-                selectedConn={selectedConn}
+            <div className="modbus-connection-shell">
+              <ConnectionConfig
+                link={selectedLink}
+                busy={actionsDisabled}
+                runtimeAction={runtimeAction}
+                globalAction={<MqttConfigPanel />}
+                onEdit={openEditLink}
                 onStart={() => void handleStartLink()}
                 onStop={() => void handleStopLink()}
-                extraAction={<MqttConfigPanel block />}
               />
             </div>
-          </div>
+          </ResizableSplit>
 
           <PointTable
+            key={selectedConn ?? 'no-connection'}
             points={points}
             selectedConn={selectedConn}
             realtimeByTag={realtimeByTag}
             realtimeRevisionByTag={realtimeRevisionByTag}
             realtimeLoading={realtimeLoading}
+            pointsLoading={pointsLoading}
+            actionsDisabled={actionsDisabled}
+            readPlan={selectedLink?.config?.read_plan ?? { mode: 1, blocks: [] }}
+            addressBase={selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO}
+            readPlanSaving={readPlanSaving}
+            runtimeRunning={selectedLink?.state === 2}
+            onReadPlanSave={handleReadPlanSave}
             onAdd={openCreatePoint}
             onEdit={(index) => openEditPoint(index)}
+            onCopy={(index) => openCopyPoint(index)}
             onDelete={(index) => void handleDeletePoint(index)}
             onDeleteAll={() => void handleDeleteAllPoints()}
           />
-        </div>
+        </ResizableSplit>
       ) : (
         <Card title="报文日志" size="small" bordered className="protocol-log-card">
           <div className="protocol-log-scroll">

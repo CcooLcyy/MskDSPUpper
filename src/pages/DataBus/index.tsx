@@ -32,6 +32,7 @@ import { api } from '../../adapters';
 import type { DcConnectionInfo, DcPointUpdate, DcRoute } from '../../adapters';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 import { DATA_BUS_VIEW_QUERY_KEY, normalizeDataBusView } from '../../components/data-bus/data-bus-view';
+import ResizableSplit from '../../components/layout/ResizableSplit';
 import './index.css';
 
 const { Text } = Typography;
@@ -135,6 +136,9 @@ const DataBus: React.FC = () => {
   const [routeSubmitting, setRouteSubmitting] = useState(false);
   const [selectedRouteKeys, setSelectedRouteKeys] = useState<string[]>([]);
   const [routeDeleting, setRouteDeleting] = useState(false);
+  const [routeSourceFilter, setRouteSourceFilter] = useState<number | 'all'>('all');
+  const [routeDestinationFilter, setRouteDestinationFilter] = useState<number | 'all'>('all');
+  const [routeSearch, setRouteSearch] = useState('');
 
   const refreshConnections = useCallback(async () => {
     setLoading(true);
@@ -204,6 +208,10 @@ const DataBus: React.FC = () => {
     const timer = window.setInterval(() => void refreshRealtime(), 3000);
     return () => window.clearInterval(timer);
   }, [view, autoRefresh, refreshRealtime]);
+
+  useEffect(() => {
+    setSelectedRouteKeys([]);
+  }, [routeSourceFilter, routeDestinationFilter, routeSearch]);
 
   const activeRouteDirection = routeDirections.find((direction) => direction.id === activeRouteDirectionId) ?? null;
   const routeBatchMode = activeRouteDirection?.mode ?? 'ordered';
@@ -541,7 +549,43 @@ const DataBus: React.FC = () => {
     .map((item, index) => ({ ...item, key: `${item.src_conn_id}:${item.src_tag}->${item.dst_conn_id}:${item.dst_tag}-${index}` })),
   [monitorConnId, monitorSearch, realtimeUpdates]);
 
-  const routeData = routes.map((route) => ({ ...route, key: routeKey(route) }));
+  const filteredRoutes = useMemo(() => {
+    const query = routeSearch.trim().toLowerCase();
+    const sourceConnection = routeSourceFilter === 'all'
+      ? null
+      : connections.find((connection) => connection.conn_id === routeSourceFilter) ?? null;
+    const destinationConnection = routeDestinationFilter === 'all'
+      ? null
+      : connections.find((connection) => connection.conn_id === routeDestinationFilter) ?? null;
+    const matchesConnection = (
+      endpoint: DcRoute['src'],
+      connection: DcConnectionInfo | null,
+    ): boolean => {
+      if (!connection) return true;
+      return endpoint.conn_id === connection.conn_id
+        || (endpoint.module_name === connection.module_name && endpoint.conn_name === connection.conn_name);
+    };
+
+    return routes.filter((route) => {
+      if (!matchesConnection(route.src, sourceConnection) || !matchesConnection(route.dst, destinationConnection)) {
+        return false;
+      }
+      if (!query) return true;
+      const searchable = [
+        route.src.module_name,
+        route.src.conn_name,
+        route.src.tag,
+        route.src.conn_id,
+        route.dst.module_name,
+        route.dst.conn_name,
+        route.dst.tag,
+        route.dst.conn_id,
+      ].map(String).join(' ').toLowerCase();
+      return searchable.includes(query);
+    });
+  }, [connections, routeDestinationFilter, routeSearch, routeSourceFilter, routes]);
+
+  const routeData = filteredRoutes.map((route) => ({ ...route, key: routeKey(route) }));
   const connTagData = connTags.map((tag) => ({ tag, key: tag }));
 
   const connectionPanel = (
@@ -574,10 +618,50 @@ const DataBus: React.FC = () => {
 
   return <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
     {contextHolder}
-    {view === 'config' ? <div className="data-bus-config-grid" style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(280px, 0.32fr) minmax(0, 1fr)', gap: 16 }}>
+    {view === 'config' ? <ResizableSplit
+      className="data-bus-config-grid"
+      defaultSize={400}
+      minSize={280}
+      maxSize={560}
+      storageKey="mskdsp.layout.data-bus.config"
+    >
       <div style={{ minHeight: 0 }}>{connectionPanel}</div>
       <Card title={<Space size={8}><span>路由配置</span><Tag color="blue">{routes.length}</Tag></Space>} size="small" extra={<Space><Button danger icon={<DeleteOutlined />} disabled={selectedRouteKeys.length === 0} loading={routeDeleting} onClick={handleDeleteSelectedRoutes}>删除选中</Button><Button danger type="text" disabled={routes.length === 0} loading={routeDeleting} onClick={handleDeleteAllRoutes}>全部删除</Button><Button icon={<ReloadOutlined />} onClick={() => void refreshRoutes()}>刷新</Button><Button type="primary" icon={<PlusOutlined />} onClick={openCreateRoute}>新增路由</Button></Space>} styles={{ body: { padding: 0, minHeight: 0, height: '100%' } }} style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '12px 16px', borderBottom: '1px solid #3e3e42' }}><Text type="secondary">单向转发绑定。源端点的最新值会转发到目标端点；同一对点位不允许同时配置两个方向。</Text></div>
+        <div className="route-filter-toolbar">
+          <Select<number | 'all'>
+            value={routeSourceFilter}
+            onChange={(value) => setRouteSourceFilter(value ?? 'all')}
+            options={[{ value: 'all', label: '全部源连接' }, ...connections.map((connection) => ({ value: connection.conn_id, label: `${connection.module_name}/${connection.conn_name}` }))]}
+            showSearch
+            optionFilterProp="label"
+            style={{ width: 190 }}
+          />
+          <Select<number | 'all'>
+            value={routeDestinationFilter}
+            onChange={(value) => setRouteDestinationFilter(value ?? 'all')}
+            options={[{ value: 'all', label: '全部目标连接' }, ...connections.map((connection) => ({ value: connection.conn_id, label: `${connection.module_name}/${connection.conn_name}` }))]}
+            showSearch
+            optionFilterProp="label"
+            style={{ width: 190 }}
+          />
+          <Input
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder="筛选端点、标签或连接编号"
+            value={routeSearch}
+            onChange={(event) => setRouteSearch(event.target.value)}
+            className="route-filter-search"
+          />
+          <Button
+            type="text"
+            onClick={() => { setRouteSourceFilter('all'); setRouteDestinationFilter('all'); setRouteSearch(''); }}
+            disabled={routeSourceFilter === 'all' && routeDestinationFilter === 'all' && routeSearch.trim() === ''}
+          >
+            清空筛选
+          </Button>
+          <Text type="secondary" className="route-filter-count">显示 {filteredRoutes.length} / 共 {routes.length} 条</Text>
+        </div>
         <Table
           rowKey="key"
           rowSelection={{
@@ -589,10 +673,10 @@ const DataBus: React.FC = () => {
           pagination={false}
           size="middle"
           scroll={{ x: 880, y: 'calc(100vh - 330px)' }}
-          locale={{ emptyText: '暂无路由配置，点击右上角新增第一条路由' }}
+          locale={{ emptyText: routes.length > 0 ? '没有符合条件的路由' : '暂无路由配置，点击右上角新增第一条路由' }}
         />
       </Card>
-    </div> : <Card title={<Space size={8}><span>实时值</span><Tag color={autoRefresh ? 'green' : 'default'} icon={autoRefresh ? <SyncOutlined spin /> : undefined}>{autoRefresh ? '自动刷新 3 秒' : '已暂停'}</Tag></Space>} size="small" extra={<Space><Text type="secondary" style={{ fontSize: 12 }}>{lastRealtimeAt ? `上次更新 ${formatTimestamp(lastRealtimeAt)}` : '尚未更新'}</Text><Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="暂停" onChange={setAutoRefresh} /><Button icon={<ReloadOutlined />} loading={realtimeLoading} onClick={() => void refreshRealtime()}>刷新</Button></Space>} styles={{ body: { padding: 0, minHeight: 0 } }} style={{ flex: 1, minHeight: 0 }}>
+    </ResizableSplit> : <Card title={<Space size={8}><span>实时值</span><Tag color={autoRefresh ? 'green' : 'default'} icon={autoRefresh ? <SyncOutlined spin /> : undefined}>{autoRefresh ? '自动刷新 3 秒' : '已暂停'}</Tag></Space>} size="small" extra={<Space><Text type="secondary" style={{ fontSize: 12 }}>{lastRealtimeAt ? `上次更新 ${formatTimestamp(lastRealtimeAt)}` : '尚未更新'}</Text><Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="暂停" onChange={setAutoRefresh} /><Button icon={<ReloadOutlined />} loading={realtimeLoading} onClick={() => void refreshRealtime()}>刷新</Button></Space>} styles={{ body: { padding: 0, minHeight: 0 } }} style={{ flex: 1, minHeight: 0 }}>
       <div style={{ padding: '12px 16px', display: 'flex', gap: 12, borderBottom: '1px solid #3e3e42' }}><Select value={monitorConnId} onChange={setMonitorConnId} style={{ width: 220 }} options={[{ value: 'all', label: '全部连接' }, ...connections.map((conn) => ({ value: conn.conn_id, label: `${conn.module_name}/${conn.conn_name}` }))]} /><Input allowClear prefix={<SearchOutlined />} placeholder="筛选标签或连接编号" value={monitorSearch} onChange={(event) => setMonitorSearch(event.target.value)} style={{ maxWidth: 320 }} /><Text type="secondary" style={{ marginLeft: 'auto', alignSelf: 'center', fontSize: 12 }}>共 {filteredRealtimeData.length} 条快照</Text></div>
       <Table rowKey="key" columns={realtimeColumns} dataSource={filteredRealtimeData} pagination={false} size="middle" scroll={{ x: 1100, y: 'calc(100vh - 290px)' }} locale={{ emptyText: connections.length ? '暂无最新值，请确认目标连接已启动并产生数据' : '暂无已注册连接' }} />
     </Card>}

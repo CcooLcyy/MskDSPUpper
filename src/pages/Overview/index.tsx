@@ -174,7 +174,7 @@ const Overview: React.FC = () => {
     <div>
       {contextHolder}
 
-      <Row gutter={[16, 16]}>
+      <Row gutter={[0, 0]}>
         {summaryCards.map((card) => (
           <Col xs={12} sm={8} md={4} key={card.title}>
             <Card size="small" bordered loading={loading}>
@@ -189,7 +189,7 @@ const Overview: React.FC = () => {
         ))}
       </Row>
 
-      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+      <Row gutter={[0, 0]} style={{ marginTop: 0 }}>
         <Col xs={24} md={12}>
           <Card title="核心模块状态" size="small" bordered loading={loading}>
             <List
@@ -219,7 +219,7 @@ const Overview: React.FC = () => {
         </Col>
       </Row>
 
-      <Card title="系统吞吐量趋势 (Tags/s)" size="small" bordered style={{ marginTop: 16 }}>
+      <Card title="系统吞吐量趋势 (Tags/s)" size="small" bordered style={{ marginTop: 0 }}>
         <div
           style={{
             height: 240,

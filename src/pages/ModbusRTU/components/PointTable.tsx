@@ -1,14 +1,21 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Card, Popconfirm, Select, Space, Table, Typography } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { Button, Card, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tooltip, Typography } from 'antd';
+import { CopyOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { DcPointUpdate, ModbusPoint } from '../../../adapters';
+import type { DcPointUpdate, ModbusPoint, ModbusReadPlan } from '../../../adapters';
 import {
   type ProtocolRealtimeCellRevision,
   renderProtocolRealtimeQualityCell,
   renderProtocolRealtimeTimestampCell,
   renderProtocolRealtimeValueCell,
 } from '../../../components/protocol/protocol-realtime';
+import {
+  MODBUS_FUNCTION,
+  buildReadPlanBlocks,
+  getCoveredReadPlanTags,
+  getMinimumAddress,
+  isExplicitReadFunction,
+} from '../modbus-form-rules';
 
 const { Text } = Typography;
 
@@ -39,8 +46,16 @@ interface Props {
   realtimeByTag: Record<string, DcPointUpdate>;
   realtimeRevisionByTag: Record<string, ProtocolRealtimeCellRevision>;
   realtimeLoading: boolean;
+  pointsLoading: boolean;
+  actionsDisabled: boolean;
+  readPlan: ModbusReadPlan | null;
+  addressBase: number;
+  readPlanSaving: boolean;
+  runtimeRunning: boolean;
+  onReadPlanSave: (readPlan: ModbusReadPlan) => Promise<boolean>;
   onAdd: () => void;
   onEdit: (index: number) => void;
+  onCopy: (index: number) => void;
   onDelete: (index: number) => void;
   onDeleteAll: () => void;
 }
@@ -51,20 +66,122 @@ const PointTable: React.FC<Props> = ({
   realtimeByTag,
   realtimeRevisionByTag,
   realtimeLoading,
+  pointsLoading,
+  actionsDisabled,
+  readPlan,
+  addressBase,
+  readPlanSaving,
+  runtimeRunning,
+  onReadPlanSave,
   onAdd,
   onEdit,
+  onCopy,
   onDelete,
   onDeleteAll,
 }) => {
   const [functionFilter, setFunctionFilter] = useState<number>();
   const [dataTypeFilter, setDataTypeFilter] = useState<number>();
+  const [tagSearch, setTagSearch] = useState('');
+  const savedReadPlan = readPlan ?? { mode: 1, blocks: [] };
+  const [readPlanMode, setReadPlanMode] = useState(savedReadPlan.mode || 1);
+  const [readPlanBlocks, setReadPlanBlocks] = useState(savedReadPlan.blocks.map((block) => ({ ...block })));
+
+  const readPlanModeOptions = [
+    { value: 1, label: '逐点读取' },
+    { value: 2, label: '区间读取（批量寄存器）' },
+  ];
+  const registerPoints = useMemo(
+    () => points.filter((point) => isExplicitReadFunction(point.function)),
+    [points],
+  );
+  const coveredTags = useMemo(
+    () => getCoveredReadPlanTags(registerPoints, readPlanBlocks),
+    [readPlanBlocks, registerPoints],
+  );
+  const uncoveredPoints = registerPoints.filter((point) => !coveredTags.includes(point.tag));
+  const currentReadPlan = useMemo<ModbusReadPlan>(
+    () => ({ mode: readPlanMode, blocks: readPlanBlocks }),
+    [readPlanBlocks, readPlanMode],
+  );
+  const readPlanDirty = readPlanMode === 2
+    && JSON.stringify(currentReadPlan) !== JSON.stringify(savedReadPlan);
+
+  const persistReadPlan = async (nextReadPlan: ModbusReadPlan) => {
+    const saved = await onReadPlanSave(nextReadPlan);
+    if (saved) {
+      setReadPlanMode(nextReadPlan.mode);
+      setReadPlanBlocks(nextReadPlan.blocks.map((block) => ({ ...block })));
+    }
+  };
+
+  const requestReadPlanApply = (nextReadPlan: ModbusReadPlan, title: string) => {
+    const apply = () => persistReadPlan(nextReadPlan);
+    if (runtimeRunning) {
+      Modal.confirm({
+        title,
+        content: '当前连接正在运行，应用策略会短暂停止并重新启动连接。',
+        okText: '应用并重启',
+        cancelText: '取消',
+        onOk: apply,
+      });
+      return;
+    }
+    apply();
+  };
+
+  const handleReadPlanModeChange = (mode: number) => {
+    if (mode === readPlanMode) {
+      return;
+    }
+
+    if (mode === 2) {
+      const nextBlocks = readPlanBlocks.length > 0
+        ? readPlanBlocks.map((block) => ({ ...block }))
+        : buildReadPlanBlocks(points);
+
+      if (nextBlocks.length > 0) {
+        requestReadPlanApply(
+          { mode: 2, blocks: nextBlocks },
+          '应用区间读取策略？',
+        );
+        return;
+      }
+
+      setReadPlanMode(mode);
+      setReadPlanBlocks(nextBlocks);
+      return;
+    }
+
+    requestReadPlanApply(
+      { mode: 1, blocks: readPlanBlocks.map((block) => ({ ...block })) },
+      '应用逐点读取策略？',
+    );
+  };
+
+  const updateReadPlanBlock = (index: number, patch: Partial<ModbusReadPlan['blocks'][number]>) => {
+    setReadPlanBlocks((current) => current.map((block, blockIndex) => (
+      blockIndex === index ? { ...block, ...patch } : block
+    )));
+  };
+
+  const generateReadPlan = () => {
+    setReadPlanBlocks(buildReadPlanBlocks(points));
+  };
 
   const visiblePoints = useMemo(
-    () => points.filter((point) => (
-      (functionFilter === undefined || point.function === functionFilter)
-      && (dataTypeFilter === undefined || point.data_type === dataTypeFilter)
-    )),
-    [dataTypeFilter, functionFilter, points],
+    () => {
+      const normalizedSearch = tagSearch.trim().toLocaleLowerCase();
+      return points.filter((point) => (
+        (functionFilter === undefined || point.function === functionFilter)
+        && (dataTypeFilter === undefined || point.data_type === dataTypeFilter)
+        && (
+          normalizedSearch.length === 0
+          || point.tag.toLocaleLowerCase().includes(normalizedSearch)
+          || String(point.address).includes(normalizedSearch)
+        )
+      ));
+    },
+    [dataTypeFilter, functionFilter, points, tagSearch],
   );
 
   const functionOptions = Object.entries(FUNCTION_CODE_LABELS).map(([value, label]) => ({
@@ -82,6 +199,7 @@ const PointTable: React.FC<Props> = ({
       dataIndex: 'tag',
       key: 'tag',
       width: 140,
+      fixed: 'left',
       render: (value: string) => <Text strong>{value}</Text>,
     },
     {
@@ -157,7 +275,8 @@ const PointTable: React.FC<Props> = ({
     {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 112,
+      fixed: 'right',
       render: (_value: unknown, record: ModbusPoint) => {
         const originalIndex = points.indexOf(record);
         if (originalIndex < 0) {
@@ -165,13 +284,37 @@ const PointTable: React.FC<Props> = ({
         }
         return (
           <Space size={4}>
-            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => onEdit(originalIndex)}>
-              编辑
-            </Button>
+            <Tooltip title="编辑点位">
+              <Button
+                type="text"
+                size="small"
+                icon={<EditOutlined />}
+                aria-label={`编辑点位 ${record.tag}`}
+                disabled={actionsDisabled}
+                onClick={() => onEdit(originalIndex)}
+              />
+            </Tooltip>
+            <Tooltip title="复制点位并递增地址">
+              <Button
+                type="text"
+                size="small"
+                icon={<CopyOutlined />}
+                aria-label={`复制点位 ${record.tag}`}
+                disabled={actionsDisabled}
+                onClick={() => onCopy(originalIndex)}
+              />
+            </Tooltip>
             <Popconfirm title="确认删除该点位？" onConfirm={() => onDelete(originalIndex)}>
-              <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-                删除
-              </Button>
+              <Tooltip title="删除点位">
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  aria-label={`删除点位 ${record.tag}`}
+                  disabled={actionsDisabled}
+                />
+              </Tooltip>
             </Popconfirm>
           </Space>
         );
@@ -181,12 +324,28 @@ const PointTable: React.FC<Props> = ({
 
   return (
     <Card
-      title="点表配置 (Tag -> Address)"
+      title={(
+        <Space size={8} wrap>
+          <span>点表配置</span>
+          {selectedConn ? <Text type="secondary">{selectedConn} · {points.length} 个点位</Text> : null}
+          {realtimeLoading && selectedConn ? <Text type="secondary">实时数据连接中</Text> : null}
+        </Space>
+      )}
       size="small"
       bordered
       className="protocol-point-card"
       extra={(
         <Space wrap>
+          <Input
+            allowClear
+            size="small"
+            prefix={<SearchOutlined />}
+            placeholder="搜索 Tag 或地址"
+            value={tagSearch}
+            disabled={!selectedConn || points.length === 0}
+            onChange={(event) => setTagSearch(event.target.value)}
+            style={{ width: 180 }}
+          />
           <Select<number>
             allowClear
             size="small"
@@ -194,7 +353,7 @@ const PointTable: React.FC<Props> = ({
             value={functionFilter}
             options={functionOptions}
             onChange={setFunctionFilter}
-            disabled={!selectedConn || points.length === 0}
+            disabled={!selectedConn || points.length === 0 || actionsDisabled}
             style={{ width: 170 }}
           />
           <Select<number>
@@ -217,27 +376,143 @@ const PointTable: React.FC<Props> = ({
               danger
               size="small"
               icon={<DeleteOutlined />}
-              disabled={!selectedConn || points.length === 0}
+              disabled={!selectedConn || points.length === 0 || actionsDisabled}
             >
               删除全部点位
             </Button>
           </Popconfirm>
-          <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onAdd} disabled={!selectedConn}>
+          <Button
+            type="primary"
+            size="small"
+            icon={<PlusOutlined />}
+            onClick={onAdd}
+            disabled={!selectedConn || actionsDisabled}
+          >
             添加点位
           </Button>
         </Space>
       )}
     >
+      <div className="protocol-read-plan-toolbar">
+        <div className="protocol-read-plan-heading">
+          <Text strong>读取策略</Text>
+          <Select<number>
+            size="small"
+            value={readPlanMode}
+            options={readPlanModeOptions}
+            disabled={!selectedConn || actionsDisabled}
+            onChange={handleReadPlanModeChange}
+            style={{ width: 220 }}
+          />
+          <Text type="secondary">
+            {readPlanMode === 1 ? '按点位逐条读取，适合地址分散的设备。' : '按寄存器区间批量读取，适合地址连续的设备。'}
+          </Text>
+        </div>
+
+        {readPlanMode === 2 ? (
+          <div className="protocol-read-plan-editor">
+            <div className="protocol-read-plan-summary">
+              <Text strong>批量读取区间</Text>
+              <Text type={uncoveredPoints.length > 0 ? 'warning' : 'secondary'}>
+                已覆盖 {coveredTags.length}/{registerPoints.length} 个寄存器点位
+                {uncoveredPoints.length > 0 ? `，未覆盖 ${uncoveredPoints.length} 个` : ''}
+              </Text>
+            </div>
+            {readPlanBlocks.map((block, index) => (
+              <div className="protocol-read-plan-block" key={`read-plan-block-${index}`}>
+                <Select<number>
+                  size="small"
+                  value={block.function}
+                  options={[
+                    { value: MODBUS_FUNCTION.READ_HOLDING_REGISTERS, label: '0x03 保持寄存器' },
+                    { value: MODBUS_FUNCTION.READ_INPUT_REGISTERS, label: '0x04 输入寄存器' },
+                  ]}
+                  disabled={actionsDisabled}
+                  onChange={(value) => updateReadPlanBlock(index, { function: value })}
+                  style={{ width: 190 }}
+                />
+                <InputNumber
+                  size="small"
+                  min={getMinimumAddress(addressBase)}
+                  max={65535}
+                  precision={0}
+                  value={block.start}
+                  disabled={actionsDisabled}
+                  onChange={(value) => updateReadPlanBlock(index, { start: value ?? getMinimumAddress(addressBase) })}
+                  addonBefore="起始"
+                />
+                <InputNumber
+                  size="small"
+                  min={1}
+                  max={125}
+                  precision={0}
+                  value={block.quantity}
+                  disabled={actionsDisabled}
+                  onChange={(value) => updateReadPlanBlock(index, { quantity: value ?? 1 })}
+                  addonBefore="数量"
+                />
+                <Tooltip title="删除读取区间">
+                  <Button
+                    type="text"
+                    danger
+                    size="small"
+                    icon={<DeleteOutlined />}
+                    aria-label={`删除第 ${index + 1} 个读取区间`}
+                    disabled={actionsDisabled}
+                    onClick={() => setReadPlanBlocks((current) => current.filter((_item, itemIndex) => itemIndex !== index))}
+                  />
+                </Tooltip>
+              </div>
+            ))}
+            <div className="protocol-read-plan-actions">
+              <Space wrap>
+                <Button
+                  type="dashed"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  disabled={actionsDisabled}
+                  onClick={() => setReadPlanBlocks((current) => ([
+                    ...current,
+                    {
+                      function: MODBUS_FUNCTION.READ_HOLDING_REGISTERS,
+                      start: getMinimumAddress(addressBase),
+                      quantity: 1,
+                    },
+                  ]))}
+                >
+                  添加读取区间
+                </Button>
+                <Button size="small" disabled={actionsDisabled || points.length === 0} onClick={generateReadPlan}>
+                  根据点位生成区间
+                </Button>
+                <Button
+                  type="primary"
+                  size="small"
+                  disabled={actionsDisabled || !readPlanDirty || (readPlanMode === 2 && readPlanBlocks.length === 0)}
+                  loading={readPlanSaving}
+                  onClick={() => requestReadPlanApply(currentReadPlan, '应用区间读取策略？')}
+                >
+                  应用区间
+                </Button>
+              </Space>
+            </div>
+          </div>
+        ) : null}
+      </div>
       <div className="protocol-table-scroll">
         <Table<ModbusPoint>
           rowKey={(record) => `${record.tag}-${record.address}-${points.indexOf(record)}`}
           columns={columns}
           dataSource={visiblePoints}
-          loading={realtimeLoading}
+          loading={pointsLoading}
           pagination={false}
           size="small"
-          scroll={{ x: 1290 }}
-          locale={{ emptyText: selectedConn ? '暂无点位' : '请先选择连接' }}
+          scroll={{ x: 1360 }}
+          locale={{
+            emptyText: selectedConn
+              ? (points.length > 0 ? '没有符合当前筛选条件的点位' : '暂无点位')
+              : '请先选择连接',
+          }}
         />
       </div>
     </Card>

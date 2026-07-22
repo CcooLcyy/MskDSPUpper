@@ -40,6 +40,7 @@ import type {
   DcPointUpdate,
 } from '../../adapters';
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
+import ResizableSplit from '../../components/layout/ResizableSplit';
 import ControlEmptyState from '../../components/control/ControlEmptyState';
 import {
   ControlGroupRoutesError,
@@ -1311,22 +1312,18 @@ const AVC: React.FC = () => {
       {modalContextHolder}
 
       {currentView === 'strategy' ? (
-        <div
-          style={{
-            display: 'flex',
-            flex: '1 1 auto',
-            gap: 16,
-            alignItems: 'stretch',
-            minWidth: 0,
-            minHeight: 0,
-            overflow: 'hidden',
-          }}
+        <ResizableSplit
+          className="control-strategy-split"
+          defaultSize={260}
+          minSize={220}
+          maxSize={440}
+          storageKey="mskdsp.layout.avc.control-groups"
         >
           <Card
             title="控制组列表"
             size="small"
             bordered
-            style={{ width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+            style={{ width: '100%', flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}
             styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', padding: '8px 0' } }}
             extra={
               <Button
@@ -1397,7 +1394,7 @@ const AVC: React.FC = () => {
               flex: 1,
               display: 'flex',
               flexDirection: 'column',
-              gap: 16,
+              gap: 0,
               minWidth: 0,
               minHeight: 0,
               overflow: 'hidden',
@@ -1566,7 +1563,7 @@ const AVC: React.FC = () => {
               </div>
             </Card>
           </div>}
-        </div>
+        </ResizableSplit>
       ) : (
         <Card title="控制日志" size="small" bordered className="protocol-log-card">
           <div className="protocol-log-scroll">
