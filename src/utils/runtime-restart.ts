@@ -92,6 +92,7 @@ export async function runWithRuntimeRestart(options: {
   run: () => Promise<void>;
   start: () => Promise<void>;
   restoreStart?: () => Promise<void>;
+  restartAfterRun?: boolean;
   failOnRestartError?: boolean;
 }): Promise<RuntimeOperationResult> {
   const failOnRestartError = options.failOnRestartError ?? true;
@@ -120,6 +121,10 @@ export async function runWithRuntimeRestart(options: {
         throw new RuntimeRestartError('restore', operationError, restartError);
       }
       throw operationError;
+    }
+
+    if (options.restartAfterRun === false) {
+      return result;
     }
 
     try {

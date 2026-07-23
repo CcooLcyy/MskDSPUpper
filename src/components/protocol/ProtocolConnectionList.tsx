@@ -29,6 +29,7 @@ interface ProtocolConnectionListProps<T extends ProtocolConnectionListItemBase> 
   getStateLabel?: (item: T) => string;
   getDescription?: (item: T) => React.ReactNode;
   actionsDisabled?: boolean;
+  getItemActionsDisabled?: (item: T) => boolean;
   getConnName?: (item: T) => string;
   getDeleteTitle?: (connName: string) => React.ReactNode;
 }
@@ -53,6 +54,7 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
   getStateLabel,
   getDescription,
   actionsDisabled = false,
+  getItemActionsDisabled = () => false,
   getConnName = defaultGetConnName,
   getDeleteTitle = () => '\u786e\u8ba4\u5220\u9664\u8be5\u8fde\u63a5\uff1f',
 }: ProtocolConnectionListProps<T>) {
@@ -84,6 +86,7 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
             const connName = getConnName(item);
             const isSelected = selectedConn === connName;
             const stateColor = getStateColor(item);
+            const itemActionsDisabled = actionsDisabled || getItemActionsDisabled(item);
 
             return (
               <List.Item key={connName} style={{ padding: '4px 0', borderBlockEnd: 'none' }}>
@@ -138,7 +141,7 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
                           size="small"
                           icon={<CopyOutlined />}
                           aria-label={`复制连接 ${connName}`}
-                          disabled={actionsDisabled}
+                          disabled={itemActionsDisabled}
                           onClick={() => onCopy(connName)}
                         />
                       </Tooltip>
@@ -154,7 +157,7 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
                           danger
                           icon={<DeleteOutlined />}
                           aria-label={`删除连接 ${connName}`}
-                          disabled={actionsDisabled}
+                          disabled={itemActionsDisabled}
                         />
                       </Tooltip>
                     </Popconfirm>

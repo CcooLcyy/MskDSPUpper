@@ -40,6 +40,7 @@ const STATE_MAP: Record<number, { label: string; color: string }> = {
 
 interface Props {
   link: ModbusLinkInfo | null;
+  pointCount: number;
   busy: boolean;
   runtimeAction: 'start' | 'stop' | null;
   globalAction: React.ReactNode;
@@ -50,6 +51,7 @@ interface Props {
 
 const ConnectionConfig: React.FC<Props> = ({
   link,
+  pointCount,
   busy,
   runtimeAction,
   globalAction,
@@ -61,7 +63,9 @@ const ConnectionConfig: React.FC<Props> = ({
   const state = STATE_MAP[link?.state ?? 0] ?? STATE_MAP[0];
   const isStopped = link?.state === 1;
   const isRunning = link?.state === 2;
+  const isPendingDelete = link?.state === 3;
   const readBlockCount = config?.read_plan?.blocks.length ?? 0;
+  const pointTableReady = pointCount > 0;
 
   return (
     <Card
@@ -80,17 +84,17 @@ const ConnectionConfig: React.FC<Props> = ({
           {globalAction}
           {config ? (
             <>
-              <Button icon={<EditOutlined />} disabled={busy} onClick={onEdit}>
+              <Button icon={<EditOutlined />} disabled={busy || isPendingDelete} onClick={onEdit}>
                 编辑配置
               </Button>
               <Button
                 type="primary"
                 icon={<LinkOutlined />}
-                disabled={!isStopped || busy}
+                disabled={!isStopped || busy || !pointTableReady}
                 loading={runtimeAction === 'start'}
                 onClick={onStart}
               >
-                启动轮询
+                {runtimeAction === 'start' ? '启动中…' : '启动轮询'}
               </Button>
               <Popconfirm
                 title="确认停止轮询？"
@@ -104,7 +108,7 @@ const ConnectionConfig: React.FC<Props> = ({
                   disabled={!isRunning || busy}
                   loading={runtimeAction === 'stop'}
                 >
-                  停止轮询
+                  {runtimeAction === 'stop' ? '停止中…' : '停止轮询'}
                 </Button>
               </Popconfirm>
             </>
@@ -126,6 +130,9 @@ const ConnectionConfig: React.FC<Props> = ({
             <Descriptions.Item label="读取策略">
               {READ_PLAN_MODE_LABELS[config.read_plan?.mode ?? 0] ?? '未指定'}
               {config.read_plan?.mode === 2 ? `（${readBlockCount} 个区间）` : ''}
+            </Descriptions.Item>
+            <Descriptions.Item label="点表状态">
+              {pointTableReady ? <Tag color="success">已配置 {pointCount} 个点位</Tag> : <Tag color="warning">未配置</Tag>}
             </Descriptions.Item>
 
             {config.transport_type === 1 && config.serial ? (
@@ -160,6 +167,24 @@ const ConnectionConfig: React.FC<Props> = ({
               </>
             ) : null}
           </Descriptions>
+          {!pointTableReady && isStopped ? (
+            <Alert
+              className="modbus-last-error"
+              type="warning"
+              showIcon
+              message="点表未就绪"
+              description="请先在下方点表配置中添加至少一个点位，再启动轮询。"
+            />
+          ) : null}
+          {isPendingDelete ? (
+            <Alert
+              className="modbus-last-error"
+              type="warning"
+              showIcon
+              message="连接待删除"
+              description="当前连接不可编辑或启动，请处理删除失败原因后重试删除。"
+            />
+          ) : null}
           {link?.last_error ? (
             <Alert
               className="modbus-last-error"

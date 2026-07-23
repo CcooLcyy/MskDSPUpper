@@ -252,6 +252,11 @@
   overflow: hidden;
 }
 
+.modbus-page-alert {
+  flex: 0 0 auto;
+  margin: 8px 12px 0;
+}
+
 .modbus-page .protocol-top-row {
   display: flex;
   align-items: stretch;
@@ -295,6 +300,18 @@
 
 .modbus-page .protocol-point-card .ant-card-extra > .ant-space {
   justify-content: flex-end;
+}
+
+.protocol-point-filter-panel {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin: -8px -12px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .protocol-read-plan-toolbar {

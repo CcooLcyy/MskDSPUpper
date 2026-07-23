@@ -226,9 +226,20 @@ export function useProtocolShadowRealtime(
 
     try {
       const updates = await api.dcGetProtocolShadowLatest(connId, targetTags);
-      setRealtimeState((previous) => mergeRealtimeUpdates(previous, buildUpdateMap(updates, connId)));
+      if (connId !== activeConnIdRef.current) {
+        return;
+      }
+
+      const activeTags = activeTagSetRef.current;
+      const updatesByTag = buildUpdateMap(updates, connId);
+      const currentUpdates = Object.fromEntries(
+        Object.entries(updatesByTag).filter(([tag]) => activeTags.has(tag)),
+      );
+      setRealtimeState((previous) => mergeRealtimeUpdates(previous, currentUpdates));
     } catch (reason) {
-      setError(String(reason));
+      if (connId === activeConnIdRef.current) {
+        setError(String(reason));
+      }
     } finally {
       snapshotRefreshInFlightRef.current = false;
     }

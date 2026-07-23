@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Typography } from 'antd';
+import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Typography } from 'antd';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import type { ModbusLinkConfig, ModbusLinkInfo, ModbusPoint, ModbusReadPlan, ModbusSerialConfig } from '../../adapters';
@@ -121,11 +121,15 @@ const ModbusRTU: React.FC = () => {
   const [pointSubmitting, setPointSubmitting] = useState(false);
   const [readPlanSaving, setReadPlanSaving] = useState(false);
   const [runtimeAction, setRuntimeAction] = useState<'start' | 'stop' | null>(null);
+  const [linkMutation, setLinkMutation] = useState<'copy' | 'delete' | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [lastRefreshAt, setLastRefreshAt] = useState<number | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
   const [linkForm] = Form.useForm<LinkFormValues>();
   const [pointForm] = Form.useForm<ModbusPointFormValues & { address_base: number }>();
   const [searchParams] = useSearchParams();
   const pointLoadRequestRef = useRef(0);
+  const readPlanDirtyRef = useRef(false);
 
   const selectedLink = links.find((l) => l.config?.conn_name === selectedConn) ?? null;
   const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY));
@@ -133,7 +137,12 @@ const ModbusRTU: React.FC = () => {
     () => points.map((point) => point.tag),
     [points],
   );
-  const { realtimeByTag, realtimeRevisionByTag, loading: realtimeLoading } = useProtocolShadowRealtime(
+  const {
+    realtimeByTag,
+    realtimeRevisionByTag,
+    loading: realtimeLoading,
+    error: realtimeError,
+  } = useProtocolShadowRealtime(
     selectedLink?.conn_id ?? null,
     realtimeTags,
   );
@@ -151,28 +160,41 @@ const ModbusRTU: React.FC = () => {
   const pointRegCountOptions = (isCoilPoint ? [1] : getAllowedRegCounts(pointDataType ?? MODBUS_DATA_TYPE.UINT16))
     .map((value) => ({ value, label: `${value} 个寄存器` }));
   const pointBitMax = (pointRegCount ?? 1) * 16 - 1;
-  const actionsDisabled = pointsLoading || pointSubmitting || linkSubmitting || readPlanSaving || runtimeAction !== null;
+  const modalOpen = linkModalOpen || pointModalOpen;
+  const actionsDisabled = pointsLoading
+    || pointSubmitting
+    || linkSubmitting
+    || readPlanSaving
+    || runtimeAction !== null
+    || linkMutation !== null
+    || modalOpen;
 
   const refreshLinks = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
       setLoading(true);
     }
     try {
-      const list = await api.modbusRtuListLinks();
+      const list = (await api.modbusRtuListLinks()).sort((left, right) => {
+        const leftName = left.config?.conn_name ?? `conn_${left.conn_id}`;
+        const rightName = right.config?.conn_name ?? `conn_${right.conn_id}`;
+        return leftName.localeCompare(rightName, 'zh-CN');
+      });
       setLinks(list);
+      setRefreshError(null);
+      setLastRefreshAt(Date.now());
       if (selectedConn && !list.some((item) => item.config?.conn_name === selectedConn)) {
         setSelectedConn(null);
       } else if (!selectedConn && list.length === 1 && list[0].config?.conn_name) {
         setSelectedConn(list[0].config.conn_name);
       }
     } catch (error) {
-      messageApi.error(`刷新连接列表失败: ${error}`);
+      setRefreshError(formatErrorText(error));
     } finally {
       if (!options?.silent) {
         setLoading(false);
       }
     }
-  }, [messageApi, selectedConn]);
+  }, [selectedConn]);
 
   const loadPoints = useCallback(async (connName: string) => {
     const requestId = pointLoadRequestRef.current + 1;
@@ -203,6 +225,24 @@ const ModbusRTU: React.FC = () => {
     return link.state;
   }, []);
 
+  const waitForLinkState = useCallback(async (connName: string, targetState: number): Promise<boolean> => {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      try {
+        if (await getLinkState(connName) === targetState) {
+          return true;
+        }
+      } catch {
+        return false;
+      }
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 250);
+      });
+    }
+
+    return false;
+  }, [getLinkState]);
+
   const runSelectedLinkStopped = useCallback(
     async (
       operation: () => Promise<void>,
@@ -210,6 +250,7 @@ const ModbusRTU: React.FC = () => {
         initialState?: number | null;
         originalConnName?: string;
         restartConnName?: string;
+        restartAfterRun?: boolean;
       },
     ) => {
       if (!selectedConn) {
@@ -233,6 +274,7 @@ const ModbusRTU: React.FC = () => {
         run: operation,
         start: () => api.modbusRtuStartLink(restartConnName),
         restoreStart: () => api.modbusRtuStartLink(originalConnName),
+        restartAfterRun: options?.restartAfterRun,
         failOnRestartError: false,
       });
     },
@@ -431,6 +473,14 @@ const ModbusRTU: React.FC = () => {
   }, [messageApi, refreshLinks, runSelectedLinkStopped, selectedConn, selectedLink]);
 
   const handleDeleteLink = useCallback(async (connName: string) => {
+    if (linkMutation !== null) {
+      return;
+    }
+    if (links.find((link) => link.config?.conn_name === connName)?.state === 2) {
+      messageApi.warning('请先停止轮询，再删除运行中的连接');
+      return;
+    }
+    setLinkMutation('delete');
     try {
       await api.modbusRtuDeleteLink(connName);
       messageApi.success(`连接 ${connName} 已删除`);
@@ -440,10 +490,16 @@ const ModbusRTU: React.FC = () => {
       await refreshLinks();
     } catch (error) {
       messageApi.error(`删除连接失败: ${error}`);
+      await refreshLinks({ silent: true });
+    } finally {
+      setLinkMutation(null);
     }
-  }, [messageApi, refreshLinks, selectedConn]);
+  }, [linkMutation, links, messageApi, refreshLinks, selectedConn]);
 
   const handleCopyLink = useCallback(async (sourceConnName: string) => {
+    if (linkMutation !== null) {
+      return;
+    }
     const sourceConfig = links.find((link) => link.config?.conn_name === sourceConnName)?.config;
     if (!sourceConfig) {
       messageApi.error(`未找到连接 ${sourceConnName} 的配置`);
@@ -468,6 +524,7 @@ const ModbusRTU: React.FC = () => {
         : null,
     };
 
+    setLinkMutation('copy');
     try {
       await api.modbusRtuUpsertLink(copiedConfig, true);
 
@@ -498,42 +555,54 @@ const ModbusRTU: React.FC = () => {
       messageApi.success(`已复制连接为 ${nextConnName}`);
     } catch (error) {
       messageApi.error(`复制连接失败: ${error}`);
+    } finally {
+      setLinkMutation(null);
     }
-  }, [links, messageApi, refreshLinks]);
+  }, [linkMutation, links, messageApi, refreshLinks]);
 
   const handleStartLink = useCallback(async () => {
     if (!selectedConn || runtimeAction !== null || selectedLink?.state !== 1) {
       return;
     }
+    const connName = selectedConn;
     setRuntimeAction('start');
     try {
-      await api.modbusRtuStartLink(selectedConn);
-      messageApi.success('启动请求已发送');
+      await api.modbusRtuStartLink(connName);
+      const confirmed = await waitForLinkState(connName, 2);
       await refreshLinks({ silent: true });
-      window.setTimeout(() => void refreshLinks({ silent: true }), 1000);
+      if (confirmed) {
+        messageApi.success('连接已进入运行中');
+      } else {
+        messageApi.warning('启动请求已发送，但暂未确认连接进入运行中');
+      }
     } catch (error) {
       messageApi.error(`启动失败: ${error}`);
     } finally {
       setRuntimeAction(null);
     }
-  }, [messageApi, refreshLinks, runtimeAction, selectedConn, selectedLink?.state]);
+  }, [messageApi, refreshLinks, runtimeAction, selectedConn, selectedLink?.state, waitForLinkState]);
 
   const handleStopLink = useCallback(async () => {
     if (!selectedConn || runtimeAction !== null || selectedLink?.state !== 2) {
       return;
     }
+    const connName = selectedConn;
     setRuntimeAction('stop');
     try {
-      await api.modbusRtuStopLink(selectedConn);
-      messageApi.success('停止请求已发送');
+      await api.modbusRtuStopLink(connName);
+      const confirmed = await waitForLinkState(connName, 1);
       await refreshLinks({ silent: true });
-      window.setTimeout(() => void refreshLinks({ silent: true }), 1000);
+      if (confirmed) {
+        messageApi.success('连接已停止');
+      } else {
+        messageApi.warning('停止请求已发送，但暂未确认连接进入已停止状态');
+      }
     } catch (error) {
       messageApi.error(`停止失败: ${error}`);
     } finally {
       setRuntimeAction(null);
     }
-  }, [messageApi, refreshLinks, runtimeAction, selectedConn, selectedLink?.state]);
+  }, [messageApi, refreshLinks, runtimeAction, selectedConn, selectedLink?.state, waitForLinkState]);
 
   const openCreatePoint = useCallback(() => {
     setEditingPointIndex(null);
@@ -621,7 +690,7 @@ const ModbusRTU: React.FC = () => {
     setPointSubmitting(true);
     try {
       const newPoint: ModbusPoint = {
-        tag: values.tag,
+        tag: values.tag.trim(),
         function: values.function,
         address: values.address,
         data_type: values.data_type,
@@ -683,20 +752,44 @@ const ModbusRTU: React.FC = () => {
     }
     setPointSubmitting(true);
     try {
-      const restartResult = await runSelectedLinkStopped(() => api.modbusRtuUpsertPointTable(selectedConn, [], true));
+      const restartResult = await runSelectedLinkStopped(
+        () => api.modbusRtuUpsertPointTable(selectedConn, [], true),
+        { restartAfterRun: false },
+      );
       setPoints([]);
-      messageApi.success('全部点位已删除');
-      if (restartResult.restartError) {
-        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
-      } else if (restartResult.stoppedBeforeRun) {
-        messageApi.success('点表已保存并重新启动连接');
-      }
+      messageApi.success(restartResult.stoppedBeforeRun ? '全部点位已删除，连接保持停止' : '全部点位已删除');
     } catch (error) {
       messageApi.error(`删除全部点位失败: ${error}`);
     } finally {
       setPointSubmitting(false);
     }
   }, [messageApi, pointSubmitting, selectedConn, runSelectedLinkStopped]);
+
+  const handleReadPlanDirtyChange = useCallback((dirty: boolean) => {
+    readPlanDirtyRef.current = dirty;
+  }, []);
+
+  const selectConnection = useCallback((connName: string) => {
+    if (actionsDisabled || connName === selectedConn) {
+      return;
+    }
+
+    if (readPlanDirtyRef.current) {
+      Modal.confirm({
+        title: '放弃未保存的读取方案？',
+        content: '切换连接会丢弃当前连接尚未应用的读取区间修改。',
+        okText: '放弃并切换',
+        cancelText: '继续编辑',
+        onOk: () => {
+          readPlanDirtyRef.current = false;
+          setSelectedConn(connName);
+        },
+      });
+      return;
+    }
+
+    setSelectedConn(connName);
+  }, [actionsDisabled, selectedConn]);
 
   useEffect(() => {
     void refreshLinks();
@@ -748,7 +841,7 @@ const ModbusRTU: React.FC = () => {
                       if (!name) {
                         throw new Error('连接名称不能只包含空格');
                       }
-                      if (links.some((item) => item.config?.conn_name === name && item.config?.conn_name !== editingLink?.conn_name)) {
+                      if (links.some((item) => item.config?.conn_name?.trim() === name && item.config?.conn_name !== editingLink?.conn_name)) {
                         throw new Error('连接名称已存在');
                       }
                     },
@@ -858,8 +951,15 @@ const ModbusRTU: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="地址基准" name="address_base" rules={[{ required: true, message: '请选择地址基准' }]}>
-                <Select options={ADDRESS_BASE_OPTIONS} />
+              <Form.Item
+                label="地址基准"
+                name="address_base"
+                extra={editingLink && points.length > 0
+                  ? '已有点位时不能直接切换地址基准；请先完成点位迁移后再修改。'
+                  : undefined}
+                rules={[{ required: true, message: '请选择地址基准' }]}
+              >
+                <Select disabled={Boolean(editingLink && points.length > 0)} options={ADDRESS_BASE_OPTIONS} />
               </Form.Item>
             </Col>
           </Row>
@@ -902,7 +1002,7 @@ const ModbusRTU: React.FC = () => {
                     if (!tag) {
                       throw new Error('Tag 不能只包含空格');
                     }
-                    if (points.some((point, index) => point.tag === tag && index !== editingPointIndex)) {
+                    if (points.some((point, index) => point.tag.trim() === tag && index !== editingPointIndex)) {
                       throw new Error('Tag 已存在');
                     }
                   },
@@ -1028,6 +1128,30 @@ const ModbusRTU: React.FC = () => {
     <div className="protocol-page modbus-page">
       {contextHolder}
 
+      {refreshError ? (
+        <Alert
+          className="modbus-page-alert"
+          type="warning"
+          showIcon
+          message="连接列表刷新失败"
+          description={`${refreshError}${lastRefreshAt ? `；上次成功刷新于 ${new Date(lastRefreshAt).toLocaleTimeString()}` : ''}`}
+          action={(
+            <Button size="small" onClick={() => void refreshLinks()}>
+              重试
+            </Button>
+          )}
+        />
+      ) : null}
+      {realtimeError ? (
+        <Alert
+          className="modbus-page-alert"
+          type="warning"
+          showIcon
+          message="实时数据暂不可用"
+          description={`点表配置仍可继续；实时数据流错误：${realtimeError}`}
+        />
+      ) : null}
+
       {currentView === 'config' ? (
         <ResizableSplit
           className="protocol-config-view"
@@ -1052,11 +1176,8 @@ const ModbusRTU: React.FC = () => {
               selectedConn={selectedConn}
               loading={loading}
               actionsDisabled={actionsDisabled}
-              onSelect={(connName) => {
-                if (!actionsDisabled) {
-                  setSelectedConn(connName);
-                }
-              }}
+              getItemActionsDisabled={(item) => item.state === 3}
+              onSelect={selectConnection}
               onCreate={openCreateLink}
               onCopy={(connName) => void handleCopyLink(connName)}
               onDelete={(connName) => void handleDeleteLink(connName)}
@@ -1076,6 +1197,7 @@ const ModbusRTU: React.FC = () => {
             <div className="modbus-connection-shell">
               <ConnectionConfig
                 link={selectedLink}
+                pointCount={points.length}
                 busy={actionsDisabled}
                 runtimeAction={runtimeAction}
                 globalAction={<MqttConfigPanel />}
@@ -1100,6 +1222,7 @@ const ModbusRTU: React.FC = () => {
             readPlanSaving={readPlanSaving}
             runtimeRunning={selectedLink?.state === 2}
             onReadPlanSave={handleReadPlanSave}
+            onReadPlanDirtyChange={handleReadPlanDirtyChange}
             onAdd={openCreatePoint}
             onEdit={(index) => openEditPoint(index)}
             onCopy={(index) => openCopyPoint(index)}
