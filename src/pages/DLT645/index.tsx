@@ -13,6 +13,10 @@ import ConnectionConfig from './components/ConnectionConfig';
 import PointTable from './components/PointTable';
 import MqttConfigPanel from './components/MqttConfigPanel';
 import { useProtocolShadowRealtime } from '../../components/protocol/protocol-realtime';
+import {
+  buildDuplicatePointTag,
+  findDlt645PointConflict,
+} from './dlt645-form-rules';
 
 const PROTOCOL_VARIANT_OPTIONS = [
   { value: 1, label: 'DLT645 标准版' },
@@ -63,21 +67,6 @@ const LINK_STATE_LABELS: Record<number, string> = {
   2: '运行中',
   3: '待删除',
 };
-
-function buildDuplicatePointTag(sourceTag: string, existingTags: Iterable<string>): string {
-  const baseTag = sourceTag.trim();
-  const copyPrefix = `${baseTag || 'point'}_copy`;
-  const usedTags = new Set(existingTags);
-  if (!usedTags.has(copyPrefix)) {
-    return copyPrefix;
-  }
-
-  let suffix = 2;
-  while (usedTags.has(`${copyPrefix}_${suffix}`)) {
-    suffix += 1;
-  }
-  return `${copyPrefix}_${suffix}`;
-}
 
 const DLT645: React.FC = () => {
   const [links, setLinks] = useState<Dlt645LinkInfo[]>([]);
@@ -595,8 +584,8 @@ const DLT645: React.FC = () => {
     setPointSubmitting(true);
     try {
       const newPoint: Dlt645Point = {
-        tag: values.tag,
-        di: values.di,
+        tag: values.tag.trim(),
+        di: values.di.trim(),
         data_len: values.data_len ?? 4,
         data_type: values.data_type ?? 6,
         access: isPointBool && values.bit_index != null ? 1 : (values.access ?? 1),
@@ -606,6 +595,23 @@ const DLT645: React.FC = () => {
         byte_index: isPointBool ? (values.byte_index ?? null) : null,
         bit_index: isPointBool ? (values.bit_index ?? null) : null,
       };
+      const conflict = findDlt645PointConflict(newPoint, points, editingPointIndex ?? -1);
+      if (conflict === 'tag') {
+        messageApi.error(`标签 ${newPoint.tag} 已存在`);
+        return;
+      }
+      if (conflict === 'di') {
+        messageApi.error(`DI ${newPoint.di} 已被其他点位占用`);
+        return;
+      }
+      if (conflict === 'di_bit') {
+        messageApi.error(`DI ${newPoint.di} 的字节/位已存在`);
+        return;
+      }
+      if (conflict === 'di_length') {
+        messageApi.error(`DI ${newPoint.di} 下 BOOL 点的 data_len 必须一致`);
+        return;
+      }
       const newPoints = editingPointIndex !== null
         ? points.map((point, index) => (index === editingPointIndex ? newPoint : point))
         : [...points, newPoint];
@@ -935,7 +941,26 @@ const DLT645: React.FC = () => {
           <div className="dlt645-form-section-title">基础信息</div>
           <Row gutter={[16, 0]}>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="标签" name="tag" rules={[{ required: true, message: '请输入标签' }]}>
+            <Form.Item
+              label="标签"
+              name="tag"
+              rules={[
+                { required: true, message: '请输入标签' },
+                {
+                  validator: async (_, value: string) => {
+                    const candidate = pointForm.getFieldsValue();
+                    const conflict = findDlt645PointConflict(
+                      { ...candidate, tag: value?.trim() ?? '' },
+                      points,
+                      editingPointIndex ?? -1,
+                    );
+                    if (conflict === 'tag') {
+                      throw new Error('标签已存在');
+                    }
+                  },
+                },
+              ]}
+            >
               <Input />
             </Form.Item>
           </Col>
@@ -943,7 +968,29 @@ const DLT645: React.FC = () => {
             <Form.Item
               label="数据标识 (DI)"
               name="di"
-              rules={[{ required: true, message: '请输入数据标识' }]}
+              dependencies={['tag', 'data_len', 'data_type', 'byte_index', 'bit_index']}
+              rules={[
+                { required: true, message: '请输入数据标识' },
+                {
+                  validator: async (_, value: string) => {
+                    const candidate = pointForm.getFieldsValue();
+                    const conflict = findDlt645PointConflict(
+                      { ...candidate, di: value?.trim() ?? '' },
+                      points,
+                      editingPointIndex ?? -1,
+                    );
+                    if (conflict === 'di') {
+                      throw new Error('DI 已被其他点位占用');
+                    }
+                    if (conflict === 'di_bit') {
+                      throw new Error('DI 的字节/位已存在');
+                    }
+                    if (conflict === 'di_length') {
+                      throw new Error('相同 DI 下 BOOL 点的 data_len 必须一致');
+                    }
+                  },
+                },
+              ]}
             >
               <Input placeholder="02010100" maxLength={8} />
             </Form.Item>
