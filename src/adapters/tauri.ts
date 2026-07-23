@@ -49,6 +49,8 @@ import type {
   RuntimeDirectoryKind,
   RuntimePaths,
   CacheClearResult,
+  CalcGroupConfig,
+  CalcGroupInfo,
 } from './types';
 import { getLowerUpdateStaticBaseUrl } from './lower-update-source';
 
@@ -266,6 +268,20 @@ export const api = {
     invoke<void>('dc_start_protocol_shadow_stream'),
   dcGetProtocolShadowLatest: (sourceConnId: number, sourceTags: string[]) =>
     invoke<DcPointUpdate[]>('dc_get_protocol_shadow_latest', { sourceConnId, sourceTags }),
+
+  calcUpsertGroup: (config: CalcGroupConfig, createOnly: boolean) =>
+    invoke<CalcGroupInfo>('calc_upsert_group', { config, createOnly }),
+  calcRenameGroup: (oldGroupName: string, newGroupName: string) =>
+    invoke<CalcGroupInfo>('calc_rename_group', { oldGroupName, newGroupName }),
+  calcGetGroup: (groupName: string) =>
+    invoke<CalcGroupInfo>('calc_get_group', { groupName }),
+  calcListGroups: () => invoke<CalcGroupInfo[]>('calc_list_groups'),
+  calcDeleteGroup: (groupName: string) =>
+    invoke<void>('calc_delete_group', { groupName }),
+  calcStartGroup: (groupName: string) =>
+    invoke<void>('calc_start_group', { groupName }),
+  calcStopGroup: (groupName: string) =>
+    invoke<void>('calc_stop_group', { groupName }),
 
   agcUpsertGroup: (config: AgcGroupConfig, createOnly: boolean) =>
     invoke<AgcGroupInfo>('agc_upsert_group', { config, createOnly }),

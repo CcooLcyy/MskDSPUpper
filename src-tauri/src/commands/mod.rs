@@ -1,6 +1,7 @@
 pub mod agc;
 pub mod app_storage;
 pub mod avc;
+pub mod calc;
 pub mod data_center;
 pub mod dlt645;
 pub mod export_config;

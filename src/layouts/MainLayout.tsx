@@ -4,6 +4,7 @@ import {
   AlertOutlined,
   ApiOutlined,
   AppstoreOutlined,
+  CalculatorOutlined,
   CloudDownloadOutlined,
   ControlOutlined,
   DashboardOutlined,
@@ -47,6 +48,11 @@ const menuItems = [
     key: '/alerts-logs',
     icon: <AlertOutlined />,
     label: '告警日志',
+  },
+  {
+    key: '/calc',
+    icon: <CalculatorOutlined />,
+    label: '数值计算',
   },
   {
     key: '/data-bus',
@@ -110,7 +116,7 @@ const MainLayout: React.FC = () => {
   const isDataBusPage = location.pathname.startsWith('/data-bus');
   const isSoftwareUpdatePage = location.pathname.startsWith('/software-update');
   const suppressHeaderTitle = isProtocolPage || isControlPage;
-  const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage || isControlPage ? 'hidden' : 'auto';
+  const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage || isControlPage || location.pathname.startsWith('/calc') ? 'hidden' : 'auto';
 
   return (
     <Layout style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>

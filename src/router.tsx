@@ -3,6 +3,7 @@ import MainLayout from './layouts/MainLayout';
 import { ADVANCED_CONFIG_PATH } from './utils/advanced-config-auth';
 import {
   ControlPage,
+  CalcPage,
   DataBusPage,
   DLT645Page,
   IEC104Page,
@@ -115,6 +116,14 @@ export const router = createBrowserRouter([
           <div style={{ color: '#aaa', fontSize: 16, padding: 0, textAlign: 'center' }}>
             {'\u544a\u8b66\u4e0e\u65e5\u5fd7\u529f\u80fd\u5f00\u53d1\u4e2d'}
           </div>
+        ),
+      },
+      {
+        path: 'calc',
+        element: (
+          <RouteSuspense>
+            <CalcPage />
+          </RouteSuspense>
         ),
       },
       {

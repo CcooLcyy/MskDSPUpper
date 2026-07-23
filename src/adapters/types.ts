@@ -435,6 +435,58 @@ export interface DcPointUpdate {
   quality: number;
 }
 
+export interface CalcTypedConstant {
+  bool_value?: boolean;
+  int_value?: number;
+  double_value?: number;
+}
+
+export interface CalcOperandSpec {
+  source_kind: number;
+  constant?: CalcTypedConstant | null;
+}
+
+export interface CalcItemConfig {
+  item_name: string;
+  operator_kind: number;
+  left_operand: CalcOperandSpec | null;
+  right_operand: CalcOperandSpec | null;
+  operands: CalcOperandSpec[];
+  decimal_places?: number;
+}
+
+export interface CalcOperandStatus {
+  index: number;
+  input_tag: string;
+  ready: boolean;
+  reason: string;
+  quality: number;
+  ts_ms: number;
+}
+
+export interface CalcItemInfo {
+  config: CalcItemConfig | null;
+  left_input_tag: string;
+  right_input_tag: string;
+  result_tag: string;
+  input_tags: string[];
+  operand_status: CalcOperandStatus[];
+  last_error: string;
+}
+
+export interface CalcGroupConfig {
+  group_name: string;
+  items: CalcItemConfig[];
+}
+
+export interface CalcGroupInfo {
+  config: CalcGroupConfig | null;
+  conn_id: number;
+  state: number;
+  last_error: string;
+  items: CalcItemInfo[];
+}
+
 export interface AgcSignalSpec {
   tag: string;
   unit: string;

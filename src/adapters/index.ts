@@ -64,6 +64,15 @@ export type {
   DcRoute,
 } from './types';
 export type {
+  CalcGroupConfig,
+  CalcGroupInfo,
+  CalcItemConfig,
+  CalcItemInfo,
+  CalcOperandStatus,
+  CalcOperandSpec,
+  CalcTypedConstant,
+} from './types';
+export type {
   AvcDefaultPointInfo,
   AvcGroupConfig,
   AvcGroupInfo,

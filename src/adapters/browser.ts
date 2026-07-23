@@ -4,6 +4,11 @@ import type {
   AgcGroupInfo,
   AppUpdateDownloadEvent,
   AppSettingsMap,
+  CalcGroupConfig,
+  CalcGroupInfo,
+  CalcItemInfo,
+  CalcOperandSpec,
+  CalcOperandStatus,
   AvcDefaultPointInfo,
   AvcGroupConfig,
   AvcGroupInfo,
@@ -90,10 +95,11 @@ const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('DLT645'),
   makeModuleInfo('AGC'),
   makeModuleInfo('AVC'),
+  makeModuleInfo('Calc'),
   makeModuleInfo('MQTTManager'),
 ];
 
-const runningModules = new Set(['ModuleManager', 'DataCenter', 'IEC104', 'ModbusRTU', 'DLT645', 'AGC', 'AVC']);
+const runningModules = new Set(['ModuleManager', 'DataCenter', 'IEC104', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc']);
 const iec104Links = new Map<string, Iec104LinkInfo>();
 const iec104Tables = new Map<string, Iec104PointTable>();
 const modbusLinks = new Map<string, ModbusLinkInfo>();
@@ -102,6 +108,7 @@ const dlt645Links = new Map<string, Dlt645LinkInfo>();
 const dlt645Tables = new Map<string, Dlt645PointTable>();
 const agcGroups = new Map<string, AgcGroupInfo>();
 const avcGroups = new Map<string, AvcGroupInfo>();
+const calcGroups = new Map<string, CalcGroupInfo>();
 let routes: DcRoute[] = [];
 let modbusMqtt: ModbusMqttConfig | null = null;
 let dlt645Mqtt: Dlt645MqttConfig | null = null;
@@ -213,6 +220,7 @@ function listConnections(): DcConnectionInfo[] {
     ...[...dlt645Links.values()].map((item) => connectionInfo('DLT645', item.config?.conn_name ?? '', item.conn_id)),
     ...[...agcGroups.values()].map((item) => connectionInfo('AGC', item.config?.group_name ?? '', item.conn_id)),
     ...[...avcGroups.values()].map((item) => connectionInfo('AVC', item.config?.group_name ?? '', item.conn_id)),
+    ...[...calcGroups.values()].map((item) => connectionInfo('Calc', item.config?.group_name ?? '', item.conn_id)),
   ].filter((item) => item.conn_name);
 }
 
@@ -276,6 +284,18 @@ function tagsForConnection(connId: number): string[] {
     return [...tags];
   }
 
+  const calc = [...calcGroups.values()].find((item) => item.conn_id === connId);
+  if (calc?.items) {
+    return calc.items.flatMap((item) => {
+      // input_tags is authoritative for aggregate items. Keep the fallback for
+      // values created by an older browser session before this field existed.
+      const inputTags = item.input_tags?.length
+        ? item.input_tags
+        : [item.left_input_tag, item.right_input_tag];
+      return [...inputTags, item.result_tag].filter(Boolean);
+    });
+  }
+
   return [];
 }
 
@@ -306,6 +326,47 @@ function makeDefaultAvcPoints(groupName: string): AvcDefaultPointInfo[] {
     { kind: 2, tag: `${groupName}.q_total_cmd`, name: '无功总指令', description: '浏览器开发模式 mock 点' },
     { kind: 3, tag: `${groupName}.q_total_meas`, name: '无功总测量值', description: '浏览器开发模式 mock 点' },
   ];
+}
+
+function makeCalcItems(config: CalcGroupConfig): CalcItemInfo[] {
+  return config.items.map((item) => {
+    const isAggregate = item.operator_kind === 9 || item.operator_kind === 10;
+    const operands = item.operands ?? [];
+    const leftInputTag = isAggregate ? '' : `${item.item_name}/left_input`;
+    const rightInputTag = isAggregate ? '' : `${item.item_name}/right_input`;
+    const inputTags = isAggregate
+      ? operands.map((_, index) => `${item.item_name}/input_${index + 1}`)
+      : [leftInputTag, rightInputTag];
+    const statusOperands: Array<{ operand: CalcOperandSpec | null | undefined; index: number; tag: string }> = isAggregate
+      ? operands.map((operand, index) => ({ operand, index, tag: inputTags[index] }))
+      : [
+        { operand: item.left_operand, index: 0, tag: leftInputTag },
+        ...(item.right_operand ? [{ operand: item.right_operand, index: 1, tag: rightInputTag }] : []),
+      ];
+    const operandStatus: CalcOperandStatus[] = statusOperands.map(({ operand, index, tag }) => {
+      const isConstant = operand?.source_kind === 2;
+      return {
+        index,
+        input_tag: tag,
+        ready: isConstant,
+        reason: isConstant ? '' : '尚未收到输入数据',
+        quality: isConstant ? 1 : 0,
+        ts_ms: 0,
+      };
+    });
+    const missingTags = operandStatus.filter((status) => !status.ready).map((status) => status.input_tag);
+    return {
+      config: clone(item),
+      left_input_tag: leftInputTag,
+      right_input_tag: rightInputTag,
+      result_tag: `${item.item_name}/result`,
+      input_tags: inputTags,
+      operand_status: operandStatus,
+      last_error: missingTags.length > 0
+        ? `item_name=${item.item_name} 等待输入: ${missingTags.join(', ')} 尚未收到数据`
+        : '',
+    };
+  });
 }
 
 function seedDemoData() {
@@ -357,6 +418,26 @@ function seedDemoData() {
     },
   };
   agcGroups.set(agcConfig.group_name, { config: agcConfig, conn_id: nextId(), state: 1, last_error: '' });
+
+  const calcConfig: CalcGroupConfig = {
+    group_name: 'calc-demo',
+    items: [
+      {
+        item_name: 'sum',
+        operator_kind: 1,
+        left_operand: { source_kind: 1, constant: null },
+        right_operand: { source_kind: 2, constant: { double_value: 5 } },
+        operands: [],
+      },
+    ],
+  };
+  calcGroups.set(calcConfig.group_name, {
+    config: calcConfig,
+    conn_id: nextId(),
+    state: 1,
+    last_error: '',
+    items: makeCalcItems(calcConfig),
+  });
 }
 
 seedDemoData();
@@ -666,6 +747,39 @@ export const browserApi: typeof tauriApi = {
   dcGetLatest: getLatestUpdates,
   dcStartProtocolShadowStream: async () => {},
   dcGetProtocolShadowLatest: getLatestUpdates,
+
+  calcUpsertGroup: async (config: CalcGroupConfig, createOnly: boolean) => {
+    const previous = calcGroups.get(config.group_name);
+    ensureUnique(createOnly, Boolean(previous), config.group_name);
+    const value: CalcGroupInfo = {
+      config: clone(config),
+      conn_id: previous?.conn_id ?? nextId(),
+      state: previous?.state ?? 1,
+      last_error: '',
+      items: makeCalcItems(config),
+    };
+    calcGroups.set(config.group_name, value);
+    return clone(value);
+  },
+  calcRenameGroup: async (oldGroupName: string, newGroupName: string) => {
+    const value = calcGroups.get(oldGroupName);
+    if (!value) throw new Error(`浏览器开发模式 mock 未找到: ${oldGroupName}`);
+    if (calcGroups.has(newGroupName)) throw new Error(`浏览器开发模式 mock 已存在: ${newGroupName}`);
+    calcGroups.delete(oldGroupName);
+    const renamed = clone(value);
+    if (renamed.config) renamed.config.group_name = newGroupName;
+    calcGroups.set(newGroupName, renamed);
+    return clone(renamed);
+  },
+  calcGetGroup: async (groupName: string) => {
+    const value = calcGroups.get(groupName);
+    if (!value) throw new Error(`浏览器开发模式 mock 未找到: ${groupName}`);
+    return clone(value);
+  },
+  calcListGroups: async () => clone([...calcGroups.values()]),
+  calcDeleteGroup: async (groupName: string) => deleteByName(calcGroups, groupName),
+  calcStartGroup: async (groupName: string) => setLinkState(calcGroups, groupName, 2),
+  calcStopGroup: async (groupName: string) => setLinkState(calcGroups, groupName, 1),
 
   agcUpsertGroup: async (config: AgcGroupConfig, createOnly: boolean) => {
     const previous = agcGroups.get(config.group_name);

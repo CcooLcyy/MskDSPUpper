@@ -1,0 +1,88 @@
+use anyhow::Result;
+
+use crate::grpc::connection::ConnectionManager;
+use crate::proto::calc_proto::{
+    calc_service_client::CalcServiceClient, CalcGroupConfig, CalcGroupInfo, DeleteGroupRequest,
+    Empty, GetGroupRequest, ListGroupsResponse, RenameGroupRequest, StartGroupRequest,
+    StopGroupRequest, UpsertGroupRequest,
+};
+
+/// Thin gRPC client for the lower-machine Calc module.
+pub struct CalcClient<'a> {
+    conn: &'a ConnectionManager,
+}
+
+impl<'a> CalcClient<'a> {
+    pub fn new(conn: &'a ConnectionManager) -> Self {
+        Self { conn }
+    }
+
+    pub async fn upsert_group(
+        &self,
+        config: CalcGroupConfig,
+        create_only: bool,
+    ) -> Result<CalcGroupInfo> {
+        let channel = self.conn.module_channel("Calc").await?;
+        let mut client = CalcServiceClient::new(channel);
+        let response = client
+            .upsert_group(UpsertGroupRequest {
+                config: Some(config),
+                create_only,
+            })
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn rename_group(
+        &self,
+        old_group_name: String,
+        new_group_name: String,
+    ) -> Result<CalcGroupInfo> {
+        let channel = self.conn.module_channel("Calc").await?;
+        let mut client = CalcServiceClient::new(channel);
+        let response = client
+            .rename_group(RenameGroupRequest {
+                old_group_name,
+                new_group_name,
+            })
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn get_group(&self, group_name: String) -> Result<CalcGroupInfo> {
+        let channel = self.conn.module_channel("Calc").await?;
+        let mut client = CalcServiceClient::new(channel);
+        let response = client.get_group(GetGroupRequest { group_name }).await?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn list_groups(&self) -> Result<ListGroupsResponse> {
+        let channel = self.conn.module_channel("Calc").await?;
+        let mut client = CalcServiceClient::new(channel);
+        let response = client.list_groups(Empty {}).await?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn delete_group(&self, group_name: String) -> Result<()> {
+        let channel = self.conn.module_channel("Calc").await?;
+        let mut client = CalcServiceClient::new(channel);
+        client
+            .delete_group(DeleteGroupRequest { group_name })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn start_group(&self, group_name: String) -> Result<()> {
+        let channel = self.conn.module_channel("Calc").await?;
+        let mut client = CalcServiceClient::new(channel);
+        client.start_group(StartGroupRequest { group_name }).await?;
+        Ok(())
+    }
+
+    pub async fn stop_group(&self, group_name: String) -> Result<()> {
+        let channel = self.conn.module_channel("Calc").await?;
+        let mut client = CalcServiceClient::new(channel);
+        client.stop_group(StopGroupRequest { group_name }).await?;
+        Ok(())
+    }
+}

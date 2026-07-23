@@ -1,5 +1,6 @@
 pub mod agc;
 pub mod avc;
+pub mod calc;
 pub mod connection;
 pub mod data_center;
 pub mod dlt645;
