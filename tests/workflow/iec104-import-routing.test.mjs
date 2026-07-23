@@ -110,7 +110,7 @@ test('IEC104 import page exposes an opt-in route checkbox and MASTER warning', (
   assert.match(pageSource, /const \[createImportRoutes, setCreateImportRoutes\] = useState\(false\)/);
   assert.match(pageSource, /const openImportPointModal = useCallback\(\(\) => \{[\s\S]*setCreateImportRoutes\(false\)/);
   assert.match(pageSource, /checked=\{createImportRoutes\}/);
-  assert.match(pageSource, /同时创建 DataCenter 路由（来源点位 → 当前 IEC104 点位）/);
+  assert.match(pageSource, /导入并创建 DataCenter 路由（来源点位 → 当前 IEC104 点位）/);
   assert.match(pageSource, /当前 IEC104 连接为 MASTER/);
   assert.match(pageSource, /config\.station_role === 0 && config\.role === ROLE_CLIENT/);
 });

@@ -574,16 +574,21 @@ const PointTable: React.FC<Props> = ({
             ]}
             onChange={setTableView}
           />
-          {tableView === 'config' ? (
+          <span
+            className={`modbus-point-advanced-toggle-slot${tableView === 'config' ? '' : ' is-hidden'}`}
+            aria-hidden={tableView !== 'config'}
+          >
             <Button
               type="text"
               size="small"
+              tabIndex={tableView === 'config' ? undefined : -1}
+              disabled={tableView !== 'config'}
               icon={showAdvancedConfig ? <EyeInvisibleOutlined /> : <EyeOutlined />}
               onClick={() => setShowAdvancedConfig((visible) => !visible)}
             >
               {showAdvancedConfig ? '隐藏字序/字节序' : '显示字序/字节序'}
             </Button>
-          ) : null}
+          </span>
           <Button
             size="small"
             icon={<FilterOutlined />}

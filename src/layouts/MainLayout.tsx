@@ -82,7 +82,7 @@ const MainLayout: React.FC = () => {
   const { hasAvailableUpdate } = useAppUpdate();
   const [collapsed, setCollapsed] = useState(false);
   // Protocol remains a navigation group; page-level view switchers live in the header.
-  const parentMenuKeys = new Set(['/protocol']);
+  const parentMenuKeys = new Set(['/protocol', '/alerts-logs']);
   const renderedMenuItems = useMemo(
     () =>
       menuItems.map((item) =>

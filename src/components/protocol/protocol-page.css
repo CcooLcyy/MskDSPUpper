@@ -176,6 +176,22 @@
   cursor: pointer;
 }
 
+.protocol-connection-item-main > .ant-space {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
+.protocol-connection-item-main > .ant-space > .ant-space-item:last-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.protocol-connection-item-main .ant-typography {
+  max-width: 100%;
+}
+
 .protocol-connection-item-main:focus-visible {
   outline: 2px solid #1890ff;
   outline-offset: 2px;
@@ -252,9 +268,391 @@
   overflow: hidden;
 }
 
+.dlt645-page .protocol-config-view {
+  overflow: hidden;
+}
+
+.dlt645-page .protocol-top-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.dlt645-connection-shell {
+  display: flex;
+  min-width: 0;
+}
+
+.dlt645-connection-card {
+  width: 100%;
+  min-width: 0;
+}
+
+.dlt645-connection-card .ant-card-head {
+  min-height: 52px;
+}
+
+.dlt645-connection-card .ant-card-head-title,
+.dlt645-connection-card .ant-card-extra {
+  min-width: 0;
+}
+
+.dlt645-connection-card .ant-card-extra {
+  max-width: 72%;
+}
+
+.dlt645-connection-title {
+  min-width: 0;
+  row-gap: 4px;
+}
+
+.dlt645-connection-name,
+.dlt645-connection-meter {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dlt645-connection-actions {
+  justify-content: flex-end;
+  row-gap: 4px;
+}
+
+.dlt645-connection-descriptions .ant-descriptions-item-content {
+  min-width: 0;
+}
+
+.dlt645-connection-descriptions .ant-descriptions-item-content > .ant-space {
+  max-width: 100%;
+}
+
+.dlt645-connection-section {
+  padding: 4px 0 2px;
+}
+
+.dlt645-connection-section + .dlt645-connection-section {
+  padding-top: 10px;
+  margin-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dlt645-connection-section-title {
+  display: block;
+  margin: 0 0 8px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dlt645-connection-section--serial {
+  padding-right: 8px;
+  padding-left: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.dlt645-connection-section--serial + .dlt645-connection-section {
+  border-top: 0;
+}
+
+.dlt645-connection-empty {
+  display: grid;
+  min-height: 126px;
+  place-items: center;
+}
+
+.dlt645-last-error {
+  margin-top: 14px;
+}
+
+.dlt645-page-alert {
+  flex: 0 0 auto;
+  margin: 8px 12px 0;
+}
+
 .modbus-page-alert {
   flex: 0 0 auto;
   margin: 8px 12px 0;
+}
+
+.iec104-page-alert {
+  flex: 0 0 auto;
+  margin: 8px 12px 0;
+}
+
+.iec104-page .protocol-config-view {
+  overflow: hidden;
+}
+
+.iec104-page .protocol-top-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.iec104-connection-shell {
+  display: flex;
+  min-width: 0;
+}
+
+.iec104-connection-card {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.iec104-connection-card > .ant-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.iec104-connection-card .ant-card-head {
+  min-height: 52px;
+}
+
+.iec104-connection-card .ant-card-head-title,
+.iec104-connection-card .ant-card-extra {
+  min-width: 0;
+}
+
+.iec104-connection-card .ant-card-extra {
+  max-width: 76%;
+}
+
+.iec104-connection-title {
+  min-width: 0;
+  row-gap: 4px;
+}
+
+.iec104-connection-name {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iec104-connection-actions {
+  justify-content: flex-end;
+  row-gap: 4px;
+}
+
+.iec104-connection-descriptions .ant-descriptions-item-content {
+  min-width: 0;
+}
+
+.iec104-connection-empty {
+  display: grid;
+  min-height: 126px;
+  place-items: center;
+}
+
+.iec104-last-error {
+  margin-top: 14px;
+}
+
+.iec104-page .protocol-point-card .ant-card-extra {
+  max-width: 80%;
+}
+
+.iec104-page .protocol-point-card .ant-card-extra > .ant-space {
+  justify-content: flex-end;
+}
+
+.iec104-import-batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.iec104-import-row-error > td {
+  background: rgba(255, 77, 79, 0.06) !important;
+}
+
+.iec104-ioa-allocation-panel,
+.iec104-ioa-adjust-list {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.iec104-ioa-allocation-panel {
+  padding: 10px 12px;
+}
+
+.iec104-ioa-allocation-toolbar,
+.iec104-ioa-adjust-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.iec104-ioa-allocation-list {
+  display: flex;
+  max-height: 190px;
+  margin-top: 10px;
+  padding-right: 4px;
+  overflow: auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.iec104-ioa-allocation-item {
+  display: grid;
+  grid-template-columns: 18px 24px minmax(120px, 0.8fr) minmax(160px, 1.2fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 3px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: grab;
+}
+
+.iec104-ioa-allocation-item:hover,
+.iec104-ioa-adjust-row:hover {
+  background: rgba(22, 119, 255, 0.08);
+}
+
+.iec104-ioa-drag-handle {
+  color: #8c8c8c;
+}
+
+.iec104-ioa-order,
+.iec104-ioa-adjust-order {
+  color: #8c8c8c;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.iec104-ioa-allocation-tag,
+.iec104-ioa-allocation-source {
+  min-width: 0;
+}
+
+.iec104-ioa-adjust-modal .ant-modal-body {
+  min-height: 0;
+}
+
+.iec104-ioa-adjust-list {
+  overflow: hidden;
+}
+
+.iec104-ioa-adjust-header,
+.iec104-ioa-adjust-row {
+  display: grid;
+  grid-template-columns: 70px minmax(150px, 1.3fr) minmax(130px, 1fr) 150px minmax(100px, 0.8fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.iec104-ioa-adjust-header {
+  color: #8c8c8c;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.iec104-ioa-adjust-row {
+  min-height: 42px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.iec104-ioa-adjust-row:last-child {
+  border-bottom: 0;
+}
+
+.iec104-ioa-adjust-row.has-error {
+  background: rgba(255, 77, 79, 0.06);
+}
+
+.iec104-ioa-adjust-row > .ant-typography {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iec104-ioa-input-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.iec104-ioa-input-dual {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iec104-ioa-form-extra {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  line-height: 1.45;
+}
+
+.iec104-ioa-form-extra > .ant-space-item {
+  min-width: 0;
+}
+
+.iec104-ioa-form-extra > .ant-space-item:first-child {
+  flex: 1 1 100%;
+}
+
+.iec104-ioa-form-extra .ant-checkbox-wrapper {
+  margin-top: 2px;
+}
+
+.iec104-ioa-adjust-status {
+  overflow: hidden;
+  color: #ff7875;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iec104-config-modal {
+  max-width: calc(100vw - 32px);
+}
+
+.iec104-config-modal .ant-modal-content {
+  display: flex;
+  max-height: calc(100dvh - 48px);
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.iec104-config-modal .ant-modal-header {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.iec104-config-modal .ant-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px 20px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.iec104-config-modal .ant-modal-footer {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .modbus-page .protocol-top-row {
@@ -300,6 +698,16 @@
 
 .modbus-page .protocol-point-card .ant-card-extra > .ant-space {
   justify-content: flex-end;
+}
+
+.modbus-point-advanced-toggle-slot {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.modbus-point-advanced-toggle-slot.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .protocol-point-filter-panel {
@@ -450,13 +858,183 @@
   margin-bottom: 12px;
 }
 
+.dlt645-config-modal {
+  max-width: calc(100vw - 32px);
+}
+
+.dlt645-config-modal .ant-modal-content {
+  display: flex;
+  max-height: calc(100dvh - 48px);
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.dlt645-config-modal .ant-modal-header {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dlt645-config-modal .ant-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px 20px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.dlt645-config-modal .ant-modal-footer {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dlt645-config-modal .ant-form-item:last-child {
+  margin-bottom: 12px;
+}
+
+.dlt645-form-section {
+  padding: 4px 0 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.dlt645-form-section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.dlt645-form-section-title {
+  display: block;
+  margin: 2px 0 12px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dlt645-form-section-hint {
+  display: block;
+  margin: -6px 0 12px;
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
+.dlt645-block-editor {
+  min-width: 0;
+  max-height: min(46vh, 420px);
+  overflow-x: auto;
+  overflow-y: auto;
+  padding: 10px 12px 0;
+  margin-top: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  scrollbar-gutter: stable;
+}
+
+.dlt645-block-item-row {
+  min-width: 0;
+  padding: 10px 10px 0;
+  margin: 0 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.dlt645-block-item-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+  padding-bottom: 6px;
+}
+
+.dlt645-block-item-index {
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dlt645-block-item-main,
+.dlt645-block-item-advanced {
+  min-width: 0;
+}
+
+.dlt645-block-item-advanced {
+  padding-top: 8px;
+  margin-top: 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dlt645-block-item-row .ant-form-item {
+  margin-bottom: 10px;
+}
+
+.dlt645-block-item-row:last-of-type {
+  margin-bottom: 10px;
+}
+
+.dlt645-page .protocol-point-card .ant-card-extra {
+  max-width: 78%;
+}
+
+.dlt645-page .protocol-point-card .ant-card-extra > .ant-space {
+  justify-content: flex-end;
+  row-gap: 6px;
+}
+
+.dlt645-point-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.dlt645-point-toolbar-main,
+.dlt645-point-secondary-actions,
+.dlt645-point-primary-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.dlt645-point-toolbar-main {
+  gap: 8px;
+}
+
+.dlt645-point-toolbar__group {
+  min-width: 0;
+}
+
+.dlt645-point-secondary-actions,
+.dlt645-point-primary-actions {
+  row-gap: 6px;
+}
+
 @media (max-width: 1200px) {
   .modbus-page .protocol-config-view {
     overflow: auto;
   }
 
+  .dlt645-page .protocol-config-view {
+    overflow: auto;
+  }
+
+  .iec104-page .protocol-config-view {
+    overflow: auto;
+  }
+
   .modbus-page .modbus-connection-card .ant-card-extra,
-  .modbus-page .protocol-point-card .ant-card-extra {
+  .modbus-page .protocol-point-card .ant-card-extra,
+  .dlt645-page .dlt645-connection-card .ant-card-extra,
+  .dlt645-page .protocol-point-card .ant-card-extra,
+  .iec104-page .iec104-connection-card .ant-card-extra,
+  .iec104-page .protocol-point-card .ant-card-extra {
     max-width: 100%;
   }
 }
@@ -479,8 +1057,105 @@
     padding-left: 16px;
   }
 
+  .dlt645-config-modal {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px);
+    margin: 8px auto;
+  }
+
+  .dlt645-config-modal .ant-modal-content {
+    max-height: calc(100dvh - 16px);
+  }
+
+  .dlt645-config-modal .ant-modal-header,
+  .dlt645-config-modal .ant-modal-body,
+  .dlt645-config-modal .ant-modal-footer {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .iec104-config-modal {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px);
+    margin: 8px auto;
+  }
+
+  .iec104-config-modal .ant-modal-content {
+    max-height: calc(100dvh - 16px);
+  }
+
+  .iec104-config-modal .ant-modal-header,
+  .iec104-config-modal .ant-modal-body,
+  .iec104-config-modal .ant-modal-footer {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .iec104-ioa-allocation-item {
+    grid-template-columns: 18px 24px minmax(100px, 1fr) auto;
+  }
+
+  .iec104-ioa-allocation-source {
+    display: none;
+  }
+
+  .iec104-ioa-adjust-header,
+  .iec104-ioa-adjust-row {
+    grid-template-columns: 54px minmax(110px, 1fr) minmax(95px, 0.9fr) 120px;
+  }
+
+  .iec104-ioa-adjust-header > span:last-child,
+  .iec104-ioa-adjust-row > .iec104-ioa-adjust-status,
+  .iec104-ioa-adjust-row > .ant-tag {
+    display: none;
+  }
+
   .modbus-connection-card .ant-card-extra,
-  .modbus-page .protocol-point-card .ant-card-extra {
+  .modbus-page .protocol-point-card .ant-card-extra,
+  .dlt645-page .dlt645-connection-card .ant-card-extra,
+  .dlt645-page .protocol-point-card .ant-card-extra,
+  .iec104-page .iec104-connection-card .ant-card-extra,
+  .iec104-page .protocol-point-card .ant-card-extra {
+    width: 100%;
+  }
+
+  .dlt645-connection-actions {
+    justify-content: flex-start;
+  }
+
+  .dlt645-connection-name,
+  .dlt645-connection-meter {
+    max-width: min(52vw, 220px);
+  }
+
+  .dlt645-page .protocol-point-card .ant-card-extra > .dlt645-point-toolbar {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .dlt645-page .protocol-point-card .ant-card-extra > .dlt645-point-toolbar > .dlt645-point-toolbar-main,
+  .dlt645-page .protocol-point-card .ant-card-extra > .dlt645-point-toolbar > .dlt645-point-primary-actions,
+  .dlt645-page .protocol-point-card .ant-card-extra > .dlt645-point-toolbar > .dlt645-point-secondary-actions {
+    max-width: 100%;
+  }
+
+  .dlt645-page .protocol-point-card .ant-card-extra > .dlt645-point-toolbar > .dlt645-point-primary-actions,
+  .dlt645-page .protocol-point-card .ant-card-extra > .dlt645-point-toolbar > .dlt645-point-secondary-actions {
+    flex-wrap: wrap;
+  }
+
+  .dlt645-page .protocol-point-card .ant-card-extra > .dlt645-point-toolbar > .dlt645-point-primary-actions {
+    justify-content: flex-start;
+  }
+
+  .dlt645-page .protocol-point-card .ant-card-extra > .dlt645-point-toolbar > .dlt645-point-secondary-actions {
+    justify-content: flex-start;
+  }
+
+  .modbus-connection-card .ant-card-extra,
+  .modbus-page .protocol-point-card .ant-card-extra,
+  .dlt645-page .dlt645-connection-card .ant-card-extra,
+  .dlt645-page .protocol-point-card .ant-card-extra {
     width: 100%;
   }
 
@@ -496,13 +1171,28 @@
   }
 
   .modbus-connection-actions,
-  .modbus-page .protocol-point-card .ant-card-extra > .ant-space {
+  .modbus-page .protocol-point-card .ant-card-extra > .ant-space,
+  .dlt645-connection-actions,
+  .iec104-connection-actions,
+  .iec104-page .protocol-point-card .ant-card-extra > .ant-space {
     justify-content: flex-start;
+  }
+
+  .iec104-connection-name {
+    max-width: min(52vw, 240px);
   }
 }
 
 @media (max-width: 520px) {
   .modbus-config-modal .ant-modal-footer .ant-btn {
+    min-width: 84px;
+  }
+
+  .dlt645-config-modal .ant-modal-footer .ant-btn {
+    min-width: 84px;
+  }
+
+  .iec104-config-modal .ant-modal-footer .ant-btn {
     min-width: 84px;
   }
 }

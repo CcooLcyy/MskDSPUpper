@@ -54,6 +54,14 @@ import { buildLowerUpdateLatestUrl } from './lower-update-source';
 const DEFAULT_MANAGER_ADDR = '127.0.0.1:17000';
 const BROWSER_SETTINGS_KEY = 'mskdsp_browser_app_settings_v1';
 
+// IEC104 LinkState values mirror IEC104.proto.
+const IEC104_LINK_STATE = {
+  UNSPECIFIED: 0,
+  STOPPED: 1,
+  RUNNING: 2,
+  PENDING_DELETE: 3,
+} as const;
+
 let managerAddr = DEFAULT_MANAGER_ADDR;
 let nextConnId = 100;
 
@@ -386,12 +394,17 @@ function seedDemoData() {
     station_role: 0,
     point_with_time: false,
   };
-  iec104Links.set(iecConfig.conn_name, { config: iecConfig, conn_id: nextId(), state: 1, last_error: '' });
+  iec104Links.set(iecConfig.conn_name, {
+    config: iecConfig,
+    conn_id: nextId(),
+    state: IEC104_LINK_STATE.STOPPED,
+    last_error: '',
+  });
   iec104Tables.set(iecConfig.conn_name, {
     conn_name: iecConfig.conn_name,
     points: [
-      { tag: 'P_MEAS', ioa: 1001, point_type: 9, scale: 1, offset: 0, deadband: 0 },
-      { tag: 'Q_MEAS', ioa: 1002, point_type: 9, scale: 1, offset: 0, deadband: 0 },
+      { tag: 'P_MEAS', ioa: 1001, point_type: 1, scale: 1, offset: 0, deadband: 0 },
+      { tag: 'Q_MEAS', ioa: 1002, point_type: 1, scale: 1, offset: 0, deadband: 0 },
     ],
   });
 
@@ -627,7 +640,7 @@ export const browserApi: typeof tauriApi = {
     upsertByName(iec104Links, config.conn_name, createOnly, (connId, previous) => ({
       config: clone(config),
       conn_id: connId,
-      state: previous?.state ?? 0,
+      state: previous?.state ?? IEC104_LINK_STATE.STOPPED,
       last_error: '',
     })),
   iec104RenameLink: async (oldConnName: string, newConnName: string) =>
@@ -639,8 +652,8 @@ export const browserApi: typeof tauriApi = {
   },
   iec104ListLinks: async () => clone([...iec104Links.values()]),
   iec104DeleteLink: async (connName: string) => deleteByName(iec104Links, connName),
-  iec104StartLink: async (connName: string) => setLinkState(iec104Links, connName, 1),
-  iec104StopLink: async (connName: string) => setLinkState(iec104Links, connName, 0),
+  iec104StartLink: async (connName: string) => setLinkState(iec104Links, connName, IEC104_LINK_STATE.RUNNING),
+  iec104StopLink: async (connName: string) => setLinkState(iec104Links, connName, IEC104_LINK_STATE.STOPPED),
   iec104UpsertPointTable: async (connName: string, points: Iec104Point[], replace: boolean) => {
     const previous = iec104Tables.get(connName)?.points ?? [];
     iec104Tables.set(connName, { conn_name: connName, points: replace ? clone(points) : mergeByTag(previous, points) });
