@@ -173,6 +173,20 @@ type ImportedPointDraft = Iec104Point & {
 
 type IoaAdjustmentStrategy = 'offset' | 'sequence' | 'manual';
 
+const POINT_DRAFT_DRAG_PREFIX = 'mskdsp-iec104-point:';
+
+const setPointDraftDragData = (event: React.DragEvent<HTMLElement>, key: string): void => {
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', `${POINT_DRAFT_DRAG_PREFIX}${key}`);
+};
+
+const getPointDraftDragKey = (event: React.DragEvent<HTMLElement>, fallback: string | null): string | null => {
+  const value = event.dataTransfer.getData('text/plain');
+  return value.startsWith(POINT_DRAFT_DRAG_PREFIX)
+    ? value.slice(POINT_DRAFT_DRAG_PREFIX.length)
+    : fallback;
+};
+
 type IoaAdjustmentDraft = {
   key: string;
   tag: string;
@@ -2823,10 +2837,18 @@ const IEC104: React.FC = () => {
                   className={`iec104-ioa-adjust-row${issue ? ' has-error' : ''}`}
                   key={draft.key}
                   draggable={!pointSubmitting}
-                  onDragStart={() => setIoaAdjustDragKey(draft.key)}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={() => {
-                    if (ioaAdjustDragKey) reorderIoaAdjustDrafts(ioaAdjustDragKey, draft.key);
+                  onDragStart={(event) => {
+                    setPointDraftDragData(event, draft.key);
+                    setIoaAdjustDragKey(draft.key);
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const sourceKey = getPointDraftDragKey(event, ioaAdjustDragKey);
+                    if (sourceKey) reorderIoaAdjustDrafts(sourceKey, draft.key);
                     setIoaAdjustDragKey(null);
                   }}
                   onDragEnd={() => setIoaAdjustDragKey(null)}
@@ -3026,10 +3048,18 @@ const IEC104: React.FC = () => {
                     className="iec104-ioa-allocation-item"
                     key={draft.key}
                     draggable={!importSubmitting}
-                    onDragStart={() => setImportDragKey(draft.key)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => {
-                      if (importDragKey) reorderImportDrafts(importDragKey, draft.key);
+                    onDragStart={(event) => {
+                      setPointDraftDragData(event, draft.key);
+                      setImportDragKey(draft.key);
+                    }}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const sourceKey = getPointDraftDragKey(event, importDragKey);
+                      if (sourceKey) reorderImportDrafts(sourceKey, draft.key);
                       setImportDragKey(null);
                     }}
                     onDragEnd={() => setImportDragKey(null)}
