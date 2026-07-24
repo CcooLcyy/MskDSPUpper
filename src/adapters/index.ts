@@ -73,6 +73,7 @@ export type {
   CalcTypedConstant,
 } from './types';
 export type {
+  AgcDefaultPointInfo,
   AvcDefaultPointInfo,
   AvcGroupConfig,
   AvcGroupInfo,

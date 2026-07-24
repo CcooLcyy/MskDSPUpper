@@ -1,5 +1,6 @@
 import type { api as tauriApi } from './tauri';
 import type {
+  AgcDefaultPointInfo,
   AgcGroupConfig,
   AgcGroupInfo,
   AppUpdateDownloadEvent,
@@ -320,19 +321,36 @@ function getLatestUpdates(connId: number, tags: string[]): Promise<DcPointUpdate
   return Promise.resolve(activeTags.map((tag, index) => ({
     src_conn_id: connId,
     src_tag: tag,
-    dst_conn_id: 0,
-    dst_tag: '',
+    dst_conn_id: connId,
+    dst_tag: tag,
     value: makePointValue(ts / 1000 + index),
     ts_ms: ts,
     quality: 0,
   })));
 }
 
-function makeDefaultAvcPoints(groupName: string): AvcDefaultPointInfo[] {
+function makeDefaultAgcPoints(): AgcDefaultPointInfo[] {
   return [
-    { kind: 1, tag: `${groupName}.voltage_meas`, name: '电压测量值', description: '浏览器开发模式 mock 点' },
-    { kind: 2, tag: `${groupName}.q_total_cmd`, name: '无功总指令', description: '浏览器开发模式 mock 点' },
-    { kind: 3, tag: `${groupName}.q_total_meas`, name: '无功总测量值', description: '浏览器开发模式 mock 点' },
+    { kind: 1, tag: '理论可调有功下限', name: '理论可调有功下限', description: '浏览器开发模式 mock 点' },
+    { kind: 2, tag: '理论可调有功上限', name: '理论可调有功上限', description: '浏览器开发模式 mock 点' },
+    { kind: 3, tag: '当前可调有功下限', name: '当前可调有功下限', description: '浏览器开发模式 mock 点' },
+    { kind: 4, tag: '当前可调有功上限', name: '当前可调有功上限', description: '浏览器开发模式 mock 点' },
+    { kind: 5, tag: '调节返回值', name: '调节返回值', description: '浏览器开发模式 mock 点' },
+  ];
+}
+
+function makeDefaultAvcPoints(): AvcDefaultPointInfo[] {
+  return [
+    { kind: 1, tag: '理论可调无功下限', name: '理论可调无功下限', description: '浏览器开发模式 mock 点' },
+    { kind: 2, tag: '理论可调无功上限', name: '理论可调无功上限', description: '浏览器开发模式 mock 点' },
+    { kind: 3, tag: '当前可调无功下限', name: '当前可调无功下限', description: '浏览器开发模式 mock 点' },
+    { kind: 4, tag: '当前可调无功上限', name: '当前可调无功上限', description: '浏览器开发模式 mock 点' },
+    { kind: 5, tag: '调节返回值', name: '调节返回值', description: '浏览器开发模式 mock 点' },
+    { kind: 6, tag: '当前电压', name: '当前电压', description: '浏览器开发模式 mock 点' },
+    { kind: 7, tag: '总无功目标', name: '总无功目标', description: '浏览器开发模式 mock 点' },
+    { kind: 8, tag: '总无功实测', name: '总无功实测', description: '浏览器开发模式 mock 点' },
+    { kind: 9, tag: '总无功偏差', name: '总无功偏差', description: '浏览器开发模式 mock 点' },
+    { kind: 10, tag: '电压偏差', name: '电压偏差', description: '浏览器开发模式 mock 点' },
   ];
 }
 
@@ -378,8 +396,11 @@ function makeCalcItems(config: CalcGroupConfig): CalcItemInfo[] {
 }
 
 function seedDemoData() {
+  // Keep the browser adapter useful as a small, multi-protocol playground.
+  // The records intentionally cover stopped/running states, serial/MQTT
+  // transports, scalar points, block points, and cross-module routes.
   const iecConfig: Iec104LinkConfig = {
-    conn_name: 'iec104-demo',
+    conn_name: '调度中心-IEC104',
     role: 1,
     local: { ip: '0.0.0.0', port: 2404 },
     remote: { ip: '127.0.0.1', port: 2404 },
@@ -390,7 +411,7 @@ function seedDemoData() {
     point_max_asdu_bytes: 240,
     point_use_standard_limit: true,
     point_dedupe: true,
-    time_sync_tag: 'TIME_SYNC',
+    time_sync_tag: '时钟同步',
     station_role: 0,
     point_with_time: false,
   };
@@ -403,40 +424,321 @@ function seedDemoData() {
   iec104Tables.set(iecConfig.conn_name, {
     conn_name: iecConfig.conn_name,
     points: [
-      { tag: 'P_MEAS', ioa: 1001, point_type: 1, scale: 1, offset: 0, deadband: 0 },
-      { tag: 'Q_MEAS', ioa: 1002, point_type: 1, scale: 1, offset: 0, deadband: 0 },
+      { tag: '有功功率', ioa: 1001, point_type: 1, scale: 1, offset: 0, deadband: 0 },
+      { tag: '无功功率', ioa: 1002, point_type: 1, scale: 1, offset: 0, deadband: 0 },
+      { tag: '有功设定', ioa: 1101, point_type: 1, scale: 1, offset: 0, deadband: 0 },
+      { tag: '运行状态', ioa: 2001, point_type: 2, scale: 1, offset: 0, deadband: 0 },
     ],
   });
 
+  const iecSecondaryConfig: Iec104LinkConfig = {
+    conn_name: '变电站-IEC104',
+    role: 2,
+    local: { ip: '192.168.10.20', port: 2404 },
+    remote: { ip: '192.168.10.11', port: 2404 },
+    ca: 2,
+    oa: 1,
+    apci: { k: 10, w: 6, t0: 30, t1: 15, t2: 10, t3: 20 },
+    point_batch_window_ms: 50,
+    point_max_asdu_bytes: 253,
+    point_use_standard_limit: true,
+    point_dedupe: false,
+    time_sync_tag: '变电站时钟同步',
+    station_role: 2,
+    point_with_time: true,
+  };
+  const iecSecondaryId = nextId();
+  iec104Links.set(iecSecondaryConfig.conn_name, {
+    config: iecSecondaryConfig,
+    conn_id: iecSecondaryId,
+    state: IEC104_LINK_STATE.RUNNING,
+    last_error: '',
+  });
+  iec104Tables.set(iecSecondaryConfig.conn_name, {
+    conn_name: iecSecondaryConfig.conn_name,
+    points: [
+      { tag: '全站有功', ioa: 3001, point_type: 1, scale: 1, offset: 0, deadband: 0.1 },
+      { tag: '全站无功', ioa: 3002, point_type: 1, scale: 1, offset: 0, deadband: 0.1 },
+      { tag: '母线电压', ioa: 3003, point_type: 1, scale: 0.001, offset: 0, deadband: 0.01 },
+      { tag: '断路器状态', ioa: 4001, point_type: 2, scale: 1, offset: 0, deadband: 0 },
+    ],
+  });
+
+  modbusMqtt = {
+    host: '127.0.0.1',
+    port: 1883,
+    client_id: 'mskdsp-browser-modbus',
+    username: 'demo',
+    password: 'demo',
+    keepalive_sec: 60,
+    clean_session: true,
+    connect_timeout_ms: 3000,
+  };
+  const modbusConfig: ModbusLinkConfig = {
+    conn_name: '储能变流器-Modbus',
+    serial: { device: '', baud_rate: 115200, data_bits: 8, parity: 1, stop_bits: 1, read_timeout_ms: 500 },
+    device_id: 1,
+    poll_interval_ms: 1000,
+    address_base: 1,
+    read_plan: { mode: 2, blocks: [{ function: 2, start: 40001, quantity: 8 }, { function: 3, start: 30001, quantity: 4 }] },
+    transport_type: 2,
+    serial_port: 'RS485-PCS',
+    request_timeout_ms: 3000,
+    serial_byte_timeout_ms: 100,
+    serial_frame_timeout_ms: 100,
+    serial_est_size: 256,
+  };
+  const modbusId = nextId();
+  modbusLinks.set(modbusConfig.conn_name, {
+    config: modbusConfig,
+    conn_id: modbusId,
+    state: 2,
+    last_error: '',
+  });
+  modbusTables.set(modbusConfig.conn_name, {
+    conn_name: modbusConfig.conn_name,
+    points: [
+      { tag: '储能有功', function: 2, address: 40001, data_type: 3, scale: 0.1, offset: 0, deadband: 0.2, reg_count: 2, word_order: 1, byte_order: 1, bit_index: null },
+      { tag: '储能无功', function: 2, address: 40003, data_type: 3, scale: 0.1, offset: 0, deadband: 0.2, reg_count: 2, word_order: 1, byte_order: 1, bit_index: null },
+      { tag: '储能荷电率', function: 3, address: 30001, data_type: 4, scale: 0.1, offset: 0, deadband: 0.1, reg_count: 1, word_order: 0, byte_order: 0, bit_index: null },
+      { tag: '储能可用', function: 1, address: 1, data_type: 1, scale: 1, offset: 0, deadband: 0, reg_count: 1, word_order: 0, byte_order: 0, bit_index: null },
+      { tag: '储能告警码', function: 3, address: 30002, data_type: 2, scale: 1, offset: 0, deadband: 0, reg_count: 1, word_order: 0, byte_order: 0, bit_index: null },
+    ],
+  });
+
+  const modbusSerialConfig: ModbusLinkConfig = {
+    conn_name: '现场电表-Modbus',
+    serial: { device: '/dev/ttyUSB0', baud_rate: 9600, data_bits: 8, parity: 1, stop_bits: 1, read_timeout_ms: 800 },
+    device_id: 12,
+    poll_interval_ms: 2000,
+    address_base: 1,
+    read_plan: { mode: 1, blocks: [] },
+    transport_type: 1,
+    serial_port: 'COM3',
+    request_timeout_ms: 4000,
+    serial_byte_timeout_ms: 150,
+    serial_frame_timeout_ms: 200,
+    serial_est_size: 128,
+  };
+  const modbusSerialId = nextId();
+  modbusLinks.set(modbusSerialConfig.conn_name, {
+    config: modbusSerialConfig,
+    conn_id: modbusSerialId,
+    state: 1,
+    last_error: '',
+  });
+  modbusTables.set(modbusSerialConfig.conn_name, {
+    conn_name: modbusSerialConfig.conn_name,
+    points: [
+      { tag: '电表电压', function: 3, address: 1, data_type: 4, scale: 0.1, offset: 0, deadband: 0.1, reg_count: 1, word_order: 0, byte_order: 0, bit_index: null },
+      { tag: '电表电流', function: 3, address: 2, data_type: 4, scale: 0.01, offset: 0, deadband: 0.02, reg_count: 1, word_order: 0, byte_order: 0, bit_index: null },
+      { tag: '电表电量', function: 3, address: 10, data_type: 3, scale: 0.01, offset: 0, deadband: 0.1, reg_count: 2, word_order: 1, byte_order: 1, bit_index: null },
+    ],
+  });
+
+  dlt645Mqtt = {
+    host: '127.0.0.1',
+    port: 1883,
+    client_id: 'mskdsp-browser-dlt645',
+    username: 'demo',
+    password: 'demo',
+    keepalive_sec: 60,
+    clean_session: true,
+    connect_timeout_ms: 3000,
+  };
+  const dltConfig: Dlt645LinkConfig = {
+    conn_name: '一号电表-DLT645',
+    protocol_variant: 1,
+    meter_addr: '000000000001',
+    device_no: '01',
+    transport_type: 1,
+    comm_mode: 3,
+    poll_interval_ms: 3000,
+    poll_item_interval_ms: 500,
+    request_timeout_ms: 3000,
+    serial_port: '',
+    serial_baud_rate: 0,
+    serial_data_bits: 0,
+    serial_parity: 0,
+    serial_stop_bits: 0,
+    serial_byte_timeout_ms: 0,
+    serial_frame_timeout_ms: 0,
+    serial_est_size: 0,
+  };
+  const dltId = nextId();
+  dlt645Links.set(dltConfig.conn_name, {
+    config: dltConfig,
+    conn_id: dltId,
+    state: 2,
+    last_error: '',
+  });
+  dlt645Tables.set(dltConfig.conn_name, {
+    conn_name: dltConfig.conn_name,
+    points: [
+      { tag: '总有功电量', di: '00000000', data_len: 4, data_type: 4, access: 1, scale: 0.01, offset: 0, deadband: 0, byte_index: null, bit_index: null },
+      { tag: '表计电压', di: '02010100', data_len: 2, data_type: 4, access: 1, scale: 0.1, offset: 0, deadband: 0.1, byte_index: null, bit_index: null },
+      { tag: '表计电流', di: '02020100', data_len: 3, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.01, byte_index: null, bit_index: null },
+    ],
+    blocks: [{
+      block_di: '00010000',
+      block_data_len: 12,
+      items: [
+        { tag: 'A相功率', data_len: 4, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.01, trim_right_space: null, byte_index: null, bit_index: null },
+        { tag: 'B相功率', data_len: 4, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.01, trim_right_space: null, byte_index: null, bit_index: null },
+        { tag: 'C相功率', data_len: 4, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.01, trim_right_space: null, byte_index: null, bit_index: null },
+      ],
+    }],
+  });
+
+  const dltSerialConfig: Dlt645LinkConfig = {
+    conn_name: '二号电表-DLT645',
+    protocol_variant: 2,
+    meter_addr: '000000000002',
+    device_no: '02',
+    transport_type: 1,
+    comm_mode: 2,
+    poll_interval_ms: 5000,
+    poll_item_interval_ms: 800,
+    request_timeout_ms: 5000,
+    serial_port: '/dev/ttyUSB1',
+    serial_baud_rate: 9600,
+    serial_data_bits: 8,
+    serial_parity: 1,
+    serial_stop_bits: 1,
+    serial_byte_timeout_ms: 200,
+    serial_frame_timeout_ms: 500,
+    serial_est_size: 128,
+  };
+  const dltSerialId = nextId();
+  dlt645Links.set(dltSerialConfig.conn_name, {
+    config: dltSerialConfig,
+    conn_id: dltSerialId,
+    state: 1,
+    last_error: '',
+  });
+  dlt645Tables.set(dltSerialConfig.conn_name, {
+    conn_name: dltSerialConfig.conn_name,
+    points: [
+      { tag: '二号表有功', di: '02030000', data_len: 3, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.01, byte_index: null, bit_index: null },
+      { tag: '二号表功率因数', di: '02060000', data_len: 2, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.005, byte_index: null, bit_index: null },
+    ],
+    blocks: [],
+  });
+
   const agcConfig: AgcGroupConfig = {
-    group_name: 'agc-demo',
-    p_cmd: { signal: { tag: 'P_CMD', unit: 'kW', scale: 1, offset: 0 }, mode: 0, delta_base: 0, base_tag: '' },
-    strategy: { strategy_type: 'average' },
+    group_name: '储能有功控制',
+    p_cmd: { signal: { tag: '有功调度指令', unit: 'kW', scale: 1, offset: 0 }, mode: 0, delta_base: 0, base_tag: '' },
+    strategy: { strategy_type: 'weighted' },
     members: [
       {
-        member_name: 'pcs-1',
+        member_name: '储能-1',
         controllable: true,
         capacity_kw: 100,
         weight: 1,
         min_kw: 0,
         max_kw: 100,
-        p_meas: { tag: 'PCS1_P', unit: 'kW', scale: 1, offset: 0 },
-        p_set: { signal: { tag: 'PCS1_P_SET', unit: 'kW', scale: 1, offset: 0 }, mode: 0, delta_base: 0, base_tag: '' },
+        p_meas: { tag: '储能1有功', unit: 'kW', scale: 1, offset: 0 },
+        p_set: { signal: { tag: '储能1有功设定', unit: 'kW', scale: 1, offset: 0 }, mode: 0, delta_base: 0, base_tag: '' },
       },
     ],
     outputs: {
-      p_total_meas: { tag: 'AGC_P_TOTAL', unit: 'kW', scale: 1, offset: 0 },
-      p_total_target: { tag: 'AGC_P_TARGET', unit: 'kW', scale: 1, offset: 0 },
-      p_total_error: { tag: 'AGC_P_ERROR', unit: 'kW', scale: 1, offset: 0 },
+      p_total_meas: { tag: '总有功实测', unit: 'kW', scale: 1, offset: 0 },
+      p_total_target: { tag: '总有功目标', unit: 'kW', scale: 1, offset: 0 },
+      p_total_error: { tag: '总有功偏差', unit: 'kW', scale: 1, offset: 0 },
     },
   };
-  agcGroups.set(agcConfig.group_name, { config: agcConfig, conn_id: nextId(), state: 1, last_error: '' });
+  agcGroups.set(agcConfig.group_name, {
+    config: agcConfig,
+    conn_id: nextId(),
+    state: 1,
+    last_error: '',
+    default_points: makeDefaultAgcPoints(),
+  });
+
+  const agcSecondaryConfig: AgcGroupConfig = {
+    group_name: '风场有功控制',
+    p_cmd: { signal: { tag: '风场有功指令', unit: 'kW', scale: 1, offset: 0 }, mode: 2, delta_base: 3, base_tag: '风场有功基准' },
+    strategy: { strategy_type: 'weighted' },
+    members: [
+      {
+        member_name: '风机-1', controllable: true, capacity_kw: 250, weight: 2, min_kw: 20, max_kw: 250,
+        p_meas: { tag: '风机1有功', unit: 'kW', scale: 1, offset: 0 },
+        p_set: { signal: { tag: '风机1有功设定', unit: 'kW', scale: 1, offset: 0 }, mode: 1, delta_base: 0, base_tag: '' },
+      },
+      {
+        member_name: '风机-2', controllable: false, capacity_kw: 180, weight: 1, min_kw: 0, max_kw: 180,
+        p_meas: { tag: '风机2有功', unit: 'kW', scale: 1, offset: 0 },
+        p_set: null,
+      },
+    ],
+    outputs: {
+      p_total_meas: { tag: '风场总有功', unit: 'kW', scale: 1, offset: 0 },
+      p_total_target: { tag: '风场有功目标', unit: 'kW', scale: 1, offset: 0 },
+      p_total_error: { tag: '风场有功偏差', unit: 'kW', scale: 1, offset: 0 },
+    },
+  };
+  agcGroups.set(agcSecondaryConfig.group_name, {
+    config: agcSecondaryConfig,
+    conn_id: nextId(),
+    state: 2,
+    last_error: '',
+    default_points: makeDefaultAgcPoints(),
+  });
+
+  const avcConfig: AvcGroupConfig = {
+    group_name: '变电站电压控制',
+    voltage_meas: { tag: '母线电压实测', unit: 'kV', scale: 1, offset: 0 },
+    voltage_cmd: { tag: '母线电压目标', unit: 'kV', scale: 1, offset: 0 },
+    q_total_cmd: { signal: { tag: '总无功指令', unit: 'kVar', scale: 1, offset: 0 }, mode: 1, delta_base: 0, base_tag: '' },
+    voltage_control: { kp: 80, deadband: 0.02 },
+    strategy: { strategy_type: 'weighted' },
+    members: [
+      {
+        member_name: '无功补偿-1', controllable: true, weight: 2, q_min_kvar: -500, q_max_kvar: 500,
+        q_meas: { tag: '补偿装置1无功', unit: 'kVar', scale: 1, offset: 0 },
+        q_set: { signal: { tag: '补偿装置1无功设定', unit: 'kVar', scale: 1, offset: 0 }, mode: 1, delta_base: 0, base_tag: '' },
+      },
+      {
+        member_name: '无功补偿-2', controllable: true, weight: 1, q_min_kvar: -300, q_max_kvar: 300,
+        q_meas: { tag: '补偿装置2无功', unit: 'kVar', scale: 1, offset: 0 },
+        q_set: { signal: { tag: '补偿装置2无功设定', unit: 'kVar', scale: 1, offset: 0 }, mode: 2, delta_base: 2, base_tag: '' },
+      },
+    ],
+  };
+  avcGroups.set(avcConfig.group_name, {
+    config: avcConfig,
+    conn_id: nextId(),
+    state: 2,
+    last_error: '',
+    default_points: makeDefaultAvcPoints(),
+  });
+
+  const avcSecondaryConfig: AvcGroupConfig = {
+    group_name: '园区电压控制',
+    voltage_meas: { tag: '园区母线电压', unit: 'kV', scale: 1, offset: 0 },
+    voltage_cmd: null,
+    q_total_cmd: { signal: { tag: '园区总无功指令', unit: 'kVar', scale: 1, offset: 0 }, mode: 1, delta_base: 0, base_tag: '' },
+    voltage_control: { kp: 45, deadband: 0.05 },
+    strategy: { strategy_type: 'weighted' },
+    members: [{
+      member_name: '园区补偿装置', controllable: true, weight: 1, q_min_kvar: -200, q_max_kvar: 200,
+      q_meas: { tag: '园区补偿无功', unit: 'kVar', scale: 1, offset: 0 },
+      q_set: { signal: { tag: '园区补偿无功设定', unit: 'kVar', scale: 1, offset: 0 }, mode: 1, delta_base: 0, base_tag: '' },
+    }],
+  };
+  avcGroups.set(avcSecondaryConfig.group_name, {
+    config: avcSecondaryConfig,
+    conn_id: nextId(),
+    state: 1,
+    last_error: '',
+    default_points: makeDefaultAvcPoints(),
+  });
 
   const calcConfig: CalcGroupConfig = {
-    group_name: 'calc-demo',
+    group_name: '计算示例',
     items: [
       {
-        item_name: 'sum',
+        item_name: '有功加常量',
         operator_kind: 1,
         left_operand: { source_kind: 1, constant: null },
         right_operand: { source_kind: 2, constant: { double_value: 5 } },
@@ -451,6 +753,61 @@ function seedDemoData() {
     last_error: '',
     items: makeCalcItems(calcConfig),
   });
+
+  const calcSecondaryConfig: CalcGroupConfig = {
+    group_name: '遥测汇总',
+    items: [
+      {
+        item_name: '总有功',
+        operator_kind: 9,
+        left_operand: null,
+        right_operand: null,
+        operands: [
+          { source_kind: 1, constant: null },
+          { source_kind: 1, constant: null },
+          { source_kind: 1, constant: null },
+        ],
+      },
+      {
+        item_name: '功率因数正常',
+        operator_kind: 6,
+        left_operand: { source_kind: 1, constant: null },
+        right_operand: { source_kind: 2, constant: { bool_value: true } },
+        operands: [],
+      },
+    ],
+  };
+  calcGroups.set(calcSecondaryConfig.group_name, {
+    config: calcSecondaryConfig,
+    conn_id: nextId(),
+    state: 2,
+    last_error: '',
+    items: makeCalcItems(calcSecondaryConfig),
+  });
+
+  const endpoint = (moduleName: string, connName: string, connId: number, tag: string): DcRoute['src'] => ({
+    module_name: moduleName,
+    conn_name: connName,
+    conn_id: connId,
+    tag,
+  });
+  const agcId = agcGroups.get(agcConfig.group_name)?.conn_id ?? 0;
+  const agcWindId = agcGroups.get(agcSecondaryConfig.group_name)?.conn_id ?? 0;
+  const avcId = avcGroups.get(avcConfig.group_name)?.conn_id ?? 0;
+  const avcParkId = avcGroups.get(avcSecondaryConfig.group_name)?.conn_id ?? 0;
+  const calcId = calcGroups.get(calcConfig.group_name)?.conn_id ?? 0;
+  const calcTelemetryId = calcGroups.get(calcSecondaryConfig.group_name)?.conn_id ?? 0;
+  routes = [
+    { src: endpoint('IEC104', iecConfig.conn_name, iec104Links.get(iecConfig.conn_name)?.conn_id ?? 0, '有功功率'), dst: endpoint('AGC', agcConfig.group_name, agcId, '有功调度指令') },
+    { src: endpoint('ModbusRTU', modbusConfig.conn_name, modbusId, '储能有功'), dst: endpoint('AGC', agcSecondaryConfig.group_name, agcWindId, '风场有功指令') },
+    { src: endpoint('IEC104', iecSecondaryConfig.conn_name, iecSecondaryId, '母线电压'), dst: endpoint('AVC', avcConfig.group_name, avcId, '母线电压实测') },
+    { src: endpoint('DLT645', dltConfig.conn_name, dltId, '表计电压'), dst: endpoint('AVC', avcSecondaryConfig.group_name, avcParkId, '园区母线电压') },
+    { src: endpoint('ModbusRTU', modbusConfig.conn_name, modbusId, '储能有功'), dst: endpoint('Calc', calcConfig.group_name, calcId, '有功加常量/left_input') },
+    { src: endpoint('DLT645', dltConfig.conn_name, dltId, '总有功电量'), dst: endpoint('Calc', calcSecondaryConfig.group_name, calcTelemetryId, '总有功/input_1') },
+    { src: endpoint('ModbusRTU', modbusSerialConfig.conn_name, modbusSerialId, '电表电量'), dst: endpoint('Calc', calcSecondaryConfig.group_name, calcTelemetryId, '总有功/input_2') },
+    { src: endpoint('DLT645', dltConfig.conn_name, dltId, 'A相功率'), dst: endpoint('Calc', calcSecondaryConfig.group_name, calcTelemetryId, '总有功/input_3') },
+    { src: endpoint('AGC', agcConfig.group_name, agcId, '总有功实测'), dst: endpoint('IEC104', iecConfig.conn_name, iec104Links.get(iecConfig.conn_name)?.conn_id ?? 0, '有功设定') },
+  ];
 }
 
 seedDemoData();
@@ -802,6 +1159,7 @@ export const browserApi: typeof tauriApi = {
       conn_id: previous?.conn_id ?? nextId(),
       state: previous?.state ?? 0,
       last_error: '',
+      default_points: previous?.default_points ?? makeDefaultAgcPoints(),
     };
     agcGroups.set(config.group_name, value);
     return clone(value);
@@ -813,8 +1171,8 @@ export const browserApi: typeof tauriApi = {
   },
   agcListGroups: async () => clone([...agcGroups.values()]),
   agcDeleteGroup: async (groupName: string) => deleteByName(agcGroups, groupName),
-  agcStartGroup: async (groupName: string) => setLinkState(agcGroups, groupName, 1),
-  agcStopGroup: async (groupName: string) => setLinkState(agcGroups, groupName, 0),
+  agcStartGroup: async (groupName: string) => setLinkState(agcGroups, groupName, 2),
+  agcStopGroup: async (groupName: string) => setLinkState(agcGroups, groupName, 1),
 
   avcUpsertGroup: async (config: AvcGroupConfig, createOnly: boolean) => {
     const previous = avcGroups.get(config.group_name);
@@ -824,7 +1182,7 @@ export const browserApi: typeof tauriApi = {
       conn_id: previous?.conn_id ?? nextId(),
       state: previous?.state ?? 0,
       last_error: '',
-      default_points: previous?.default_points ?? makeDefaultAvcPoints(config.group_name),
+      default_points: previous?.default_points ?? makeDefaultAvcPoints(),
     };
     avcGroups.set(config.group_name, value);
     return clone(value);
@@ -842,7 +1200,7 @@ export const browserApi: typeof tauriApi = {
     if (renamed.config) {
       renamed.config.group_name = newGroupName;
     }
-    renamed.default_points = makeDefaultAvcPoints(newGroupName);
+    renamed.default_points = makeDefaultAvcPoints();
     avcGroups.set(newGroupName, renamed);
     return clone(renamed);
   },
@@ -853,8 +1211,8 @@ export const browserApi: typeof tauriApi = {
   },
   avcListGroups: async () => clone([...avcGroups.values()]),
   avcDeleteGroup: async (groupName: string) => deleteByName(avcGroups, groupName),
-  avcStartGroup: async (groupName: string) => setLinkState(avcGroups, groupName, 1),
-  avcStopGroup: async (groupName: string) => setLinkState(avcGroups, groupName, 0),
+  avcStartGroup: async (groupName: string) => setLinkState(avcGroups, groupName, 2),
+  avcStopGroup: async (groupName: string) => setLinkState(avcGroups, groupName, 1),
 
   saveFullConfigExport: async (filePath: string, snapshot: FullConfigExportSnapshot) => {
     const key = filePath || 'browser-dev-export.json';

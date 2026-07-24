@@ -5,8 +5,8 @@ use tauri::State;
 
 use crate::grpc::agc::AgcClient;
 use crate::proto::agc_proto::{
-    strategy_config, DerivedOutputs, GroupConfig, GroupInfo, MemberConfig, SignalSpec,
-    StrategyConfig, ValueSpec, WeightedStrategyConfig,
+    strategy_config, DefaultPointInfo, DerivedOutputs, GroupConfig, GroupInfo, MemberConfig,
+    SignalSpec, StrategyConfig, ValueSpec, WeightedStrategyConfig,
 };
 use crate::state::AppState;
 
@@ -65,6 +65,15 @@ pub struct GroupInfoDto {
     pub conn_id: u32,
     pub state: i32,
     pub last_error: String,
+    pub default_points: Vec<DefaultPointInfoDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DefaultPointInfoDto {
+    pub kind: i32,
+    pub tag: String,
+    pub name: String,
+    pub description: String,
 }
 
 impl From<SignalSpec> for SignalSpecDto {
@@ -141,6 +150,17 @@ impl From<GroupConfig> for GroupConfigDto {
     }
 }
 
+impl From<DefaultPointInfo> for DefaultPointInfoDto {
+    fn from(point: DefaultPointInfo) -> Self {
+        Self {
+            kind: point.kind,
+            tag: point.tag,
+            name: point.name,
+            description: point.description,
+        }
+    }
+}
+
 impl From<GroupInfo> for GroupInfoDto {
     fn from(group: GroupInfo) -> Self {
         Self {
@@ -148,6 +168,7 @@ impl From<GroupInfo> for GroupInfoDto {
             conn_id: group.conn_id,
             state: group.state,
             last_error: group.last_error,
+            default_points: group.default_points.into_iter().map(Into::into).collect(),
         }
     }
 }

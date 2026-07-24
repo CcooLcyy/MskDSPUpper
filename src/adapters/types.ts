@@ -530,11 +530,19 @@ export interface AgcGroupConfig {
   outputs: AgcDerivedOutputs | null;
 }
 
+export interface AgcDefaultPointInfo {
+  kind: number;
+  tag: string;
+  name: string;
+  description: string;
+}
+
 export interface AgcGroupInfo {
   config: AgcGroupConfig | null;
   conn_id: number;
   state: number;
   last_error: string;
+  default_points: AgcDefaultPointInfo[];
 }
 
 export interface AvcSignalSpec {
