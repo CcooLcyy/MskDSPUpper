@@ -14,6 +14,7 @@ import type {
   DcConnTags,
   DcConnectionInfo,
   DcPointUpdate,
+  DcSourcePointUpdate,
   DcRoute,
   Dlt645Block,
   Dlt645LinkConfig,
@@ -264,6 +265,8 @@ export const api = {
     invoke<void>('dc_delete_routes', { routes }),
   dcGetLatest: (connId: number, tags: string[]) =>
     invoke<DcPointUpdate[]>('dc_get_latest', { connId, tags }),
+  dcGetSourceLatest: (connId: number, tags: string[]) =>
+    invoke<DcSourcePointUpdate[]>('dc_get_source_latest', { connId, tags }),
   dcStartProtocolShadowStream: () =>
     invoke<void>('dc_start_protocol_shadow_stream'),
   dcGetProtocolShadowLatest: (sourceConnId: number, sourceTags: string[]) =>

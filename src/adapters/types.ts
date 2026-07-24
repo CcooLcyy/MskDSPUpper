@@ -435,6 +435,15 @@ export interface DcPointUpdate {
   quality: number;
 }
 
+export interface DcSourcePointUpdate {
+  conn_id: number;
+  tag: string;
+  value: DcPointValue | null;
+  ts_ms: number;
+  quality: number;
+  sequence: number;
+}
+
 export interface CalcTypedConstant {
   bool_value?: boolean;
   int_value?: number;

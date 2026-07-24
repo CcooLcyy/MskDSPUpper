@@ -7,7 +7,8 @@ use crate::grpc::data_center::{
     DataCenterClient, StableRoute as Route, StableRouteEndpoint as Endpoint,
 };
 use crate::proto::data_center_proto::{
-    point_value, ConnectionInfo, GetLatestRequest, ListRoutesRequest, PointUpdate,
+    point_value, ConnectionInfo, GetLatestRequest, GetSourceLatestRequest, ListRoutesRequest,
+    PointUpdate, SourcePointUpdate,
 };
 use crate::protocol_shadow;
 use crate::state::AppState;
@@ -53,6 +54,16 @@ pub struct PointUpdateDto {
     pub value: Option<PointValueDto>,
     pub ts_ms: i64,
     pub quality: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SourcePointUpdateDto {
+    pub conn_id: u32,
+    pub tag: String,
+    pub value: Option<PointValueDto>,
+    pub ts_ms: i64,
+    pub quality: i32,
+    pub sequence: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -156,6 +167,19 @@ impl From<PointUpdate> for PointUpdateDto {
             value: point_value_from_proto(pu.value),
             ts_ms: pu.ts_ms,
             quality: pu.quality,
+        }
+    }
+}
+
+impl From<SourcePointUpdate> for SourcePointUpdateDto {
+    fn from(update: SourcePointUpdate) -> Self {
+        Self {
+            conn_id: update.conn_id,
+            tag: update.tag,
+            value: point_value_from_proto(update.value),
+            ts_ms: update.ts_ms,
+            quality: update.quality,
+            sequence: update.sequence,
         }
     }
 }
@@ -364,6 +388,31 @@ pub async fn dc_get_latest(
 }
 
 #[tauri::command]
+pub async fn dc_get_source_latest(
+    state: State<'_, AppState>,
+    conn_id: u32,
+    tags: Vec<String>,
+) -> Result<Vec<SourcePointUpdateDto>, String> {
+    let client = DataCenterClient::new(&state.conn_manager);
+    let resp = client
+        .get_source_latest(GetSourceLatestRequest { conn_id, tags })
+        .await
+        .map_err(|error| {
+            let unsupported = error
+                .downcast_ref::<tonic::Status>()
+                .is_some_and(|status| status.code() == tonic::Code::Unimplemented);
+            tracing::error!(conn_id, error = %error, "获取 DataCenter 源端最新值失败");
+            if unsupported {
+                "下位机版本不支持源端实时值接口".to_string()
+            } else {
+                error.to_string()
+            }
+        })?;
+    tracing::debug!(conn_id, update_count = resp.updates.len(), "获取 DataCenter 源端最新值完成");
+    Ok(resp.updates.into_iter().map(SourcePointUpdateDto::from).collect())
+}
+
+#[tauri::command]
 pub async fn dc_start_protocol_shadow_stream(
     app_handle: AppHandle,
     state: State<'_, AppState>,
@@ -394,4 +443,34 @@ pub async fn dc_get_protocol_shadow_latest(
     })?;
 
     Ok(updates.into_iter().map(PointUpdateDto::from).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PointValueDto, SourcePointUpdateDto};
+    use crate::proto::data_center_proto::{point_value, PointValue, SourcePointUpdate};
+
+    // 验证：源端最新值 DTO 保留连接、点名、值、时间、质量和更新序号。
+    #[test]
+    fn source_point_update_dto_preserves_all_realtime_fields() {
+        let update = SourcePointUpdate {
+            conn_id: 17,
+            tag: "馈线电流".to_string(),
+            value: Some(PointValue {
+                kind: Some(point_value::Kind::DoubleValue(12.5)),
+            }),
+            ts_ms: 1_720_000_000_000,
+            quality: 2,
+            sequence: 99,
+        };
+
+        let dto = SourcePointUpdateDto::from(update);
+
+        assert_eq!(dto.conn_id, 17);
+        assert_eq!(dto.tag, "馈线电流");
+        assert!(matches!(dto.value, Some(PointValueDto::Double(value)) if value == 12.5));
+        assert_eq!(dto.ts_ms, 1_720_000_000_000);
+        assert_eq!(dto.quality, 2);
+        assert_eq!(dto.sequence, 99);
+    }
 }

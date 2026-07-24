@@ -5,7 +5,8 @@ use crate::grpc::connection::ConnectionManager;
 use crate::proto::data_center_proto::{
     data_center_service_client::DataCenterServiceClient, ConnTags, ConnectionInfo, ConnectionKey,
     Empty, GetConnTagsRequest, GetLatestRequest, GetLatestResponse, GetOrCreateConnectionRequest,
-    ListConnectionsResponse, ListRoutesRequest, PointUpdate, SubscribeRequest,
+    GetSourceLatestRequest, GetSourceLatestResponse, ListConnectionsResponse, ListRoutesRequest,
+    PointUpdate, SubscribeRequest,
     UpsertConnTagsRequest,
 };
 
@@ -173,6 +174,16 @@ impl<'a> DataCenterClient<'a> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
         let resp = client.get_latest(request).await?;
+        Ok(resp.into_inner())
+    }
+
+    pub async fn get_source_latest(
+        &self,
+        request: GetSourceLatestRequest,
+    ) -> Result<GetSourceLatestResponse> {
+        let channel = self.conn.module_channel("DataCenter").await?;
+        let mut client = DataCenterServiceClient::new(channel);
+        let resp = client.get_source_latest(request).await?;
         Ok(resp.into_inner())
     }
 

@@ -22,7 +22,7 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { DcPointUpdate, Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../../adapters';
+import type { DcSourcePointUpdate, Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../../adapters';
 import {
   type ProtocolRealtimeCellRevision,
   renderProtocolRealtimeQualityCell,
@@ -62,7 +62,7 @@ interface Props {
   points: Dlt645Point[];
   blocks: Dlt645Block[];
   selectedConn: string | null;
-  realtimeByTag: Record<string, DcPointUpdate>;
+  realtimeByTag: Record<string, DcSourcePointUpdate>;
   realtimeRevisionByTag: Record<string, ProtocolRealtimeCellRevision>;
   realtimeLoading: boolean;
   pointsLoading?: boolean;

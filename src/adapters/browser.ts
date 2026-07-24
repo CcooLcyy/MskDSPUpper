@@ -16,6 +16,7 @@ import type {
   DcConnTags,
   DcConnectionInfo,
   DcPointUpdate,
+  DcSourcePointUpdate,
   DcPointValue,
   DcRoute,
   Dlt645Block,
@@ -326,6 +327,19 @@ function getLatestUpdates(connId: number, tags: string[]): Promise<DcPointUpdate
     value: makePointValue(ts / 1000 + index),
     ts_ms: ts,
     quality: 0,
+  })));
+}
+
+function getSourceLatestUpdates(connId: number, tags: string[]): Promise<DcSourcePointUpdate[]> {
+  const activeTags = tags.length > 0 ? tags : tagsForConnection(connId);
+  const ts = Date.now();
+  return Promise.resolve(activeTags.map((tag, index) => ({
+    conn_id: connId,
+    tag,
+    value: makePointValue(ts / 1000 + index),
+    ts_ms: ts,
+    quality: 1,
+    sequence: ts + index,
   })));
 }
 
@@ -1115,6 +1129,7 @@ export const browserApi: typeof tauriApi = {
     routes = routes.filter((route) => !keys.has(JSON.stringify(route)));
   },
   dcGetLatest: getLatestUpdates,
+  dcGetSourceLatest: getSourceLatestUpdates,
   dcStartProtocolShadowStream: async () => {},
   dcGetProtocolShadowLatest: getLatestUpdates,
 

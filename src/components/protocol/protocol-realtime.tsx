@@ -1,8 +1,7 @@
 import React, { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { Tag, Typography } from 'antd';
 import { api } from '../../adapters';
-import type { DcPointUpdate, DcPointValue } from '../../adapters';
+import type { DcPointValue, DcSourcePointUpdate } from '../../adapters';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 
 const { Text } = Typography;
@@ -14,8 +13,7 @@ const QUALITY_META: Record<number, { label: string; color: string }> = {
   3: { label: '不确定', color: 'orange' },
 };
 
-export const PROTOCOL_SHADOW_UPDATE_EVENT = 'protocol-shadow-update';
-const PROTOCOL_SHADOW_SNAPSHOT_REFRESH_MS = 500;
+const PROTOCOL_SOURCE_REFRESH_MS = 1000;
 
 export type ProtocolRealtimeCellRevision = {
   value: number;
@@ -24,7 +22,7 @@ export type ProtocolRealtimeCellRevision = {
 };
 
 type ProtocolRealtimeState = {
-  realtimeByTag: Record<string, DcPointUpdate>;
+  realtimeByTag: Record<string, DcSourcePointUpdate>;
   realtimeRevisionByTag: Record<string, ProtocolRealtimeCellRevision>;
 };
 
@@ -44,23 +42,17 @@ function createEmptyRealtimeState(): ProtocolRealtimeState {
 }
 
 function normalizeTags(tags: string[]): string[] {
-  // Tags are DataCenter keys; preserve whitespace because it is part of the exact tag identity.
   return Array.from(new Set(tags.filter((tag) => tag.length > 0)));
 }
 
-function hasTauriEventRuntime(): boolean {
-  const internals = (window as Window & {
-    __TAURI_INTERNALS__?: { transformCallback?: unknown };
-  }).__TAURI_INTERNALS__;
-
-  return typeof internals?.transformCallback === 'function';
-}
-
-function buildUpdateMap(updates: DcPointUpdate[], sourceConnId: number): Record<string, DcPointUpdate> {
-  const next: Record<string, DcPointUpdate> = {};
+function buildUpdateMap(
+  updates: DcSourcePointUpdate[],
+  sourceConnId: number,
+): Record<string, DcSourcePointUpdate> {
+  const next: Record<string, DcSourcePointUpdate> = {};
   for (const update of updates) {
-    if (update.src_conn_id === sourceConnId) {
-      next[update.src_tag] = update;
+    if (update.conn_id === sourceConnId) {
+      next[update.tag] = update;
     }
   }
   return next;
@@ -89,23 +81,25 @@ function arePointValuesEqual(
   return left.value === right.value;
 }
 
-function arePointUpdatesEqual(left: DcPointUpdate | undefined, right: DcPointUpdate): boolean {
+function arePointUpdatesEqual(
+  left: DcSourcePointUpdate | undefined,
+  right: DcSourcePointUpdate,
+): boolean {
   if (!left) {
     return false;
   }
 
-  return left.src_conn_id === right.src_conn_id
-    && left.src_tag === right.src_tag
-    && left.dst_conn_id === right.dst_conn_id
-    && left.dst_tag === right.dst_tag
+  return left.conn_id === right.conn_id
+    && left.tag === right.tag
     && left.ts_ms === right.ts_ms
     && left.quality === right.quality
+    && left.sequence === right.sequence
     && arePointValuesEqual(left.value, right.value);
 }
 
 function getNextRealtimeCellRevision(
-  previousUpdate: DcPointUpdate | undefined,
-  nextUpdate: DcPointUpdate,
+  previousUpdate: DcSourcePointUpdate | undefined,
+  nextUpdate: DcSourcePointUpdate,
   previousRevision: ProtocolRealtimeCellRevision | undefined,
 ): ProtocolRealtimeCellRevision {
   if (!previousUpdate) {
@@ -133,7 +127,7 @@ function getNextRealtimeCellRevision(
 
 function mergeRealtimeUpdates(
   previous: ProtocolRealtimeState,
-  updatesByTag: Record<string, DcPointUpdate>,
+  updatesByTag: Record<string, DcSourcePointUpdate>,
 ): ProtocolRealtimeState {
   let changed = false;
   const nextRealtimeByTag = { ...previous.realtimeByTag };
@@ -163,11 +157,11 @@ function mergeRealtimeUpdates(
     : previous;
 }
 
-export function useProtocolShadowRealtime(
+export function useProtocolRealtime(
   sourceConnId: number | null | undefined,
   tags: string[],
 ): {
-  realtimeByTag: Record<string, DcPointUpdate>;
+  realtimeByTag: Record<string, DcSourcePointUpdate>;
   realtimeRevisionByTag: Record<string, ProtocolRealtimeCellRevision>;
   loading: boolean;
   error: string | null;
@@ -177,181 +171,93 @@ export function useProtocolShadowRealtime(
   const hasSelection = Boolean(sourceConnId && normalizedTags.length > 0);
   const activeConnIdRef = useRef<number | null>(sourceConnId ?? null);
   const activeTagSetRef = useRef<Set<string>>(new Set(normalizedTags));
-  const pendingUpdatesRef = useRef<Record<string, DcPointUpdate>>({});
-  const flushFrameRef = useRef<number | null>(null);
-  const snapshotRefreshInFlightRef = useRef(false);
+  const requestIdRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
+  const refreshQueuedInitialRef = useRef(false);
   const [realtimeState, setRealtimeState] = useState<ProtocolRealtimeState>(() => createEmptyRealtimeState());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const resetPendingUpdates = useEffectEvent(() => {
-    pendingUpdatesRef.current = {};
-    if (flushFrameRef.current != null) {
-      window.cancelAnimationFrame(flushFrameRef.current);
-      flushFrameRef.current = null;
-    }
-  });
-
-  const flushPendingUpdates = useEffectEvent(() => {
-    flushFrameRef.current = null;
-
-    const pendingEntries = Object.entries(pendingUpdatesRef.current);
-    if (pendingEntries.length === 0) {
+  const refreshSourceLatest = useEffectEvent(async (
+    connId: number,
+    targetTags: string[],
+    initial: boolean,
+  ) => {
+    if (refreshInFlightRef.current) {
+      refreshQueuedRef.current = true;
+      refreshQueuedInitialRef.current ||= initial;
       return;
     }
 
-    pendingUpdatesRef.current = {};
-
-    setRealtimeState((previous) =>
-      mergeRealtimeUpdates(previous, Object.fromEntries(pendingEntries)),
-    );
-  });
-
-  const schedulePendingFlush = useEffectEvent(() => {
-    if (flushFrameRef.current != null) {
-      return;
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    refreshInFlightRef.current = true;
+    if (initial) {
+      setLoading(true);
     }
-
-    flushFrameRef.current = window.requestAnimationFrame(() => {
-      flushPendingUpdates();
-    });
-  });
-
-  const refreshLatestSnapshot = useEffectEvent(async (connId: number, targetTags: string[]) => {
-    if (snapshotRefreshInFlightRef.current) {
-      return;
-    }
-
-    snapshotRefreshInFlightRef.current = true;
 
     try {
-      const updates = await api.dcGetProtocolShadowLatest(connId, targetTags);
-      if (connId !== activeConnIdRef.current) {
+      const updates = await api.dcGetSourceLatest(connId, targetTags);
+      if (requestId !== requestIdRef.current || connId !== activeConnIdRef.current) {
         return;
       }
 
       const activeTags = activeTagSetRef.current;
-      const updatesByTag = buildUpdateMap(updates, connId);
       const currentUpdates = Object.fromEntries(
-        Object.entries(updatesByTag).filter(([tag]) => activeTags.has(tag)),
+        Object.entries(buildUpdateMap(updates, connId)).filter(([tag]) => activeTags.has(tag)),
       );
       setRealtimeState((previous) => mergeRealtimeUpdates(previous, currentUpdates));
+      setError(null);
     } catch (reason) {
-      if (connId === activeConnIdRef.current) {
+      if (requestId === requestIdRef.current && connId === activeConnIdRef.current) {
         setError(String(reason));
       }
     } finally {
-      snapshotRefreshInFlightRef.current = false;
+      if (requestId === requestIdRef.current && initial) {
+        setLoading(false);
+      }
+      refreshInFlightRef.current = false;
+
+      if (refreshQueuedRef.current) {
+        const queuedInitial = refreshQueuedInitialRef.current;
+        refreshQueuedRef.current = false;
+        refreshQueuedInitialRef.current = false;
+        const activeConnId = activeConnIdRef.current;
+        if (activeConnId && activeTagSetRef.current.size > 0) {
+          void refreshSourceLatest(activeConnId, [...activeTagSetRef.current], queuedInitial);
+        }
+      }
     }
   });
 
   useEffect(() => {
     activeConnIdRef.current = sourceConnId ?? null;
     activeTagSetRef.current = new Set(normalizedTags);
-  }, [sourceConnId, normalizedTags]);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-
-    if (!hasTauriEventRuntime()) {
-      return () => {
-        disposed = true;
-        resetPendingUpdates();
-      };
-    }
-
-    void listen<DcPointUpdate>(PROTOCOL_SHADOW_UPDATE_EVENT, ({ payload }) => {
-      if (payload.src_conn_id !== activeConnIdRef.current) {
-        return;
-      }
-      if (!activeTagSetRef.current.has(payload.src_tag)) {
-        return;
-      }
-
-      pendingUpdatesRef.current = {
-        ...pendingUpdatesRef.current,
-        [payload.src_tag]: payload,
-      };
-      schedulePendingFlush();
-    }).then((dispose) => {
-      if (disposed) {
-        void dispose();
-        return;
-      }
-      unlisten = dispose;
-    });
-
-    return () => {
-      disposed = true;
-      resetPendingUpdates();
-      if (unlisten) {
-        void unlisten();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
+    requestIdRef.current += 1;
+    refreshQueuedRef.current = false;
+    refreshQueuedInitialRef.current = false;
 
     if (!hasSelection || !sourceConnId) {
-      resetPendingUpdates();
       setRealtimeState(createEmptyRealtimeState());
       setLoading(false);
       setError(null);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    void (async () => {
-      resetPendingUpdates();
-      setRealtimeState(createEmptyRealtimeState());
-      setLoading(true);
-      setError(null);
-
-      try {
-        await api.dcStartProtocolShadowStream();
-      } catch (reason) {
-        if (!cancelled) {
-          setError(String(reason));
-        }
-      }
-
-      try {
-        const updates = await api.dcGetProtocolShadowLatest(sourceConnId, normalizedTags);
-        if (cancelled) {
-          return;
-        }
-
-        setRealtimeState((previous) => mergeRealtimeUpdates(previous, buildUpdateMap(updates, sourceConnId)));
-      } catch (reason) {
-        if (!cancelled) {
-          setError(String(reason));
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      resetPendingUpdates();
-    };
-  }, [hasSelection, sourceConnId, tagSignature, normalizedTags]);
-
-  useEffect(() => {
-    if (!hasSelection || !sourceConnId) {
       return undefined;
     }
 
+    setRealtimeState(createEmptyRealtimeState());
+    setError(null);
+    setLoading(true);
+    void refreshSourceLatest(sourceConnId, normalizedTags, true);
+
     const timer = window.setInterval(() => {
-      void refreshLatestSnapshot(sourceConnId, normalizedTags);
-    }, PROTOCOL_SHADOW_SNAPSHOT_REFRESH_MS);
+      void refreshSourceLatest(sourceConnId, normalizedTags, false);
+    }, PROTOCOL_SOURCE_REFRESH_MS);
 
     return () => {
+      requestIdRef.current += 1;
+      refreshQueuedRef.current = false;
+      refreshQueuedInitialRef.current = false;
       window.clearInterval(timer);
     };
   }, [hasSelection, sourceConnId, tagSignature, normalizedTags]);
@@ -433,7 +339,7 @@ export function renderProtocolRealtimePlaceholder(): React.ReactNode {
 }
 
 export function renderProtocolRealtimeValueCell(
-  update: DcPointUpdate | null | undefined,
+  update: DcSourcePointUpdate | null | undefined,
   revision: number | null | undefined,
 ): React.ReactNode {
   if (!update) {
@@ -444,7 +350,7 @@ export function renderProtocolRealtimeValueCell(
 }
 
 export function renderProtocolRealtimeTimestampCell(
-  update: DcPointUpdate | null | undefined,
+  update: DcSourcePointUpdate | null | undefined,
   revision: number | null | undefined,
 ): React.ReactNode {
   if (!update) {
@@ -461,7 +367,7 @@ export function renderProtocolRealtimeTimestampCell(
 }
 
 export function renderProtocolRealtimeQualityCell(
-  update: DcPointUpdate | null | undefined,
+  update: DcSourcePointUpdate | null | undefined,
   revision: number | null | undefined,
 ): React.ReactNode {
   if (!update) {

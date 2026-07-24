@@ -27,7 +27,7 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { DcPointUpdate, ModbusPoint, ModbusReadPlan } from '../../../adapters';
+import type { DcSourcePointUpdate, ModbusPoint, ModbusReadPlan } from '../../../adapters';
 import {
   type ProtocolRealtimeCellRevision,
   renderProtocolRealtimeQualityCell,
@@ -79,7 +79,7 @@ interface ReadPlanValidation {
 interface Props {
   points: ModbusPoint[];
   selectedConn: string | null;
-  realtimeByTag: Record<string, DcPointUpdate>;
+  realtimeByTag: Record<string, DcSourcePointUpdate>;
   realtimeRevisionByTag: Record<string, ProtocolRealtimeCellRevision>;
   realtimeLoading: boolean;
   pointsLoading: boolean;
