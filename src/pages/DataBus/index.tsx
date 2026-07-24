@@ -72,6 +72,22 @@ type RouteDirectionDraft = {
 
 type RouteDraftStatus = 'ready' | 'existing' | 'duplicate' | 'manyToOne' | 'bidirectional' | 'self';
 
+type RouteTagDrag = {
+  side: 'source' | 'destination';
+  index: number;
+};
+
+const ROUTE_TAG_DRAG_PREFIX = 'mskdsp-route-tag:';
+
+const serializeRouteTagDrag = ({ side, index }: RouteTagDrag): string =>
+  `${ROUTE_TAG_DRAG_PREFIX}${side}:${index}`;
+
+const parseRouteTagDrag = (value: string): RouteTagDrag | null => {
+  const match = new RegExp(`^${ROUTE_TAG_DRAG_PREFIX}(source|destination):(\\d+)$`).exec(value);
+  if (!match) return null;
+  return { side: match[1] as RouteTagDrag['side'], index: Number(match[2]) };
+};
+
 const formatTimestamp = (tsMs: number): string => {
   if (tsMs <= 0) return '-';
   const d = new Date(tsMs);
@@ -132,7 +148,7 @@ const DataBus: React.FC = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [routeDirections, setRouteDirections] = useState<RouteDirectionDraft[]>([]);
   const [activeRouteDirectionId, setActiveRouteDirectionId] = useState<number | null>(null);
-  const [routeDrag, setRouteDrag] = useState<{ side: 'source' | 'destination'; index: number } | null>(null);
+  const [routeDrag, setRouteDrag] = useState<RouteTagDrag | null>(null);
   const [routeSubmitting, setRouteSubmitting] = useState(false);
   const [selectedRouteKeys, setSelectedRouteKeys] = useState<string[]>([]);
   const [routeDeleting, setRouteDeleting] = useState(false);
@@ -445,6 +461,25 @@ const DataBus: React.FC = () => {
     next.splice(to, 0, moved);
     updateActiveDirection(side === 'source' ? { sourceTags: next } : { destinationTags: next });
   }, [selectedDestinationTags, selectedSourceTags, updateActiveDirection]);
+
+  const handleRouteTagDragStart = useCallback((event: React.DragEvent<HTMLDivElement>, side: RouteTagDrag['side'], index: number) => {
+    const drag = { side, index };
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', serializeRouteTagDrag(drag));
+    setRouteDrag(drag);
+  }, []);
+
+  const handleRouteTagDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const handleRouteTagDrop = useCallback((event: React.DragEvent<HTMLDivElement>, side: RouteTagDrag['side'], index: number) => {
+    event.preventDefault();
+    const drag = parseRouteTagDrag(event.dataTransfer.getData('text/plain')) ?? routeDrag;
+    if (drag?.side === side) reorderRouteTags(side, drag.index, index);
+    setRouteDrag(null);
+  }, [reorderRouteTags, routeDrag]);
 
   const addCustomMapping = useCallback(() => {
     if (!activeRouteDirection) return;
@@ -770,7 +805,7 @@ const DataBus: React.FC = () => {
               />
               <div className="route-selected-list">
                 <Text type="secondary">已选 {selectedSourceTags.length} 个</Text>
-                {selectedSourceTags.map((tag, index) => <div key={tag} className="route-selected-item" draggable onDragStart={() => setRouteDrag({ side: 'source', index })} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (routeDrag?.side === 'source') reorderRouteTags('source', routeDrag.index, index); setRouteDrag(null); }}><HolderOutlined /><span className="route-selected-index">{index + 1}</span><span>{tag}</span><Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('source', tag)} /></div>)}
+                {selectedSourceTags.map((tag, index) => <div key={tag} className="route-selected-item" draggable onDragStart={(event) => handleRouteTagDragStart(event, 'source', index)} onDragOver={handleRouteTagDragOver} onDrop={(event) => handleRouteTagDrop(event, 'source', index)} onDragEnd={() => setRouteDrag(null)}><HolderOutlined /><span className="route-selected-index">{index + 1}</span><span>{tag}</span><Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('source', tag)} /></div>)}
               </div>
             </div>
             <div className="route-builder-panel">
@@ -797,7 +832,7 @@ const DataBus: React.FC = () => {
               />
               <div className="route-selected-list">
                 <Text type="secondary">已选 {selectedDestinationTags.length} 个</Text>
-                {selectedDestinationTags.map((tag, index) => <div key={tag} className="route-selected-item" draggable onDragStart={() => setRouteDrag({ side: 'destination', index })} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (routeDrag?.side === 'destination') reorderRouteTags('destination', routeDrag.index, index); setRouteDrag(null); }}><HolderOutlined /><span className="route-selected-index">{index + 1}</span><span>{tag}</span><Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('destination', tag)} /></div>)}
+                {selectedDestinationTags.map((tag, index) => <div key={tag} className="route-selected-item" draggable onDragStart={(event) => handleRouteTagDragStart(event, 'destination', index)} onDragOver={handleRouteTagDragOver} onDrop={(event) => handleRouteTagDrop(event, 'destination', index)} onDragEnd={() => setRouteDrag(null)}><HolderOutlined /><span className="route-selected-index">{index + 1}</span><span>{tag}</span><Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('destination', tag)} /></div>)}
               </div>
             </div>
             <div className="route-pair-preview">
