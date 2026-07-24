@@ -130,9 +130,9 @@ function makeModuleInfo(moduleName: string): ModuleInfo {
     module_name: moduleName,
     version: {
       major: '0',
-      minor: '4',
-      patch: '1',
-      version: '0.4.1-dev',
+      minor: '5',
+      patch: '0',
+      version: '0.5.0-dev',
     },
     lib_name: moduleName,
     dependencies: [],
@@ -855,7 +855,7 @@ export const browserApi: typeof tauriApi = {
     }
   },
 
-  getAppVersion: async () => '0.4.1-browser-dev',
+  getAppVersion: async () => '0.5.0-browser-dev',
   checkAppUpdate: async () => null,
   downloadAndInstallAppUpdate: async (onEvent?: (event: AppUpdateDownloadEvent) => void) => {
     onEvent?.({ event: 'Started', data: { contentLength: 0 } });
