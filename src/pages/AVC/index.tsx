@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -50,6 +50,12 @@ import {
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
+import {
+  calculateControlAllocationShares,
+  inferControlAllocationMode,
+  resolveControlAllocationWeight,
+} from '../../utils/control-allocation';
+import type { ControlAllocationMode } from '../../utils/control-allocation';
 import '../../components/control/control-modal.css';
 
 const { Paragraph, Text } = Typography;
@@ -57,6 +63,7 @@ const { Paragraph, Text } = Typography;
 const AVC_MODULE_NAME = 'AVC';
 
 type AvcCommandMode = 'voltage' | 'q_total';
+type AllocationMode = ControlAllocationMode;
 
 type AvcGroupFormValues = {
   group_name: string;
@@ -94,6 +101,30 @@ type MemberRouteDraft = {
   endpoints: MemberRouteEndpoints;
 };
 
+type GroupOperation = 'start' | 'stop' | 'delete';
+
+type RuntimeMonitorStatus = {
+  state: 'idle' | 'ok' | 'stale' | 'offline';
+  error: string | null;
+  updatedAt: number | null;
+};
+
+const inferAllocationMode = (members: AvcMemberConfig[]): AllocationMode => {
+  return inferControlAllocationMode(members.map((member) => ({
+    controllable: member.controllable,
+    weight: member.weight,
+    basis: member.q_max_kvar - member.q_min_kvar,
+  })));
+};
+
+const allocationModeLabel = (members: AvcMemberConfig[]): string => (
+  {
+    equal: '平均分配（等权）',
+    proportional: '按可调范围比例',
+    custom: '自定义权重比例',
+  }[inferAllocationMode(members)]
+);
+
 const STATE_MAP: Record<number, { label: string; color: string }> = {
   0: { label: '未指定', color: 'default' },
   1: { label: '已停止', color: 'default' },
@@ -126,6 +157,33 @@ const DEFAULT_POINT_KIND_LABELS: Record<number, string> = {
   8: '总无功实测',
   9: '总无功偏差',
   10: '电压偏差',
+};
+
+const AVC_RESERVED_DEFAULT_TAGS = new Set([
+  '理论可调无功下限',
+  '理论可调无功上限',
+  '当前可调无功下限',
+  '当前可调无功上限',
+  '调节返回值',
+  '当前电压',
+  '总无功目标',
+  '总无功实测',
+  '总无功偏差',
+  '电压偏差',
+]);
+
+const VALUE_MODE_OPTIONS = Object.entries(VALUE_MODE_LABELS)
+  .filter(([value]) => Number(value) > 0)
+  .map(([value, label]) => ({ value: Number(value), label }));
+
+const DELTA_BASE_OPTIONS = Object.entries(DELTA_BASE_LABELS)
+  .filter(([value]) => Number(value) > 0)
+  .map(([value, label]) => ({ value: Number(value), label }));
+
+const EMPTY_RUNTIME_STATUS: RuntimeMonitorStatus = {
+  state: 'idle',
+  error: null,
+  updatedAt: null,
 };
 
 const DEFAULT_VOLTAGE_SIGNAL: AvcSignalSpec = {
@@ -359,16 +417,87 @@ const findDuplicateGroupEndpointTags = (config: AvcGroupConfig): string[] => {
   collectTag(config.voltage_meas?.tag, 'voltage_meas');
   collectTag(config.voltage_cmd?.tag, 'voltage_cmd');
   collectTag(config.q_total_cmd?.signal?.tag, 'q_total_cmd');
+  if (config.q_total_cmd?.mode === 2 && config.q_total_cmd.delta_base === 3) {
+    collectTag(config.q_total_cmd.base_tag, 'q_total_cmd.base_tag');
+  }
   config.members.forEach((member, index) => {
     const memberLabel = member.member_name.trim() || `member #${index + 1}`;
     collectTag(member.q_meas?.tag, `${memberLabel}.q_meas`);
     collectTag(member.q_set?.signal?.tag, `${memberLabel}.q_set`);
+    if (member.q_set?.mode === 2 && member.q_set.delta_base === 3) {
+      collectTag(member.q_set.base_tag, `${memberLabel}.q_set.base_tag`);
+    }
   });
 
   return Array.from(tagOwners.entries())
     .filter(([, owners]) => owners.length > 1)
     .map(([tag, owners]) => `${tag} (${owners.join('，')})`);
 };
+
+const assertNotReservedDefaultTag = (tag: string | null | undefined, fieldName: string) => {
+  const normalizedTag = tag?.trim();
+  if (normalizedTag && AVC_RESERVED_DEFAULT_TAGS.has(normalizedTag)) {
+    throw new Error(`${fieldName} 不能使用 AVC 默认点保留 tag：${normalizedTag}`);
+  }
+};
+
+const validateValueSpecForSubmit = (spec: AvcValueSpec | null | undefined, fieldName: string) => {
+  if (!spec?.signal?.tag) {
+    throw new Error(`${fieldName} 必须配置 signal.tag`);
+  }
+
+  assertNotReservedDefaultTag(spec.signal.tag, `${fieldName}.signal.tag`);
+  if (spec.mode !== 1 && spec.mode !== 2) {
+    throw new Error(`${fieldName}.mode 必须选择绝对值或增量值`);
+  }
+
+  if (spec.mode !== 2) {
+    return;
+  }
+
+  if (![1, 2, 3].includes(spec.delta_base)) {
+    throw new Error(`${fieldName}.delta_base 必须选择有效的增量基准`);
+  }
+  if (spec.delta_base === 3) {
+    if (!spec.base_tag?.trim()) {
+      throw new Error(`${fieldName}.base_tag 不能为空`);
+    }
+    assertNotReservedDefaultTag(spec.base_tag, `${fieldName}.base_tag`);
+  }
+};
+
+const reservedTagRules = (fieldName: string) => [
+  {
+    validator: async (_rule: unknown, value: unknown) => {
+      assertNotReservedDefaultTag(String(value ?? ''), fieldName);
+    },
+  },
+];
+
+const requiredTagRules = (fieldName: string) => [
+  { required: true, whitespace: true, message: `${fieldName} 不能为空` },
+  ...reservedTagRules(fieldName),
+];
+
+const valueModeRules = (fieldName: string) => [
+  {
+    validator: async (_rule: unknown, value: unknown) => {
+      if (value !== 1 && value !== 2) {
+        throw new Error(`${fieldName} 必须选择绝对值或增量值`);
+      }
+    },
+  },
+];
+
+const deltaBaseRules = (fieldName: string) => [
+  {
+    validator: async (_rule: unknown, value: unknown) => {
+      if (value !== 1 && value !== 2 && value !== 3) {
+        throw new Error(`${fieldName} 必须选择有效的增量基准`);
+      }
+    },
+  },
+];
 
 const validateGroupConfig = (config: AvcGroupConfig) => {
   if (!config.group_name.trim()) {
@@ -378,6 +507,7 @@ const validateGroupConfig = (config: AvcGroupConfig) => {
   if (!config.voltage_meas?.tag) {
     throw new Error('请配置电压量测点 voltage_meas');
   }
+  assertNotReservedDefaultTag(config.voltage_meas.tag, 'voltage_meas.tag');
 
   const hasVoltageCommand = Boolean(config.voltage_cmd?.tag);
   const hasQTotalCommand = Boolean(config.q_total_cmd?.signal?.tag);
@@ -388,19 +518,36 @@ const validateGroupConfig = (config: AvcGroupConfig) => {
   if (hasVoltageCommand && !config.voltage_control) {
     throw new Error('目标电压模式必须配置电压控制参数');
   }
+  if (hasVoltageCommand) {
+    assertNotReservedDefaultTag(config.voltage_cmd?.tag, 'voltage_cmd.tag');
+    if (!config.voltage_control || !Number.isFinite(config.voltage_control.kp) || config.voltage_control.kp <= 0) {
+      throw new Error('voltage_control.kp 必须大于 0');
+    }
+    if (!Number.isFinite(config.voltage_control.deadband) || config.voltage_control.deadband < 0) {
+      throw new Error('voltage_control.deadband 不能小于 0');
+    }
+  } else if (hasQTotalCommand) {
+    validateValueSpecForSubmit(config.q_total_cmd, 'q_total_cmd');
+  }
 
   if (config.members.length === 0) {
     throw new Error('至少添加一个成员');
   }
 
+  const memberNames = new Set<string>();
   config.members.forEach((member, index) => {
     const memberLabel = member.member_name.trim() || `member #${index + 1}`;
     if (!member.member_name.trim()) {
       throw new Error(`成员 #${index + 1} 缺少 member_name`);
     }
+    if (memberNames.has(member.member_name.trim())) {
+      throw new Error(`成员名称不能重复：${member.member_name.trim()}`);
+    }
+    memberNames.add(member.member_name.trim());
     if (!member.q_meas?.tag) {
       throw new Error(`${memberLabel} 缺少 q_meas`);
     }
+    assertNotReservedDefaultTag(member.q_meas.tag, `${memberLabel}.q_meas.tag`);
     if (member.q_min_kvar > member.q_max_kvar) {
       throw new Error(`${memberLabel} 的 q_min_kvar 不能大于 q_max_kvar`);
     }
@@ -409,6 +556,11 @@ const validateGroupConfig = (config: AvcGroupConfig) => {
     }
     if (member.controllable && (member.weight ?? 0) <= 0) {
       throw new Error(`${memberLabel} 的 weight 必须大于 0`);
+    }
+    if (member.controllable) {
+      validateValueSpecForSubmit(member.q_set, `${memberLabel}.q_set`);
+    } else if (member.q_set) {
+      validateValueSpecForSubmit(member.q_set, `${memberLabel}.q_set`);
     }
   });
 
@@ -453,11 +605,14 @@ const AVC: React.FC = () => {
   const [selectedGroupName, setSelectedGroupName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeMonitorStatus>(EMPTY_RUNTIME_STATUS);
+  const [groupOperation, setGroupOperation] = useState<GroupOperation | null>(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<AvcGroupConfig | null>(null);
   const [editingMemberIndex, setEditingMemberIndex] = useState<number | null>(null);
+  const [allocationMode, setAllocationMode] = useState<AllocationMode>('equal');
   const [membersDraft, setMembersDraft] = useState<AvcMemberConfig[]>([]);
   const [memberRouteDrafts, setMemberRouteDrafts] = useState<MemberRouteDraft[]>([]);
   const [dataBusConnectionOptions, setDataBusConnectionOptions] = useState<DataBusConnectionOption[]>([]);
@@ -473,6 +628,9 @@ const AVC: React.FC = () => {
     Partial<Record<MemberTagPickerKey, string>>
   >({});
   const [runtimeUpdates, setRuntimeUpdates] = useState<Record<string, DcPointUpdate>>({});
+  const groupOperationRef = useRef<GroupOperation | null>(null);
+  const runtimeRequestIdRef = useRef(0);
+  const runtimeErrorToastRef = useRef<{ text: string; at: number } | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
   const [modalApi, modalContextHolder] = Modal.useModal();
   const [groupForm] = Form.useForm<AvcGroupFormValues>();
@@ -491,9 +649,49 @@ const AVC: React.FC = () => {
     () => groups.find((item) => item.config?.group_name === selectedGroupName) ?? null,
     [groups, selectedGroupName],
   );
+
+  const allocationShares = useMemo(() => calculateControlAllocationShares(
+    membersDraft.map((member) => ({
+      controllable: member.controllable,
+      weight: member.weight,
+      basis: member.q_max_kvar - member.q_min_kvar,
+    })),
+  ), [membersDraft]);
+
+  const handleAllocationModeChange = useCallback((mode: AllocationMode) => {
+    setAllocationMode(mode);
+    if (mode !== 'custom') {
+      setMembersDraft((prev) => prev.map((member) => {
+        if (!member.controllable) return member;
+        const range = member.q_max_kvar - member.q_min_kvar;
+        return { ...member, weight: resolveControlAllocationWeight(mode, range, member.weight) };
+      }));
+    }
+  }, []);
+
+  const handleMemberWeightChange = useCallback((index: number, value: number | null) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return;
+    setMembersDraft((prev) => prev.map((member, memberIndex) => (
+      memberIndex === index ? { ...member, weight: value } : member
+    )));
+  }, []);
   const selectedConfig = selectedGroup?.config ?? null;
   const stateInfo = STATE_MAP[selectedGroup?.state ?? 0] ?? STATE_MAP[0];
   const currentView = normalizeControlView(searchParams.get(CONTROL_VIEW_QUERY_KEY));
+
+  const beginGroupOperation = useCallback((operation: GroupOperation) => {
+    if (groupOperationRef.current) {
+      return false;
+    }
+    groupOperationRef.current = operation;
+    setGroupOperation(operation);
+    return true;
+  }, []);
+
+  const endGroupOperation = useCallback(() => {
+    groupOperationRef.current = null;
+    setGroupOperation(null);
+  }, []);
 
   const getGroupState = useCallback(async (groupName: string): Promise<number | null> => {
     const group = await api.avcGetGroup(groupName);
@@ -587,29 +785,62 @@ const AVC: React.FC = () => {
   }, []);
 
   const refreshRuntime = useCallback(async () => {
+    const requestId = runtimeRequestIdRef.current + 1;
+    runtimeRequestIdRef.current = requestId;
     if (!selectedGroup?.conn_id) {
       setRuntimeUpdates({});
+      setRuntimeStatus(EMPTY_RUNTIME_STATUS);
+      setRuntimeLoading(false);
       return;
     }
 
     const tags = collectObservedTags(selectedGroup);
     if (tags.length === 0) {
       setRuntimeUpdates({});
+      setRuntimeStatus({ state: 'stale', error: null, updatedAt: null });
+      setRuntimeLoading(false);
       return;
     }
 
     setRuntimeLoading(true);
     try {
       const updates = await api.dcGetLatest(selectedGroup.conn_id, tags);
+      if (requestId !== runtimeRequestIdRef.current) {
+        return;
+      }
       const nextUpdates: Record<string, DcPointUpdate> = {};
       updates.forEach((update) => {
-        nextUpdates[update.dst_tag] = update;
+        const tag = update.dst_tag || update.src_tag;
+        if (tag) {
+          nextUpdates[tag] = update;
+        }
       });
       setRuntimeUpdates(nextUpdates);
+      setRuntimeStatus({
+        state: updates.length > 0 ? 'ok' : 'stale',
+        error: null,
+        updatedAt: Date.now(),
+      });
     } catch (error) {
-      messageApi.error(`刷新 AVC 运行监视失败: ${error}`);
+      if (requestId !== runtimeRequestIdRef.current) {
+        return;
+      }
+      const errorText = formatErrorText(error);
+      setRuntimeStatus((prev) => ({
+        state: 'offline',
+        error: errorText,
+        updatedAt: prev.updatedAt,
+      }));
+      const now = Date.now();
+      const previousToast = runtimeErrorToastRef.current;
+      if (!previousToast || previousToast.text !== errorText || now - previousToast.at >= 30000) {
+        messageApi.error(`刷新 AVC 运行监视失败: ${errorText}`);
+        runtimeErrorToastRef.current = { text: errorText, at: now };
+      }
     } finally {
-      setRuntimeLoading(false);
+      if (requestId === runtimeRequestIdRef.current) {
+        setRuntimeLoading(false);
+      }
     }
   }, [messageApi, selectedGroup]);
 
@@ -623,7 +854,10 @@ const AVC: React.FC = () => {
 
   useEffect(() => {
     if (currentView !== 'strategy' || !selectedGroup?.conn_id) {
+      runtimeRequestIdRef.current += 1;
       setRuntimeUpdates({});
+      setRuntimeStatus(EMPTY_RUNTIME_STATUS);
+      setRuntimeLoading(false);
       return;
     }
 
@@ -636,6 +870,9 @@ const AVC: React.FC = () => {
   }, [currentView, refreshRuntime, selectedGroup?.conn_id]);
 
   const handleSelectGroup = useCallback((groupName: string) => {
+    if (groupOperationRef.current) {
+      return;
+    }
     setSelectedGroupName(groupName);
   }, []);
 
@@ -775,6 +1012,7 @@ const AVC: React.FC = () => {
 
   const openCreateGroupForm = useCallback(() => {
     setEditingGroup(null);
+    setAllocationMode('equal');
     setMembersDraft([]);
     setMemberRouteDrafts([]);
     setGroupAutoRouteEnabled(false);
@@ -802,6 +1040,7 @@ const AVC: React.FC = () => {
     }
 
     setEditingGroup(selectedConfig);
+    setAllocationMode(inferAllocationMode(selectedConfig.members));
     setMembersDraft(selectedConfig.members.map((member) => cloneMember(member)));
     setMemberRouteDrafts(selectedConfig.members.map(() => ({ enabled: false, endpoints: {} })));
     setGroupAutoRouteEnabled(false);
@@ -820,7 +1059,7 @@ const AVC: React.FC = () => {
     renameForm.resetFields();
     renameForm.setFieldsValue({
       old_group_name: selectedConfig.group_name,
-      new_group_name: selectedConfig.group_name,
+      new_group_name: '',
     });
     setRenameModalOpen(true);
   }, [renameForm, selectedConfig]);
@@ -873,6 +1112,9 @@ const AVC: React.FC = () => {
 
   const handleDeleteGroup = useCallback(
     async (groupName: string) => {
+      if (!beginGroupOperation('delete')) {
+        return;
+      }
       try {
         await api.avcDeleteGroup(groupName);
         messageApi.success(`控制组 ${groupName} 已删除`);
@@ -883,42 +1125,48 @@ const AVC: React.FC = () => {
       } catch (error) {
         messageApi.error(`删除控制组失败: ${error}`);
         await refreshGroups();
+      } finally {
+        endGroupOperation();
       }
     },
-    [messageApi, refreshGroups, selectedGroupName],
+    [beginGroupOperation, endGroupOperation, messageApi, refreshGroups, selectedGroupName],
   );
 
   const handleStartGroup = useCallback(async () => {
-    if (!selectedGroupName) {
+    if (!selectedGroupName || selectedGroup?.state !== 1 || !beginGroupOperation('start')) {
       return;
     }
 
     try {
       await api.avcStartGroup(selectedGroupName);
-      messageApi.success('启动控制组请求已发送');
+      messageApi.success('启动控制组请求已发送，正在确认状态');
       await refreshGroups();
       window.setTimeout(() => void refreshGroups(), 1000);
     } catch (error) {
       messageApi.error(`启动控制组失败: ${error}`);
       await refreshGroups();
+    } finally {
+      endGroupOperation();
     }
-  }, [messageApi, refreshGroups, selectedGroupName]);
+  }, [beginGroupOperation, endGroupOperation, messageApi, refreshGroups, selectedGroup, selectedGroupName]);
 
   const handleStopGroup = useCallback(async () => {
-    if (!selectedGroupName) {
+    if (!selectedGroupName || selectedGroup?.state !== 2 || !beginGroupOperation('stop')) {
       return;
     }
 
     try {
       await api.avcStopGroup(selectedGroupName);
-      messageApi.success('停止控制组请求已发送');
+      messageApi.success('停止控制组请求已发送，正在确认状态');
       await refreshGroups();
       window.setTimeout(() => void refreshGroups(), 1000);
     } catch (error) {
       messageApi.error(`停止控制组失败: ${error}`);
       await refreshGroups();
+    } finally {
+      endGroupOperation();
     }
-  }, [messageApi, refreshGroups, selectedGroupName]);
+  }, [beginGroupOperation, endGroupOperation, messageApi, refreshGroups, selectedGroup, selectedGroupName]);
 
   const handleGroupSubmit = useCallback(async () => {
     let savedGroup: AvcGroupInfo | null = null;
@@ -937,7 +1185,13 @@ const AVC: React.FC = () => {
         members: membersDraft.map((member) => ({
           member_name: member.member_name.trim(),
           controllable: member.controllable ?? true,
-          weight: member.weight ?? 0,
+          weight: member.controllable
+            ? allocationMode === 'equal'
+              ? 1
+              : allocationMode === 'proportional'
+                ? member.q_max_kvar - member.q_min_kvar
+                : (member.weight ?? 0)
+            : (member.weight ?? 0),
           q_min_kvar: member.q_min_kvar ?? 0,
           q_max_kvar: member.q_max_kvar ?? 0,
           q_meas: normalizeSignal(member.q_meas),
@@ -945,6 +1199,14 @@ const AVC: React.FC = () => {
         })),
       };
 
+      if (allocationMode === 'proportional') {
+        const invalidRangeMember = config.members.find(
+          (member) => member.controllable && member.q_max_kvar <= member.q_min_kvar,
+        );
+        if (invalidRangeMember) {
+          throw new Error(`${invalidRangeMember.member_name || '可控成员'} 的无功上限必须大于下限`);
+        }
+      }
       validateGroupConfig(config);
       savedGroupName = config.group_name;
 
@@ -1079,6 +1341,7 @@ const AVC: React.FC = () => {
       messageApi.error(`保存 AVC 控制组失败: ${error instanceof Error ? error.message : String(error)}`);
     }
   }, [
+    allocationMode,
     editingGroup,
     groupAutoRouteEnabled,
     groupForm,
@@ -1113,7 +1376,11 @@ const AVC: React.FC = () => {
       const nextMember: AvcMemberConfig = {
         member_name: values.member_name.trim(),
         controllable: values.controllable ?? true,
-        weight: values.weight ?? 0,
+        weight: allocationMode === 'equal'
+          ? 1
+          : allocationMode === 'proportional'
+            ? (values.q_max_kvar ?? 0) - (values.q_min_kvar ?? 0)
+            : (values.weight ?? 0),
         q_min_kvar: values.q_min_kvar ?? 0,
         q_max_kvar: values.q_max_kvar ?? 0,
         q_meas: cloneSignal(values.q_meas),
@@ -1123,6 +1390,13 @@ const AVC: React.FC = () => {
       if (nextMember.q_min_kvar > nextMember.q_max_kvar) {
         throw new Error('q_min_kvar 不能大于 q_max_kvar');
       }
+      if (
+        allocationMode === 'proportional'
+        && nextMember.controllable
+        && nextMember.q_min_kvar === nextMember.q_max_kvar
+      ) {
+        throw new Error('按可调范围比例分配时，无功上限必须大于下限');
+      }
 
       if (nextMember.controllable && !(nextMember.q_set?.signal?.tag ?? '').trim()) {
         throw new Error('可控成员必须配置 q_set');
@@ -1130,6 +1404,18 @@ const AVC: React.FC = () => {
 
       if (!(nextMember.q_meas?.tag ?? '').trim()) {
         throw new Error('请配置 q_meas');
+      }
+
+      assertNotReservedDefaultTag(nextMember.q_meas?.tag, 'q_meas.tag');
+      if (nextMember.controllable || nextMember.q_set) {
+        validateValueSpecForSubmit(nextMember.q_set, 'q_set');
+      }
+      const duplicateMember = membersDraft.some(
+        (member, index) => index !== editingMemberIndex
+          && member.member_name.trim() === nextMember.member_name.trim(),
+      );
+      if (duplicateMember) {
+        throw new Error(`成员名称不能重复：${nextMember.member_name}`);
       }
 
       setMembersDraft((prev) => {
@@ -1154,17 +1440,34 @@ const AVC: React.FC = () => {
     } catch (error) {
       messageApi.error(`保存成员失败: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [editingMemberIndex, memberAutoRouteEnabled, memberForm, memberRouteEndpoints, messageApi]);
+  }, [allocationMode, editingMemberIndex, memberAutoRouteEnabled, memberForm, memberRouteEndpoints, membersDraft, messageApi]);
 
   const handleDeleteMember = useCallback((index: number) => {
     setMembersDraft((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
     setMemberRouteDrafts((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
   }, []);
 
-  const editDisabled = !selectedGroup || selectedGroup.state !== 1;
-  const renameDisabled = !selectedGroup || selectedGroup.state !== 1;
-  const startDisabled = !selectedGroup || selectedGroup.state !== 1;
-  const stopDisabled = !selectedGroup || selectedGroup.state !== 2;
+  const editDisabled = !selectedGroup || selectedGroup.state !== 1 || groupOperation !== null;
+  const renameDisabled = !selectedGroup || selectedGroup.state !== 1 || groupOperation !== null;
+  const startDisabled = !selectedGroup || selectedGroup.state !== 1 || groupOperation !== null;
+  const stopDisabled = !selectedGroup || selectedGroup.state !== 2 || groupOperation !== null;
+
+  const runtimeStatusLabel =
+    runtimeStatus.state === 'ok'
+      ? '数据正常'
+      : runtimeStatus.state === 'stale'
+        ? '暂无最新数据'
+        : runtimeStatus.state === 'offline'
+          ? '数据总线不可用'
+          : '等待数据';
+  const runtimeStatusColor =
+    runtimeStatus.state === 'ok'
+      ? 'green'
+      : runtimeStatus.state === 'offline'
+        ? 'red'
+        : runtimeStatus.state === 'stale'
+          ? 'orange'
+          : 'default';
 
   const importantRuntimeRows = useMemo(() => {
     if (!selectedGroup) {
@@ -1263,11 +1566,81 @@ const AVC: React.FC = () => {
   ];
 
   const modalMemberColumns: ColumnsType<AvcMemberConfig> = [
-    ...memberColumns,
+    {
+      title: '成员',
+      dataIndex: 'member_name',
+      key: 'member_name',
+      width: 170,
+      ellipsis: true,
+      render: (value: string) => <Text strong title={value}>{value}</Text>,
+    },
+    {
+      title: '调节范围 (kVar)',
+      key: 'range',
+      width: 150,
+      render: (_, record) => `${record.q_min_kvar} ~ ${record.q_max_kvar}`,
+    },
+    {
+      title: '测量值',
+      key: 'q_meas_value',
+      width: 110,
+      render: (_, record) => formatPointValue(record.q_meas?.tag ? runtimeUpdates[record.q_meas.tag] : null),
+    },
+    {
+      title: '设定值',
+      key: 'q_set_value',
+      width: 110,
+      render: (_, record) => formatPointValue(
+        record.q_set?.signal?.tag ? runtimeUpdates[record.q_set.signal.tag] : null,
+      ),
+    },
+    {
+      title: '权重',
+      dataIndex: 'weight',
+      key: 'weight',
+      width: 120,
+      render: (value: number, record, index) => {
+        if (!record.controllable) return <Text type="secondary">—</Text>;
+        if (allocationMode !== 'custom') return value;
+        return (
+          <InputNumber
+            aria-label={`${record.member_name} 调节权重`}
+            value={value}
+            min={0}
+            step={0.1}
+            status={value > 0 ? undefined : 'error'}
+            style={{ width: 96 }}
+            onChange={(nextValue) => handleMemberWeightChange(index, nextValue)}
+          />
+        );
+      },
+    },
+    {
+      title: '理论占比（未触限）',
+      key: 'allocation_share',
+      width: 135,
+      render: (_, record, index) => {
+        if (!record.controllable) return <Text type="secondary">未参与</Text>;
+        const share = allocationShares[index] ?? 0;
+        return share > 0
+          ? `${(share * 100).toFixed(1)}%`
+          : <Text type="danger">待设置</Text>;
+      },
+    },
+    {
+      title: '可控',
+      key: 'controllable',
+      width: 80,
+      render: (_, record) => (
+        <Tag color={record.controllable ? 'green' : 'default'}>
+          {record.controllable ? '是' : '否'}
+        </Tag>
+      ),
+    },
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 96,
       render: (_, __, index) => (
         <Space>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditMember(index)} />
@@ -1417,10 +1790,17 @@ const AVC: React.FC = () => {
                         重命名
                       </Button>
                       <Popconfirm
-                        title={`确认删除 ${selectedConfig.group_name}？`}
+                        title={`确认删除 ${selectedConfig.group_name}？${selectedGroup?.state === 2 ? ' 删除前会停止正在运行的控制组。' : ''}`}
                         onConfirm={() => void handleDeleteGroup(selectedConfig.group_name)}
                       >
-                        <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                        <Button
+                          type="link"
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          loading={groupOperation === 'delete'}
+                          disabled={groupOperation !== null}
+                        >
                           {selectedGroup?.state === 3 ? '重试删除' : '删除'}
                         </Button>
                       </Popconfirm>
@@ -1436,8 +1816,8 @@ const AVC: React.FC = () => {
                       <Descriptions.Item label="控制状态">
                         <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
                       </Descriptions.Item>
-                      <Descriptions.Item label="策略类型">
-                        {selectedConfig.strategy?.strategy_type ?? '-'}
+                      <Descriptions.Item label="分配方式">
+                        {allocationModeLabel(selectedConfig.members)}
                       </Descriptions.Item>
                       <Descriptions.Item label="命令模式">
                         {selectedConfig.voltage_cmd ? '目标电压模式' : '总无功模式'}
@@ -1497,6 +1877,21 @@ const AVC: React.FC = () => {
                       <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
                     </div>
                     <div>
+                      <Text type="secondary" style={{ marginRight: 12 }}>数据状态</Text>
+                      <Tag color={runtimeStatusColor}>{runtimeStatusLabel}</Tag>
+                      {runtimeStatus.updatedAt ? (
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {' '}
+                          更新于 {new Date(runtimeStatus.updatedAt).toLocaleTimeString()}
+                        </Text>
+                      ) : null}
+                      {runtimeStatus.error ? (
+                        <Text type="danger" style={{ display: 'block', marginTop: 4 }}>
+                          {runtimeStatus.error}
+                        </Text>
+                      ) : null}
+                    </div>
+                    <div>
                       <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>运行控制</Text>
                       <Space wrap>
                         <Button
@@ -1504,6 +1899,7 @@ const AVC: React.FC = () => {
                           icon={<PlayCircleOutlined />}
                           style={{ background: '#4caf50', borderColor: '#4caf50' }}
                           disabled={startDisabled}
+                          loading={groupOperation === 'start'}
                           onClick={() => void handleStartGroup()}
                         >
                           启动控制组
@@ -1512,6 +1908,7 @@ const AVC: React.FC = () => {
                           danger
                           icon={<PauseCircleOutlined />}
                           disabled={stopDisabled}
+                          loading={groupOperation === 'stop'}
                           onClick={() => void handleStopGroup()}
                         >
                           停止控制组
@@ -1582,17 +1979,25 @@ const AVC: React.FC = () => {
         open={groupModalOpen}
         onOk={() => void handleGroupSubmit()}
         onCancel={() => setGroupModalOpen(false)}
+        okText="保存配置"
+        cancelText="取消"
         width={1100}
         centered
         className="control-config-modal control-group-modal"
         destroyOnClose
       >
         <Form form={groupForm} layout="vertical" size="small">
-          <div style={{ display: 'flex', gap: 16 }}>
+          <div className="control-config-intro">
+            <span className="control-config-intro__mark">AVC</span>
+            <span className="control-config-intro__text">控制组配置</span>
+          </div>
+          <div className="control-config-section control-config-section--overview">
+            <div className="control-config-section__heading">基础信息</div>
+            <div className="control-config-grid control-config-grid--overview control-config-grid--overview-triple">
             <div style={{ flex: 1 }}>
               <Form.Item
                 name="group_name"
-                label="group_name"
+                label="控制组名称"
                 rules={[{ required: true, message: '请输入控制组名称' }]}
               >
                 <Input disabled={!!editingGroup} placeholder="avc_group_1" />
@@ -1609,26 +2014,45 @@ const AVC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ width: 220 }}>
-              <Form.Item name={['strategy', 'strategy_type']} label="strategy_type">
-                <Select options={[{ value: 'weighted', label: 'weighted' }]} />
+              <Form.Item label="分配方式">
+                <Select<AllocationMode>
+                  value={allocationMode}
+                  onChange={handleAllocationModeChange}
+                  options={[
+                    { value: 'equal', label: '平均分配（等权）' },
+                    { value: 'proportional', label: '按可调范围比例' },
+                    { value: 'custom', label: '自定义权重比例' },
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item name={['strategy', 'strategy_type']} hidden>
+                <Input />
               </Form.Item>
             </div>
+            </div>
+            <Text type="secondary" className="control-allocation-note">
+              理论占比按可控成员权重归一化；达到无功上下限后，剩余指令会重新分配。
+            </Text>
           </div>
 
-          <div style={{ marginBottom: 16 }}>
+          <div className="control-config-section control-config-section--routing">
             <Space>
               <Switch checked={groupAutoRouteEnabled} onChange={setGroupAutoRouteEnabled} />
-              <Text>保存时自动创建组级 DataCenter 路由</Text>
+              <Text strong>保存时自动创建组级 DataCenter 路由</Text>
             </Space>
             <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
               仅为本次从数据总线选择的组级点位增量创建路由，方向为外部点位 → AVC；已有路由不会自动删除。
             </Text>
           </div>
 
-          <Card title="voltage_meas" size="small" bordered style={{ marginBottom: 16 }}>
+          <Card className="control-config-section control-config-section--command" title="电压测量（voltage_meas）" size="small" bordered>
             <div style={{ display: 'flex', gap: 16 }}>
               <div style={{ flex: 1 }}>
-                <Form.Item name={['voltage_meas', 'tag']} label="tag">
+                <Form.Item
+                  name={['voltage_meas', 'tag']}
+                  label="测量点 tag"
+                  rules={requiredTagRules('voltage_meas.tag')}
+                >
                   <Input placeholder="bus_voltage_meas" />
                 </Form.Item>
                 <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
@@ -1648,17 +2072,17 @@ const AVC: React.FC = () => {
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['voltage_meas', 'unit']} label="unit">
+                <Form.Item name={['voltage_meas', 'unit']} label="单位">
                   <Input placeholder="kV" />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['voltage_meas', 'scale']} label="scale">
+                <Form.Item name={['voltage_meas', 'scale']} label="缩放系数">
                   <InputNumber step={0.01} style={{ width: '100%' }} />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['voltage_meas', 'offset']} label="offset">
+                <Form.Item name={['voltage_meas', 'offset']} label="偏移量">
                   <InputNumber step={0.01} style={{ width: '100%' }} />
                 </Form.Item>
               </div>
@@ -1667,10 +2091,14 @@ const AVC: React.FC = () => {
 
           {commandMode === 'voltage' ? (
             <>
-              <Card title="voltage_cmd" size="small" bordered style={{ marginBottom: 16 }}>
+              <Card className="control-config-section control-config-section--command" title="目标电压命令（voltage_cmd）" size="small" bordered>
                 <div style={{ display: 'flex', gap: 16 }}>
                   <div style={{ flex: 1 }}>
-                    <Form.Item name={['voltage_cmd', 'tag']} label="tag">
+                    <Form.Item
+                      name={['voltage_cmd', 'tag']}
+                      label="命令点 tag"
+                      rules={requiredTagRules('voltage_cmd.tag')}
+                    >
                       <Input placeholder="bus_voltage_cmd" />
                     </Form.Item>
                     <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
@@ -1690,43 +2118,67 @@ const AVC: React.FC = () => {
                     </Form.Item>
                   </div>
                   <div style={{ width: 140 }}>
-                    <Form.Item name={['voltage_cmd', 'unit']} label="unit">
+                    <Form.Item name={['voltage_cmd', 'unit']} label="单位">
                       <Input placeholder="kV" />
                     </Form.Item>
                   </div>
                   <div style={{ width: 140 }}>
-                    <Form.Item name={['voltage_cmd', 'scale']} label="scale">
+                    <Form.Item name={['voltage_cmd', 'scale']} label="缩放系数">
                       <InputNumber step={0.01} style={{ width: '100%' }} />
                     </Form.Item>
                   </div>
                   <div style={{ width: 140 }}>
-                    <Form.Item name={['voltage_cmd', 'offset']} label="offset">
+                    <Form.Item name={['voltage_cmd', 'offset']} label="偏移量">
                       <InputNumber step={0.01} style={{ width: '100%' }} />
                     </Form.Item>
                   </div>
                 </div>
               </Card>
 
-              <Card title="voltage_control" size="small" bordered style={{ marginBottom: 16 }}>
+              <Card className="control-config-section control-config-section--parameters" title="电压控制参数" size="small" bordered>
                 <div style={{ display: 'flex', gap: 16 }}>
                   <div style={{ flex: 1 }}>
-                    <Form.Item name={['voltage_control', 'kp']} label="kp">
-                      <InputNumber step={0.01} style={{ width: '100%' }} />
+                    <Form.Item
+                      name={['voltage_control', 'kp']}
+                      label="比例系数 kp"
+                      rules={[{
+                        validator: async (_rule, value: number | null) => {
+                          if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+                            throw new Error('kp 必须大于 0');
+                          }
+                        },
+                      }]}
+                    >
+                      <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
                     </Form.Item>
                   </div>
                   <div style={{ flex: 1 }}>
-                    <Form.Item name={['voltage_control', 'deadband']} label="deadband">
-                      <InputNumber step={0.01} style={{ width: '100%' }} />
+                    <Form.Item
+                      name={['voltage_control', 'deadband']}
+                      label="电压死区 deadband"
+                      rules={[{
+                        validator: async (_rule, value: number | null) => {
+                          if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+                            throw new Error('deadband 不能小于 0');
+                          }
+                        },
+                      }]}
+                    >
+                      <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
                     </Form.Item>
                   </div>
                 </div>
               </Card>
             </>
           ) : (
-            <Card title="q_total_cmd" size="small" bordered style={{ marginBottom: 16 }}>
+            <Card className="control-config-section control-config-section--command" title="总无功命令（q_total_cmd）" size="small" bordered>
               <div style={{ display: 'flex', gap: 16 }}>
                 <div style={{ flex: 1 }}>
-                  <Form.Item name={['q_total_cmd', 'signal', 'tag']} label="tag">
+                  <Form.Item
+                    name={['q_total_cmd', 'signal', 'tag']}
+                    label="命令点 tag"
+                    rules={requiredTagRules('q_total_cmd.signal.tag')}
+                  >
                     <Input placeholder="q_total_cmd" />
                   </Form.Item>
                   <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
@@ -1746,47 +2198,60 @@ const AVC: React.FC = () => {
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_total_cmd', 'signal', 'unit']} label="unit">
+                  <Form.Item name={['q_total_cmd', 'signal', 'unit']} label="单位">
                     <Input placeholder="kVar" />
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_total_cmd', 'signal', 'scale']} label="scale">
+                  <Form.Item name={['q_total_cmd', 'signal', 'scale']} label="缩放系数">
                     <InputNumber step={0.01} style={{ width: '100%' }} />
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_total_cmd', 'signal', 'offset']} label="offset">
+                  <Form.Item name={['q_total_cmd', 'signal', 'offset']} label="偏移量">
                     <InputNumber step={0.01} style={{ width: '100%' }} />
                   </Form.Item>
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 16 }}>
                 <div style={{ width: 260 }}>
-                  <Form.Item name={['q_total_cmd', 'mode']} label="mode">
-                    <Select
-                      options={Object.entries(VALUE_MODE_LABELS).map(([value, label]) => ({
-                        value: Number(value),
-                        label,
-                      }))}
+                    <Form.Item
+                      name={['q_total_cmd', 'mode']}
+                      label="指令模式"
+                      rules={valueModeRules('q_total_cmd.mode')}
+                    >
+                      <Select
+                        options={VALUE_MODE_OPTIONS}
                     />
                   </Form.Item>
                 </div>
                 {qTotalMode === 2 ? (
                   <>
                     <div style={{ width: 260 }}>
-                      <Form.Item name={['q_total_cmd', 'delta_base']} label="delta_base">
+                      <Form.Item
+                        name={['q_total_cmd', 'delta_base']}
+                        label="增量基准"
+                        rules={deltaBaseRules('q_total_cmd.delta_base')}
+                      >
                         <Select
-                          options={Object.entries(DELTA_BASE_LABELS).map(([value, label]) => ({
-                            value: Number(value),
-                            label,
-                          }))}
+                          options={DELTA_BASE_OPTIONS}
                         />
                       </Form.Item>
                     </div>
                     {qTotalDeltaBase === 3 ? (
                       <div style={{ flex: 1 }}>
-                        <Form.Item name={['q_total_cmd', 'base_tag']} label="base_tag">
+                        <Form.Item
+                          name={['q_total_cmd', 'base_tag']}
+                          label="基准点 tag"
+                          rules={[
+                            ...reservedTagRules('q_total_cmd.base_tag'),
+                            {
+                              required: true,
+                              whitespace: true,
+                              message: 'base_tag 不能为空',
+                            },
+                          ]}
+                        >
                           <Input placeholder="q_total_base_tag" />
                         </Form.Item>
                         <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
@@ -1813,7 +2278,8 @@ const AVC: React.FC = () => {
           )}
 
           <Card
-            title="成员配置"
+            className="control-config-section control-config-section--members"
+            title={`成员配置${membersDraft.length ? `（${membersDraft.length}）` : ''}`}
             size="small"
             bordered
             extra={
@@ -1828,7 +2294,7 @@ const AVC: React.FC = () => {
               dataSource={membersDraft}
               pagination={false}
               size="small"
-              scroll={{ x: 1240 }}
+              scroll={{ x: 1115, y: 280 }}
               locale={{ emptyText: '暂无成员，请添加' }}
             />
           </Card>
@@ -1840,6 +2306,8 @@ const AVC: React.FC = () => {
         open={renameModalOpen}
         onOk={() => void handleRenameGroup()}
         onCancel={() => setRenameModalOpen(false)}
+        okText="保存名称"
+        cancelText="取消"
         width={520}
         centered
         className="control-config-modal control-rename-modal"
@@ -1852,7 +2320,18 @@ const AVC: React.FC = () => {
           <Form.Item
             name="new_group_name"
             label="new_group_name"
-            rules={[{ required: true, message: '请输入新的控制组名称' }]}
+            rules={[
+              { required: true, whitespace: true, message: '请输入新的控制组名称' },
+              {
+                validator: async (_rule, value: string) => {
+                  const oldName = String(renameForm.getFieldValue('old_group_name') ?? '').trim();
+                  const newName = String(value ?? '').trim();
+                  if (newName && oldName === newName) {
+                    throw new Error('新名称不能与原名称相同');
+                  }
+                },
+              },
+            ]}
           >
             <Input placeholder="请输入新的 AVC 控制组名称" />
           </Form.Item>
@@ -1867,6 +2346,8 @@ const AVC: React.FC = () => {
         open={memberModalOpen}
         onOk={() => void handleMemberSubmit()}
         onCancel={() => setMemberModalOpen(false)}
+        okText="保存成员"
+        cancelText="取消"
         width={920}
         centered
         className="control-config-modal control-member-modal"
@@ -1887,7 +2368,7 @@ const AVC: React.FC = () => {
             <div style={{ flex: 1 }}>
               <Form.Item
                 name="member_name"
-                label="member_name"
+                label="成员名称"
                 rules={[{ required: true, message: '请输入成员名称' }]}
               >
                 <Input placeholder="pcs_1" />
@@ -1909,7 +2390,7 @@ const AVC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ width: 140 }}>
-              <Form.Item name="controllable" label="controllable" valuePropName="checked">
+              <Form.Item name="controllable" label="是否可控" valuePropName="checked">
                 <Switch />
               </Form.Item>
             </div>
@@ -1917,26 +2398,50 @@ const AVC: React.FC = () => {
 
           <div style={{ display: 'flex', gap: 16 }}>
             <div style={{ flex: 1 }}>
-              <Form.Item name="weight" label="weight">
-                <InputNumber style={{ width: '100%' }} step={0.1} min={0} />
+              <Form.Item
+                name="weight"
+                label="调节权重"
+                dependencies={['controllable']}
+                rules={[{
+                  validator: async (_rule, value) => {
+                    if (
+                      allocationMode === 'custom'
+                      && memberForm.getFieldValue('controllable')
+                      && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0)
+                    ) {
+                      throw new Error('自定义比例下，可控成员的权重必须大于 0');
+                    }
+                  },
+                }]}
+              >
+                <InputNumber
+                  disabled={allocationMode !== 'custom'}
+                  style={{ width: '100%' }}
+                  step={0.1}
+                  min={0}
+                />
               </Form.Item>
             </div>
             <div style={{ flex: 1 }}>
-              <Form.Item name="q_min_kvar" label="q_min_kvar">
+              <Form.Item name="q_min_kvar" label="无功下限（kVar）">
                 <InputNumber style={{ width: '100%' }} step={0.1} />
               </Form.Item>
             </div>
             <div style={{ flex: 1 }}>
-              <Form.Item name="q_max_kvar" label="q_max_kvar">
+              <Form.Item name="q_max_kvar" label="无功上限（kVar）">
                 <InputNumber style={{ width: '100%' }} step={0.1} />
               </Form.Item>
             </div>
           </div>
 
-          <Card title="q_meas" size="small" bordered style={{ marginBottom: 16 }}>
+          <Card className="control-config-section control-config-section--command" title="无功测量点（q_meas）" size="small" bordered>
             <div style={{ display: 'flex', gap: 16 }}>
               <div style={{ flex: 1 }}>
-                <Form.Item name={['q_meas', 'tag']} label="tag">
+                <Form.Item
+                  name={['q_meas', 'tag']}
+                  label="测量点 tag"
+                  rules={requiredTagRules('q_meas.tag')}
+                >
                   <Input placeholder="pcs_1_q_meas" />
                 </Form.Item>
                 <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
@@ -1956,17 +2461,17 @@ const AVC: React.FC = () => {
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['q_meas', 'unit']} label="unit">
+                <Form.Item name={['q_meas', 'unit']} label="单位">
                   <Input placeholder="kVar" />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['q_meas', 'scale']} label="scale">
+                <Form.Item name={['q_meas', 'scale']} label="缩放系数">
                   <InputNumber step={0.01} style={{ width: '100%' }} />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['q_meas', 'offset']} label="offset">
+                <Form.Item name={['q_meas', 'offset']} label="偏移量">
                   <InputNumber step={0.01} style={{ width: '100%' }} />
                 </Form.Item>
               </div>
@@ -1974,10 +2479,14 @@ const AVC: React.FC = () => {
           </Card>
 
           {memberControllable ? (
-            <Card title="q_set" size="small" bordered>
+            <Card className="control-config-section control-config-section--command" title="无功设定点（q_set）" size="small" bordered>
               <div style={{ display: 'flex', gap: 16 }}>
                 <div style={{ flex: 1 }}>
-                  <Form.Item name={['q_set', 'signal', 'tag']} label="tag">
+                  <Form.Item
+                    name={['q_set', 'signal', 'tag']}
+                    label="设定点 tag"
+                    rules={requiredTagRules('q_set.signal.tag')}
+                  >
                     <Input placeholder="pcs_1_q_set" />
                   </Form.Item>
                   <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
@@ -1997,47 +2506,60 @@ const AVC: React.FC = () => {
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_set', 'signal', 'unit']} label="unit">
+                  <Form.Item name={['q_set', 'signal', 'unit']} label="单位">
                     <Input placeholder="kVar" />
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_set', 'signal', 'scale']} label="scale">
+                  <Form.Item name={['q_set', 'signal', 'scale']} label="缩放系数">
                     <InputNumber step={0.01} style={{ width: '100%' }} />
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_set', 'signal', 'offset']} label="offset">
+                  <Form.Item name={['q_set', 'signal', 'offset']} label="偏移量">
                     <InputNumber step={0.01} style={{ width: '100%' }} />
                   </Form.Item>
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 16 }}>
                 <div style={{ width: 260 }}>
-                  <Form.Item name={['q_set', 'mode']} label="mode">
-                    <Select
-                      options={Object.entries(VALUE_MODE_LABELS).map(([value, label]) => ({
-                        value: Number(value),
-                        label,
-                      }))}
+                    <Form.Item
+                      name={['q_set', 'mode']}
+                      label="指令模式"
+                      rules={valueModeRules('q_set.mode')}
+                    >
+                      <Select
+                        options={VALUE_MODE_OPTIONS}
                     />
                   </Form.Item>
                 </div>
                 {memberQSetMode === 2 ? (
                   <>
                     <div style={{ width: 260 }}>
-                      <Form.Item name={['q_set', 'delta_base']} label="delta_base">
-                        <Select
-                          options={Object.entries(DELTA_BASE_LABELS).map(([value, label]) => ({
-                            value: Number(value),
-                            label,
-                          }))}
+                        <Form.Item
+                          name={['q_set', 'delta_base']}
+                          label="增量基准"
+                          rules={deltaBaseRules('q_set.delta_base')}
+                        >
+                          <Select
+                            options={DELTA_BASE_OPTIONS}
                         />
                       </Form.Item>
                     </div>
                     {memberQSetDeltaBase === 3 ? (
                       <div style={{ flex: 1 }}>
-                        <Form.Item name={['q_set', 'base_tag']} label="base_tag">
+                          <Form.Item
+                            name={['q_set', 'base_tag']}
+                            label="基准点 tag"
+                            rules={[
+                              ...reservedTagRules('q_set.base_tag'),
+                              {
+                                required: true,
+                                whitespace: true,
+                                message: 'base_tag 不能为空',
+                              },
+                            ]}
+                          >
                           <Input placeholder="q_base_tag" />
                         </Form.Item>
                         <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
@@ -2062,7 +2584,7 @@ const AVC: React.FC = () => {
               </div>
             </Card>
           ) : (
-            <Card title="q_set" size="small" bordered>
+            <Card className="control-config-section control-config-section--command" title="无功设定点（q_set）" size="small" bordered>
               <Text type="secondary">当前成员为不可控成员，不需要配置 q_set。</Text>
             </Card>
           )}

@@ -25,7 +25,8 @@
 .control-config-modal .ant-modal-body {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 16px 20px;
+  padding: 18px 22px 20px;
+  background: var(--control-modal-body-bg, rgba(0, 0, 0, 0.08));
   overflow: auto;
   scrollbar-gutter: stable;
 }
@@ -33,12 +34,164 @@
 .control-config-modal .ant-modal-footer {
   flex: 0 0 auto;
   margin: 0;
-  padding: 12px 20px;
+  padding: 12px 22px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--control-modal-footer-bg, rgba(0, 0, 0, 0.12));
 }
 
 .control-config-modal .ant-form-item:last-child {
   margin-bottom: 0;
+}
+
+.control-config-modal .ant-modal-title {
+  font-size: 17px;
+  letter-spacing: 0;
+}
+
+.control-config-modal .ant-form {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.control-config-modal .control-config-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(22, 119, 255, 0.22);
+  border-radius: 6px;
+  background: rgba(22, 119, 255, 0.07);
+}
+
+.control-config-modal .control-config-intro__mark {
+  flex: 0 0 auto;
+  color: #1677ff;
+  font-weight: 600;
+}
+
+.control-config-modal .control-config-intro__text {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.control-config-modal .control-config-section.ant-card {
+  margin-bottom: 12px;
+  border-color: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: none;
+}
+
+.control-config-modal .control-config-section:not(.ant-card) {
+  margin-bottom: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.control-config-modal .control-config-section__heading {
+  margin-bottom: 12px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.control-config-modal .control-config-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.control-config-modal .control-config-grid--overview {
+  grid-template-columns: minmax(0, 1fr) 220px;
+}
+
+.control-config-modal .control-config-grid--overview-triple {
+  grid-template-columns: minmax(0, 1fr) 220px 220px;
+}
+
+.control-config-modal .control-config-grid > div {
+  width: auto !important;
+  min-width: 0;
+}
+
+.control-config-modal .control-allocation-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.control-config-modal .control-config-section .ant-card-head {
+  min-height: 42px;
+  padding: 0 14px;
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.control-config-modal .control-config-section .ant-card-head-title {
+  font-weight: 600;
+}
+
+.control-config-modal .control-config-section .ant-card-body {
+  padding: 14px;
+}
+
+.control-config-modal .control-config-section--members .ant-card-body {
+  padding: 0;
+}
+
+.control-config-modal .control-config-section--members .ant-card-head {
+  padding-inline: 14px;
+}
+
+.control-config-modal .control-config-section--members .ant-table-thead > tr > th {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.control-config-modal .control-config-section--members .ant-table-tbody > tr > td {
+  padding-block: 10px;
+}
+
+.control-config-modal .control-config-section--members .ant-input-number {
+  max-width: 100%;
+}
+
+.control-config-modal .control-config-section--members .ant-table-cell {
+  max-width: 220px;
+}
+
+.control-config-modal .control-config-section--members .ant-table-cell-ellipsis {
+  max-width: 220px;
+}
+
+.control-config-modal .control-config-section--members .ant-table-container {
+  border-inline: 0;
+}
+
+.control-config-modal .control-config-section--members .ant-table-wrapper {
+  margin: 0;
+}
+
+.control-config-modal .control-config-section--members .ant-table-body {
+  max-height: 280px;
+  overflow-y: auto !important;
+}
+
+.control-config-modal .control-form-label-help {
+  display: block;
+  margin-top: -4px;
+  margin-bottom: 10px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.control-config-modal .control-config-advanced {
+  padding-top: 2px;
 }
 
 .control-group-modal .ant-table-wrapper,
@@ -63,11 +216,28 @@
   }
 
   .control-config-modal .ant-modal-body {
-    padding: 14px 16px;
+    padding: 14px 16px 16px;
   }
 
   .control-config-modal .ant-modal-footer {
     padding: 10px 16px;
+  }
+
+  .control-config-modal .control-config-section .ant-card-body {
+    padding: 12px;
+  }
+
+  .control-config-modal .control-config-grid--overview {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .control-config-modal .control-config-section:not(.ant-card) {
+    padding: 12px;
+  }
+
+  .control-config-modal .control-config-section--members .ant-table-body {
+    max-height: 240px;
   }
 
   .control-config-modal .ant-form > div[style*="display: flex"],
