@@ -142,22 +142,6 @@ export function createDefaultModbusPoint(addressBase?: number): ModbusPointFormV
   };
 }
 
-/** 为复制点位生成不重复的 Tag，保持与连接复制的命名习惯一致。 */
-export function buildDuplicatePointTag(sourceTag: string, existingTags: Iterable<string>): string {
-  const baseTag = sourceTag.trim();
-  const copyPrefix = `${baseTag}_copy`;
-  const usedTags = new Set(existingTags);
-  if (!usedTags.has(copyPrefix)) {
-    return copyPrefix;
-  }
-
-  let suffix = 2;
-  while (usedTags.has(`${copyPrefix}_${suffix}`)) {
-    suffix += 1;
-  }
-  return `${copyPrefix}_${suffix}`;
-}
-
 export function getDuplicatePointAddress(address: number, regCount: number): number {
   return address + Math.max(regCount || 1, 1);
 }

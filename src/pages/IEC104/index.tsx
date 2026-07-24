@@ -1492,20 +1492,12 @@ const IEC104: React.FC = () => {
     }
   }, [selectedConn, pointForm, editingPointIndex, points, messageApi, pointSubmitting, runSelectedLinkStopped]);
 
-  const handleCopyPoint = useCallback(async (index: number) => {
+  const openCopyPoint = useCallback((index: number) => {
     if (!selectedConn || pointSubmitting) return;
     const source = points[index];
     if (!source) return;
 
-    const usedTags = new Set(points.map((point) => point.tag));
     const usedIoas = new Set(points.map((point) => point.ioa));
-    const baseTag = source.tag.replace(/_copy(?:_\d+)?$/, '') || source.tag;
-    let tag = `${baseTag}_copy`;
-    let suffix = 2;
-    while (usedTags.has(tag)) {
-      tag = `${baseTag}_copy_${suffix}`;
-      suffix += 1;
-    }
     let ioa = source.ioa + 1;
     while (usedIoas.has(ioa) && ioa <= MAX_IOA) {
       ioa += 1;
@@ -1515,21 +1507,29 @@ const IEC104: React.FC = () => {
       return;
     }
 
-    const newPoints = [...points, { ...source, tag, ioa }];
-    setPointSubmitting(true);
-    try {
-      const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
-      setPoints(newPoints);
-      messageApi.success(`已复制点位为 ${tag}`);
-      if (restartResult.restartError) {
-        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
-      }
-    } catch (error) {
-      messageApi.error(`复制点位失败: ${formatErrorText(error)}`);
-    } finally {
-      setPointSubmitting(false);
+    setEditingPointIndex(null);
+    pointForm.resetFields();
+    pointForm.setFieldsValue({
+      tag: source.tag,
+      ioa,
+      ioa_category: getIoaCategoryByIoa(ioa),
+      point_type: source.point_type,
+      scale: source.scale,
+      offset: source.offset,
+      deadband: source.deadband,
+    });
+    setPointModalOpen(true);
+  }, [messageApi, pointForm, pointSubmitting, points, selectedConn]);
+
+  useEffect(() => {
+    if (!pointModalOpen || editingPointIndex !== null) {
+      return;
     }
-  }, [messageApi, pointSubmitting, points, runSelectedLinkStopped, selectedConn]);
+    const tag = pointForm.getFieldValue('tag');
+    if (typeof tag === 'string' && tag.trim() && points.some((point) => point.tag.trim() === tag.trim())) {
+      pointForm.setFields([{ name: 'tag', errors: ['该标签已存在'] }]);
+    }
+  }, [editingPointIndex, pointForm, pointModalOpen, points]);
 
   const handleDeletePoint = useCallback(
     async (index: number) => {
@@ -1951,7 +1951,7 @@ const IEC104: React.FC = () => {
                 icon={<CopyOutlined />}
                 aria-label={`复制点位 ${record.tag}`}
                 disabled={actionsDisabled}
-                onClick={() => void handleCopyPoint(originalIndex)}
+                onClick={() => openCopyPoint(originalIndex)}
               />
             </Tooltip>
             <Popconfirm title="确认删除该点位？" onConfirm={() => void handleDeletePoint(originalIndex)}>
@@ -1984,7 +1984,7 @@ const IEC104: React.FC = () => {
       { title: 'Deadband', dataIndex: 'deadband', key: 'deadband', width: 110 },
       actionColumn,
     ];
-  }, [actionsDisabled, handleCopyPoint, handleDeletePoint, openEditPoint, pointTableView, points, realtimeByTag, realtimeRevisionByTag]);
+  }, [actionsDisabled, handleDeletePoint, openCopyPoint, openEditPoint, pointTableView, points, realtimeByTag, realtimeRevisionByTag]);
 
   const importPointColumns: ColumnsType<ImportedPointDraft> = [
     {
@@ -2601,6 +2601,8 @@ const IEC104: React.FC = () => {
                 name="tag"
                 label="Tag (标签)"
                 normalize={(value) => (typeof value === 'string' ? value.trim() : value)}
+                validateStatus={pointTagDuplicate ? 'error' : undefined}
+                help={pointTagDuplicate ? '该标签已存在' : undefined}
                 rules={[
                   { required: true, message: '请输入标签名' },
                   { max: 128, message: '标签长度不能超过 128 个字符' },

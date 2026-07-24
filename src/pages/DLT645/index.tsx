@@ -14,7 +14,6 @@ import PointTable from './components/PointTable';
 import MqttConfigPanel from './components/MqttConfigPanel';
 import { useProtocolShadowRealtime } from '../../components/protocol/protocol-realtime';
 import {
-  buildDuplicatePointTag,
   findDlt645PointConflict,
 } from './dlt645-form-rules';
 
@@ -123,8 +122,13 @@ const DLT645: React.FC = () => {
 
   const protocolVariant = Form.useWatch('protocol_variant', linkForm);
   const commMode = Form.useWatch('comm_mode', linkForm);
+  const pointTag = Form.useWatch('tag', pointForm);
   const pointDataType = Form.useWatch('data_type', pointForm);
   const isPointBool = pointDataType === 1;
+  const pointTagTrimmed = typeof pointTag === 'string' ? pointTag.trim() : '';
+  const pointTagDuplicate = pointTagTrimmed.length > 0 && points.some(
+    (point, index) => index !== editingPointIndex && point.tag.trim() === pointTagTrimmed,
+  );
 
   // ── Data fetching ──
 
@@ -556,7 +560,7 @@ const DLT645: React.FC = () => {
     setEditingPointIndex(null);
     pointForm.resetFields();
     pointForm.setFieldsValue({
-      tag: buildDuplicatePointTag(point.tag, points.map((item) => item.tag)),
+      tag: point.tag,
       di: point.di,
       data_len: point.data_len,
       data_type: point.data_type,
@@ -569,6 +573,16 @@ const DLT645: React.FC = () => {
     });
     setPointModalOpen(true);
   }, [pointForm, points]);
+
+  useEffect(() => {
+    if (!pointModalOpen || editingPointIndex !== null) {
+      return;
+    }
+    const tag = pointForm.getFieldValue('tag');
+    if (typeof tag === 'string' && tag.trim() && points.some((point) => point.tag.trim() === tag.trim())) {
+      pointForm.setFields([{ name: 'tag', errors: ['标签已存在'] }]);
+    }
+  }, [editingPointIndex, pointForm, pointModalOpen, points]);
 
   const handlePointSubmit = useCallback(async () => {
     if (!selectedConn || pointSubmitting) {
@@ -944,6 +958,8 @@ const DLT645: React.FC = () => {
             <Form.Item
               label="标签"
               name="tag"
+              validateStatus={pointTagDuplicate ? 'error' : undefined}
+              help={pointTagDuplicate ? '标签已存在' : undefined}
               rules={[
                 { required: true, message: '请输入标签' },
                 {

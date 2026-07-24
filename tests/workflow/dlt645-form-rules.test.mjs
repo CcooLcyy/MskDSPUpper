@@ -2,22 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import {
-  buildDuplicatePointTag,
-  findDlt645PointConflict,
-} from '../../src/pages/DLT645/dlt645-form-rules.ts';
+import { findDlt645PointConflict } from '../../src/pages/DLT645/dlt645-form-rules.ts';
 
 const dlt645Source = readFileSync(new URL('../../src/pages/DLT645/index.tsx', import.meta.url), 'utf8');
-
-// 验证 DLT645 复制点位会规范化已有副本后缀并选择第一个可用编号。
-test('DLT645 复制点位生成规范化且不重复的 Tag', () => {
-  assert.equal(buildDuplicatePointTag('temperature', []), 'temperature_copy');
-  assert.equal(buildDuplicatePointTag('temperature_copy', ['temperature_copy']), 'temperature_copy_2');
-  assert.equal(
-    buildDuplicatePointTag('temperature_copy_3', ['temperature_copy', 'temperature_copy_3']),
-    'temperature_copy_2',
-  );
-});
 
 // 验证普通 DLT645 点位不能复用其他点位的 DI。
 test('DLT645 普通点位检测 DI 冲突', () => {
@@ -67,6 +54,8 @@ test('DLT645 BOOL bit 点检测 byte、bit 和长度冲突', () => {
 // 验证 DLT645 页面接入 Tag 和 DI 的前端冲突校验，避免仅依赖下位机返回错误。
 test('DLT645 页面接入点位重复校验', () => {
   assert.match(dlt645Source, /findDlt645PointConflict\(/);
+  assert.match(dlt645Source, /tag: point\.tag/);
+  assert.match(dlt645Source, /useEffect\(\(\) => \{[\s\S]*pointForm\.setFields\(\[\{ name: 'tag', errors: \['标签已存在'\] \}\]\)/);
   assert.match(dlt645Source, /标签已存在/);
   assert.match(dlt645Source, /DI.*已存在|DI.*冲突/);
 });

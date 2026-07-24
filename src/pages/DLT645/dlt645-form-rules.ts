@@ -9,30 +9,6 @@ export interface Dlt645PointLike {
 
 export type Dlt645PointConflict = 'tag' | 'di' | 'di_bit' | 'di_length' | null;
 
-function stripCopySuffix(tag: string): string {
-  let baseTag = tag.trim();
-  while (/_copy(?:_\d+)?$/.test(baseTag)) {
-    baseTag = baseTag.replace(/_copy(?:_\d+)?$/, '');
-  }
-  return baseTag;
-}
-
-/** 为复制点位生成规范化且不重复的 Tag。 */
-export function buildDuplicatePointTag(sourceTag: string, existingTags: Iterable<string>): string {
-  const baseTag = stripCopySuffix(sourceTag);
-  const copyPrefix = `${baseTag || 'point'}_copy`;
-  const usedTags = new Set(Array.from(existingTags, (tag) => tag.trim()));
-  if (!usedTags.has(copyPrefix)) {
-    return copyPrefix;
-  }
-
-  let suffix = 2;
-  while (usedTags.has(`${copyPrefix}_${suffix}`)) {
-    suffix += 1;
-  }
-  return `${copyPrefix}_${suffix}`;
-}
-
 function isBitPoint(point: Dlt645PointLike): boolean {
   return point.data_type === 1 && point.bit_index !== null && point.bit_index !== undefined;
 }

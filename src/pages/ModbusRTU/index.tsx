@@ -16,7 +16,6 @@ import {
   MODBUS_ADDRESS_BASE,
   MODBUS_DATA_TYPE,
   MODBUS_FUNCTION,
-  buildDuplicatePointTag,
   createDefaultModbusPoint,
   getAllowedDataTypes,
   getAllowedRegCounts,
@@ -149,6 +148,7 @@ const ModbusRTU: React.FC = () => {
 
   const transportType = Form.useWatch('transport_type', linkForm);
   const pointFunction = Form.useWatch('function', pointForm);
+  const pointTag = Form.useWatch('tag', pointForm);
   const pointDataType = Form.useWatch('data_type', pointForm);
   const pointRegCount = Form.useWatch('reg_count', pointForm);
   const pointAddressBase = Form.useWatch('address_base', pointForm);
@@ -160,6 +160,10 @@ const ModbusRTU: React.FC = () => {
   const pointRegCountOptions = (isCoilPoint ? [1] : getAllowedRegCounts(pointDataType ?? MODBUS_DATA_TYPE.UINT16))
     .map((value) => ({ value, label: `${value} 个寄存器` }));
   const pointBitMax = (pointRegCount ?? 1) * 16 - 1;
+  const pointTagTrimmed = typeof pointTag === 'string' ? pointTag.trim() : '';
+  const pointTagDuplicate = pointTagTrimmed.length > 0 && points.some(
+    (point, index) => index !== editingPointIndex && point.tag.trim() === pointTagTrimmed,
+  );
   const modalOpen = linkModalOpen || pointModalOpen;
   const actionsDisabled = pointsLoading
     || pointSubmitting
@@ -643,7 +647,7 @@ const ModbusRTU: React.FC = () => {
     setEditingPointIndex(null);
     pointForm.resetFields();
     pointForm.setFieldsValue({
-      tag: buildDuplicatePointTag(point.tag, points.map((item) => item.tag)),
+      tag: point.tag,
       function: point.function as ModbusPointFormValues['function'],
       address: getNextDuplicatePointAddress(point, points),
       reg_count: point.reg_count,
@@ -658,6 +662,16 @@ const ModbusRTU: React.FC = () => {
     });
     setPointModalOpen(true);
   }, [pointForm, points, selectedLink?.config?.address_base]);
+
+  useEffect(() => {
+    if (!pointModalOpen || editingPointIndex !== null) {
+      return;
+    }
+    const tag = pointForm.getFieldValue('tag');
+    if (typeof tag === 'string' && tag.trim() && points.some((point) => point.tag.trim() === tag.trim())) {
+      pointForm.setFields([{ name: 'tag', errors: ['Tag 已存在'] }]);
+    }
+  }, [editingPointIndex, pointForm, pointModalOpen, points]);
 
   const handlePointSubmit = useCallback(async () => {
     if (!selectedConn) {
@@ -993,6 +1007,8 @@ const ModbusRTU: React.FC = () => {
             <Form.Item
               label="Tag"
               name="tag"
+              validateStatus={pointTagDuplicate ? 'error' : undefined}
+              help={pointTagDuplicate ? 'Tag 已存在' : undefined}
               rules={[
                 { required: true, message: '请输入 Tag' },
                 { max: 128, message: 'Tag 不能超过 128 个字符' },
