@@ -72,6 +72,18 @@ import {
   buildImportedPointRoutes,
   saveImportedPointsWithOptionalRoutes,
 } from './import-routing';
+import {
+  IOA_CATEGORY_FILTER_OPTIONS,
+  IOA_CATEGORY_FORM_OPTIONS,
+  MAX_IOA,
+  getIoaCategoryByIoa,
+  getIoaCategoryFilterByIoa,
+  getIoaCategoryLabel,
+  getIoaCategoryRange,
+  matchesIoaCategoryFilter,
+  type IoaCategoryFilterKey,
+  type IoaCategoryKey,
+} from './ioa-category';
 
 const { Text } = Typography;
 
@@ -116,8 +128,6 @@ const POINT_TYPE_LABELS: Record<number, string> = {
   2: 'SINGLE (单点遥信)',
 };
 
-const MAX_IOA = 16777215;
-
 const DEFAULT_POINT_FORM_VALUES = {
   scale: 1,
   offset: 0,
@@ -137,14 +147,6 @@ const validateOptionalIpv4 = (_rule: unknown, value: unknown): Promise<void> => 
   }
 
   return Promise.reject(new Error(IP_ADDRESS_ERROR_MESSAGE));
-};
-
-type IoaCategoryKey = 'custom' | 'teleindication' | 'telemetry' | 'remoteAdjust';
-
-type IoaCategoryOption = {
-  value: IoaCategoryKey;
-  label: string;
-  start?: number;
 };
 
 type DataBusConnectionOption = {
@@ -173,6 +175,20 @@ type ImportedPointDraft = Iec104Point & {
 
 type IoaAdjustmentStrategy = 'offset' | 'sequence' | 'manual';
 
+const POINT_DRAFT_DRAG_PREFIX = 'mskdsp-iec104-point:';
+
+const setPointDraftDragData = (event: React.DragEvent<HTMLElement>, key: string): void => {
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', `${POINT_DRAFT_DRAG_PREFIX}${key}`);
+};
+
+const getPointDraftDragKey = (event: React.DragEvent<HTMLElement>, fallback: string | null): string | null => {
+  const value = event.dataTransfer.getData('text/plain');
+  return value.startsWith(POINT_DRAFT_DRAG_PREFIX)
+    ? value.slice(POINT_DRAFT_DRAG_PREFIX.length)
+    : fallback;
+};
+
 type IoaAdjustmentDraft = {
   key: string;
   tag: string;
@@ -180,17 +196,6 @@ type IoaAdjustmentDraft = {
   originalIoa: number;
   ioa: number;
 };
-
-const IOA_CATEGORY_OPTIONS: IoaCategoryOption[] = [
-  { value: 'custom', label: '自定义' },
-  { value: 'teleindication', label: '遥信 (0001H 起)', start: 0x0001 },
-  { value: 'telemetry', label: '遥测 (4001H 起)', start: 0x4001 },
-  { value: 'remoteAdjust', label: '遥调 (6201H 起)', start: 0x6201 },
-];
-
-const KNOWN_IOA_CATEGORY_OPTIONS = IOA_CATEGORY_OPTIONS.filter(
-  (option): option is IoaCategoryOption & { start: number } => typeof option.start === 'number',
-);
 
 const buildDataBusConnectionOptions = (connections: DcConnectionInfo[]): DataBusConnectionOption[] =>
   connections
@@ -282,36 +287,6 @@ const allocateSequentialIoas = ({
 };
 
 const getDefaultImportedPointType = (points: Iec104Point[]) => points[points.length - 1]?.point_type ?? 1;
-
-const getIoaCategoryRange = (category: IoaCategoryKey) => {
-  const categoryIndex = KNOWN_IOA_CATEGORY_OPTIONS.findIndex((option) => option.value === category);
-  if (categoryIndex < 0) {
-    return null;
-  }
-
-  const start = KNOWN_IOA_CATEGORY_OPTIONS[categoryIndex].start;
-  const nextStart = KNOWN_IOA_CATEGORY_OPTIONS[categoryIndex + 1]?.start;
-
-  return {
-    start,
-    end: typeof nextStart === 'number' ? nextStart - 1 : MAX_IOA,
-  };
-};
-
-const getIoaCategoryByIoa = (ioa?: number | null): IoaCategoryKey => {
-  if (typeof ioa !== 'number' || Number.isNaN(ioa)) {
-    return 'custom';
-  }
-
-  for (const option of KNOWN_IOA_CATEGORY_OPTIONS) {
-    const range = getIoaCategoryRange(option.value);
-    if (range && ioa >= range.start && ioa <= range.end) {
-      return option.value;
-    }
-  }
-
-  return 'custom';
-};
 
 const getNextAvailableIoaInRange = (usedIoas: Set<number>, start: number, end: number) => {
   const usedIoasInRange = Array.from(usedIoas).filter((candidate) => candidate >= start && candidate <= end);
@@ -483,6 +458,7 @@ const IEC104: React.FC = () => {
   const [selectedConn, setSelectedConn] = useState<string | null>(null);
   const [points, setPoints] = useState<Iec104Point[]>([]);
   const [pointTypeFilter, setPointTypeFilter] = useState<number>();
+  const [ioaCategoryFilter, setIoaCategoryFilter] = useState<IoaCategoryFilterKey>();
   const [pointSearch, setPointSearch] = useState('');
   const [pointTableView, setPointTableView] = useState<'config' | 'runtime'>('config');
   const [ioaInputHex, setIoaInputHex] = useState(false);
@@ -562,6 +538,7 @@ const IEC104: React.FC = () => {
       const normalizedSearch = pointSearch.trim().toLocaleLowerCase();
       return points.filter((point) => (
         (pointTypeFilter === undefined || point.point_type === pointTypeFilter)
+        && matchesIoaCategoryFilter(point.ioa, ioaCategoryFilter)
         && (
           normalizedSearch.length === 0
           || point.tag.toLocaleLowerCase().includes(normalizedSearch)
@@ -570,13 +547,16 @@ const IEC104: React.FC = () => {
         )
       ));
     },
-    [pointSearch, pointTypeFilter, points],
+    [ioaCategoryFilter, pointSearch, pointTypeFilter, points],
   );
-  const hasPointFilters = Boolean(pointSearch.trim() || pointTypeFilter !== undefined);
-  const pointFilterCount = Number(Boolean(pointSearch.trim())) + Number(pointTypeFilter !== undefined);
+  const hasPointFilters = Boolean(pointSearch.trim() || pointTypeFilter !== undefined || ioaCategoryFilter !== undefined);
+  const pointFilterCount = Number(Boolean(pointSearch.trim()))
+    + Number(pointTypeFilter !== undefined)
+    + Number(ioaCategoryFilter !== undefined);
   const clearPointFilters = useCallback(() => {
     setPointSearch('');
     setPointTypeFilter(undefined);
+    setIoaCategoryFilter(undefined);
   }, []);
   const actionsDisabled = pointsLoading
     || pointSubmitting
@@ -1884,8 +1864,16 @@ const IEC104: React.FC = () => {
       title: 'IOA (信息体地址)',
       dataIndex: 'ioa',
       key: 'ioa',
-      width: 180,
-      render: (ioa: number) => `${ioa} (${formatIoaHex(ioa)})`,
+      width: 230,
+      render: (ioa: number) => {
+        const category = getIoaCategoryFilterByIoa(ioa);
+        return (
+          <Space size={6} wrap>
+            <span>{`${ioa} (${formatIoaHex(ioa)})`}</span>
+            <Tag color={category === 'unclassified' ? 'default' : 'blue'}>{getIoaCategoryLabel(category)}</Tag>
+          </Space>
+        );
+      },
       sorter: (left: Iec104Point, right: Iec104Point) => left.ioa - right.ioa,
     };
     const typeColumn = {
@@ -2011,7 +1999,7 @@ const IEC104: React.FC = () => {
       ),
     },
     {
-      title: 'IOA 类型',
+      title: 'IOA 业务类别',
       dataIndex: 'ioa_category',
       key: 'ioa_category',
       width: 180,
@@ -2021,7 +2009,7 @@ const IEC104: React.FC = () => {
           style={{ width: '100%' }}
           value={value}
           disabled={importSubmitting}
-          options={IOA_CATEGORY_OPTIONS}
+          options={IOA_CATEGORY_FORM_OPTIONS}
           onChange={(nextValue) => handleImportPointIoaCategoryChange(record.key, nextValue as IoaCategoryKey)}
         />
       ),
@@ -2345,10 +2333,20 @@ const IEC104: React.FC = () => {
                   onChange={(event) => setPointSearch(event.target.value)}
                   style={{ width: 190 }}
                 />
+                <Select<IoaCategoryFilterKey>
+                  allowClear
+                  size="small"
+                  placeholder="全部业务类别"
+                  value={ioaCategoryFilter}
+                  options={IOA_CATEGORY_FILTER_OPTIONS}
+                  onChange={setIoaCategoryFilter}
+                  disabled={!selectedConn || points.length === 0}
+                  style={{ width: 190 }}
+                />
                 <Select<number>
                   allowClear
                   size="small"
-                  placeholder="全部点类型"
+                  placeholder="全部编码类型"
                   value={pointTypeFilter}
                   options={Object.entries(POINT_TYPE_LABELS).map(([value, label]) => ({ value: Number(value), label }))}
                   onChange={setPointTypeFilter}
@@ -2371,7 +2369,7 @@ const IEC104: React.FC = () => {
                 loading={pointsLoading || (pointTableView === 'runtime' && realtimeLoading)}
                 pagination={false}
                 size="small"
-                scroll={{ x: pointTableView === 'runtime' ? 1100 : 1120 }}
+                scroll={{ x: pointTableView === 'runtime' ? 1100 : 1170 }}
                 locale={{
                   emptyText: selectedConn
                     ? points.length > 0
@@ -2621,11 +2619,11 @@ const IEC104: React.FC = () => {
             <Col xs={24} sm={12} lg={8}>
               <Form.Item
                 name="ioa_category"
-                label="IOA 类型"
+                label="IOA 业务类别"
               >
                 <Select
-                  options={IOA_CATEGORY_OPTIONS}
-                  placeholder="选择 IOA 类型"
+                  options={IOA_CATEGORY_FORM_OPTIONS}
+                  placeholder="选择 IOA 业务类别"
                   onChange={(nextValue) => handlePointIoaCategoryChange(nextValue as IoaCategoryKey)}
                 />
               </Form.Item>
@@ -2823,10 +2821,18 @@ const IEC104: React.FC = () => {
                   className={`iec104-ioa-adjust-row${issue ? ' has-error' : ''}`}
                   key={draft.key}
                   draggable={!pointSubmitting}
-                  onDragStart={() => setIoaAdjustDragKey(draft.key)}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={() => {
-                    if (ioaAdjustDragKey) reorderIoaAdjustDrafts(ioaAdjustDragKey, draft.key);
+                  onDragStart={(event) => {
+                    setPointDraftDragData(event, draft.key);
+                    setIoaAdjustDragKey(draft.key);
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const sourceKey = getPointDraftDragKey(event, ioaAdjustDragKey);
+                    if (sourceKey) reorderIoaAdjustDrafts(sourceKey, draft.key);
                     setIoaAdjustDragKey(null);
                   }}
                   onDragEnd={() => setIoaAdjustDragKey(null)}
@@ -2959,8 +2965,8 @@ const IEC104: React.FC = () => {
               allowClear
               size="small"
               value={importBatchCategory}
-              placeholder="统一 IOA 地址段"
-              options={IOA_CATEGORY_OPTIONS}
+              placeholder="统一 IOA 业务类别"
+              options={IOA_CATEGORY_FORM_OPTIONS}
               disabled={importPointDrafts.length === 0 || importSubmitting}
               onChange={applyImportBatchCategory}
               style={{ width: 190 }}
@@ -3026,10 +3032,18 @@ const IEC104: React.FC = () => {
                     className="iec104-ioa-allocation-item"
                     key={draft.key}
                     draggable={!importSubmitting}
-                    onDragStart={() => setImportDragKey(draft.key)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => {
-                      if (importDragKey) reorderImportDrafts(importDragKey, draft.key);
+                    onDragStart={(event) => {
+                      setPointDraftDragData(event, draft.key);
+                      setImportDragKey(draft.key);
+                    }}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const sourceKey = getPointDraftDragKey(event, importDragKey);
+                      if (sourceKey) reorderImportDrafts(sourceKey, draft.key);
                       setImportDragKey(null);
                     }}
                     onDragEnd={() => setImportDragKey(null)}
