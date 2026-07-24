@@ -34,6 +34,7 @@ import type {
   DcRoute,
 } from '../../adapters';
 import ResizableSplit from '../../components/layout/ResizableSplit';
+import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import './index.css';
 
 const { Text, Paragraph } = Typography;
@@ -184,6 +185,45 @@ const CalcPage: React.FC = () => {
   );
   const selectedConfig = selectedGroup?.config ?? null;
 
+  const getGroupState = useCallback(async (groupName: string): Promise<number | null> => {
+    const group = await api.calcGetGroup(groupName);
+    return group.state;
+  }, []);
+
+  const runSelectedGroupStopped = useCallback(
+    async (
+      operation: () => Promise<void>,
+      options?: {
+        initialState?: number | null;
+        originalGroupName?: string;
+        restartGroupName?: string;
+      },
+    ) => {
+      const originalGroupName = options?.originalGroupName ?? selectedGroupName;
+      if (!originalGroupName) {
+        await operation();
+        return {
+          stoppedBeforeRun: false,
+          restartedAfterRun: false,
+          retriedAfterRunningPrecondition: false,
+          restartError: null,
+        };
+      }
+
+      const restartGroupName = options?.restartGroupName ?? originalGroupName;
+      return runWithRuntimeRestart({
+        initialState: options?.initialState ?? selectedGroup?.state ?? null,
+        loadState: () => getGroupState(originalGroupName),
+        stop: () => api.calcStopGroup(originalGroupName),
+        run: operation,
+        start: () => api.calcStartGroup(restartGroupName),
+        restoreStart: () => api.calcStartGroup(originalGroupName),
+        failOnRestartError: false,
+      });
+    },
+    [getGroupState, selectedGroup?.state, selectedGroupName],
+  );
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -272,15 +312,30 @@ const CalcPage: React.FC = () => {
         }, true);
         messageApi.success('计算分组已创建');
       } else if (selectedConfig && name !== selectedConfig.group_name) {
-        await api.calcRenameGroup(selectedConfig.group_name, name);
-        messageApi.success('计算分组已重命名');
+        const oldName = selectedConfig.group_name;
+        const restartResult = await runSelectedGroupStopped(
+          () => api.calcRenameGroup(oldName, name).then(() => undefined),
+          { originalGroupName: oldName, restartGroupName: name },
+        );
+        console.info('Calc 计算分组重命名完成', {
+          groupName: oldName,
+          nextGroupName: name,
+          restarted: restartResult.restartedAfterRun,
+        });
+        if (restartResult.restartError) {
+          messageApi.warning(`计算分组已重命名，但重新启动失败：${formatErrorText(restartResult.restartError)}`);
+        } else if (restartResult.stoppedBeforeRun) {
+          messageApi.success('计算分组已重命名并重新启动');
+        } else {
+          messageApi.success('计算分组已重命名');
+        }
       }
       setGroupModalOpen(false);
       setGroupInitialDraft(null);
       setSelectedGroupName(name);
       await refresh();
     } catch (error) {
-      messageApi.error(`保存分组失败：${String(error)}`);
+      messageApi.error(`保存分组失败：${formatErrorText(error)}`);
     }
   };
 
@@ -425,13 +480,26 @@ const CalcPage: React.FC = () => {
     if (editingItemIndex === null) items.push(item);
     else items[editingItemIndex] = item;
     try {
-      await api.calcUpsertGroup({ ...selectedConfig, items }, false);
+      const restartResult = await runSelectedGroupStopped(
+        () => api.calcUpsertGroup({ ...selectedConfig, items }, false).then(() => undefined),
+      );
+      console.info('Calc 计算项保存完成', {
+        groupName: selectedConfig.group_name,
+        itemName: item.item_name,
+        restarted: restartResult.restartedAfterRun,
+      });
       setItemModalOpen(false);
       setItemInitialSnapshot(null);
-      messageApi.success(editingItemIndex === null ? '计算项已添加' : '计算项已更新');
+      if (restartResult.restartError) {
+        messageApi.warning(`计算项已保存，但重新启动失败：${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success(editingItemIndex === null ? '计算项已添加并重新启动' : '计算项已更新并重新启动');
+      } else {
+        messageApi.success(editingItemIndex === null ? '计算项已添加' : '计算项已更新');
+      }
       await refresh();
     } catch (error) {
-      messageApi.error(`保存计算项失败：${String(error)}`);
+      messageApi.error(`保存计算项失败：${formatErrorText(error)}`);
     }
   };
 
@@ -443,11 +511,24 @@ const CalcPage: React.FC = () => {
     }
     const items = selectedConfig.items.filter((_, itemIndex) => itemIndex !== index);
     try {
-      await api.calcUpsertGroup({ ...selectedConfig, items }, false);
-      messageApi.success('计算项已删除');
+      const restartResult = await runSelectedGroupStopped(
+        () => api.calcUpsertGroup({ ...selectedConfig, items }, false).then(() => undefined),
+      );
+      console.info('Calc 计算项删除完成', {
+        groupName: selectedConfig.group_name,
+        deletedItemIndex: index,
+        restarted: restartResult.restartedAfterRun,
+      });
+      if (restartResult.restartError) {
+        messageApi.warning(`计算项已删除，但重新启动失败：${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('计算项已删除并重新启动');
+      } else {
+        messageApi.success('计算项已删除');
+      }
       await refresh();
     } catch (error) {
-      messageApi.error(`删除计算项失败：${String(error)}`);
+      messageApi.error(`删除计算项失败：${formatErrorText(error)}`);
     }
   };
 
