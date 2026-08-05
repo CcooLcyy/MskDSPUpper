@@ -811,7 +811,7 @@ const DataBus: React.FC = () => {
 
         {routeBatchMode === 'ordered' ? (
           <div className="route-builder-grid">
-            <div className="route-builder-panel">
+            <div className="route-builder-panel route-builder-panel-source">
               <Text strong>源点位</Text>
               <Text type="secondary" className="route-builder-caption">点选标签，按点击顺序编号</Text>
               <Select
@@ -847,14 +847,14 @@ const DataBus: React.FC = () => {
                     >
                       <HolderOutlined />
                       <span className="route-selected-index">{index + 1}</span>
-                      <span>{tag}</span>
+                      <span className="route-selected-label">{tag}</span>
                       <Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('source', tag)} />
                     </div>
                   );
                 })}
               </div>
             </div>
-            <div className="route-builder-panel">
+            <div className="route-builder-panel route-builder-panel-destination">
               <Text strong>目标点位</Text>
               <Text type="secondary" className="route-builder-caption">点选标签，按点击顺序编号；已有入站路由的目标点不可再次选择</Text>
               <Select
@@ -894,7 +894,7 @@ const DataBus: React.FC = () => {
                     >
                       <HolderOutlined />
                       <span className="route-selected-index">{index + 1}</span>
-                      <span>{tag}</span>
+                      <span className="route-selected-label">{tag}</span>
                       <Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('destination', tag)} />
                     </div>
                   );
