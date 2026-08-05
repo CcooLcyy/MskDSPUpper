@@ -155,6 +155,12 @@
   padding: 3px 0;
   font-size: 12px;
   cursor: grab;
+  touch-action: none;
+}
+
+.route-selected-item.is-dragging {
+  cursor: grabbing;
+  opacity: 0.68;
 }
 
 .route-selected-index {

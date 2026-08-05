@@ -33,6 +33,7 @@ import type { DcConnectionInfo, DcPointUpdate, DcRoute } from '../../adapters';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 import { DATA_BUS_VIEW_QUERY_KEY, normalizeDataBusView } from '../../components/data-bus/data-bus-view';
 import ResizableSplit from '../../components/layout/ResizableSplit';
+import { usePointerReorder } from '../../components/interaction/use-pointer-reorder';
 import './index.css';
 
 const { Text } = Typography;
@@ -78,6 +79,7 @@ type RouteTagDrag = {
 };
 
 const ROUTE_TAG_DRAG_PREFIX = 'mskdsp-route-tag:';
+const ROUTE_TAG_POINTER_SEPARATOR = '\u0000';
 
 const serializeRouteTagDrag = ({ side, index }: RouteTagDrag): string =>
   `${ROUTE_TAG_DRAG_PREFIX}${side}:${index}`;
@@ -86,6 +88,17 @@ const parseRouteTagDrag = (value: string): RouteTagDrag | null => {
   const match = new RegExp(`^${ROUTE_TAG_DRAG_PREFIX}(source|destination):(\\d+)$`).exec(value);
   if (!match) return null;
   return { side: match[1] as RouteTagDrag['side'], index: Number(match[2]) };
+};
+
+const serializeRouteTagPointerKey = (side: RouteTagDrag['side'], tag: string): string =>
+  `${side}${ROUTE_TAG_POINTER_SEPARATOR}${tag}`;
+
+const parseRouteTagPointerKey = (value: string): { side: RouteTagDrag['side']; tag: string } | null => {
+  const separatorIndex = value.indexOf(ROUTE_TAG_POINTER_SEPARATOR);
+  if (separatorIndex < 0) return null;
+  const side = value.slice(0, separatorIndex);
+  if (side !== 'source' && side !== 'destination') return null;
+  return { side, tag: value.slice(separatorIndex + ROUTE_TAG_POINTER_SEPARATOR.length) };
 };
 
 const formatTimestamp = (tsMs: number): string => {
@@ -462,6 +475,19 @@ const DataBus: React.FC = () => {
     updateActiveDirection(side === 'source' ? { sourceTags: next } : { destinationTags: next });
   }, [selectedDestinationTags, selectedSourceTags, updateActiveDirection]);
 
+  const reorderRouteTagsByPointerKey = useCallback((fromKey: string, toKey: string) => {
+    const from = parseRouteTagPointerKey(fromKey);
+    const to = parseRouteTagPointerKey(toKey);
+    if (!from || !to || from.side !== to.side) return;
+    const current = from.side === 'source' ? selectedSourceTags : selectedDestinationTags;
+    reorderRouteTags(from.side, current.indexOf(from.tag), current.indexOf(to.tag));
+  }, [reorderRouteTags, selectedDestinationTags, selectedSourceTags]);
+
+  const routePointerReorder = usePointerReorder({
+    disabled: routeSubmitting || !routeModalOpen || routeBatchMode !== 'ordered',
+    onReorder: reorderRouteTagsByPointerKey,
+  });
+
   const handleRouteTagDragStart = useCallback((event: React.DragEvent<HTMLDivElement>, side: RouteTagDrag['side'], index: number) => {
     const drag = { side, index };
     event.dataTransfer.effectAllowed = 'move';
@@ -805,7 +831,27 @@ const DataBus: React.FC = () => {
               />
               <div className="route-selected-list">
                 <Text type="secondary">已选 {selectedSourceTags.length} 个</Text>
-                {selectedSourceTags.map((tag, index) => <div key={tag} className="route-selected-item" draggable onDragStart={(event) => handleRouteTagDragStart(event, 'source', index)} onDragOver={handleRouteTagDragOver} onDrop={(event) => handleRouteTagDrop(event, 'source', index)} onDragEnd={() => setRouteDrag(null)}><HolderOutlined /><span className="route-selected-index">{index + 1}</span><span>{tag}</span><Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('source', tag)} /></div>)}
+                {selectedSourceTags.map((tag, index) => {
+                  const pointerKey = serializeRouteTagPointerKey('source', tag);
+                  return (
+                    <div
+                      key={tag}
+                      className={`route-selected-item${routePointerReorder.activeKey === pointerKey ? ' is-dragging' : ''}`}
+                      draggable
+                      onPointerDown={(event) => routePointerReorder.onPointerDown(event, pointerKey)}
+                      onPointerEnter={(event) => routePointerReorder.onPointerEnter(event, pointerKey)}
+                      onDragStart={(event) => handleRouteTagDragStart(event, 'source', index)}
+                      onDragOver={handleRouteTagDragOver}
+                      onDrop={(event) => handleRouteTagDrop(event, 'source', index)}
+                      onDragEnd={() => setRouteDrag(null)}
+                    >
+                      <HolderOutlined />
+                      <span className="route-selected-index">{index + 1}</span>
+                      <span>{tag}</span>
+                      <Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('source', tag)} />
+                    </div>
+                  );
+                })}
               </div>
             </div>
             <div className="route-builder-panel">
@@ -832,7 +878,27 @@ const DataBus: React.FC = () => {
               />
               <div className="route-selected-list">
                 <Text type="secondary">已选 {selectedDestinationTags.length} 个</Text>
-                {selectedDestinationTags.map((tag, index) => <div key={tag} className="route-selected-item" draggable onDragStart={(event) => handleRouteTagDragStart(event, 'destination', index)} onDragOver={handleRouteTagDragOver} onDrop={(event) => handleRouteTagDrop(event, 'destination', index)} onDragEnd={() => setRouteDrag(null)}><HolderOutlined /><span className="route-selected-index">{index + 1}</span><span>{tag}</span><Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('destination', tag)} /></div>)}
+                {selectedDestinationTags.map((tag, index) => {
+                  const pointerKey = serializeRouteTagPointerKey('destination', tag);
+                  return (
+                    <div
+                      key={tag}
+                      className={`route-selected-item${routePointerReorder.activeKey === pointerKey ? ' is-dragging' : ''}`}
+                      draggable
+                      onPointerDown={(event) => routePointerReorder.onPointerDown(event, pointerKey)}
+                      onPointerEnter={(event) => routePointerReorder.onPointerEnter(event, pointerKey)}
+                      onDragStart={(event) => handleRouteTagDragStart(event, 'destination', index)}
+                      onDragOver={handleRouteTagDragOver}
+                      onDrop={(event) => handleRouteTagDrop(event, 'destination', index)}
+                      onDragEnd={() => setRouteDrag(null)}
+                    >
+                      <HolderOutlined />
+                      <span className="route-selected-index">{index + 1}</span>
+                      <span>{tag}</span>
+                      <Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('destination', tag)} />
+                    </div>
+                  );
+                })}
               </div>
             </div>
             <div className="route-pair-preview">

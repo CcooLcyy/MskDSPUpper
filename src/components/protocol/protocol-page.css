@@ -514,6 +514,13 @@
   border-radius: 3px;
   font-size: 12px;
   cursor: grab;
+  touch-action: none;
+}
+
+.iec104-ioa-allocation-item.is-dragging,
+.iec104-ioa-adjust-row.is-dragging {
+  cursor: grabbing;
+  opacity: 0.68;
 }
 
 .iec104-ioa-allocation-item:hover,
@@ -563,6 +570,8 @@
 .iec104-ioa-adjust-row {
   min-height: 42px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: grab;
+  touch-action: none;
 }
 
 .iec104-ioa-adjust-row:last-child {

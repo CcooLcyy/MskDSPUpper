@@ -42,6 +42,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import ResizableSplit from '../../components/layout/ResizableSplit';
+import { usePointerReorder } from '../../components/interaction/use-pointer-reorder';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import {
   renderProtocolRealtimeQualityCell,
@@ -1307,6 +1308,15 @@ const IEC104: React.FC = () => {
       return next;
     });
   }, []);
+
+  const ioaAdjustPointerReorder = usePointerReorder({
+    disabled: pointSubmitting || !ioaAdjustModalOpen,
+    onReorder: reorderIoaAdjustDrafts,
+  });
+  const importPointerReorder = usePointerReorder({
+    disabled: importSubmitting || !importPointModalOpen,
+    onReorder: reorderImportDrafts,
+  });
 
   const recalculateIoaAdjustDrafts = useCallback((
     strategy: IoaAdjustmentStrategy = ioaAdjustStrategy,
@@ -2818,9 +2828,11 @@ const IEC104: React.FC = () => {
               const changed = draft.ioa !== draft.originalIoa;
               return (
                 <div
-                  className={`iec104-ioa-adjust-row${issue ? ' has-error' : ''}`}
+                  className={`iec104-ioa-adjust-row${issue ? ' has-error' : ''}${ioaAdjustPointerReorder.activeKey === draft.key ? ' is-dragging' : ''}`}
                   key={draft.key}
                   draggable={!pointSubmitting}
+                  onPointerDown={(event) => ioaAdjustPointerReorder.onPointerDown(event, draft.key)}
+                  onPointerEnter={(event) => ioaAdjustPointerReorder.onPointerEnter(event, draft.key)}
                   onDragStart={(event) => {
                     setPointDraftDragData(event, draft.key);
                     setIoaAdjustDragKey(draft.key);
@@ -3029,9 +3041,11 @@ const IEC104: React.FC = () => {
               <div className="iec104-ioa-allocation-list">
                 {importPointDrafts.map((draft, index) => (
                   <div
-                    className="iec104-ioa-allocation-item"
+                    className={`iec104-ioa-allocation-item${importPointerReorder.activeKey === draft.key ? ' is-dragging' : ''}`}
                     key={draft.key}
                     draggable={!importSubmitting}
+                    onPointerDown={(event) => importPointerReorder.onPointerDown(event, draft.key)}
+                    onPointerEnter={(event) => importPointerReorder.onPointerEnter(event, draft.key)}
                     onDragStart={(event) => {
                       setPointDraftDragData(event, draft.key);
                       setImportDragKey(draft.key);

@@ -16,3 +16,13 @@ test('DataBus 路由排序拖放允许投放并清理状态', () => {
   assert.match(dataBusSource, /if \(drag\?\.side === side\) reorderRouteTags\(side, drag\.index, index\);[\s\S]*setRouteDrag\(null\);/);
   assert.equal((dataBusSource.match(/onDragEnd=\{\(\) => setRouteDrag\(null\)\}/g) ?? []).length, 2);
 });
+
+// 验证数据中心左右排序列表均绑定指针拖动，兼容不触发原生拖放事件的 WebView。
+test('DataBus 路由排序支持指针拖动', () => {
+  assert.match(dataBusSource, /const routePointerReorder = usePointerReorder\(\{/);
+  assert.match(dataBusSource, /const reorderRouteTagsByPointerKey = useCallback\(/);
+  assert.equal((dataBusSource.match(/onPointerDown=\{\(event\) => routePointerReorder\.onPointerDown\(event, pointerKey\)\}/g) ?? []).length, 2);
+  assert.equal((dataBusSource.match(/onPointerEnter=\{\(event\) => routePointerReorder\.onPointerEnter\(event, pointerKey\)\}/g) ?? []).length, 2);
+  assert.match(dataBusSource, /const pointerKey = serializeRouteTagPointerKey\('source', tag\);/);
+  assert.match(dataBusSource, /const pointerKey = serializeRouteTagPointerKey\('destination', tag\);/);
+});

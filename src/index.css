@@ -11,6 +11,11 @@ body {
   overflow: hidden;
 }
 
+.pointer-reorder-active,
+.pointer-reorder-active * {
+  user-select: none !important;
+}
+
 #root {
   width: 100vw;
   height: 100vh;
