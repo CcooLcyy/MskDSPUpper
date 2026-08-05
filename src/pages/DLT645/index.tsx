@@ -298,15 +298,20 @@ const DLT645: React.FC = () => {
   }, [selectedLink, linkForm]);
 
   const handleLinkSubmit = useCallback(async () => {
+    if (linkSubmitting) {
+      return;
+    }
+
+    setLinkSubmitting(true);
     let renameCompleted = false;
     let values: ReturnType<typeof linkForm.getFieldsValue>;
     try {
       values = await linkForm.validateFields();
     } catch {
+      setLinkSubmitting(false);
       return;
     }
 
-    setLinkSubmitting(true);
     try {
       const isSerial = (values.comm_mode ?? 3) === 2;
       const config: Dlt645LinkConfig = {
@@ -380,7 +385,7 @@ const DLT645: React.FC = () => {
     } finally {
       setLinkSubmitting(false);
     }
-  }, [editingLink, linkForm, messageApi, refreshLinks, runSelectedLinkStopped]);
+  }, [editingLink, linkForm, linkSubmitting, messageApi, refreshLinks, runSelectedLinkStopped]);
 
   const handleDeleteLink = useCallback(async (connName: string) => {
     if (linkMutation !== null) {
@@ -816,10 +821,18 @@ const DLT645: React.FC = () => {
     <Modal
       title={editingLink ? '编辑连接' : '新增连接'}
       open={linkModalOpen}
-      onCancel={() => setLinkModalOpen(false)}
+      onCancel={() => {
+        if (!linkSubmitting) {
+          setLinkModalOpen(false);
+        }
+      }}
       onOk={() => void handleLinkSubmit()}
       width={720}
       className="dlt645-config-modal"
+      confirmLoading={linkSubmitting}
+      maskClosable={!linkSubmitting}
+      closable={!linkSubmitting}
+      keyboard={!linkSubmitting}
       destroyOnClose
     >
       <Form form={linkForm} layout="vertical" size="small" autoComplete="off">
@@ -944,10 +957,18 @@ const DLT645: React.FC = () => {
     <Modal
       title={editingPointIndex !== null ? '编辑点位' : '新增点位'}
       open={pointModalOpen}
-      onCancel={() => setPointModalOpen(false)}
+      onCancel={() => {
+        if (!pointSubmitting) {
+          setPointModalOpen(false);
+        }
+      }}
       onOk={() => void handlePointSubmit()}
       width={640}
       className="dlt645-config-modal"
+      confirmLoading={pointSubmitting}
+      maskClosable={!pointSubmitting}
+      closable={!pointSubmitting}
+      keyboard={!pointSubmitting}
       destroyOnClose
     >
       <Form form={pointForm} layout="vertical" size="small">
@@ -1075,10 +1096,18 @@ const DLT645: React.FC = () => {
     <Modal
       title={editingBlockIndex !== null ? '编辑数据块' : '新增数据块'}
       open={blockModalOpen}
-      onCancel={() => setBlockModalOpen(false)}
+      onCancel={() => {
+        if (!blockSubmitting) {
+          setBlockModalOpen(false);
+        }
+      }}
       onOk={() => void handleBlockSubmit()}
       width={960}
       className="dlt645-config-modal"
+      confirmLoading={blockSubmitting}
+      maskClosable={!blockSubmitting}
+      closable={!blockSubmitting}
+      keyboard={!blockSubmitting}
       destroyOnClose
     >
       <Form form={blockForm} layout="vertical" size="small">

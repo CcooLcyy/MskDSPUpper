@@ -171,9 +171,11 @@ const CalcPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [groupModalMode, setGroupModalMode] = useState<'create' | 'rename'>('create');
+  const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [groupNameDraft, setGroupNameDraft] = useState('');
   const [groupInitialDraft, setGroupInitialDraft] = useState<string | null>(null);
   const [itemModalOpen, setItemModalOpen] = useState(false);
+  const [itemSubmitting, setItemSubmitting] = useState(false);
   const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
   const [itemDraft, setItemDraft] = useState<ItemDraft>(defaultItem);
   const [itemInitialSnapshot, setItemInitialSnapshot] = useState<string | null>(null);
@@ -275,6 +277,10 @@ const CalcPage: React.FC = () => {
   }, [groupNameDraft, groupModalMode, groups, selectedConfig?.group_name]);
 
   const closeGroupModal = () => {
+    if (groupSubmitting) {
+      return;
+    }
+
     if (groupInitialDraft !== null && groupNameDraft !== groupInitialDraft) {
       Modal.confirm({
         title: '放弃未保存修改？',
@@ -293,12 +299,18 @@ const CalcPage: React.FC = () => {
   };
 
   const saveGroup = async () => {
-    const name = groupNameDraft.trim();
-    if (groupNameError) {
-      messageApi.warning(groupNameError);
+    if (groupSubmitting) {
       return;
     }
+
+    setGroupSubmitting(true);
     try {
+      const name = groupNameDraft.trim();
+      if (groupNameError) {
+        messageApi.warning(groupNameError);
+        return;
+      }
+
       if (groupModalMode === 'create') {
         await api.calcUpsertGroup({
           group_name: name,
@@ -336,6 +348,8 @@ const CalcPage: React.FC = () => {
       await refresh();
     } catch (error) {
       messageApi.error(`保存分组失败：${formatErrorText(error)}`);
+    } finally {
+      setGroupSubmitting(false);
     }
   };
 
@@ -415,6 +429,10 @@ const CalcPage: React.FC = () => {
   };
 
   const closeItemModal = () => {
+    if (itemSubmitting) {
+      return;
+    }
+
     if (itemInitialSnapshot !== null && draftKey(itemDraft) !== itemInitialSnapshot) {
       Modal.confirm({
         title: '放弃未保存修改？',
@@ -433,13 +451,16 @@ const CalcPage: React.FC = () => {
   };
 
   const saveItem = async () => {
-    if (!selectedConfig) return;
-    const item = itemToConfig(itemDraft);
-    if (itemNameError) {
-      messageApi.warning(itemNameError);
-      return;
-    }
-    if (NUMERIC_OPERATOR_KINDS.has(item.operator_kind)) {
+    if (!selectedConfig || itemSubmitting) return;
+
+    setItemSubmitting(true);
+    try {
+      const item = itemToConfig(itemDraft);
+      if (itemNameError) {
+        messageApi.warning(itemNameError);
+        return;
+      }
+      if (NUMERIC_OPERATOR_KINDS.has(item.operator_kind)) {
       const operands = isAggregate ? item.operands : [item.left_operand, item.right_operand];
       const valid = operands.every((operand) => {
         if (!operand || operand.source_kind !== 2) return true;
@@ -450,7 +471,7 @@ const CalcPage: React.FC = () => {
         return;
       }
     }
-    if (LOGIC_OPERATOR_KINDS.has(item.operator_kind)) {
+      if (LOGIC_OPERATOR_KINDS.has(item.operator_kind)) {
       const valid = [item.left_operand, item.right_operand].filter(Boolean).every((operand) => {
         if (!operand || operand.source_kind !== 2) return true;
         return operand.constant?.bool_value !== undefined;
@@ -460,46 +481,49 @@ const CalcPage: React.FC = () => {
         return;
       }
     }
-    if (isAggregate && item.operands.length < 2) {
+      if (isAggregate && item.operands.length < 2) {
       messageApi.warning('求和/求平均至少需要两个操作数');
       return;
     }
-    if (item.operator_kind === 10 && item.decimal_places !== undefined && (item.decimal_places < 0 || item.decimal_places > 15)) {
+      if (item.operator_kind === 10 && item.decimal_places !== undefined && (item.decimal_places < 0 || item.decimal_places > 15)) {
       messageApi.warning('平均值小数位数必须为 0 到 15');
       return;
     }
-    if (inputRequirementError) {
+      if (inputRequirementError) {
       messageApi.warning(inputRequirementError);
       return;
     }
-    if (divisorError) {
+      if (divisorError) {
       messageApi.warning(divisorError);
       return;
     }
-    const items = [...selectedConfig.items];
-    if (editingItemIndex === null) items.push(item);
-    else items[editingItemIndex] = item;
-    try {
-      const restartResult = await runSelectedGroupStopped(
-        () => api.calcUpsertGroup({ ...selectedConfig, items }, false).then(() => undefined),
-      );
-      console.info('Calc 计算项保存完成', {
-        groupName: selectedConfig.group_name,
-        itemName: item.item_name,
-        restarted: restartResult.restartedAfterRun,
-      });
-      setItemModalOpen(false);
-      setItemInitialSnapshot(null);
-      if (restartResult.restartError) {
-        messageApi.warning(`计算项已保存，但重新启动失败：${formatErrorText(restartResult.restartError)}`);
-      } else if (restartResult.stoppedBeforeRun) {
-        messageApi.success(editingItemIndex === null ? '计算项已添加并重新启动' : '计算项已更新并重新启动');
-      } else {
-        messageApi.success(editingItemIndex === null ? '计算项已添加' : '计算项已更新');
+      const items = [...selectedConfig.items];
+      if (editingItemIndex === null) items.push(item);
+      else items[editingItemIndex] = item;
+      try {
+        const restartResult = await runSelectedGroupStopped(
+          () => api.calcUpsertGroup({ ...selectedConfig, items }, false).then(() => undefined),
+        );
+        console.info('Calc 计算项保存完成', {
+          groupName: selectedConfig.group_name,
+          itemName: item.item_name,
+          restarted: restartResult.restartedAfterRun,
+        });
+        setItemModalOpen(false);
+        setItemInitialSnapshot(null);
+        if (restartResult.restartError) {
+          messageApi.warning(`计算项已保存，但重新启动失败：${formatErrorText(restartResult.restartError)}`);
+        } else if (restartResult.stoppedBeforeRun) {
+          messageApi.success(editingItemIndex === null ? '计算项已添加并重新启动' : '计算项已更新并重新启动');
+        } else {
+          messageApi.success(editingItemIndex === null ? '计算项已添加' : '计算项已更新');
+        }
+        await refresh();
+      } catch (error) {
+        messageApi.error(`保存计算项失败：${formatErrorText(error)}`);
       }
-      await refresh();
-    } catch (error) {
-      messageApi.error(`保存计算项失败：${formatErrorText(error)}`);
+    } finally {
+      setItemSubmitting(false);
     }
   };
 
@@ -788,10 +812,10 @@ const CalcPage: React.FC = () => {
         </> : <div className="calc-empty">暂无计算分组，请先新建。</div>}
       </Card>
     </ResizableSplit>
-    <Modal title={groupModalMode === 'create' ? '新建计算分组' : '重命名计算分组'} open={groupModalOpen} onCancel={closeGroupModal} onOk={() => void saveGroup()} okText="保存" cancelText="取消">
+    <Modal title={groupModalMode === 'create' ? '新建计算分组' : '重命名计算分组'} open={groupModalOpen} onCancel={closeGroupModal} onOk={() => void saveGroup()} okText="保存" cancelText="取消" confirmLoading={groupSubmitting} maskClosable={!groupSubmitting} closable={!groupSubmitting} keyboard={!groupSubmitting}>
       <Form layout="vertical"><Form.Item label="分组名称" required validateStatus={groupNameError ? 'error' : undefined} help={groupNameError}><Input autoFocus value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} onPressEnter={() => void saveGroup()} /></Form.Item></Form>
     </Modal>
-    <Modal className="calc-item-modal" centered title={editingItemIndex === null ? '新增计算项' : '编辑计算项'} open={itemModalOpen} width="min(920px, calc(100vw - 32px))" styles={{ body: { maxHeight: 'min(680px, calc(100vh - 220px))', overflowY: 'auto', paddingInline: 24 } }} onCancel={closeItemModal} onOk={() => void saveItem()} okText="保存" cancelText="取消">
+    <Modal className="calc-item-modal" centered title={editingItemIndex === null ? '新增计算项' : '编辑计算项'} open={itemModalOpen} width="min(920px, calc(100vw - 32px))" styles={{ body: { maxHeight: 'min(680px, calc(100vh - 220px))', overflowY: 'auto', paddingInline: 24 } }} onCancel={closeItemModal} onOk={() => void saveItem()} okText="保存" cancelText="取消" confirmLoading={itemSubmitting} maskClosable={!itemSubmitting} closable={!itemSubmitting} keyboard={!itemSubmitting}>
       <Form layout="vertical">
         <Row gutter={16}><Col span={12}><Form.Item label="计算项名称" required validateStatus={itemNameError ? 'error' : undefined} help={itemNameError}><Input placeholder="例如：总功率" value={itemDraft.itemName} onChange={(event) => setItemDraft((current) => ({ ...current, itemName: event.target.value }))} /></Form.Item></Col><Col span={12}><Form.Item label="运算符" required><Select value={itemDraft.operatorKind} onChange={updateOperator} options={OPERATOR_OPTIONS.map(({ label, value }) => ({ label, value }))} /></Form.Item></Col></Row>
         {isAggregate ? <>

@@ -610,6 +610,9 @@ const AVC: React.FC = () => {
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
+  const [groupSubmitting, setGroupSubmitting] = useState(false);
+  const [renameSubmitting, setRenameSubmitting] = useState(false);
+  const [memberSubmitting, setMemberSubmitting] = useState(false);
   const [editingGroup, setEditingGroup] = useState<AvcGroupConfig | null>(null);
   const [editingMemberIndex, setEditingMemberIndex] = useState<number | null>(null);
   const [allocationMode, setAllocationMode] = useState<AllocationMode>('equal');
@@ -1169,6 +1172,8 @@ const AVC: React.FC = () => {
   }, [beginGroupOperation, endGroupOperation, messageApi, refreshGroups, selectedGroup, selectedGroupName]);
 
   const handleGroupSubmit = useCallback(async () => {
+    if (groupSubmitting) return;
+    setGroupSubmitting(true);
     let savedGroup: AvcGroupInfo | null = null;
     let savedGroupName = '';
     let plannedRouteCount = 0;
@@ -1339,10 +1344,13 @@ const AVC: React.FC = () => {
         return;
       }
       messageApi.error(`保存 AVC 控制组失败: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setGroupSubmitting(false);
     }
   }, [
     allocationMode,
     editingGroup,
+    groupSubmitting,
     groupAutoRouteEnabled,
     groupForm,
     groupRouteEndpoints,
@@ -1354,6 +1362,8 @@ const AVC: React.FC = () => {
   ]);
 
   const handleRenameGroup = useCallback(async () => {
+    if (renameSubmitting) return;
+    setRenameSubmitting(true);
     try {
       const values = await renameForm.validateFields();
       const oldGroupName = values.old_group_name.trim();
@@ -1367,10 +1377,14 @@ const AVC: React.FC = () => {
     } catch (error) {
       messageApi.error(`重命名控制组失败: ${error instanceof Error ? error.message : String(error)}`);
       await refreshGroups();
+    } finally {
+      setRenameSubmitting(false);
     }
-  }, [messageApi, refreshGroups, renameForm]);
+  }, [messageApi, refreshGroups, renameForm, renameSubmitting]);
 
   const handleMemberSubmit = useCallback(async () => {
+    if (memberSubmitting) return;
+    setMemberSubmitting(true);
     try {
       const values = await memberForm.validateFields();
       const nextMember: AvcMemberConfig = {
@@ -1439,8 +1453,19 @@ const AVC: React.FC = () => {
       setMemberModalOpen(false);
     } catch (error) {
       messageApi.error(`保存成员失败: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setMemberSubmitting(false);
     }
-  }, [allocationMode, editingMemberIndex, memberAutoRouteEnabled, memberForm, memberRouteEndpoints, membersDraft, messageApi]);
+  }, [
+    allocationMode,
+    editingMemberIndex,
+    memberAutoRouteEnabled,
+    memberForm,
+    memberRouteEndpoints,
+    memberSubmitting,
+    membersDraft,
+    messageApi,
+  ]);
 
   const handleDeleteMember = useCallback((index: number) => {
     setMembersDraft((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
@@ -1978,9 +2003,15 @@ const AVC: React.FC = () => {
         title={editingGroup ? '编辑 AVC 控制组' : '新增 AVC 控制组'}
         open={groupModalOpen}
         onOk={() => void handleGroupSubmit()}
-        onCancel={() => setGroupModalOpen(false)}
+        onCancel={() => {
+          if (!groupSubmitting) setGroupModalOpen(false);
+        }}
         okText="保存配置"
         cancelText="取消"
+        confirmLoading={groupSubmitting}
+        maskClosable={!groupSubmitting}
+        closable={!groupSubmitting}
+        keyboard={!groupSubmitting}
         width={1100}
         centered
         className="control-config-modal control-group-modal"
@@ -2305,9 +2336,15 @@ const AVC: React.FC = () => {
         title="重命名 AVC 控制组"
         open={renameModalOpen}
         onOk={() => void handleRenameGroup()}
-        onCancel={() => setRenameModalOpen(false)}
+        onCancel={() => {
+          if (!renameSubmitting) setRenameModalOpen(false);
+        }}
         okText="保存名称"
         cancelText="取消"
+        confirmLoading={renameSubmitting}
+        maskClosable={!renameSubmitting}
+        closable={!renameSubmitting}
+        keyboard={!renameSubmitting}
         width={520}
         centered
         className="control-config-modal control-rename-modal"
@@ -2345,9 +2382,15 @@ const AVC: React.FC = () => {
         title={editingMemberIndex === null ? '添加成员' : '编辑成员'}
         open={memberModalOpen}
         onOk={() => void handleMemberSubmit()}
-        onCancel={() => setMemberModalOpen(false)}
+        onCancel={() => {
+          if (!memberSubmitting) setMemberModalOpen(false);
+        }}
         okText="保存成员"
         cancelText="取消"
+        confirmLoading={memberSubmitting}
+        maskClosable={!memberSubmitting}
+        closable={!memberSubmitting}
+        keyboard={!memberSubmitting}
         width={920}
         centered
         className="control-config-modal control-member-modal"

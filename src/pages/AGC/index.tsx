@@ -384,6 +384,8 @@ const AGC: React.FC = () => {
   const runtimeErrorToastRef = useRef<{ text: string; at: number } | null>(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
+  const [groupSubmitting, setGroupSubmitting] = useState(false);
+  const [memberSubmitting, setMemberSubmitting] = useState(false);
   const [editingGroup, setEditingGroup] = useState<AgcGroupConfig | null>(null);
   const [editingMemberIndex, setEditingMemberIndex] = useState<number | null>(null);
   const [allocationMode, setAllocationMode] = useState<AllocationMode>('equal');
@@ -748,6 +750,8 @@ const AGC: React.FC = () => {
   }, [messageApi, refreshGroups, selectedGroupName]);
 
   const handleGroupSubmit = useCallback(async () => {
+    if (groupSubmitting) return;
+    setGroupSubmitting(true);
     let submittedConfig: AgcGroupConfig | null = null;
     try {
       const values = await groupForm.validateFields();
@@ -910,10 +914,13 @@ const AGC: React.FC = () => {
         return;
       }
       messageApi.error(`操作失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setGroupSubmitting(false);
     }
   }, [
     allocationMode,
     editingGroup,
+    groupSubmitting,
     groupForm,
     memberRouteDrafts,
     membersDraft,
@@ -961,6 +968,8 @@ const AGC: React.FC = () => {
   }, [memberForm, memberRouteDrafts, membersDraft, refreshDataBusEndpointOptions]);
 
   const handleMemberSubmit = useCallback(async () => {
+    if (memberSubmitting) return;
+    setMemberSubmitting(true);
     try {
       const values = await memberForm.validateFields();
       const nextMember: AgcMemberConfig = {
@@ -998,8 +1007,18 @@ const AGC: React.FC = () => {
       setMemberModalOpen(false);
     } catch (e) {
       messageApi.error(`成员保存失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setMemberSubmitting(false);
     }
-  }, [allocationMode, createMemberRoutes, editingMemberIndex, memberForm, memberRouteEndpoints, messageApi]);
+  }, [
+    allocationMode,
+    createMemberRoutes,
+    editingMemberIndex,
+    memberForm,
+    memberRouteEndpoints,
+    memberSubmitting,
+    messageApi,
+  ]);
 
   const handleDeleteMember = useCallback((index: number) => {
     setMembersDraft((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
@@ -1498,9 +1517,15 @@ const AGC: React.FC = () => {
         title={editingGroup ? '编辑 AGC 控制组' : '新增 AGC 控制组'}
         open={groupModalOpen}
         onOk={() => void handleGroupSubmit()}
-        onCancel={() => setGroupModalOpen(false)}
+        onCancel={() => {
+          if (!groupSubmitting) setGroupModalOpen(false);
+        }}
         okText="保存配置"
         cancelText="取消"
+        confirmLoading={groupSubmitting}
+        maskClosable={!groupSubmitting}
+        closable={!groupSubmitting}
+        keyboard={!groupSubmitting}
         width={1100}
         centered
         className="control-config-modal control-group-modal"
@@ -1687,9 +1712,15 @@ const AGC: React.FC = () => {
         title={editingMemberIndex === null ? '添加成员' : '编辑成员'}
         open={memberModalOpen}
         onOk={() => void handleMemberSubmit()}
-        onCancel={() => setMemberModalOpen(false)}
+        onCancel={() => {
+          if (!memberSubmitting) setMemberModalOpen(false);
+        }}
         okText="保存成员"
         cancelText="取消"
+        confirmLoading={memberSubmitting}
+        maskClosable={!memberSubmitting}
+        closable={!memberSubmitting}
+        keyboard={!memberSubmitting}
         width={920}
         centered
         className="control-config-modal control-member-modal"

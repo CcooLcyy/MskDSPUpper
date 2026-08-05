@@ -475,6 +475,7 @@ const IEC104: React.FC = () => {
   const [filterExpanded, setFilterExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [pointsLoading, setPointsLoading] = useState(false);
+  const [linkSubmitting, setLinkSubmitting] = useState(false);
   const [pointSubmitting, setPointSubmitting] = useState(false);
   const [importSubmitting, setImportSubmitting] = useState(false);
   const [runtimeAction, setRuntimeAction] = useState<'start' | 'stop' | null>(null);
@@ -959,6 +960,11 @@ const IEC104: React.FC = () => {
   );
 
   const handleLinkSubmit = useCallback(async () => {
+    if (linkSubmitting) {
+      return;
+    }
+
+    setLinkSubmitting(true);
     let renameCompleted = false;
     try {
       const values = await linkForm.validateFields();
@@ -1046,8 +1052,10 @@ const IEC104: React.FC = () => {
         return;
       }
       messageApi.error(`操作失败: ${e}`);
+    } finally {
+      setLinkSubmitting(false);
     }
-  }, [linkForm, editingLink, messageApi, refreshLinks, runSelectedLinkStopped]);
+  }, [editingLink, linkForm, linkSubmitting, messageApi, refreshLinks, runSelectedLinkStopped]);
 
   const handleDeleteLink = useCallback(
     async (connName: string) => {
@@ -2413,9 +2421,17 @@ const IEC104: React.FC = () => {
         title={editingLink ? '编辑连接' : '新增连接'}
         open={linkModalOpen}
         onOk={() => void handleLinkSubmit()}
-        onCancel={() => setLinkModalOpen(false)}
+        onCancel={() => {
+          if (!linkSubmitting) {
+            setLinkModalOpen(false);
+          }
+        }}
         width={680}
         className="iec104-config-modal"
+        confirmLoading={linkSubmitting}
+        maskClosable={!linkSubmitting}
+        closable={!linkSubmitting}
+        keyboard={!linkSubmitting}
         destroyOnClose
       >
         <Form
@@ -2600,6 +2616,7 @@ const IEC104: React.FC = () => {
         confirmLoading={pointSubmitting}
         maskClosable={!pointSubmitting}
         closable={!pointSubmitting}
+        keyboard={!pointSubmitting}
         destroyOnClose
       >
         <Form form={pointForm} layout="vertical" size="small">
@@ -2729,6 +2746,7 @@ const IEC104: React.FC = () => {
         confirmLoading={pointSubmitting}
         maskClosable={!pointSubmitting}
         closable={!pointSubmitting}
+        keyboard={!pointSubmitting}
         okButtonProps={{
           disabled: pointSubmitting || ioaAdjustDrafts.length === 0 || ioaAdjustValidation.issues.size > 0 || ioaAdjustValidation.changedCount === 0,
         }}
@@ -2895,6 +2913,7 @@ const IEC104: React.FC = () => {
         confirmLoading={importSubmitting}
         maskClosable={!importSubmitting}
         closable={!importSubmitting}
+        keyboard={!importSubmitting}
         okButtonProps={{
           disabled: dataBusEndpointLoading || importSubmitting || importPointDrafts.length === 0 || importValidation.errorCount > 0,
         }}
