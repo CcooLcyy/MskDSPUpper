@@ -26,6 +26,7 @@ import {
   api,
   type AppUpdateStatusKind,
   type LowerUpdateChannel,
+  type LowerUpdateCachedPackage,
   type LowerUpdateDownloadProgress,
   type LowerUpdateDownloadResult,
   type LowerUpdateInstallResult,
@@ -59,6 +60,7 @@ type LowerUpdateStatus =
   | '下载中'
   | '校验中'
   | '下载失败'
+  | '已缓存'
   | '已下载到上位机'
   | '上传中'
   | '上传失败'
@@ -141,6 +143,8 @@ function getDeliveryStatusColor(status: LowerUpdateStatus): string {
     case '已下载到上位机':
       return 'blue';
     case '已上传到下位机':
+      return 'blue';
+    case '已缓存':
       return 'blue';
     case '升级完成':
       return 'success';
@@ -414,6 +418,15 @@ function formatPublishedAt(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function formatDownloadedAt(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '-';
+  }
+
+  const date = new Date(value * 1000);
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+}
+
 function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -523,6 +536,8 @@ const AdvancedConfigPage: React.FC = () => {
   const [isVerifyingLowerUpdate, setIsVerifyingLowerUpdate] = useState(false);
   const [activeManifest, setActiveManifest] = useState<LowerUpdateManifest | null>(null);
   const [downloadResult, setDownloadResult] = useState<LowerUpdateDownloadResult | null>(null);
+  const [cachedPackages, setCachedPackages] = useState<LowerUpdateCachedPackage[]>([]);
+  const [isLoadingCachedPackages, setIsLoadingCachedPackages] = useState(false);
   const [uploadResult, setUploadResult] = useState<LowerUpdateUploadResult | null>(null);
   const [installResult, setInstallResult] = useState<LowerUpdateInstallResult | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
@@ -566,6 +581,23 @@ const AdvancedConfigPage: React.FC = () => {
   const canReverifyImage = installResult?.success === true;
   const appDownloadPercent =
     appTotalBytes && appTotalBytes > 0 ? Math.min(100, Math.round((appDownloadedBytes / appTotalBytes) * 100)) : 0;
+
+  const refreshCachedLowerUpdates = React.useCallback(async (): Promise<void> => {
+    setIsLoadingCachedPackages(true);
+    try {
+      const packages = await api.listCachedLowerUpdates(channel);
+      setCachedPackages(packages);
+    } catch (error) {
+      setCachedPackages([]);
+      messageApi.warning(`读取已缓存下位机更新包失败: ${formatErrorMessage(error)}`);
+    } finally {
+      setIsLoadingCachedPackages(false);
+    }
+  }, [channel, messageApi]);
+
+  React.useEffect(() => {
+    void refreshCachedLowerUpdates();
+  }, [refreshCachedLowerUpdates]);
 
   React.useEffect(() => {
     if (lowerUpdateAuthMethod !== 'password' || !targetUploadAccount.trim()) {
@@ -679,6 +711,27 @@ const AdvancedConfigPage: React.FC = () => {
     setSha256(manifest.asset.sha256);
   };
 
+  const applyCachedPackage = (cachedPackage: LowerUpdateCachedPackage): LowerUpdateDownloadResult => {
+    const restoredDownloadResult: LowerUpdateDownloadResult = {
+      package_name: cachedPackage.manifest.asset.name,
+      package_path: cachedPackage.package_path,
+      downloaded_bytes: cachedPackage.package_size,
+      sha256: cachedPackage.sha256,
+    };
+    applyLowerUpdateManifest(cachedPackage.manifest);
+    resetUploadState();
+    setActiveManifest(cachedPackage.manifest);
+    setDownloadResult(restoredDownloadResult);
+    setDownloadedPackagePath(cachedPackage.package_path);
+    setDownloadedPackageSha256(cachedPackage.sha256);
+    setDownloadedBytes(cachedPackage.package_size);
+    setDownloadTotalBytes(cachedPackage.manifest.asset.size);
+    setDownloadModalProgress(100);
+    setDownloadStage('finished');
+    setDeliveryStatus('已缓存');
+    return restoredDownloadResult;
+  };
+
   const queryLowerUpdateRuntimeInfo = async (): Promise<LowerUpdateRuntimeInfo> => api.getLowerUpdateRuntimeInfo({
     upload_account: targetUploadAccount.trim(),
     auth: lowerUpdateAuthMethod === 'password'
@@ -725,14 +778,22 @@ const AdvancedConfigPage: React.FC = () => {
       const manifest = await api.checkLowerUpdate(channel);
       applyLowerUpdateManifest(manifest);
       setActiveManifest(manifest);
-      setDownloadResult(null);
-      setDownloadedPackagePath('-');
-      setDownloadedPackageSha256('-');
-      setDownloadStage('idle');
-      setDownloadModalProgress(0);
-      setDownloadedBytes(0);
-      setDownloadTotalBytes(manifest.asset.size);
-      resetUploadState();
+      const matchingCachedPackage = cachedPackages.find((cachedPackage) =>
+        cachedPackage.manifest.asset.sha256.toLowerCase() === manifest.asset.sha256.toLowerCase()
+        && compareLowerUpdateImages(manifest.image_id, cachedPackage.manifest.image_id) === 'same');
+      if (matchingCachedPackage) {
+        applyCachedPackage(matchingCachedPackage);
+        messageApi.info('已找到相同的本地缓存包，可直接下发');
+      } else {
+        setDownloadResult(null);
+        setDownloadedPackagePath('-');
+        setDownloadedPackageSha256('-');
+        setDownloadStage('idle');
+        setDownloadModalProgress(0);
+        setDownloadedBytes(0);
+        setDownloadTotalBytes(manifest.asset.size);
+        resetUploadState();
+      }
 
       if (!manifest.image_id?.trim()) {
         setCurrentLowerImageId('-');
@@ -819,6 +880,7 @@ const AdvancedConfigPage: React.FC = () => {
       setDownloadModalProgress(100);
       setDownloadStage('finished');
       setDeliveryStatus('已下载到上位机');
+      void refreshCachedLowerUpdates();
       messageApi.success('下位机更新包已下载并校验通过');
     } catch (error) {
       setDownloadStage('failed');
@@ -899,6 +961,7 @@ const AdvancedConfigPage: React.FC = () => {
           package_name: packageResult.package_name,
           package_path: packageResult.package_path,
           package_size: packageResult.downloaded_bytes,
+          package_sha256: packageResult.sha256,
           upload_account: targetUploadAccount.trim(),
           install_dir: targetInstallDir.trim(),
           auth: lowerUpdateAuthMethod === 'password'
@@ -936,7 +999,10 @@ const AdvancedConfigPage: React.FC = () => {
     }
   };
 
-  const runInstallStep = async (packageResult: LowerUpdateDownloadResult): Promise<LowerUpdateInstallResult | null> => {
+  const runInstallStep = async (
+    packageResult: LowerUpdateDownloadResult,
+    manifest: LowerUpdateManifest,
+  ): Promise<LowerUpdateInstallResult | null> => {
     setCurrentLowerImageId('-');
     resetInstallState();
     setDeployTaskStep('installing');
@@ -945,7 +1011,7 @@ const AdvancedConfigPage: React.FC = () => {
     setIsInstallingLowerUpdate(true);
 
     try {
-      const expectedImageId = activeManifest?.image_id?.trim();
+      const expectedImageId = manifest.image_id?.trim();
       if (!expectedImageId) {
         throw new Error('当前更新清单未包含有效的期望镜像 ID');
       }
@@ -999,13 +1065,13 @@ const AdvancedConfigPage: React.FC = () => {
     }
   };
 
-  const runImageVerifyStep = async (): Promise<boolean> => {
+  const runImageVerifyStep = async (manifest: LowerUpdateManifest): Promise<boolean> => {
     setDeployTaskStep('verifying');
     setDeliveryStatus('镜像确认中');
     setIsVerifyingLowerUpdate(true);
 
     try {
-      const expectedImageId = activeManifest?.image_id?.trim();
+      const expectedImageId = manifest.image_id?.trim();
       if (!expectedImageId) {
         throw new Error('当前更新清单未包含镜像 ID，无法确认安装结果');
       }
@@ -1041,24 +1107,41 @@ const AdvancedConfigPage: React.FC = () => {
     }
   };
 
-  const runDeployFlow = async ({ forceUpload = false }: { forceUpload?: boolean } = {}): Promise<void> => {
-    if (!downloadResult) {
+  const runDeployFlow = async ({
+    forceUpload = false,
+    cachedPackage,
+  }: { forceUpload?: boolean; cachedPackage?: LowerUpdateCachedPackage } = {}): Promise<void> => {
+    const selectedManifest = cachedPackage?.manifest ?? activeManifest;
+    const selectedDownloadResult = cachedPackage
+      ? {
+          package_name: cachedPackage.manifest.asset.name,
+          package_path: cachedPackage.package_path,
+          downloaded_bytes: cachedPackage.package_size,
+          sha256: cachedPackage.sha256,
+        }
+      : downloadResult;
+
+    if (!selectedDownloadResult) {
       messageApi.warning('请先下载到上位机');
       return;
     }
-    if (!activeManifest?.image_id?.trim()) {
+    if (!selectedManifest?.image_id?.trim()) {
       messageApi.warning('当前更新清单未包含镜像 ID，不能执行无法验证结果的安装');
       return;
     }
 
-    const shouldContinueLowerUpdateDeploy = await checkLowerUpdateTargetBeforeDeploy(activeManifest.image_id);
+    if (cachedPackage) {
+      applyCachedPackage(cachedPackage);
+    }
+
+    const shouldContinueLowerUpdateDeploy = await checkLowerUpdateTargetBeforeDeploy(selectedManifest.image_id);
     if (!shouldContinueLowerUpdateDeploy) {
       return;
     }
 
     setIsUploadModalOpen(true);
 
-    let activeUploadResult = forceUpload ? null : uploadResult;
+    let activeUploadResult = forceUpload || cachedPackage ? null : uploadResult;
     if (forceUpload) {
       setUploadResult(null);
       setUploadedRemotePath('-');
@@ -1068,29 +1151,39 @@ const AdvancedConfigPage: React.FC = () => {
     }
 
     if (!activeUploadResult) {
-      activeUploadResult = await runUploadStep(downloadResult);
+      activeUploadResult = await runUploadStep(selectedDownloadResult);
       if (!activeUploadResult) {
         return;
       }
     } else {
       setUploadedRemotePath(activeUploadResult.remote_path);
       setUploadedBytes(activeUploadResult.uploaded_bytes);
-      setUploadTotalBytes(downloadResult.downloaded_bytes);
+      setUploadTotalBytes(selectedDownloadResult.downloaded_bytes);
       setUploadModalProgress(100);
       setUploadStage('finished');
       setDeployTaskStep('uploaded');
     }
 
-    const installResult = await runInstallStep(downloadResult);
+    const installResult = await runInstallStep(selectedDownloadResult, selectedManifest);
     if (!installResult || installResult.already_current) {
       return;
     }
 
-    await runImageVerifyStep();
+    await runImageVerifyStep(selectedManifest);
   };
 
   const handleDeployPackage = async (): Promise<void> => {
     await runDeployFlow();
+  };
+
+  const handleDeployCachedPackage = async (cachedPackage: LowerUpdateCachedPackage): Promise<void> => {
+    Modal.confirm({
+      title: `下发已缓存版本 ${cachedPackage.manifest.version}`,
+      content: '该操作不会检查线上最新版本，将按缓存的指定版本下发。确认继续吗？',
+      okText: '继续下发',
+      cancelText: '取消',
+      onOk: () => runDeployFlow({ cachedPackage }),
+    });
   };
 
   const handleRetryDeploy = async (): Promise<void> => {
@@ -1102,7 +1195,7 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const handleReinstall = async (): Promise<void> => {
-    if (!downloadResult || !uploadResult) {
+    if (!downloadResult || !uploadResult || !activeManifest) {
       messageApi.warning('请先完成上传');
       return;
     }
@@ -1124,9 +1217,9 @@ const AdvancedConfigPage: React.FC = () => {
       return;
     }
 
-    const installResult = await runInstallStep(downloadResult);
+    const installResult = await runInstallStep(downloadResult, activeManifest);
     if (installResult && !installResult.already_current) {
-      await runImageVerifyStep();
+      await runImageVerifyStep(activeManifest);
     }
   };
 
@@ -1137,7 +1230,9 @@ const AdvancedConfigPage: React.FC = () => {
     }
 
     setIsUploadModalOpen(true);
-    await runImageVerifyStep();
+    if (activeManifest) {
+      await runImageVerifyStep(activeManifest);
+    }
   };
 
   const renderAppUpdateCard = (): React.ReactNode => (
@@ -1325,6 +1420,7 @@ const AdvancedConfigPage: React.FC = () => {
                     disabled={isCheckingLowerUpdate || isDownloadingLowerUpdate || isDeployingLowerUpdate}
                     onChange={(value) => {
                       setChannel(value);
+                      setCachedPackages([]);
                       resetUpdateState();
                     }}
                   />
@@ -1333,6 +1429,50 @@ const AdvancedConfigPage: React.FC = () => {
               <Text type="secondary">
                 上位机从静态源获取更新包，再下发到下位机执行安装。
               </Text>
+              <div className="advanced-config-cached-package">
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Space wrap>
+                    <Text strong>已缓存版本
+                      {isLoadingCachedPackages ? ' (读取中)' : ''}
+                    </Text>
+                    <Tag color={cachedPackages.length > 0 ? 'blue' : 'default'}>
+                      {cachedPackages.length > 0 ? `可用 ${cachedPackages.length} 个` : '无可用缓存'}
+                    </Tag>
+                  </Space>
+                  {cachedPackages.map((cachedPackage) => (
+                    <div className="advanced-config-cached-package-item" key={cachedPackage.package_path}>
+                      <Descriptions size="small" column={2}>
+                        <Descriptions.Item label="版本">{cachedPackage.manifest.version}</Descriptions.Item>
+                        <Descriptions.Item label="渠道">{UPDATE_CHANNEL_LABELS[cachedPackage.manifest.channel]}</Descriptions.Item>
+                        <Descriptions.Item label="安装包">{cachedPackage.manifest.asset.name}</Descriptions.Item>
+                        <Descriptions.Item label="下载时间">{formatDownloadedAt(cachedPackage.downloaded_at)}</Descriptions.Item>
+                        <Descriptions.Item label="镜像 ID" span={2}>
+                          <Text code className="advanced-config-hash">{cachedPackage.manifest.image_id}</Text>
+                        </Descriptions.Item>
+                        <Descriptions.Item label="SHA256" span={2}>
+                          <Text code className="advanced-config-hash">{cachedPackage.sha256}</Text>
+                        </Descriptions.Item>
+                      </Descriptions>
+                      <Space wrap>
+                        <Button
+                          type="primary"
+                          icon={<UploadOutlined />}
+                          onClick={() => void handleDeployCachedPackage(cachedPackage)}
+                          disabled={
+                            hasDeployTargetValidationError
+                            || isCheckingLowerUpdate
+                            || isDownloadingLowerUpdate
+                            || isDeployingLowerUpdate
+                          }
+                        >
+                          下发此缓存版本
+                        </Button>
+                        <Text type="warning">缓存版本可能不是线上最新版本</Text>
+                      </Space>
+                    </div>
+                  ))}
+                </Space>
+              </div>
               <Space wrap className="advanced-config-action-row">
                 <Button
                   icon={<FileSearchOutlined />}

@@ -31,6 +31,8 @@ const DEFAULT_LOWER_UPDATE_BASE_URL: &str = "https://update.clsclear.top/mskdsp-
 const LOWER_UPDATE_PLATFORM: &str = "linux-arm64";
 const LOWER_UPDATE_PRODUCT: &str = "mskdsp-lower";
 const LOWER_UPDATE_SCHEMA_VERSION: u32 = 1;
+const LOWER_UPDATE_CACHE_METADATA_SCHEMA_VERSION: u32 = 1;
+const LOWER_UPDATE_CACHE_METADATA_FILE_NAME: &str = ".mskdsp-cache.json";
 const LOWER_UPDATE_CONTAINER_NAME: &str = "mskdsp";
 const LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const LOWER_UPDATE_PRECHECK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -109,6 +111,22 @@ pub struct LowerUpdateDownloadResultDto {
     pub sha256: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LowerUpdateCacheMetadataDto {
+    pub schema_version: u32,
+    pub downloaded_at: u64,
+    pub manifest: LowerUpdateManifestDto,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct LowerUpdateCachedPackageDto {
+    pub downloaded_at: u64,
+    pub manifest: LowerUpdateManifestDto,
+    pub package_path: String,
+    pub package_size: u64,
+    pub sha256: String,
+}
+
 #[derive(Debug, Default, Serialize, Clone, PartialEq, Eq)]
 pub struct LowerUpdateCacheCleanupResultDto {
     pub removed_files: u64,
@@ -120,6 +138,7 @@ pub struct LowerUpdateUploadRequestDto {
     pub package_name: String,
     pub package_path: String,
     pub package_size: u64,
+    pub package_sha256: String,
     pub upload_account: String,
     pub install_dir: String,
     pub auth: LowerUpdateSshAuthDto,
@@ -1019,6 +1038,11 @@ fn validate_manifest(
     if !is_safe_file_name(&manifest.asset.name) {
         return Err("下位机更新清单安装包名称不能包含路径分隔符".into());
     }
+    if manifest.asset.name == LOWER_UPDATE_CACHE_METADATA_FILE_NAME
+        || manifest.asset.name.starts_with(".mskdsp-cache.json.tmp-")
+    {
+        return Err("下位机更新清单安装包名称与缓存元数据保留名称冲突".into());
+    }
     if !is_http_url(&manifest.asset.url) {
         return Err("下位机更新清单安装包地址不合法".into());
     }
@@ -1044,9 +1068,154 @@ fn cache_dir(cache_root: &Path, manifest: &LowerUpdateManifestDto) -> PathBuf {
     cache_root.join(&manifest.channel).join(&manifest.platform)
 }
 
+fn cache_metadata_path(directory: &Path) -> PathBuf {
+    directory.join(LOWER_UPDATE_CACHE_METADATA_FILE_NAME)
+}
+
+fn unix_timestamp_now() -> u64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+async fn persist_cache_metadata(
+    directory: &Path,
+    manifest: &LowerUpdateManifestDto,
+) -> Result<(), String> {
+    let metadata = LowerUpdateCacheMetadataDto {
+        schema_version: LOWER_UPDATE_CACHE_METADATA_SCHEMA_VERSION,
+        downloaded_at: unix_timestamp_now(),
+        manifest: manifest.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&metadata)
+        .map_err(|error| format!("序列化下位机更新缓存清单失败: {error}"))?;
+    let metadata_path = cache_metadata_path(directory);
+    let temporary_path = directory.join(format!(
+        ".mskdsp-cache.json.tmp-{}-{}",
+        std::process::id(),
+        unix_timestamp_now()
+    ));
+    fs::write(&temporary_path, bytes)
+        .await
+        .map_err(|error| format!("写入下位机更新缓存清单失败: {error}"))?;
+    let replace_result = tokio::task::spawn_blocking({
+        let temporary_path = temporary_path.clone();
+        let metadata_path = metadata_path.clone();
+        move || replace_cache_metadata_file(&temporary_path, &metadata_path)
+    })
+    .await
+    .map_err(|error| format!("替换下位机更新缓存清单任务失败: {error}"))?;
+    if let Err(error) = replace_result {
+        let _ = fs::remove_file(&temporary_path).await;
+        return Err(format!("保存下位机更新缓存清单失败: {error}"));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_cache_metadata_file(source: &Path, destination: &Path) -> io::Result<()> {
+    std_fs::rename(source, destination)
+}
+
+#[cfg(target_os = "windows")]
+fn replace_cache_metadata_file(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+async fn load_cached_package(
+    directory: &Path,
+    requested_channel: Option<&str>,
+) -> Result<Option<LowerUpdateCachedPackageDto>, String> {
+    let metadata_path = cache_metadata_path(directory);
+    let metadata_bytes = match fs::read(&metadata_path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取下位机更新缓存清单失败: {error}")),
+    };
+    let metadata = serde_json::from_slice::<LowerUpdateCacheMetadataDto>(&metadata_bytes)
+        .map_err(|error| format!("解析下位机更新缓存清单失败: {error}"))?;
+    if metadata.schema_version != LOWER_UPDATE_CACHE_METADATA_SCHEMA_VERSION {
+        return Err(format!(
+            "下位机更新缓存清单版本不支持: {}",
+            metadata.schema_version
+        ));
+    }
+    let channel = normalize_channel(&metadata.manifest.channel)?;
+    if requested_channel.is_some_and(|requested| requested != channel) {
+        return Ok(None);
+    }
+    validate_manifest(&metadata.manifest, &channel)?;
+    if metadata
+        .manifest
+        .image_id
+        .as_deref()
+        .and_then(normalize_image_id)
+        .is_none()
+    {
+        return Err("下位机更新缓存清单缺少有效镜像 ID".into());
+    }
+
+    let package_path = directory.join(&metadata.manifest.asset.name);
+    let package_metadata = fs::metadata(&package_path)
+        .await
+        .map_err(|error| format!("读取下位机更新缓存包失败: {error}"))?;
+    if !package_metadata.is_file() {
+        return Err("下位机更新缓存包不是普通文件".into());
+    }
+    if package_metadata.len() != metadata.manifest.asset.size {
+        return Err(format!(
+            "下位机更新缓存包大小不匹配: 期望 {} 字节，实际 {} 字节",
+            metadata.manifest.asset.size,
+            package_metadata.len()
+        ));
+    }
+    let sha256 = compute_sha256(&package_path).await?;
+    if !sha256.eq_ignore_ascii_case(&metadata.manifest.asset.sha256) {
+        return Err(format!(
+            "下位机更新缓存包校验失败: 期望 {}，实际 {}",
+            metadata.manifest.asset.sha256, sha256
+        ));
+    }
+
+    Ok(Some(LowerUpdateCachedPackageDto {
+        downloaded_at: metadata.downloaded_at,
+        manifest: metadata.manifest,
+        package_path: package_path.to_string_lossy().into_owned(),
+        package_size: package_metadata.len(),
+        sha256,
+    }))
+}
+
 fn is_partial_download(path: &Path) -> bool {
     path.extension()
         .is_some_and(|extension| extension == "download")
+        || path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".mskdsp-cache.json.tmp-"))
 }
 
 fn ensure_cache_root(cache_root: &Path) -> io::Result<()> {
@@ -1148,6 +1317,25 @@ fn regular_files(directory: &Path) -> io::Result<Vec<(PathBuf, SystemTime, OsStr
     Ok(files)
 }
 
+fn is_cache_metadata_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == LOWER_UPDATE_CACHE_METADATA_FILE_NAME)
+}
+
+fn metadata_matches_package(directory: &Path, package_path: &Path) -> bool {
+    let metadata_path = cache_metadata_path(directory);
+    let Ok(bytes) = std_fs::read(metadata_path) else {
+        return false;
+    };
+    let Ok(metadata) = serde_json::from_slice::<LowerUpdateCacheMetadataDto>(&bytes) else {
+        return false;
+    };
+    metadata.schema_version == LOWER_UPDATE_CACHE_METADATA_SCHEMA_VERSION
+        && !metadata.manifest.asset.name.trim().is_empty()
+        && directory.join(metadata.manifest.asset.name) == package_path
+}
+
 fn retain_only_regular_file(
     directory: &Path,
     keep_path: &Path,
@@ -1169,10 +1357,23 @@ fn retain_latest_regular_file(
     let files = regular_files(directory)?;
     let latest = files
         .iter()
+        .filter(|(path, _, _)| !is_cache_metadata_file(path))
         .max_by(|left, right| left.1.cmp(&right.1).then_with(|| left.2.cmp(&right.2)))
         .map(|(path, _, _)| path.clone());
     if let Some(latest) = latest {
-        retain_only_regular_file(directory, &latest, result)?;
+        let keep_metadata = metadata_matches_package(directory, &latest);
+        for (path, _, _) in regular_files(directory)? {
+            if path == latest || (keep_metadata && is_cache_metadata_file(&path)) {
+                continue;
+            }
+            let metadata = std_fs::symlink_metadata(&path)?;
+            record_removed_file(&path, &metadata, result)?;
+        }
+    } else {
+        for (path, _, _) in files {
+            let metadata = std_fs::symlink_metadata(&path)?;
+            record_removed_file(&path, &metadata, result)?;
+        }
     }
     Ok(())
 }
@@ -1231,6 +1432,51 @@ pub async fn clear_lower_update_cache(
         "下位机更新缓存已清理"
     );
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn list_cached_lower_updates(
+    state: State<'_, AppState>,
+    channel: Option<String>,
+) -> Result<Vec<LowerUpdateCachedPackageDto>, String> {
+    let requested_channel = channel.as_deref().map(normalize_channel).transpose()?;
+    let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
+    let cache_root = state.runtime_paths.lower_update_dir();
+    let mut cached = Vec::new();
+
+    for candidate_channel in ["stable", "beta", "nightly", "ci"] {
+        if requested_channel
+            .as_deref()
+            .is_some_and(|requested| requested != candidate_channel)
+        {
+            continue;
+        }
+        let directory = cache_root
+            .join(candidate_channel)
+            .join(LOWER_UPDATE_PLATFORM);
+        if !directory.is_dir() {
+            continue;
+        }
+        match load_cached_package(&directory, requested_channel.as_deref()).await {
+            Ok(Some(package)) => cached.push(package),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                operation = "cache_list",
+                channel = candidate_channel,
+                error = %log_detail(&error),
+                "忽略无效的下位机更新缓存"
+            ),
+        }
+    }
+
+    cached.sort_by(|left, right| right.downloaded_at.cmp(&left.downloaded_at));
+    tracing::info!(
+        operation = "cache_list",
+        count = cached.len(),
+        channel = ?requested_channel,
+        "下位机更新缓存查询完成"
+    );
+    Ok(cached)
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -1468,8 +1714,14 @@ pub async fn download_lower_update(
         let partial_path = output_dir.join(format!("{}.download", manifest.asset.name));
 
         if output_path.is_file() {
+            let existing_size = fs::metadata(&output_path)
+                .await
+                .map_err(|error| format!("读取上位机缓存包信息失败: {error}"))?
+                .len();
             let existing_sha256 = compute_sha256(&output_path).await?;
-            if existing_sha256.eq_ignore_ascii_case(&manifest.asset.sha256) {
+            if existing_size == manifest.asset.size
+                && existing_sha256.eq_ignore_ascii_case(&manifest.asset.sha256)
+            {
                 tracing::info!(
                     operation = "download",
                     package = %manifest.asset.name,
@@ -1484,6 +1736,7 @@ pub async fn download_lower_update(
                     Ok(result)
                 })
                 .await?;
+                persist_cache_metadata(&output_dir, &manifest).await?;
                 emit_download_progress(
                     &app_handle,
                     &manifest,
@@ -1494,7 +1747,7 @@ pub async fn download_lower_update(
                 return Ok(LowerUpdateDownloadResultDto {
                     package_name: manifest.asset.name,
                     package_path: output_path.to_string_lossy().into_owned(),
-                    downloaded_bytes: manifest.asset.size,
+                    downloaded_bytes: existing_size,
                     sha256: existing_sha256,
                 });
             }
@@ -1592,6 +1845,7 @@ pub async fn download_lower_update(
             Ok(result)
         })
         .await?;
+        persist_cache_metadata(&output_dir, &manifest).await?;
         emit_download_progress(
             &app_handle,
             &manifest,
@@ -1658,6 +1912,16 @@ async fn upload_lower_update_package_inner(
         return Err(format!(
             "上位机更新包大小不匹配: 期望 {} 字节，实际 {} 字节",
             request.package_size, total_bytes
+        ));
+    }
+    if !is_sha256(&request.package_sha256) {
+        return Err("上位机更新包缺少有效 SHA256".into());
+    }
+    let actual_sha256 = compute_sha256(&package_path).await?;
+    if !actual_sha256.eq_ignore_ascii_case(&request.package_sha256) {
+        return Err(format!(
+            "上位机更新包校验失败: 期望 {}，实际 {}",
+            request.package_sha256, actual_sha256
         ));
     }
     let mut file = fs::File::open(&package_path)
@@ -2068,10 +2332,13 @@ pub async fn install_lower_update_package(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_password_root_shell_command, build_user_upload_command, cleanup_cache_startup_in,
-        clear_cache_root_contents, format_upload_remote_error, parse_available_bytes,
-        parse_runtime_query_output, parse_upload_account, should_skip_install, sudo_password_stdin,
-        LowerUpdateRuntimeInfoDto, LOWER_UPDATE_CONTAINER_NAME,
+        build_password_root_shell_command, build_user_upload_command, cache_metadata_path,
+        cleanup_cache_startup_in, clear_cache_root_contents, compute_sha256,
+        format_upload_remote_error, load_cached_package, parse_available_bytes,
+        parse_runtime_query_output, parse_upload_account, persist_cache_metadata,
+        should_skip_install, sudo_password_stdin, LowerUpdateAssetDto, LowerUpdateChecksumDto,
+        LowerUpdateManifestDto, LowerUpdateRuntimeInfoDto, LowerUpdateSourceDto,
+        LOWER_UPDATE_CONTAINER_NAME,
     };
     use std::{
         fs,
@@ -2103,6 +2370,38 @@ mod tests {
     impl Drop for TestDirectory {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_manifest(
+        package_name: &str,
+        package_size: u64,
+        sha256: String,
+    ) -> LowerUpdateManifestDto {
+        LowerUpdateManifestDto {
+            schema_version: 1,
+            product: "mskdsp-lower".to_string(),
+            channel: "stable".to_string(),
+            platform: "linux-arm64".to_string(),
+            version: "1.2.3".to_string(),
+            package_version: "1.2.3".to_string(),
+            image_id: Some(format!("sha256:{}", "a".repeat(64))),
+            published_at: "2026-08-06T00:00:00Z".to_string(),
+            source: LowerUpdateSourceDto {
+                repository: "https://example.com/mskdsp".to_string(),
+                source_ref: "main".to_string(),
+                sha: "a".repeat(40),
+            },
+            asset: LowerUpdateAssetDto {
+                name: package_name.to_string(),
+                url: format!("https://example.com/{package_name}"),
+                sha256,
+                size: package_size,
+            },
+            checksum: LowerUpdateChecksumDto {
+                name: "SHA256SUMS".to_string(),
+                url: "https://example.com/SHA256SUMS".to_string(),
+            },
         }
     }
 
@@ -2269,6 +2568,89 @@ mod tests {
         assert!(error.contains("格式不合法"));
     }
 
+    // 验证下载完成后会持久化完整清单，并且重启后只能恢复重新校验通过的缓存包。
+    #[tokio::test]
+    async fn persists_and_loads_verified_cache_metadata_as_one_unit() {
+        let temp = TestDirectory::new();
+        let platform_dir = temp.path().join("stable/linux-arm64");
+        fs::create_dir_all(&platform_dir).expect("应能创建缓存目录");
+        let package_path = platform_dir.join("mskdsp-lower.tar");
+        fs::write(&package_path, b"verified-package").expect("应能写入缓存包");
+        let sha256 = compute_sha256(&package_path)
+            .await
+            .expect("应能计算缓存包 SHA256");
+        let manifest = test_manifest("mskdsp-lower.tar", 16, sha256.clone());
+
+        persist_cache_metadata(&platform_dir, &manifest)
+            .await
+            .expect("应能写入缓存元数据");
+
+        let metadata_bytes =
+            fs::read(cache_metadata_path(&platform_dir)).expect("应能读取缓存元数据");
+        let metadata: super::LowerUpdateCacheMetadataDto =
+            serde_json::from_slice(&metadata_bytes).expect("缓存元数据应为有效 JSON");
+        assert_eq!(metadata.schema_version, 1);
+        assert_eq!(metadata.manifest.asset.name, "mskdsp-lower.tar");
+
+        let cached = load_cached_package(&platform_dir, Some("stable"))
+            .await
+            .expect("读取缓存包不应失败")
+            .expect("应恢复已下载缓存包");
+        assert_eq!(cached.manifest.image_id, manifest.image_id);
+        assert_eq!(
+            cached.package_path,
+            package_path.to_string_lossy().into_owned()
+        );
+        assert_eq!(cached.package_size, 16);
+        assert_eq!(cached.sha256, sha256);
+    }
+
+    // 验证缓存包内容被篡改后不会恢复为可下发缓存。
+    #[tokio::test]
+    async fn rejects_cached_package_when_checksum_no_longer_matches_metadata() {
+        let temp = TestDirectory::new();
+        let platform_dir = temp.path().join("stable/linux-arm64");
+        fs::create_dir_all(&platform_dir).expect("应能创建缓存目录");
+        let package_path = platform_dir.join("mskdsp-lower.tar");
+        fs::write(&package_path, b"original-package").expect("应能写入缓存包");
+        let sha256 = compute_sha256(&package_path)
+            .await
+            .expect("应能计算缓存包 SHA256");
+        let manifest = test_manifest("mskdsp-lower.tar", 16, sha256);
+        persist_cache_metadata(&platform_dir, &manifest)
+            .await
+            .expect("应能写入缓存元数据");
+        fs::write(&package_path, b"tampered-package").expect("应能篡改测试缓存包");
+
+        let error = load_cached_package(&platform_dir, Some("stable"))
+            .await
+            .expect_err("篡改缓存包不应恢复");
+        assert!(error.contains("大小不匹配") || error.contains("校验失败"));
+    }
+
+    // 验证没有合法镜像 ID 的旧缓存不能恢复为可下发版本。
+    #[tokio::test]
+    async fn rejects_cached_metadata_without_image_id() {
+        let temp = TestDirectory::new();
+        let platform_dir = temp.path().join("stable/linux-arm64");
+        fs::create_dir_all(&platform_dir).expect("应能创建缓存目录");
+        let package_path = platform_dir.join("mskdsp-lower.tar");
+        fs::write(&package_path, b"verified-package").expect("应能写入缓存包");
+        let sha256 = compute_sha256(&package_path)
+            .await
+            .expect("应能计算缓存包 SHA256");
+        let mut manifest = test_manifest("mskdsp-lower.tar", 16, sha256);
+        manifest.image_id = None;
+        persist_cache_metadata(&platform_dir, &manifest)
+            .await
+            .expect("应能写入缓存元数据");
+
+        let error = load_cached_package(&platform_dir, Some("stable"))
+            .await
+            .expect_err("缺少镜像 ID 的缓存不应恢复");
+        assert!(error.contains("镜像 ID"));
+    }
+
     #[test]
     fn startup_cleanup_removes_partial_files_and_keeps_latest_package() {
         let temp = TestDirectory::new();
@@ -2290,6 +2672,34 @@ mod tests {
         assert_eq!(result.reclaimed_bytes, 3 + 7 + 6);
     }
 
+    // 验证启动清理以“安装包 + 元数据”为整体保留最新缓存单元。
+    #[test]
+    fn startup_cleanup_keeps_metadata_with_latest_package_and_removes_old_package() {
+        let temp = TestDirectory::new();
+        let platform_dir = temp.path().join("stable/linux-arm64");
+        fs::create_dir_all(&platform_dir).expect("应能创建缓存目录");
+        fs::write(platform_dir.join("a-old-package"), b"old").expect("应能写入旧包");
+        let latest_path = platform_dir.join("z-latest-package");
+        fs::write(&latest_path, b"latest").expect("应能写入新包");
+        let metadata = super::LowerUpdateCacheMetadataDto {
+            schema_version: 1,
+            downloaded_at: 1,
+            manifest: test_manifest("z-latest-package", 6, "a".repeat(64)),
+        };
+        fs::write(
+            cache_metadata_path(&platform_dir),
+            serde_json::to_vec(&metadata).expect("应能序列化缓存元数据"),
+        )
+        .expect("应能写入缓存元数据");
+
+        let result = cleanup_cache_startup_in(temp.path()).expect("启动清理应成功");
+
+        assert!(!platform_dir.join("a-old-package").exists());
+        assert!(latest_path.is_file());
+        assert!(cache_metadata_path(&platform_dir).is_file());
+        assert_eq!(result.removed_files, 1);
+    }
+
     #[test]
     fn manual_cleanup_only_removes_cache_root_contents_and_recreates_root() {
         let temp = TestDirectory::new();
@@ -2298,6 +2708,11 @@ mod tests {
         fs::create_dir_all(cache_root.join("stable/linux-arm64")).expect("应能创建缓存目录");
         fs::write(cache_root.join("stable/linux-arm64/package"), b"package")
             .expect("应能写入缓存包");
+        fs::write(
+            cache_root.join("stable/linux-arm64/.mskdsp-cache.json"),
+            b"metadata",
+        )
+        .expect("应能写入缓存元数据");
         fs::write(&sibling, b"keep").expect("应能写入同级文件");
 
         let result = clear_cache_root_contents(&cache_root).expect("手动清理应成功");
@@ -2310,7 +2725,7 @@ mod tests {
             0
         );
         assert!(sibling.is_file());
-        assert_eq!(result.removed_files, 1);
-        assert_eq!(result.reclaimed_bytes, 7);
+        assert_eq!(result.removed_files, 2);
+        assert_eq!(result.reclaimed_bytes, 7 + 8);
     }
 }

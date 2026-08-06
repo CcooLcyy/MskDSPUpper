@@ -9,6 +9,10 @@ const backendSource = readFileSync(
   new URL('../../src-tauri/src/commands/lower_update.rs', import.meta.url),
   'utf8',
 );
+const tauriAdapterSource = readFileSync(
+  new URL('../../src/adapters/tauri.ts', import.meta.url),
+  'utf8',
+);
 
 // 验证同一个 Docker 构建的镜像 ID 比较不区分大小写。
 test('lower update treats image ids with different hex casing as the same build', () => {
@@ -50,4 +54,26 @@ test('lower update backend checks the expected image before running the package'
   const installCommandIndex = backendSource.indexOf('let output = tokio::time::timeout(', preflightIndex);
   assert.ok(preflightIndex >= 0, '安装接口应查询目标机运行镜像');
   assert.ok(installCommandIndex > preflightIndex, '安装命令必须在镜像预检之后执行');
+});
+
+// 验证上位机能够在不访问在线清单的情况下恢复已校验缓存包。
+test('lower update restores verified cached packages when the page opens', () => {
+  assert.match(backendSource, /pub async fn list_cached_lower_updates\(/);
+  assert.match(tauriAdapterSource, /listCachedLowerUpdates[\s\S]*?invoke<[^>]+>\('list_cached_lower_updates'/);
+  assert.match(pageSource, /api\.listCachedLowerUpdates\(channel\)/);
+  assert.match(pageSource, /cachedPackages\.map/);
+  assert.match(pageSource, /handleDeployCachedPackage\(cachedPackage\)/);
+  assert.match(pageSource, /downloaded_at/);
+  assert.match(pageSource, /可能不是线上最新版本/);
+});
+
+// 验证“下发已缓存版本”入口只复用缓存清单和本地包，不隐式触发检查或下载。
+test('lower update can deploy a cached package without check or download', () => {
+  assert.match(pageSource, /下发已缓存版本/);
+  const handler = pageSource.match(
+    /const handleDeployCachedPackage = async \([^)]*\): Promise<void> => \{([\s\S]*?)\n  \};/,
+  );
+  assert.ok(handler, '应提供独立的缓存包下发处理函数');
+  assert.match(handler[1], /runDeployFlow/);
+  assert.doesNotMatch(handler[1], /handleCheckUpdate|handleDownload|checkLowerUpdate|downloadLowerUpdate/);
 });

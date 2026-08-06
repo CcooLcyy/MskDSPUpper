@@ -150,6 +150,7 @@ pub fn run() {
             commands::lower_update::get_lower_update_password,
             commands::lower_update::clear_lower_update_password,
             commands::lower_update::clear_lower_update_cache,
+            commands::lower_update::list_cached_lower_updates,
         ])
         .run(tauri::generate_context!())
         .map_err(|error| {

@@ -31,6 +31,7 @@ import type {
   Iec104Point,
   Iec104PointTable,
   LowerUpdateChannel,
+  LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
   LowerUpdateDownloadResult,
   LowerUpdateInstallRequest,
@@ -123,6 +124,7 @@ let modbusMqtt: ModbusMqttConfig | null = null;
 let dlt645Mqtt: Dlt645MqttConfig | null = null;
 let browserLatestLowerManifest: LowerUpdateManifest | null = null;
 let browserRunningLowerImageId = `sha256:${'0'.repeat(64)}`;
+const browserCachedLowerPackages = new Map<LowerUpdateChannel, LowerUpdateCachedPackage>();
 const exportSnapshots = new Map<string, FullConfigExportSnapshot>();
 
 function makeModuleInfo(moduleName: string): ModuleInfo {
@@ -839,7 +841,16 @@ export const browserApi: typeof tauriApi = {
   openRuntimeDirectory: async () => {
     throw new Error('浏览器开发模式不支持打开本地目录');
   },
-  clearLowerUpdateCache: async () => ({ removed_files: 0, reclaimed_bytes: 0 }),
+  clearLowerUpdateCache: async () => {
+    const removedFiles = browserCachedLowerPackages.size;
+    browserCachedLowerPackages.clear();
+    return { removed_files: removedFiles, reclaimed_bytes: 0 };
+  },
+  listCachedLowerUpdates: async (channel?: LowerUpdateChannel): Promise<LowerUpdateCachedPackage[]> => {
+    const values = [...browserCachedLowerPackages.values()]
+      .filter((item) => Boolean(item.manifest.image_id?.trim()));
+    return clone(channel ? values.filter((item) => item.manifest.channel === channel) : values);
+  },
 
   setManagerAddr: async (addr: string) => {
     managerAddr = addr;
@@ -912,6 +923,15 @@ export const browserApi: typeof tauriApi = {
     if (digest.toLowerCase() !== manifest.asset.sha256.toLowerCase()) {
       throw new Error(`下位机更新包校验失败: 期望 ${manifest.asset.sha256}，实际 ${digest}`);
     }
+
+    browserLatestLowerManifest = clone(manifest);
+    browserCachedLowerPackages.set(manifest.channel, {
+      downloaded_at: Math.floor(Date.now() / 1000),
+      manifest: clone(manifest),
+      package_path: `browser-cache://${manifest.asset.name}`,
+      package_size: bytes.byteLength,
+      sha256: digest,
+    });
 
     onProgress?.({
       package_name: manifest.asset.name,

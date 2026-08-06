@@ -28,6 +28,7 @@ import type {
   Iec104Point,
   Iec104PointTable,
   LowerUpdateChannel,
+  LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
   LowerUpdateDownloadResult,
   LowerUpdateInstallRequest,
@@ -95,6 +96,8 @@ export const api = {
   openRuntimeDirectory: (kind: RuntimeDirectoryKind) =>
     invoke<void>('open_runtime_directory', { kind }),
   clearLowerUpdateCache: () => invoke<CacheClearResult>('clear_lower_update_cache'),
+  listCachedLowerUpdates: (channel?: LowerUpdateChannel) =>
+    invoke<LowerUpdateCachedPackage[]>('list_cached_lower_updates', { channel: channel ?? null }),
 
   setManagerAddr: (addr: string, forceReconnect = false) =>
     invoke<void>('set_manager_addr', { addr, forceReconnect }),

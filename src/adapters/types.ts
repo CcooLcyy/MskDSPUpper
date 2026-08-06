@@ -121,6 +121,14 @@ export interface LowerUpdateDownloadResult {
   sha256: string;
 }
 
+export interface LowerUpdateCachedPackage {
+  downloaded_at: number;
+  manifest: LowerUpdateManifest;
+  package_path: string;
+  package_size: number;
+  sha256: string;
+}
+
 export type LowerUpdateUploadStage = 'started' | 'uploading' | 'finished';
 
 export type LowerUpdateSshAuth =
@@ -131,6 +139,7 @@ export interface LowerUpdateUploadRequest {
   package_name: string;
   package_path: string;
   package_size: number;
+  package_sha256: string;
   upload_account: string;
   install_dir: string;
   auth: LowerUpdateSshAuth;
