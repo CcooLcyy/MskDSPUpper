@@ -1,16 +1,19 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::State;
 
 use crate::grpc::data_center::{
     DataCenterClient, StableRoute as Route, StableRouteEndpoint as Endpoint,
 };
 use crate::proto::data_center_proto::{
-    point_value, ConnectionInfo, GetLatestRequest, ListRoutesRequest, PointUpdate,
+    point_value, ConnectionInfo, ConnectionKey, GetLatestRequest, GetSourceLatestRequest,
+    ListRoutesRequest, PointUpdate, SourcePointUpdate,
 };
-use crate::protocol_shadow;
 use crate::state::AppState;
+
+const LEGACY_PROTOCOL_SHADOW_MODULE_NAME: &str = "MskDSPUpper";
+const LEGACY_PROTOCOL_SHADOW_CONN_NAME: &str = "__protocol_shadow__";
 
 // ── DTOs ──
 
@@ -53,6 +56,16 @@ pub struct PointUpdateDto {
     pub value: Option<PointValueDto>,
     pub ts_ms: i64,
     pub quality: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SourcePointUpdateDto {
+    pub conn_id: u32,
+    pub tag: String,
+    pub value: Option<PointValueDto>,
+    pub ts_ms: i64,
+    pub quality: i32,
+    pub sequence: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -160,6 +173,19 @@ impl From<PointUpdate> for PointUpdateDto {
     }
 }
 
+impl From<SourcePointUpdate> for SourcePointUpdateDto {
+    fn from(update: SourcePointUpdate) -> Self {
+        Self {
+            conn_id: update.conn_id,
+            tag: update.tag,
+            value: point_value_from_proto(update.value),
+            ts_ms: update.ts_ms,
+            quality: update.quality,
+            sequence: update.sequence,
+        }
+    }
+}
+
 // ── To Proto ──
 
 impl EndpointDto {
@@ -184,40 +210,52 @@ impl RouteDto {
 
 // ── Tauri Commands ──
 
-fn is_protocol_shadow_connection(info: &ConnectionInfo) -> bool {
-    info.module_name == protocol_shadow::PROTOCOL_SHADOW_MODULE_NAME
-        && info.conn_name == protocol_shadow::PROTOCOL_SHADOW_CONN_NAME
+fn is_legacy_protocol_shadow_connection(info: &ConnectionInfo) -> bool {
+    info.module_name == LEGACY_PROTOCOL_SHADOW_MODULE_NAME
+        && info.conn_name == LEGACY_PROTOCOL_SHADOW_CONN_NAME
 }
 
-fn endpoint_uses_hidden_connection(
-    endpoint: &Endpoint,
-    hidden_conn_ids: &HashSet<u32>,
-    hidden_connection_keys: &HashSet<(String, String)>,
-) -> bool {
-    hidden_conn_ids.contains(&endpoint.conn_id)
-        || hidden_connection_keys
-            .contains(&(endpoint.module_name.clone(), endpoint.conn_name.clone()))
+fn endpoint_uses_legacy_protocol_shadow(endpoint: &Endpoint) -> bool {
+    endpoint.module_name == LEGACY_PROTOCOL_SHADOW_MODULE_NAME
+        && endpoint.conn_name == LEGACY_PROTOCOL_SHADOW_CONN_NAME
 }
 
-fn route_uses_hidden_connection(
-    route: &Route,
-    hidden_conn_ids: &HashSet<u32>,
-    hidden_connection_keys: &HashSet<(String, String)>,
-) -> bool {
+fn route_uses_legacy_protocol_shadow(route: &Route) -> bool {
     route
         .src
         .as_ref()
-        .map(|endpoint| {
-            endpoint_uses_hidden_connection(endpoint, hidden_conn_ids, hidden_connection_keys)
-        })
-        .unwrap_or(false)
+        .is_some_and(endpoint_uses_legacy_protocol_shadow)
         || route
             .dst
             .as_ref()
-            .map(|endpoint| {
-                endpoint_uses_hidden_connection(endpoint, hidden_conn_ids, hidden_connection_keys)
-            })
-            .unwrap_or(false)
+            .is_some_and(endpoint_uses_legacy_protocol_shadow)
+}
+
+async fn cleanup_legacy_protocol_shadow_connections(
+    client: &DataCenterClient<'_>,
+    connections: &[ConnectionInfo],
+) {
+    for connection in connections
+        .iter()
+        .filter(|connection| is_legacy_protocol_shadow_connection(connection))
+    {
+        let key = ConnectionKey {
+            module_name: connection.module_name.clone(),
+            conn_name: connection.conn_name.clone(),
+        };
+        if let Err(error) = client.delete_connection(key).await {
+            tracing::warn!(
+                conn_id = connection.conn_id,
+                error = %error,
+                "清理历史协议影子连接失败"
+            );
+        } else {
+            tracing::info!(
+                conn_id = connection.conn_id,
+                "已清理历史协议影子连接及其路由"
+            );
+        }
+    }
 }
 
 #[tauri::command]
@@ -229,10 +267,11 @@ pub async fn dc_list_connections(
         tracing::error!(error = %error, "获取 DataCenter 连接列表失败");
         error.to_string()
     })?;
+    cleanup_legacy_protocol_shadow_connections(&client, &resp.conns).await;
     let connections = resp
         .conns
         .into_iter()
-        .filter(|conn| !is_protocol_shadow_connection(conn))
+        .filter(|connection| !is_legacy_protocol_shadow_connection(connection))
         .map(|c| c.into())
         .collect::<Vec<_>>();
     tracing::info!(
@@ -268,16 +307,12 @@ pub async fn dc_list_routes(
         tracing::error!(error = %error, "获取 DataCenter 连接列表失败");
         error.to_string()
     })?;
+    cleanup_legacy_protocol_shadow_connections(&client, &connections.conns).await;
     let mut connection_lookup = HashMap::new();
-    let mut hidden_conn_ids = HashSet::new();
-    let mut hidden_connection_keys = HashSet::new();
-
     for conn in connections.conns {
-        if is_protocol_shadow_connection(&conn) {
-            hidden_conn_ids.insert(conn.conn_id);
-            hidden_connection_keys.insert((conn.module_name.clone(), conn.conn_name.clone()));
+        if is_legacy_protocol_shadow_connection(&conn) {
+            continue;
         }
-
         connection_lookup.insert(conn.conn_id, (conn.module_name, conn.conn_name));
     }
 
@@ -296,9 +331,7 @@ pub async fn dc_list_routes(
     let routes = resp
         .routes
         .into_iter()
-        .filter(|route| {
-            !route_uses_hidden_connection(route, &hidden_conn_ids, &hidden_connection_keys)
-        })
+        .filter(|route| !route_uses_legacy_protocol_shadow(route))
         .map(|r| RouteDto::from_proto(r, &connection_lookup))
         .collect::<Vec<_>>();
     tracing::info!(route_count = routes.len(), "获取 DataCenter 路由完成");
@@ -364,34 +397,84 @@ pub async fn dc_get_latest(
 }
 
 #[tauri::command]
-pub async fn dc_start_protocol_shadow_stream(
-    app_handle: AppHandle,
+pub async fn dc_get_source_latest(
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    tracing::info!("开始启动协议实时数据流");
-    state
-        .protocol_shadow
-        .ensure_started(app_handle, state.conn_manager.clone());
-    tracing::info!("协议实时数据流启动请求完成");
-    Ok(())
+    conn_id: u32,
+    tags: Vec<String>,
+) -> Result<Vec<SourcePointUpdateDto>, String> {
+    let client = DataCenterClient::new(&state.conn_manager);
+    let resp = client
+        .get_source_latest(GetSourceLatestRequest { conn_id, tags })
+        .await
+        .map_err(|error| {
+            tracing::error!(conn_id, error = %error, "获取 DataCenter 源端最新点值失败");
+            error.to_string()
+        })?;
+    tracing::debug!(
+        conn_id,
+        update_count = resp.updates.len(),
+        "获取 DataCenter 源端最新点值完成"
+    );
+    Ok(resp
+        .updates
+        .into_iter()
+        .map(SourcePointUpdateDto::from)
+        .collect())
 }
 
-#[tauri::command]
-pub async fn dc_get_protocol_shadow_latest(
-    state: State<'_, AppState>,
-    source_conn_id: u32,
-    source_tags: Vec<String>,
-) -> Result<Vec<PointUpdateDto>, String> {
-    let updates = protocol_shadow::get_protocol_shadow_latest(
-        state.conn_manager.as_ref(),
-        source_conn_id,
-        source_tags,
-    )
-    .await
-    .map_err(|error| {
-        tracing::error!(source_conn_id, error = %error, "获取协议实时数据失败");
-        error.to_string()
-    })?;
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_legacy_protocol_shadow_connection, route_uses_legacy_protocol_shadow, Route,
+        LEGACY_PROTOCOL_SHADOW_CONN_NAME, LEGACY_PROTOCOL_SHADOW_MODULE_NAME,
+    };
+    use crate::grpc::data_center::StableRouteEndpoint;
+    use crate::proto::data_center_proto::ConnectionInfo;
 
-    Ok(updates.into_iter().map(PointUpdateDto::from).collect())
+    // 验证历史影子连接只按保留的模块名和连接名识别，不误伤普通连接。
+    #[test]
+    fn legacy_protocol_shadow_connection_match_is_exact() {
+        let legacy = ConnectionInfo {
+            conn_id: 7,
+            module_name: LEGACY_PROTOCOL_SHADOW_MODULE_NAME.to_string(),
+            conn_name: LEGACY_PROTOCOL_SHADOW_CONN_NAME.to_string(),
+        };
+        let regular = ConnectionInfo {
+            conn_id: 8,
+            module_name: "IEC104".to_string(),
+            conn_name: LEGACY_PROTOCOL_SHADOW_CONN_NAME.to_string(),
+        };
+
+        assert!(is_legacy_protocol_shadow_connection(&legacy));
+        assert!(!is_legacy_protocol_shadow_connection(&regular));
+    }
+
+    // 验证历史影子路由会被隐藏，普通业务路由不会被清理过滤。
+    #[test]
+    fn legacy_protocol_shadow_route_filter_preserves_business_routes() {
+        let legacy_endpoint = StableRouteEndpoint {
+            conn_id: 7,
+            tag: "conn_1::P".to_string(),
+            module_name: LEGACY_PROTOCOL_SHADOW_MODULE_NAME.to_string(),
+            conn_name: LEGACY_PROTOCOL_SHADOW_CONN_NAME.to_string(),
+        };
+        let business_endpoint = StableRouteEndpoint {
+            conn_id: 8,
+            tag: "P".to_string(),
+            module_name: "AGC".to_string(),
+            conn_name: "group-1".to_string(),
+        };
+
+        let legacy_route = Route {
+            src: Some(business_endpoint.clone()),
+            dst: Some(legacy_endpoint),
+        };
+        let business_route = Route {
+            src: Some(business_endpoint.clone()),
+            dst: Some(business_endpoint),
+        };
+
+        assert!(route_uses_legacy_protocol_shadow(&legacy_route));
+        assert!(!route_uses_legacy_protocol_shadow(&business_route));
+    }
 }

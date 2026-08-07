@@ -123,7 +123,6 @@ const ModuleOps: React.FC = () => {
       await reconnectManagerRuntime(normalizedAddr, {
         setManagerAddr: api.setManagerAddr,
         refreshManagerState: () => refresh({ suppressError: true }),
-        startRealtimeStream: api.dcStartProtocolShadowStream,
       });
       messageApi.success(`ModuleManager 已连接: ${normalizedAddr}`);
     } catch (error) {

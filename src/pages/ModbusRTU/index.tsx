@@ -11,7 +11,7 @@ import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-rest
 import ConnectionConfig from './components/ConnectionConfig';
 import PointTable from './components/PointTable';
 import MqttConfigPanel from './components/MqttConfigPanel';
-import { useProtocolShadowRealtime } from '../../components/protocol/protocol-realtime';
+import { useProtocolRealtime } from '../../components/protocol/protocol-realtime';
 import {
   MODBUS_ADDRESS_BASE,
   MODBUS_DATA_TYPE,
@@ -141,7 +141,7 @@ const ModbusRTU: React.FC = () => {
     realtimeRevisionByTag,
     loading: realtimeLoading,
     error: realtimeError,
-  } = useProtocolShadowRealtime(
+  } = useProtocolRealtime(
     selectedLink?.conn_id ?? null,
     realtimeTags,
   );

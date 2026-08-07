@@ -48,7 +48,7 @@ import {
   renderProtocolRealtimeQualityCell,
   renderProtocolRealtimeTimestampCell,
   renderProtocolRealtimeValueCell,
-  useProtocolShadowRealtime,
+  useProtocolRealtime,
 } from '../../components/protocol/protocol-realtime';
 import {
   buildDuplicateConnectionName,
@@ -531,7 +531,7 @@ const IEC104: React.FC = () => {
     realtimeRevisionByTag,
     loading: realtimeLoading,
     error: realtimeError,
-  } = useProtocolShadowRealtime(
+  } = useProtocolRealtime(
     selectedLink?.conn_id ?? null,
     realtimeTags,
   );

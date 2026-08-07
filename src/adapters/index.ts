@@ -61,6 +61,7 @@ export type {
   DcConnectionInfo,
   DcEndpoint,
   DcPointUpdate,
+  DcSourcePointUpdate,
   DcPointValue,
   DcRoute,
 } from './types';

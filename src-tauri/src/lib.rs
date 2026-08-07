@@ -2,7 +2,6 @@ pub mod commands;
 pub mod grpc;
 pub mod logging;
 pub mod proto;
-pub mod protocol_shadow;
 pub mod runtime_paths;
 pub mod state;
 
@@ -118,8 +117,7 @@ pub fn run() {
             commands::data_center::dc_upsert_routes,
             commands::data_center::dc_delete_routes,
             commands::data_center::dc_get_latest,
-            commands::data_center::dc_start_protocol_shadow_stream,
-            commands::data_center::dc_get_protocol_shadow_latest,
+            commands::data_center::dc_get_source_latest,
             commands::agc::agc_upsert_group,
             commands::agc::agc_get_group,
             commands::agc::agc_list_groups,

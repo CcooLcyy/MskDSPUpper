@@ -216,7 +216,6 @@ pub async fn set_manager_addr(
     let address_changed = state.conn_manager.set_manager_addr(normalized_addr.clone());
     let reset_runtime = should_reset_manager_runtime(address_changed, force_reconnect);
     if reset_runtime {
-        state.protocol_shadow.stop();
         state.conn_manager.clear_runtime_cache();
     }
     tracing::info!(
