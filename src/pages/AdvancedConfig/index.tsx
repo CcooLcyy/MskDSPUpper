@@ -43,7 +43,11 @@ import {
 } from '../../components/app-update/update-view';
 import { validateManagerAddress } from '../../utils/network';
 import { resolveLowerUpdateSudoPassword } from '../../utils/lower-update-auth';
-import { compareLowerUpdateImages } from '../../utils/lower-update-deploy';
+import {
+  assessLowerUpdateCacheFreshness,
+  compareLowerUpdateImages,
+  type LowerUpdateCacheFreshness,
+} from '../../utils/lower-update-deploy';
 import { useSearchParams } from 'react-router-dom';
 import './index.css';
 
@@ -427,6 +431,57 @@ function formatDownloadedAt(value: number): string {
   return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
 }
 
+function summarizeCachedPackageFreshness(
+  onlineManifest: LowerUpdateManifest | null,
+  cachedPackages: LowerUpdateCachedPackage[],
+): LowerUpdateCacheFreshness {
+  if (!onlineManifest) {
+    return 'unknown';
+  }
+  if (cachedPackages.length === 0) {
+    return 'unavailable';
+  }
+  if (cachedPackages.some((cachedPackage) =>
+    assessLowerUpdateCacheFreshness(onlineManifest, cachedPackage) === 'current')) {
+    return 'current';
+  }
+  if (cachedPackages.some((cachedPackage) =>
+    assessLowerUpdateCacheFreshness(onlineManifest, cachedPackage) === 'stale')) {
+    return 'stale';
+  }
+  return 'unknown';
+}
+
+function getCacheFreshnessTag(freshness: LowerUpdateCacheFreshness): { color: string; label: string } {
+  switch (freshness) {
+    case 'current':
+      return { color: 'success', label: '已确认一致' };
+    case 'stale':
+      return { color: 'warning', label: '已确认落后' };
+    case 'unavailable':
+      return { color: 'default', label: '无可用缓存' };
+    default:
+      return { color: 'default', label: '未校验线上版本' };
+  }
+}
+
+function getCacheFreshnessMessage(
+  freshness: LowerUpdateCacheFreshness,
+  onlineVersion: string | null,
+  checkedAt: number | null,
+): string {
+  switch (freshness) {
+    case 'current':
+      return `缓存包与线上最新版本一致（检查于 ${checkedAt ? formatDownloadedAt(checkedAt / 1000) : '-'}）`;
+    case 'stale':
+      return `缓存版本不是线上最新版本${onlineVersion ? `，线上版本：${onlineVersion}` : ''}`;
+    case 'unavailable':
+      return '当前没有可用于线上校验的缓存包';
+    default:
+      return '无法确认线上最新版本，缓存版本可能不是最新';
+  }
+}
+
 function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -537,6 +592,9 @@ const AdvancedConfigPage: React.FC = () => {
   const [activeManifest, setActiveManifest] = useState<LowerUpdateManifest | null>(null);
   const [downloadResult, setDownloadResult] = useState<LowerUpdateDownloadResult | null>(null);
   const [cachedPackages, setCachedPackages] = useState<LowerUpdateCachedPackage[]>([]);
+  const [cacheFreshness, setCacheFreshness] = useState<LowerUpdateCacheFreshness>('unknown');
+  const [onlineLowerUpdateManifest, setOnlineLowerUpdateManifest] = useState<LowerUpdateManifest | null>(null);
+  const [onlineLowerUpdateCheckedAt, setOnlineLowerUpdateCheckedAt] = useState<number | null>(null);
   const [isLoadingCachedPackages, setIsLoadingCachedPackages] = useState(false);
   const [uploadResult, setUploadResult] = useState<LowerUpdateUploadResult | null>(null);
   const [installResult, setInstallResult] = useState<LowerUpdateInstallResult | null>(null);
@@ -598,6 +656,10 @@ const AdvancedConfigPage: React.FC = () => {
   React.useEffect(() => {
     void refreshCachedLowerUpdates();
   }, [refreshCachedLowerUpdates]);
+
+  React.useEffect(() => {
+    setCacheFreshness(summarizeCachedPackageFreshness(onlineLowerUpdateManifest, cachedPackages));
+  }, [cachedPackages, onlineLowerUpdateManifest]);
 
   React.useEffect(() => {
     if (lowerUpdateAuthMethod !== 'password' || !targetUploadAccount.trim()) {
@@ -695,6 +757,9 @@ const AdvancedConfigPage: React.FC = () => {
     resetUploadState();
     setActiveManifest(null);
     setDownloadResult(null);
+    setCacheFreshness('unknown');
+    setOnlineLowerUpdateManifest(null);
+    setOnlineLowerUpdateCheckedAt(null);
   };
 
   const invalidateRuntimeCheck = (): void => {
@@ -774,13 +839,24 @@ const AdvancedConfigPage: React.FC = () => {
 
   const handleCheckUpdate = async (): Promise<void> => {
     setIsCheckingLowerUpdate(true);
+    setCacheFreshness('unknown');
+    setOnlineLowerUpdateManifest(null);
+    setOnlineLowerUpdateCheckedAt(null);
     try {
       const manifest = await api.checkLowerUpdate(channel);
       applyLowerUpdateManifest(manifest);
       setActiveManifest(manifest);
+      setOnlineLowerUpdateManifest(manifest);
+      setOnlineLowerUpdateCheckedAt(Date.now());
+      const nextCacheFreshness = summarizeCachedPackageFreshness(manifest, cachedPackages);
+      setCacheFreshness(nextCacheFreshness);
+      if (nextCacheFreshness === 'stale') {
+        messageApi.warning(`本地缓存版本不是线上最新版本，线上版本为 ${manifest.version}`);
+      } else if (nextCacheFreshness === 'unknown' && cachedPackages.length > 0) {
+        messageApi.warning('无法确认本地缓存是否为线上最新版本');
+      }
       const matchingCachedPackage = cachedPackages.find((cachedPackage) =>
-        cachedPackage.manifest.asset.sha256.toLowerCase() === manifest.asset.sha256.toLowerCase()
-        && compareLowerUpdateImages(manifest.image_id, cachedPackage.manifest.image_id) === 'same');
+        assessLowerUpdateCacheFreshness(manifest, cachedPackage) === 'current');
       if (matchingCachedPackage) {
         applyCachedPackage(matchingCachedPackage);
         messageApi.info('已找到相同的本地缓存包，可直接下发');
@@ -839,6 +915,9 @@ const AdvancedConfigPage: React.FC = () => {
         messageApi.warning(`已获取更新清单，但查询目标机运行镜像失败: ${formatErrorMessage(error)}`);
       }
     } catch (error) {
+      setCacheFreshness('unknown');
+      setOnlineLowerUpdateManifest(null);
+      setOnlineLowerUpdateCheckedAt(null);
       setDeliveryStatus('检查失败');
       messageApi.error(`检查更新失败: ${formatLowerUpdateCheckError(channel, error)}`);
     } finally {
@@ -851,6 +930,7 @@ const AdvancedConfigPage: React.FC = () => {
       messageApi.warning('请先检查更新');
       return;
     }
+    const downloadingManifest = activeManifest;
 
     setIsDownloadModalOpen(true);
     setIsDownloadingLowerUpdate(true);
@@ -880,6 +960,12 @@ const AdvancedConfigPage: React.FC = () => {
       setDownloadModalProgress(100);
       setDownloadStage('finished');
       setDeliveryStatus('已下载到上位机');
+      if (onlineLowerUpdateManifest) {
+        setCacheFreshness(assessLowerUpdateCacheFreshness(onlineLowerUpdateManifest, {
+          manifest: downloadingManifest,
+          sha256: result.sha256,
+        }));
+      }
       void refreshCachedLowerUpdates();
       messageApi.success('下位机更新包已下载并校验通过');
     } catch (error) {
@@ -1177,9 +1263,17 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const handleDeployCachedPackage = async (cachedPackage: LowerUpdateCachedPackage): Promise<void> => {
+    const cachedFreshness = onlineLowerUpdateManifest
+      ? assessLowerUpdateCacheFreshness(onlineLowerUpdateManifest, cachedPackage)
+      : 'unknown';
+    const freshnessMessage = getCacheFreshnessMessage(
+      cachedFreshness,
+      onlineLowerUpdateManifest?.version ?? null,
+      onlineLowerUpdateCheckedAt,
+    );
     Modal.confirm({
       title: `下发已缓存版本 ${cachedPackage.manifest.version}`,
-      content: '该操作不会检查线上最新版本，将按缓存的指定版本下发。确认继续吗？',
+      content: `${freshnessMessage}。该操作不会检查线上最新版本，将按缓存的指定版本下发。确认继续吗？`,
       okText: '继续下发',
       cancelText: '取消',
       onOk: () => runDeployFlow({ cachedPackage }),
@@ -1285,6 +1379,8 @@ const AdvancedConfigPage: React.FC = () => {
       </Space>
     </Card>
   );
+
+  const cacheFreshnessTag = getCacheFreshnessTag(cacheFreshness);
 
   return (
       <>
@@ -1438,39 +1534,53 @@ const AdvancedConfigPage: React.FC = () => {
                     <Tag color={cachedPackages.length > 0 ? 'blue' : 'default'}>
                       {cachedPackages.length > 0 ? `可用 ${cachedPackages.length} 个` : '无可用缓存'}
                     </Tag>
+                    {cachedPackages.length > 0 ? (
+                      <Tag color={cacheFreshnessTag.color}>{cacheFreshnessTag.label}</Tag>
+                    ) : null}
                   </Space>
-                  {cachedPackages.map((cachedPackage) => (
-                    <div className="advanced-config-cached-package-item" key={cachedPackage.package_path}>
-                      <Descriptions size="small" column={2}>
-                        <Descriptions.Item label="版本">{cachedPackage.manifest.version}</Descriptions.Item>
-                        <Descriptions.Item label="渠道">{UPDATE_CHANNEL_LABELS[cachedPackage.manifest.channel]}</Descriptions.Item>
-                        <Descriptions.Item label="安装包">{cachedPackage.manifest.asset.name}</Descriptions.Item>
-                        <Descriptions.Item label="下载时间">{formatDownloadedAt(cachedPackage.downloaded_at)}</Descriptions.Item>
-                        <Descriptions.Item label="镜像 ID" span={2}>
-                          <Text code className="advanced-config-hash">{cachedPackage.manifest.image_id}</Text>
-                        </Descriptions.Item>
-                        <Descriptions.Item label="SHA256" span={2}>
-                          <Text code className="advanced-config-hash">{cachedPackage.sha256}</Text>
-                        </Descriptions.Item>
-                      </Descriptions>
-                      <Space wrap>
-                        <Button
-                          type="primary"
-                          icon={<UploadOutlined />}
-                          onClick={() => void handleDeployCachedPackage(cachedPackage)}
-                          disabled={
-                            hasDeployTargetValidationError
-                            || isCheckingLowerUpdate
-                            || isDownloadingLowerUpdate
-                            || isDeployingLowerUpdate
-                          }
-                        >
-                          下发此缓存版本
-                        </Button>
-                        <Text type="warning">缓存版本可能不是线上最新版本</Text>
-                      </Space>
-                    </div>
-                  ))}
+                  {cachedPackages.map((cachedPackage) => {
+                    const cachedFreshness = onlineLowerUpdateManifest
+                      ? assessLowerUpdateCacheFreshness(onlineLowerUpdateManifest, cachedPackage)
+                      : 'unknown';
+                    return (
+                      <div className="advanced-config-cached-package-item" key={cachedPackage.package_path}>
+                        <Descriptions size="small" column={2}>
+                          <Descriptions.Item label="版本">{cachedPackage.manifest.version}</Descriptions.Item>
+                          <Descriptions.Item label="渠道">{UPDATE_CHANNEL_LABELS[cachedPackage.manifest.channel]}</Descriptions.Item>
+                          <Descriptions.Item label="安装包">{cachedPackage.manifest.asset.name}</Descriptions.Item>
+                          <Descriptions.Item label="下载时间">{formatDownloadedAt(cachedPackage.downloaded_at)}</Descriptions.Item>
+                          <Descriptions.Item label="镜像 ID" span={2}>
+                            <Text code className="advanced-config-hash">{cachedPackage.manifest.image_id}</Text>
+                          </Descriptions.Item>
+                          <Descriptions.Item label="SHA256" span={2}>
+                            <Text code className="advanced-config-hash">{cachedPackage.sha256}</Text>
+                          </Descriptions.Item>
+                        </Descriptions>
+                        <Space wrap>
+                          <Button
+                            type="primary"
+                            icon={<UploadOutlined />}
+                            onClick={() => void handleDeployCachedPackage(cachedPackage)}
+                            disabled={
+                              hasDeployTargetValidationError
+                              || isCheckingLowerUpdate
+                              || isDownloadingLowerUpdate
+                              || isDeployingLowerUpdate
+                            }
+                          >
+                            下发此缓存版本
+                          </Button>
+                          <Text type={cachedFreshness === 'current' ? 'success' : 'warning'}>
+                            {getCacheFreshnessMessage(
+                              cachedFreshness,
+                              onlineLowerUpdateManifest?.version ?? null,
+                              onlineLowerUpdateCheckedAt,
+                            )}
+                          </Text>
+                        </Space>
+                      </div>
+                    );
+                  })}
                 </Space>
               </div>
               <Space wrap className="advanced-config-action-row">

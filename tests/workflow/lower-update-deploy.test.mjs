@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { compareLowerUpdateImages } from '../../src/utils/lower-update-deploy.ts';
+import {
+  assessLowerUpdateCacheFreshness,
+  compareLowerUpdateImages,
+} from '../../src/utils/lower-update-deploy.ts';
 
 const pageSource = readFileSync(new URL('../../src/pages/AdvancedConfig/index.tsx', import.meta.url), 'utf8');
 const backendSource = readFileSync(
@@ -36,6 +39,71 @@ test('lower update distinguishes different builds', () => {
   );
 });
 
+function makeManifest(overrides = {}) {
+  return {
+    channel: 'ci',
+    platform: 'linux-arm64',
+    image_id: `sha256:${'a'.repeat(64)}`,
+    asset: {
+      sha256: 'a'.repeat(64),
+    },
+    ...overrides,
+  };
+}
+
+function makeCachedPackage(manifest = makeManifest(), overrides = {}) {
+  return {
+    downloaded_at: 1,
+    manifest,
+    package_path: '/tmp/lower-update.tar.gz',
+    package_size: 1,
+    sha256: manifest.asset.sha256,
+    ...overrides,
+  };
+}
+
+// 验证缓存新鲜度在未检查、无缓存、匹配和落后场景下保持明确语义。
+test('lower update assesses cached package freshness against the online manifest', () => {
+  const onlineManifest = makeManifest();
+  assert.equal(assessLowerUpdateCacheFreshness(null, null), 'unknown');
+  assert.equal(assessLowerUpdateCacheFreshness(onlineManifest, null), 'unavailable');
+  assert.equal(
+    assessLowerUpdateCacheFreshness(
+      onlineManifest,
+      makeCachedPackage(makeManifest({ image_id: `SHA256:${'A'.repeat(64)}`, asset: { sha256: 'A'.repeat(64) } })),
+    ),
+    'current',
+  );
+  assert.equal(
+    assessLowerUpdateCacheFreshness(
+      onlineManifest,
+      makeCachedPackage(makeManifest({ asset: { sha256: 'b'.repeat(64) } }), { sha256: 'b'.repeat(64) }),
+    ),
+    'stale',
+  );
+  assert.equal(
+    assessLowerUpdateCacheFreshness(
+      onlineManifest,
+      makeCachedPackage(makeManifest({ image_id: `sha256:${'b'.repeat(64)}` })),
+    ),
+    'stale',
+  );
+  assert.equal(
+    assessLowerUpdateCacheFreshness(
+      onlineManifest,
+      makeCachedPackage(makeManifest({ channel: 'stable' })),
+    ),
+    'stale',
+  );
+  assert.equal(
+    assessLowerUpdateCacheFreshness(
+      onlineManifest,
+      makeCachedPackage(makeManifest({ image_id: null }), { sha256: 'a'.repeat(64) }),
+    ),
+    'unknown',
+  );
+});
+
 // 验证页面在上传前执行目标机版本预检，并把期望镜像传给安装接口。
 test('lower update deploy flow preflights the target before upload and install', () => {
   assert.match(pageSource, /checkLowerUpdateTargetBeforeDeploy\(activeManifest\.image_id\)/);
@@ -65,6 +133,12 @@ test('lower update restores verified cached packages when the page opens', () =>
   assert.match(pageSource, /handleDeployCachedPackage\(cachedPackage\)/);
   assert.match(pageSource, /downloaded_at/);
   assert.match(pageSource, /可能不是线上最新版本/);
+  assert.match(pageSource, /cacheFreshness/);
+  assert.match(pageSource, /const nextCacheFreshness = summarizeCachedPackageFreshness\(manifest, cachedPackages\)/);
+  assert.match(pageSource, /setCacheFreshness\(nextCacheFreshness\)/);
+  assert.match(pageSource, /assessLowerUpdateCacheFreshness\(manifest, cachedPackage\) === 'current'/);
+  assert.match(pageSource, /与线上最新版本一致/);
+  assert.match(pageSource, /缓存版本不是线上最新版本/);
 });
 
 // 验证“下发已缓存版本”入口只复用缓存清单和本地包，不隐式触发检查或下载。
