@@ -132,7 +132,7 @@ test('lower update restores verified cached packages when the page opens', () =>
   assert.match(pageSource, /cachedPackages\.map/);
   assert.match(pageSource, /handleDeployCachedPackage\(cachedPackage\)/);
   assert.match(pageSource, /downloaded_at/);
-  assert.match(pageSource, /可能不是线上最新版本/);
+  assert.match(pageSource, /无法确认线上最新版本，缓存版本可能不是最新/);
   assert.match(pageSource, /cacheFreshness/);
   assert.match(pageSource, /const nextCacheFreshness = summarizeCachedPackageFreshness\(manifest, cachedPackages\)/);
   assert.match(pageSource, /setCacheFreshness\(nextCacheFreshness\)/);

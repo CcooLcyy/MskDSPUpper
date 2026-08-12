@@ -1883,6 +1883,7 @@ const IEC104: React.FC = () => {
       dataIndex: 'ioa',
       key: 'ioa',
       width: 230,
+      defaultSortOrder: 'ascend' as const,
       render: (ioa: number) => {
         const category = getIoaCategoryFilterByIoa(ioa);
         return (
