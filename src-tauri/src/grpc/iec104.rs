@@ -4,7 +4,7 @@ use crate::grpc::connection::ConnectionManager;
 use crate::proto::iec104_proto::{
     iec104_service_client::Iec104ServiceClient, DeleteLinkRequest, Empty, GetLinkRequest,
     GetPointTableRequest, LinkConfig, LinkInfo, Point, PointTable, RenameLinkRequest,
-    SendTimeSyncRequest, StartLinkRequest, StopLinkRequest, UpsertLinkRequest,
+    SendTimeSyncRequest, SimulationRequest, SimulationSnapshot, StartLinkRequest, StopLinkRequest, UpsertLinkRequest,
     UpsertPointTableRequest,
 };
 
@@ -113,6 +113,32 @@ impl<'a> Iec104Client<'a> {
         client
             .send_time_sync(SendTimeSyncRequest { conn_name, ts_ms })
             .await?;
+        Ok(())
+    }
+
+    pub async fn generate_simulation_values(&self, conn_name: String) -> Result<SimulationSnapshot> {
+        let channel = self.conn.module_channel("IEC104").await?;
+        let mut client = Iec104ServiceClient::new(channel);
+        Ok(client.generate_simulation_values(SimulationRequest { conn_name }).await?.into_inner())
+    }
+
+    pub async fn get_simulation_snapshot(&self, conn_name: String) -> Result<SimulationSnapshot> {
+        let channel = self.conn.module_channel("IEC104").await?;
+        let mut client = Iec104ServiceClient::new(channel);
+        Ok(client.get_simulation_snapshot(SimulationRequest { conn_name }).await?.into_inner())
+    }
+
+    pub async fn apply_simulation_values(&self, conn_name: String) -> Result<()> {
+        let channel = self.conn.module_channel("IEC104").await?;
+        let mut client = Iec104ServiceClient::new(channel);
+        client.apply_simulation_values(SimulationRequest { conn_name }).await?;
+        Ok(())
+    }
+
+    pub async fn clear_simulation_values(&self, conn_name: String) -> Result<()> {
+        let channel = self.conn.module_channel("IEC104").await?;
+        let mut client = Iec104ServiceClient::new(channel);
+        client.clear_simulation_values(SimulationRequest { conn_name }).await?;
         Ok(())
     }
 }

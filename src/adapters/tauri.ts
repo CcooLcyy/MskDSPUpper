@@ -28,6 +28,7 @@ import type {
   Iec104LinkInfo,
   Iec104Point,
   Iec104PointTable,
+  Iec104SimulationSnapshot,
   LowerUpdateChannel,
   LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
@@ -212,6 +213,14 @@ export const api = {
     invoke<Iec104PointTable>('iec104_get_point_table', { connName }),
   iec104SendTimeSync: (connName: string, tsMs: number) =>
     invoke<void>('iec104_send_time_sync', { connName, tsMs }),
+  iec104GenerateSimulationValues: (connName: string) =>
+    invoke<Iec104SimulationSnapshot>('iec104_generate_simulation_values', { connName }),
+  iec104GetSimulationSnapshot: (connName: string) =>
+    invoke<Iec104SimulationSnapshot>('iec104_get_simulation_snapshot', { connName }),
+  iec104ApplySimulationValues: (connName: string) =>
+    invoke<void>('iec104_apply_simulation_values', { connName }),
+  iec104ClearSimulationValues: (connName: string) =>
+    invoke<void>('iec104_clear_simulation_values', { connName }),
 
   modbusRtuUpdateConfig: (mqtt: ModbusMqttConfig) =>
     invoke<ModbusUpdateConfigResponse>('modbus_rtu_update_config', { mqtt }),

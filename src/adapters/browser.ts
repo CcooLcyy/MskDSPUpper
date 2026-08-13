@@ -31,6 +31,7 @@ import type {
   Iec104LinkInfo,
   Iec104Point,
   Iec104PointTable,
+  Iec104SimulationSnapshot,
   LowerUpdateChannel,
   LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
@@ -113,6 +114,7 @@ const moduleInfos: ModuleInfo[] = [
 const runningModules = new Set(['ModuleManager', 'DataCenter', 'IEC104', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc']);
 const iec104Links = new Map<string, Iec104LinkInfo>();
 const iec104Tables = new Map<string, Iec104PointTable>();
+const iec104Simulation = new Map<string, Iec104SimulationSnapshot>();
 const modbusLinks = new Map<string, ModbusLinkInfo>();
 const modbusTables = new Map<string, ModbusPointTable>();
 const dlt645Links = new Map<string, Dlt645LinkInfo>();
@@ -276,6 +278,7 @@ function tagsForConnection(connId: number): string[] {
     collectSignalTag(agc.config.outputs?.p_total_meas, tags);
     collectSignalTag(agc.config.outputs?.p_total_target, tags);
     collectSignalTag(agc.config.outputs?.p_total_error, tags);
+    agc.default_points.forEach((point) => tags.add(point.tag));
     agc.config.members.forEach((member) => {
       collectSignalTag(member.p_meas, tags);
       collectValueSpec(member.p_set, tags);
@@ -352,6 +355,7 @@ function makeDefaultAgcPoints(): AgcDefaultPointInfo[] {
     { kind: 3, tag: '当前可调有功下限', name: '当前可调有功下限', description: '浏览器开发模式 mock 点' },
     { kind: 4, tag: '当前可调有功上限', name: '当前可调有功上限', description: '浏览器开发模式 mock 点' },
     { kind: 5, tag: '调节返回值', name: '调节返回值', description: '浏览器开发模式 mock 点' },
+    { kind: 6, tag: 'AGC装机容量', name: 'AGC装机容量', description: '浏览器开发模式 mock 点' },
   ];
 }
 
@@ -1051,6 +1055,24 @@ export const browserApi: typeof tauriApi = {
   },
   iec104GetPointTable: async (connName: string) => clone(iec104Tables.get(connName) ?? { conn_name: connName, points: [] }),
   iec104SendTimeSync: async () => {},
+  iec104GenerateSimulationValues: async (connName: string): Promise<Iec104SimulationSnapshot> => {
+    const table = iec104Tables.get(connName);
+    if (!table || table.points.length === 0) throw new Error('浏览器开发模式 mock 点表为空');
+    const tsMs = Date.now();
+    const snapshot: Iec104SimulationSnapshot = {
+      conn_name: connName,
+      points: table.points.map((point) => point.point_type === 2
+        ? { tag: point.tag, point_type: point.point_type, bool_value: Math.random() >= 0.5, double_value: null, quality: 0, ts_ms: tsMs }
+        : { tag: point.tag, point_type: point.point_type, bool_value: null, double_value: Math.random() * 100, quality: 0, ts_ms: tsMs }),
+    };
+    iec104Simulation.set(connName, snapshot);
+    return clone(snapshot);
+  },
+  iec104GetSimulationSnapshot: async (connName: string) => clone(iec104Simulation.get(connName) ?? { conn_name: connName, points: [] }),
+  iec104ApplySimulationValues: async (connName: string) => {
+    if (!iec104Simulation.has(connName)) throw new Error('浏览器开发模式 mock 没有模拟值');
+  },
+  iec104ClearSimulationValues: async (connName: string) => { iec104Simulation.delete(connName); },
 
   modbusRtuUpdateConfig: async (mqtt: ModbusMqttConfig): Promise<ModbusUpdateConfigResponse> => {
     modbusMqtt = clone(mqtt);

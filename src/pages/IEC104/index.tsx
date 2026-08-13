@@ -67,6 +67,7 @@ import type {
   Iec104LinkConfig,
   Iec104LinkInfo,
   Iec104Point,
+  Iec104SimulationSnapshot,
 } from '../../adapters';
 import {
   ImportedPointRoutesError,
@@ -452,12 +453,17 @@ const isMasterStationConfig = (config: Iec104LinkConfig | null | undefined): boo
     ),
   );
 
+const isSimulationSupported = (config: Iec104LinkConfig | null | undefined): boolean =>
+  Boolean(config && config.role === ROLE_SERVER && (config.station_role === 2 || config.station_role === 0));
+
 // ── Component ──
 
 const IEC104: React.FC = () => {
   const [links, setLinks] = useState<Iec104LinkInfo[]>([]);
   const [selectedConn, setSelectedConn] = useState<string | null>(null);
   const [points, setPoints] = useState<Iec104Point[]>([]);
+  const [simulationSnapshot, setSimulationSnapshot] = useState<Iec104SimulationSnapshot | null>(null);
+  const [simulationLoading, setSimulationLoading] = useState(false);
   const [pointTypeFilter, setPointTypeFilter] = useState<number>();
   const [ioaCategoryFilter, setIoaCategoryFilter] = useState<IoaCategoryFilterKey>();
   const [pointSearch, setPointSearch] = useState('');
@@ -696,19 +702,34 @@ const IEC104: React.FC = () => {
       const requestId = pointLoadRequestRef.current + 1;
       pointLoadRequestRef.current = requestId;
       setPoints([]);
+      setSimulationSnapshot(null);
       setPointsLoading(true);
       try {
-        const pt = await api.iec104GetPointTable(connName);
-        if (requestId !== pointLoadRequestRef.current) {
+        try {
+          const pt = await api.iec104GetPointTable(connName);
+          if (requestId !== pointLoadRequestRef.current) {
+            return;
+          }
+          setPoints(pt.points);
+        } catch (error) {
+          if (requestId !== pointLoadRequestRef.current) {
+            return;
+          }
+          setPoints([]);
+          messageApi.error(`加载 IEC104 点表失败: ${error}`);
           return;
         }
-        setPoints(pt.points);
-      } catch (error) {
-        if (requestId !== pointLoadRequestRef.current) {
-          return;
+
+        try {
+          const snapshot = await api.iec104GetSimulationSnapshot(connName);
+          if (requestId === pointLoadRequestRef.current) {
+            setSimulationSnapshot(snapshot);
+          }
+        } catch {
+          if (requestId === pointLoadRequestRef.current) {
+            setSimulationSnapshot(null);
+          }
         }
-        setPoints([]);
-        messageApi.error(`加载 IEC104 点表失败: ${error}`);
       } finally {
         if (requestId === pointLoadRequestRef.current) {
           setPointsLoading(false);
@@ -717,6 +738,46 @@ const IEC104: React.FC = () => {
     },
     [messageApi],
   );
+
+  const handleGenerateSimulation = useCallback(async () => {
+    if (!selectedConn) return;
+    setSimulationLoading(true);
+    try {
+      setSimulationSnapshot(await api.iec104GenerateSimulationValues(selectedConn));
+      messageApi.success('已生成固定随机模拟值');
+    } catch (error) {
+      messageApi.error(`生成模拟值失败: ${formatErrorText(error)}`);
+    } finally {
+      setSimulationLoading(false);
+    }
+  }, [messageApi, selectedConn]);
+
+  const handleApplySimulation = useCallback(async () => {
+    if (!selectedConn) return;
+    setSimulationLoading(true);
+    try {
+      await api.iec104ApplySimulationValues(selectedConn);
+      messageApi.success('模拟值已发送');
+    } catch (error) {
+      messageApi.error(`发送模拟值失败: ${formatErrorText(error)}`);
+    } finally {
+      setSimulationLoading(false);
+    }
+  }, [messageApi, selectedConn]);
+
+  const handleClearSimulation = useCallback(async () => {
+    if (!selectedConn) return;
+    setSimulationLoading(true);
+    try {
+      await api.iec104ClearSimulationValues(selectedConn);
+      setSimulationSnapshot({ conn_name: selectedConn, points: [] });
+      messageApi.success('模拟值已清除，已恢复真实数据路径');
+    } catch (error) {
+      messageApi.error(`清除模拟值失败: ${formatErrorText(error)}`);
+    } finally {
+      setSimulationLoading(false);
+    }
+  }, [messageApi, selectedConn]);
 
   const getLinkState = useCallback(
     async (connName: string): Promise<number | null> => {
@@ -2398,6 +2459,54 @@ const IEC104: React.FC = () => {
                 }}
               />
             </div>
+          </Card>
+          <Card
+            size="small"
+            bordered
+            className="iec104-simulation-card"
+            title={<Space><ThunderboltOutlined /><span>无路由模拟数据</span>{simulationSnapshot?.points.length ? <Tag color="warning">已生成 {simulationSnapshot.points.length} 点</Tag> : null}</Space>}
+            extra={(
+              <Space wrap>
+                <Button
+                  size="small"
+                  icon={<ThunderboltOutlined />}
+                  loading={simulationLoading}
+                  disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || points.length === 0 || actionsDisabled}
+                  onClick={() => void handleGenerateSimulation()}
+                >生成随机量</Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<LinkOutlined />}
+                  loading={simulationLoading}
+                  disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !simulationSnapshot?.points.length || selectedLink?.state !== 2 || actionsDisabled}
+                  onClick={() => void handleApplySimulation()}
+                >应用并发送</Button>
+                <Popconfirm title="确认清除当前模拟值？" onConfirm={() => void handleClearSimulation()}>
+                  <Button size="small" danger icon={<ClearOutlined />} loading={simulationLoading} disabled={!selectedConn || !simulationSnapshot?.points.length || actionsDisabled}>清除模拟值</Button>
+                </Popconfirm>
+              </Space>
+            )}
+          >
+            <Alert
+              type="warning"
+              showIcon
+              message="模拟值仅在 IEC104 内存中生效，不进入 DataCenter 路由；再次生成才会替换当前值。"
+              style={{ marginBottom: 8 }}
+            />
+            <Table
+              size="small"
+              rowKey="tag"
+              pagination={false}
+              dataSource={simulationSnapshot?.points ?? []}
+              columns={[
+                { title: 'Tag', dataIndex: 'tag', key: 'tag' },
+                { title: '类型', dataIndex: 'point_type', key: 'point_type', render: (value: number) => POINT_TYPE_LABELS[value] ?? value },
+                { title: '模拟值', key: 'value', render: (_: unknown, record: Iec104SimulationSnapshot['points'][number]) => record.point_type === 2 ? (record.bool_value ? 'true' : 'false') : record.double_value?.toFixed(3) ?? '-' },
+                { title: '品质', dataIndex: 'quality', key: 'quality', render: (value: number) => value === 0 ? '良好' : `0x${value.toString(16).toUpperCase()}` },
+              ]}
+              locale={{ emptyText: '尚未生成模拟值' }}
+            />
           </Card>
         </ResizableSplit>
       ) : (

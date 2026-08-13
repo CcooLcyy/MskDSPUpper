@@ -377,3 +377,79 @@ pub async fn iec104_send_time_sync(
     tracing::info!(protocol = "IEC104", conn_name = %conn_name, "发送时间同步请求完成");
     Ok(())
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SimulationPointDto {
+    pub tag: String,
+    pub point_type: i32,
+    pub bool_value: Option<bool>,
+    pub double_value: Option<f64>,
+    pub quality: u32,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SimulationSnapshotDto {
+    pub conn_name: String,
+    pub points: Vec<SimulationPointDto>,
+}
+
+impl From<crate::proto::iec104_proto::SimulationSnapshot> for SimulationSnapshotDto {
+    fn from(snapshot: crate::proto::iec104_proto::SimulationSnapshot) -> Self {
+        Self {
+            conn_name: snapshot.conn_name,
+            points: snapshot.points.into_iter().map(|point| SimulationPointDto {
+                tag: point.tag,
+                point_type: point.r#type,
+                bool_value: point.bool_value,
+                double_value: point.double_value,
+                quality: point.quality,
+                ts_ms: point.ts_ms,
+            }).collect(),
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn iec104_generate_simulation_values(
+    state: State<'_, AppState>, conn_name: String,
+) -> Result<SimulationSnapshotDto, String> {
+    let client = Iec104Client::new(&state.conn_manager);
+    client.generate_simulation_values(conn_name.clone()).await.map(Into::into).map_err(|error| {
+        tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "生成模拟值失败");
+        error.to_string()
+    })
+}
+
+#[tauri::command]
+pub async fn iec104_get_simulation_snapshot(
+    state: State<'_, AppState>, conn_name: String,
+) -> Result<SimulationSnapshotDto, String> {
+    let client = Iec104Client::new(&state.conn_manager);
+    client.get_simulation_snapshot(conn_name.clone()).await.map(Into::into).map_err(|error| {
+        tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "读取模拟值失败");
+        error.to_string()
+    })
+}
+
+#[tauri::command]
+pub async fn iec104_apply_simulation_values(
+    state: State<'_, AppState>, conn_name: String,
+) -> Result<(), String> {
+    let client = Iec104Client::new(&state.conn_manager);
+    client.apply_simulation_values(conn_name.clone()).await.map_err(|error| {
+        tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "应用模拟值失败");
+        error.to_string()
+    })
+}
+
+#[tauri::command]
+pub async fn iec104_clear_simulation_values(
+    state: State<'_, AppState>, conn_name: String,
+) -> Result<(), String> {
+    let client = Iec104Client::new(&state.conn_manager);
+    client.clear_simulation_values(conn_name.clone()).await.map_err(|error| {
+        tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "清除模拟值失败");
+        error.to_string()
+    })
+}

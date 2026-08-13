@@ -246,6 +246,20 @@ export interface Iec104PointTable {
   points: Iec104Point[];
 }
 
+export interface Iec104SimulationPoint {
+  tag: string;
+  point_type: number;
+  bool_value?: boolean | null;
+  double_value?: number | null;
+  quality: number;
+  ts_ms: number;
+}
+
+export interface Iec104SimulationSnapshot {
+  conn_name: string;
+  points: Iec104SimulationPoint[];
+}
+
 export interface ModbusSerialConfig {
   device: string;
   baud_rate: number;
