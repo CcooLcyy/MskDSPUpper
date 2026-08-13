@@ -467,6 +467,7 @@ const IEC104: React.FC = () => {
   const [points, setPoints] = useState<Iec104Point[]>([]);
   const [simulationSnapshot, setSimulationSnapshot] = useState<Iec104SimulationSnapshot | null>(null);
   const [simulationLoading, setSimulationLoading] = useState(false);
+  const [simulationModalOpen, setSimulationModalOpen] = useState(false);
   const [pointTypeFilter, setPointTypeFilter] = useState<number>();
   const [ioaCategoryFilter, setIoaCategoryFilter] = useState<IoaCategoryFilterKey>();
   const [pointSearch, setPointSearch] = useState('');
@@ -2452,6 +2453,14 @@ const IEC104: React.FC = () => {
             className="protocol-point-card"
             extra={(
               <Space wrap>
+                <Button
+                  size="small"
+                  icon={<ThunderboltOutlined />}
+                  disabled={!selectedConn}
+                  onClick={() => setSimulationModalOpen(true)}
+                >
+                  模拟数据
+                </Button>
                 <Segmented<'config' | 'runtime'>
                   size="small"
                   value={pointTableView}
@@ -2555,54 +2564,6 @@ const IEC104: React.FC = () => {
               />
             </div>
           </Card>
-          <Card
-            size="small"
-            bordered
-            className="iec104-simulation-card"
-            title={<Space><ThunderboltOutlined /><span>无路由模拟数据</span>{simulationSnapshot?.points.length ? <Tag color="warning">已生成 {simulationSnapshot.points.length} 点</Tag> : null}</Space>}
-            extra={(
-              <Space wrap>
-                <Button
-                  size="small"
-                  icon={<ThunderboltOutlined />}
-                  loading={simulationLoading}
-                  disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || points.length === 0 || actionsDisabled}
-                  onClick={() => void handleGenerateSimulation()}
-                >生成随机量</Button>
-                <Button
-                  size="small"
-                  type="primary"
-                  icon={<LinkOutlined />}
-                  loading={simulationLoading}
-                  disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !simulationSnapshot?.points.length || selectedLink?.state !== 2 || actionsDisabled}
-                  onClick={() => void handleApplySimulation()}
-                >应用并发送</Button>
-                <Popconfirm title="确认清除当前模拟值？" onConfirm={() => void handleClearSimulation()}>
-                  <Button size="small" danger icon={<ClearOutlined />} loading={simulationLoading} disabled={!selectedConn || !simulationSnapshot?.points.length || actionsDisabled}>清除模拟值</Button>
-                </Popconfirm>
-              </Space>
-            )}
-          >
-            <Alert
-              type="warning"
-              showIcon
-              message="模拟值仅在 IEC104 内存中生效，不进入 DataCenter 路由；再次生成才会替换当前值。"
-              style={{ marginBottom: 8 }}
-            />
-            <Table
-              size="small"
-              rowKey="tag"
-              pagination={false}
-              dataSource={simulationSnapshot?.points ?? []}
-              columns={[
-                { title: 'Tag', dataIndex: 'tag', key: 'tag' },
-                { title: '类型', dataIndex: 'point_type', key: 'point_type', render: (value: number) => POINT_TYPE_LABELS[value] ?? value },
-                { title: '模拟值', key: 'value', render: (_: unknown, record: Iec104SimulationSnapshot['points'][number]) => record.point_type === 2 ? (record.bool_value ? 'true' : 'false') : record.double_value?.toFixed(3) ?? '-' },
-                { title: '品质', dataIndex: 'quality', key: 'quality', render: (value: number) => value === 0 ? '良好' : `0x${value.toString(16).toUpperCase()}` },
-              ]}
-              locale={{ emptyText: '尚未生成模拟值' }}
-            />
-          </Card>
         </ResizableSplit>
       ) : (
         <Card title="报文日志" size="small" bordered className="protocol-log-card">
@@ -2620,6 +2581,68 @@ const IEC104: React.FC = () => {
           </div>
         </Card>
       )}
+
+      <Modal
+        title={(
+          <Space>
+            <ThunderboltOutlined />
+            <span>无路由模拟数据</span>
+            {simulationSnapshot?.points.length ? <Tag color="warning">已生成 {simulationSnapshot.points.length} 点</Tag> : null}
+          </Space>
+        )}
+        open={simulationModalOpen}
+        footer={null}
+        width={900}
+        onCancel={() => setSimulationModalOpen(false)}
+      >
+        {!isSimulationSupported(selectedLink?.config) ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="当前连接不支持模拟数据"
+            description="请先选择角色为 SERVER、站点角色为 SLAVE（被控站）的 IEC104 连接。"
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Button
+            icon={<ThunderboltOutlined />}
+            loading={simulationLoading}
+            disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || points.length === 0 || actionsDisabled}
+            onClick={() => void handleGenerateSimulation()}
+          >生成随机量</Button>
+          <Button
+            type="primary"
+            icon={<LinkOutlined />}
+            loading={simulationLoading}
+            disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !simulationSnapshot?.points.length || selectedLink?.state !== 2 || actionsDisabled}
+            onClick={() => void handleApplySimulation()}
+          >应用并发送</Button>
+          <Popconfirm title="确认清除当前模拟值？" onConfirm={() => void handleClearSimulation()}>
+            <Button danger icon={<ClearOutlined />} loading={simulationLoading} disabled={!selectedConn || !simulationSnapshot?.points.length || actionsDisabled}>清除模拟值</Button>
+          </Popconfirm>
+        </Space>
+        <Alert
+          type="warning"
+          showIcon
+          message="模拟值仅在 IEC104 内存中生效，不进入 DataCenter 路由；再次生成才会替换当前值。"
+          style={{ marginBottom: 12 }}
+        />
+        <Table
+          size="small"
+          rowKey="tag"
+          pagination={false}
+          scroll={{ x: 720, y: 420 }}
+          dataSource={simulationSnapshot?.points ?? []}
+          columns={[
+            { title: 'Tag', dataIndex: 'tag', key: 'tag' },
+            { title: '类型', dataIndex: 'point_type', key: 'point_type', render: (value: number) => POINT_TYPE_LABELS[value] ?? value },
+            { title: '模拟值', key: 'value', render: (_: unknown, record: Iec104SimulationSnapshot['points'][number]) => record.point_type === 2 ? (record.bool_value ? 'true' : 'false') : record.double_value?.toFixed(3) ?? '-' },
+            { title: '品质', dataIndex: 'quality', key: 'quality', render: (value: number) => value === 0 ? '良好' : `0x${value.toString(16).toUpperCase()}` },
+          ]}
+          locale={{ emptyText: '尚未生成模拟值' }}
+        />
+      </Modal>
 
       {/* Link Modal */}
       <Modal
