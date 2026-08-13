@@ -338,6 +338,7 @@ impl FullConfigExportConfigDto {
             agc: Some(self.agc.to_proto()),
             avc: Some(self.avc.to_proto()),
             calc: None,
+            iec61850: None,
         }
     }
 
@@ -352,6 +353,7 @@ impl FullConfigExportConfigDto {
             agc: None,
             avc: None,
             calc: None,
+            iec61850: None,
         });
 
         Ok(Self {

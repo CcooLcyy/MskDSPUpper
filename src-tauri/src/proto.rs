@@ -37,6 +37,10 @@ pub mod config_pusher_proto {
     include!("proto_gen/config_pusher_proto.rs");
 }
 
+pub mod iec61850_proto {
+    include!("proto_gen/iec61850_proto.rs");
+}
+
 pub mod export_config_proto {
     include!("proto_gen/export_config_proto.rs");
 }

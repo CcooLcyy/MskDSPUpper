@@ -29,6 +29,7 @@ fn main() {
         proto_dir.join("AVC.proto"),
         proto_dir.join("Calc.proto"),
         proto_dir.join("ConfigPusher.proto"),
+        proto_dir.join("IEC61850.proto"),
         proto_dir.join("ExportConfig.proto"),
         proto_dir.join("MQTTManager.proto"),
     ];
