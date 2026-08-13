@@ -130,6 +130,9 @@ const POINT_TYPE_LABELS: Record<number, string> = {
   2: 'SINGLE (单点遥信)',
 };
 
+const POINT_TYPE_FLOAT = 1;
+const POINT_TYPE_SINGLE = 2;
+
 const DEFAULT_POINT_FORM_VALUES = {
   scale: 1,
   offset: 0,
@@ -471,6 +474,8 @@ const IEC104: React.FC = () => {
   const [ioaInputHex, setIoaInputHex] = useState(false);
   const [selectedPointTags, setSelectedPointTags] = useState<string[]>([]);
   const [ioaAdjustModalOpen, setIoaAdjustModalOpen] = useState(false);
+  const [pointTypeBatchModalOpen, setPointTypeBatchModalOpen] = useState(false);
+  const [pointTypeBatchValue, setPointTypeBatchValue] = useState<number>();
   const [ioaAdjustDrafts, setIoaAdjustDrafts] = useState<IoaAdjustmentDraft[]>([]);
   const [ioaAdjustStrategy, setIoaAdjustStrategy] = useState<IoaAdjustmentStrategy>('offset');
   const [ioaAdjustStart, setIoaAdjustStart] = useState(1);
@@ -572,6 +577,7 @@ const IEC104: React.FC = () => {
     || runtimeAction !== null
     || linkModalOpen
     || pointModalOpen
+    || pointTypeBatchModalOpen
     || importPointModalOpen
     || ioaAdjustModalOpen;
   const isSinglePoint = pointType === 2;
@@ -1364,6 +1370,87 @@ const IEC104: React.FC = () => {
     setIoaAdjustDragKey(null);
     setIoaAdjustModalOpen(true);
   }, [messageApi, points, selectedPointTags]);
+
+  const openPointTypeBatchModal = useCallback(() => {
+    if (selectedPointTags.length === 0) {
+      messageApi.info('请先在点表中勾选需要批量编辑的点位');
+      return;
+    }
+    const selected = points.filter((point) => selectedPointTags.includes(point.tag));
+    if (selected.length === 0) {
+      messageApi.info('当前勾选的点位已不存在，请重新选择');
+      setSelectedPointTags([]);
+      return;
+    }
+    setPointTypeBatchValue(undefined);
+    setPointTypeBatchModalOpen(true);
+  }, [messageApi, points, selectedPointTags]);
+
+  const handlePointTypeBatchSubmit = useCallback(async () => {
+    if (!selectedConn || pointSubmitting || pointTypeBatchValue === undefined) return;
+
+    const selectedTags = new Set(selectedPointTags);
+    const selectedPoints = points.filter((point) => selectedTags.has(point.tag));
+    if (selectedPoints.length === 0) {
+      messageApi.info('当前没有可编辑的已选点位');
+      setPointTypeBatchModalOpen(false);
+      setSelectedPointTags([]);
+      return;
+    }
+
+    const newPoints = points.map((point) => {
+      if (!selectedTags.has(point.tag)) {
+        return point;
+      }
+      if (pointTypeBatchValue === POINT_TYPE_SINGLE) {
+        return {
+          ...point,
+          point_type: POINT_TYPE_SINGLE,
+          scale: DEFAULT_POINT_FORM_VALUES.scale,
+          offset: DEFAULT_POINT_FORM_VALUES.offset,
+          deadband: DEFAULT_POINT_FORM_VALUES.deadband,
+        };
+      }
+      return {
+        ...point,
+        point_type: POINT_TYPE_FLOAT,
+        scale: point.point_type === POINT_TYPE_FLOAT ? point.scale : DEFAULT_POINT_FORM_VALUES.scale,
+        offset: point.point_type === POINT_TYPE_FLOAT ? point.offset : DEFAULT_POINT_FORM_VALUES.offset,
+        deadband: point.point_type === POINT_TYPE_FLOAT ? point.deadband : DEFAULT_POINT_FORM_VALUES.deadband,
+      };
+    });
+    const changedCount = selectedPoints.filter((point) => point.point_type !== pointTypeBatchValue).length;
+    if (changedCount === 0) {
+      messageApi.info('所选点位已经是目标类型');
+      setPointTypeBatchModalOpen(false);
+      return;
+    }
+
+    setPointSubmitting(true);
+    try {
+      const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
+      setPoints(newPoints);
+      setSimulationSnapshot(null);
+      setPointTypeBatchModalOpen(false);
+      setSelectedPointTags([]);
+      console.info('IEC104 已批量更新点位类型', {
+        connName: selectedConn,
+        pointCount: changedCount,
+        pointType: pointTypeBatchValue,
+      });
+      messageApi.success(`已将 ${changedCount} 个点位统一设置为 ${POINT_TYPE_LABELS[pointTypeBatchValue]}`);
+      messageApi.info('点表已更新，当前模拟值已清除');
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动链路');
+      }
+    } catch (error) {
+      messageApi.error(`批量编辑点位类型失败: ${formatErrorText(error)}`);
+    } finally {
+      setPointSubmitting(false);
+    }
+  }, [messageApi, pointSubmitting, pointTypeBatchValue, points, runSelectedLinkStopped, selectedConn, selectedPointTags]);
 
   const reorderIoaAdjustDrafts = useCallback((fromKey: string, toKey: string) => {
     if (fromKey === toKey) return;
@@ -2396,6 +2483,14 @@ const IEC104: React.FC = () => {
                 >
                   IOA 调整{selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}
                 </Button>
+                <Button
+                  size="small"
+                  icon={<EditOutlined />}
+                  disabled={!selectedConn || pointTableView !== 'config' || selectedPointTags.length === 0 || actionsDisabled}
+                  onClick={openPointTypeBatchModal}
+                >
+                  批量编辑类型{selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}
+                </Button>
                 <Button size="small" icon={<UploadOutlined />} disabled={!selectedConn || actionsDisabled} onClick={openImportPointModal}>从数据总线导入</Button>
                 <Button type="primary" size="small" icon={<PlusOutlined />} disabled={!selectedConn || actionsDisabled} onClick={openCreatePoint}>添加点位</Button>
               </Space>
@@ -2837,6 +2932,48 @@ const IEC104: React.FC = () => {
             </Text>
           ) : null}
         </Form>
+      </Modal>
+
+      {/* Point Type Batch Edit Modal */}
+      <Modal
+        title="批量编辑点位类型"
+        open={pointTypeBatchModalOpen}
+        onOk={() => void handlePointTypeBatchSubmit()}
+        onCancel={() => {
+          if (!pointSubmitting) {
+            setPointTypeBatchModalOpen(false);
+          }
+        }}
+        width={560}
+        className="iec104-config-modal"
+        okText="保存批量修改"
+        cancelText="取消"
+        confirmLoading={pointSubmitting}
+        okButtonProps={{ disabled: pointSubmitting || pointTypeBatchValue === undefined }}
+        maskClosable={!pointSubmitting}
+        closable={!pointSubmitting}
+        keyboard={!pointSubmitting}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="warning"
+            showIcon
+            message={`当前选中 ${selectedPointTags.length} 个点位`}
+            description="批量保存会覆盖所选点位的类型；SINGLE 不使用 Scale、Offset、Deadband，这三个参数会重置为 1、0、0。更新点表后当前模拟值会被清除。"
+          />
+          <Select<number>
+            value={pointTypeBatchValue}
+            onChange={setPointTypeBatchValue}
+            options={[
+              { value: POINT_TYPE_FLOAT, label: POINT_TYPE_LABELS[POINT_TYPE_FLOAT] },
+              { value: POINT_TYPE_SINGLE, label: POINT_TYPE_LABELS[POINT_TYPE_SINGLE] },
+            ]}
+            placeholder="选择统一点位类型"
+            style={{ width: '100%' }}
+            disabled={pointSubmitting}
+          />
+        </Space>
       </Modal>
 
       {/* IOA Batch Adjustment Modal */}

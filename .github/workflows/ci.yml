@@ -258,6 +258,14 @@ jobs:
         run: |
           node scripts/workflow/write-sha256sums.mjs --metadata-file package/metadata/ci.json --output-dir ${{ steps.bundle.outputs.output_dir }}
 
+      - name: Upload CI package artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.metadata.outputs.artifact_base_name }}
+          path: ${{ steps.bundle.outputs.output_dir }}
+          if-no-files-found: error
+
       - name: Sync CI static updater source
         shell: pwsh
         env:
@@ -292,11 +300,3 @@ jobs:
           name: ci-package-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: package/diagnostics
           if-no-files-found: ignore
-
-      - name: Upload CI package artifact
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.metadata.outputs.artifact_base_name }}
-          path: ${{ steps.bundle.outputs.output_dir }}
-          if-no-files-found: error
