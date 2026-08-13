@@ -107,6 +107,7 @@ const AGC_RESERVED_DEFAULT_TAGS = new Set([
   '当前可调有功下限',
   '当前可调有功上限',
   '调节返回值',
+  'AGC装机容量',
 ]);
 
 const DEFAULT_SIGNAL: AgcSignalSpec = {
@@ -778,13 +779,11 @@ const AGC: React.FC = () => {
         outputs: normalizeOutputs(values.outputs),
       };
       submittedConfig = config;
-      if (allocationMode === 'proportional') {
-        const invalidCapacityMember = config.members.find(
-          (member) => member.controllable && member.capacity_kw <= 0,
-        );
-        if (invalidCapacityMember) {
-          throw new Error(`${invalidCapacityMember.member_name || '可控成员'} 的额定容量必须大于 0`);
-        }
+      const invalidCapacityMember = config.members.find(
+        (member) => !Number.isFinite(member.capacity_kw) || member.capacity_kw <= 0,
+      );
+      if (invalidCapacityMember) {
+        throw new Error(`${invalidCapacityMember.member_name || '成员'} 的额定容量必须是大于 0 的有限数值`);
       }
       const duplicateTags = findDuplicateGroupEndpointTags(config);
       if (duplicateTags.length > 0) {
@@ -1782,15 +1781,9 @@ const AGC: React.FC = () => {
                 rules={[
                   {
                     validator: async (_rule, value) => {
-                      if (
-                        allocationMode === 'proportional'
-                        && memberForm.getFieldValue('controllable')
-                        && (!isFiniteNumber(value) || value <= 0)
-                      ) {
-                        throw new Error('按容量比例分配时，额定容量必须大于 0');
+                      if (!isFiniteNumber(value) || value <= 0) {
+                        throw new Error('额定容量必须是大于 0 的有限数值');
                       }
-                      if (value == null || (isFiniteNumber(value) && value >= 0)) return;
-                      throw new Error('额定容量必须是非负有效数字');
                     },
                   },
                 ]}
