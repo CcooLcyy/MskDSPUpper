@@ -92,6 +92,10 @@ import {
   generateBatchPoints,
   type BatchPointDraft,
 } from './batch-point';
+import {
+  buildIec104SimulationUpdates,
+  resolveIec104RuntimeDisplay,
+} from './simulation-realtime';
 
 const { Text } = Typography;
 
@@ -562,6 +566,22 @@ const IEC104: React.FC = () => {
     selectedLink?.conn_id ?? null,
     realtimeTags,
   );
+  const activeSimulationSnapshot = simulationSnapshot?.conn_name === selectedConn
+    ? simulationSnapshot
+    : null;
+  const simulationUpdatesByTag = useMemo(
+    () => buildIec104SimulationUpdates(activeSimulationSnapshot),
+    [activeSimulationSnapshot],
+  );
+  useEffect(() => {
+    if (!selectedConn || simulationUpdatesByTag.size === 0) {
+      return;
+    }
+    console.info('IEC104 运行视图已加载模拟数据', {
+      connName: selectedConn,
+      pointCount: simulationUpdatesByTag.size,
+    });
+  }, [selectedConn, simulationUpdatesByTag]);
   const visiblePoints = useMemo(
     () => {
       const normalizedSearch = pointSearch.trim().toLocaleLowerCase();
@@ -587,7 +607,8 @@ const IEC104: React.FC = () => {
     setPointTypeFilter(undefined);
     setIoaCategoryFilter(undefined);
   }, []);
-  const actionsDisabled = pointsLoading
+  const actionsDisabled = simulationLoading
+    || pointsLoading
     || pointSubmitting
     || importSubmitting
     || runtimeAction !== null
@@ -819,6 +840,9 @@ const IEC104: React.FC = () => {
     try {
       await api.iec104ClearSimulationValues(selectedConn);
       setSimulationSnapshot({ conn_name: selectedConn, points: [] });
+      console.info('IEC104 模拟值已清除，运行视图恢复实时数据', {
+        connName: selectedConn,
+      });
       messageApi.success('模拟值已清除，已恢复真实数据路径');
     } catch (error) {
       messageApi.error(`清除模拟值失败: ${formatErrorText(error)}`);
@@ -2200,8 +2224,15 @@ const IEC104: React.FC = () => {
       key: 'realtime_value',
       width: 160,
       render: (_value: unknown, record: Iec104Point) => {
-        const update = realtimeByTag[record.tag];
-        return renderProtocolRealtimeValueCell(update, realtimeRevisionByTag[record.tag]?.value);
+        const display = resolveIec104RuntimeDisplay(
+          record.tag,
+          simulationUpdatesByTag,
+          realtimeByTag[record.tag],
+        );
+        return renderProtocolRealtimeValueCell(
+          display.update,
+          display.simulated ? undefined : realtimeRevisionByTag[record.tag]?.value,
+        );
       },
     };
     const realtimeTimestampColumn = {
@@ -2209,8 +2240,15 @@ const IEC104: React.FC = () => {
       key: 'realtime_ts',
       width: 130,
       render: (_value: unknown, record: Iec104Point) => {
-        const update = realtimeByTag[record.tag];
-        return renderProtocolRealtimeTimestampCell(update, realtimeRevisionByTag[record.tag]?.timestamp);
+        const display = resolveIec104RuntimeDisplay(
+          record.tag,
+          simulationUpdatesByTag,
+          realtimeByTag[record.tag],
+        );
+        return renderProtocolRealtimeTimestampCell(
+          display.update,
+          display.simulated ? undefined : realtimeRevisionByTag[record.tag]?.timestamp,
+        );
       },
     };
     const realtimeQualityColumn = {
@@ -2218,8 +2256,14 @@ const IEC104: React.FC = () => {
       key: 'realtime_quality',
       width: 100,
       render: (_value: unknown, record: Iec104Point) => {
-        const update = realtimeByTag[record.tag];
-        return renderProtocolRealtimeQualityCell(update, realtimeRevisionByTag[record.tag]?.quality);
+        const display = resolveIec104RuntimeDisplay(
+          record.tag,
+          simulationUpdatesByTag,
+          realtimeByTag[record.tag],
+        );
+        return display.simulated
+          ? <Tag color="warning">模拟</Tag>
+          : renderProtocolRealtimeQualityCell(display.update, realtimeRevisionByTag[record.tag]?.quality);
       },
     };
     const actionColumn = {
@@ -2284,7 +2328,17 @@ const IEC104: React.FC = () => {
       { title: 'Deadband', dataIndex: 'deadband', key: 'deadband', width: 110 },
       actionColumn,
     ];
-  }, [actionsDisabled, handleDeletePoint, openCopyPoint, openEditPoint, pointTableView, points, realtimeByTag, realtimeRevisionByTag]);
+  }, [
+    actionsDisabled,
+    handleDeletePoint,
+    openCopyPoint,
+    openEditPoint,
+    pointTableView,
+    points,
+    realtimeByTag,
+    realtimeRevisionByTag,
+    simulationUpdatesByTag,
+  ]);
 
   const importPointColumns: ColumnsType<ImportedPointDraft> = [
     {
