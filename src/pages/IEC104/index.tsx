@@ -26,6 +26,7 @@ import {
   PlusOutlined,
   DeleteOutlined,
   EditOutlined,
+  FileTextOutlined,
   LinkOutlined,
   DisconnectOutlined,
   ClockCircleOutlined,
@@ -86,6 +87,10 @@ import {
   type IoaCategoryFilterKey,
   type IoaCategoryKey,
 } from './ioa-category';
+import {
+  generateBatchPoints,
+  type BatchPointDraft,
+} from './batch-point';
 
 const { Text } = Typography;
 
@@ -477,6 +482,14 @@ const IEC104: React.FC = () => {
   const [ioaAdjustModalOpen, setIoaAdjustModalOpen] = useState(false);
   const [pointTypeBatchModalOpen, setPointTypeBatchModalOpen] = useState(false);
   const [pointTypeBatchValue, setPointTypeBatchValue] = useState<number>();
+  const [batchPointModalOpen, setBatchPointModalOpen] = useState(false);
+  const [batchPointText, setBatchPointText] = useState('');
+  const [batchPointStartIoa, setBatchPointStartIoa] = useState(1);
+  const [batchPointStep, setBatchPointStep] = useState(1);
+  const [batchPointType, setBatchPointType] = useState(POINT_TYPE_FLOAT);
+  const [batchPointScale, setBatchPointScale] = useState(DEFAULT_POINT_FORM_VALUES.scale);
+  const [batchPointOffset, setBatchPointOffset] = useState(DEFAULT_POINT_FORM_VALUES.offset);
+  const [batchPointDeadband, setBatchPointDeadband] = useState(DEFAULT_POINT_FORM_VALUES.deadband);
   const [ioaAdjustDrafts, setIoaAdjustDrafts] = useState<IoaAdjustmentDraft[]>([]);
   const [ioaAdjustStrategy, setIoaAdjustStrategy] = useState<IoaAdjustmentStrategy>('offset');
   const [ioaAdjustStart, setIoaAdjustStart] = useState(1);
@@ -579,6 +592,7 @@ const IEC104: React.FC = () => {
     || linkModalOpen
     || pointModalOpen
     || pointTypeBatchModalOpen
+    || batchPointModalOpen
     || importPointModalOpen
     || ioaAdjustModalOpen;
   const isSinglePoint = pointType === 2;
@@ -674,6 +688,29 @@ const IEC104: React.FC = () => {
       errorCount: Array.from(rowIssues.values()).reduce((count, issues) => count + issues.length, 0),
     };
   }, [importPointDrafts, importReservedTagSet, points]);
+
+  const batchPointResult = useMemo(
+    () => generateBatchPoints({
+      text: batchPointText,
+      startIoa: batchPointStartIoa,
+      step: batchPointStep,
+      pointType: batchPointType,
+      scale: batchPointScale,
+      offset: batchPointOffset,
+      deadband: batchPointDeadband,
+      occupiedTags: new Set(points.map((point) => point.tag.trim())),
+      occupiedIoas: new Set(points.map((point) => point.ioa)),
+    }),
+    [batchPointDeadband, batchPointOffset, batchPointScale, batchPointStartIoa, batchPointStep, batchPointText, batchPointType, points],
+  );
+
+  const batchPointIssuesByLine = useMemo(() => {
+    const issuesByLine = new Map<number, string[]>();
+    batchPointResult.issues.forEach((issue) => {
+      issuesByLine.set(issue.line, [...(issuesByLine.get(issue.line) ?? []), issue.message]);
+    });
+    return issuesByLine;
+  }, [batchPointResult]);
 
   // ── Data Loading ──
 
@@ -1268,6 +1305,67 @@ const IEC104: React.FC = () => {
     pointForm.setFieldsValue(getCreatePointInitialValues(points));
     setPointModalOpen(true);
   }, [pointForm, points]);
+
+  const openBatchPointModal = useCallback(() => {
+    setBatchPointText('');
+    setBatchPointStartIoa(getNextAvailableIoa(new Set(points.map((point) => point.ioa))));
+    setBatchPointStep(1);
+    setBatchPointType(getDefaultImportedPointType(points));
+    setBatchPointScale(DEFAULT_POINT_FORM_VALUES.scale);
+    setBatchPointOffset(DEFAULT_POINT_FORM_VALUES.offset);
+    setBatchPointDeadband(DEFAULT_POINT_FORM_VALUES.deadband);
+    setBatchPointModalOpen(true);
+  }, [points]);
+
+  const handleBatchPointSubmit = useCallback(async () => {
+    if (!selectedConn || pointSubmitting) return;
+    if (batchPointResult.drafts.length === 0) {
+      messageApi.error('请至少输入一个点名');
+      return;
+    }
+    if (batchPointResult.issues.length > 0) {
+      messageApi.error(`请先修正 ${batchPointResult.issues.length} 个批量点位配置错误`);
+      return;
+    }
+
+    const normalizedPoints: Iec104Point[] = batchPointResult.drafts.map((draft) => ({
+      tag: draft.tag,
+      ioa: draft.ioa,
+      point_type: draft.point_type,
+      scale: draft.scale,
+      offset: draft.offset,
+      deadband: draft.deadband,
+    }));
+    const newPoints = [...points, ...normalizedPoints];
+
+    setPointSubmitting(true);
+    try {
+      const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
+      setPoints(newPoints);
+      setSimulationSnapshot(null);
+      setBatchPointModalOpen(false);
+      console.info('IEC104 批量添加点位完成', {
+        connName: selectedConn,
+        pointCount: normalizedPoints.length,
+        startIoa: batchPointStartIoa,
+        step: batchPointStep,
+      });
+      messageApi.success(`已批量添加 ${normalizedPoints.length} 个点位`);
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动链路');
+      }
+    } catch (error) {
+      console.error('IEC104 批量添加点位失败', {
+        connName: selectedConn,
+        error,
+      });
+      messageApi.error(`批量添加点位失败: ${formatErrorText(error)}`);
+    } finally {
+      setPointSubmitting(false);
+    }
+  }, [batchPointResult, batchPointStartIoa, batchPointStep, messageApi, pointSubmitting, points, runSelectedLinkStopped, selectedConn]);
 
   const openImportPointModal = useCallback(() => {
     setImportSourceConnId(undefined);
@@ -2018,6 +2116,48 @@ const IEC104: React.FC = () => {
 
   // ── Point Table Columns ──
 
+  const batchPointPreviewColumns: ColumnsType<BatchPointDraft> = [
+    {
+      title: '行',
+      dataIndex: 'sourceLine',
+      key: 'sourceLine',
+      width: 60,
+    },
+    {
+      title: '点名',
+      dataIndex: 'tag',
+      key: 'tag',
+      width: 220,
+      ellipsis: true,
+    },
+    {
+      title: 'IOA',
+      dataIndex: 'ioa',
+      key: 'ioa',
+      width: 170,
+      render: (ioa: number) => Number.isInteger(ioa) && ioa >= 1 && ioa <= MAX_IOA
+        ? formatIoaDual(ioa)
+        : String(ioa),
+    },
+    {
+      title: '类型',
+      dataIndex: 'point_type',
+      key: 'point_type',
+      width: 190,
+      render: (value: number) => POINT_TYPE_LABELS[value] ?? `未知类型 (${value})`,
+    },
+    {
+      title: '状态',
+      key: 'status',
+      render: (_value: unknown, record: BatchPointDraft) => {
+        const issues = batchPointIssuesByLine.get(record.sourceLine) ?? [];
+        return issues.length > 0
+          ? <Text type="danger">{issues.join('；')}</Text>
+          : <Tag color="success">可导入</Tag>;
+      },
+    },
+  ];
+
   const pointColumns: ColumnsType<Iec104Point> = useMemo(() => {
     const tagColumn = {
       title: 'Tag (标签)',
@@ -2499,6 +2639,14 @@ const IEC104: React.FC = () => {
                   onClick={openPointTypeBatchModal}
                 >
                   批量编辑类型{selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}
+                </Button>
+                <Button
+                  size="small"
+                  icon={<FileTextOutlined />}
+                  disabled={!selectedConn || pointTableView !== 'config' || actionsDisabled}
+                  onClick={openBatchPointModal}
+                >
+                  批量添加点位
                 </Button>
                 <Button size="small" icon={<UploadOutlined />} disabled={!selectedConn || actionsDisabled} onClick={openImportPointModal}>从数据总线导入</Button>
                 <Button type="primary" size="small" icon={<PlusOutlined />} disabled={!selectedConn || actionsDisabled} onClick={openCreatePoint}>添加点位</Button>
@@ -2995,6 +3143,160 @@ const IEC104: React.FC = () => {
             placeholder="选择统一点位类型"
             style={{ width: '100%' }}
             disabled={pointSubmitting}
+          />
+        </Space>
+      </Modal>
+
+      {/* 批量添加点位弹窗 */}
+      <Modal
+        title="批量添加点位"
+        open={batchPointModalOpen}
+        onOk={() => void handleBatchPointSubmit()}
+        onCancel={() => {
+          if (!pointSubmitting) {
+            setBatchPointModalOpen(false);
+          }
+        }}
+        width={980}
+        className="iec104-config-modal iec104-batch-point-modal"
+        okText={pointSubmitting ? '保存中…' : `添加 ${batchPointResult.drafts.length} 个点位`}
+        cancelText="取消"
+        confirmLoading={pointSubmitting}
+        okButtonProps={{
+          disabled: pointSubmitting || batchPointResult.drafts.length === 0 || batchPointResult.issues.length > 0,
+        }}
+        maskClosable={!pointSubmitting}
+        closable={!pointSubmitting}
+        keyboard={!pointSubmitting}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="每行输入一个点名，系统按起始 IOA 和步长自动生成连续地址"
+            description="空行会自动忽略。点名、IOA 与当前点表冲突时不能提交；如需删除某一行，直接在上方文本框中删除即可。"
+          />
+
+          <Row gutter={16}>
+            <Col xs={24} lg={10}>
+              <Text strong style={{ display: 'block', marginBottom: 8 }}>批量点名</Text>
+              <Input.TextArea
+                rows={12}
+                value={batchPointText}
+                disabled={pointSubmitting}
+                placeholder={'例如：\n母线电压A\n母线电压B\n母线电压C'}
+                onChange={(event) => setBatchPointText(event.target.value)}
+              />
+            </Col>
+            <Col xs={24} lg={14}>
+              <Row gutter={[12, 12]}>
+                <Col xs={24} sm={12}>
+                  <Space size={8} style={{ display: 'flex', marginBottom: 8 }}>
+                    <Text type="secondary">起始 IOA</Text>
+                    <Checkbox checked={ioaInputHex} onChange={(event) => setIoaInputHex(event.target.checked)}>十六进制输入</Checkbox>
+                  </Space>
+                  <IoaInput
+                    min={1}
+                    max={MAX_IOA}
+                    precision={0}
+                    value={batchPointStartIoa}
+                    inputHex={ioaInputHex}
+                    disabled={pointSubmitting}
+                    style={{ width: '100%' }}
+                    onChange={(value) => setBatchPointStartIoa(typeof value === 'number' && Number.isFinite(value) ? value : 0)}
+                  />
+                </Col>
+                <Col xs={24} sm={12}>
+                  <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>步长</Text>
+                  <InputNumber
+                    min={1}
+                    precision={0}
+                    value={batchPointStep}
+                    disabled={pointSubmitting}
+                    style={{ width: '100%' }}
+                    onChange={(value) => setBatchPointStep(typeof value === 'number' && Number.isFinite(value) ? value : 0)}
+                  />
+                </Col>
+                <Col xs={24}>
+                  <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>统一点位类型</Text>
+                  <Select<number>
+                    value={batchPointType}
+                    options={[
+                      { value: POINT_TYPE_FLOAT, label: POINT_TYPE_LABELS[POINT_TYPE_FLOAT] },
+                      { value: POINT_TYPE_SINGLE, label: POINT_TYPE_LABELS[POINT_TYPE_SINGLE] },
+                    ]}
+                    disabled={pointSubmitting}
+                    style={{ width: '100%' }}
+                    onChange={(value) => {
+                      setBatchPointType(value);
+                      if (value === POINT_TYPE_SINGLE) {
+                        setBatchPointScale(DEFAULT_POINT_FORM_VALUES.scale);
+                        setBatchPointOffset(DEFAULT_POINT_FORM_VALUES.offset);
+                        setBatchPointDeadband(DEFAULT_POINT_FORM_VALUES.deadband);
+                      }
+                    }}
+                  />
+                </Col>
+                <Col xs={8}>
+                  <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>Scale</Text>
+                  <InputNumber
+                    step={0.01}
+                    value={batchPointScale}
+                    disabled={pointSubmitting || batchPointType === POINT_TYPE_SINGLE}
+                    style={{ width: '100%' }}
+                    onChange={(value) => setBatchPointScale(typeof value === 'number' ? value : DEFAULT_POINT_FORM_VALUES.scale)}
+                  />
+                </Col>
+                <Col xs={8}>
+                  <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>Offset</Text>
+                  <InputNumber
+                    step={0.01}
+                    value={batchPointOffset}
+                    disabled={pointSubmitting || batchPointType === POINT_TYPE_SINGLE}
+                    style={{ width: '100%' }}
+                    onChange={(value) => setBatchPointOffset(typeof value === 'number' ? value : DEFAULT_POINT_FORM_VALUES.offset)}
+                  />
+                </Col>
+                <Col xs={8}>
+                  <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>Deadband</Text>
+                  <InputNumber
+                    step={0.01}
+                    min={0}
+                    value={batchPointDeadband}
+                    disabled={pointSubmitting || batchPointType === POINT_TYPE_SINGLE}
+                    style={{ width: '100%' }}
+                    onChange={(value) => setBatchPointDeadband(typeof value === 'number' ? value : DEFAULT_POINT_FORM_VALUES.deadband)}
+                  />
+                </Col>
+              </Row>
+            </Col>
+          </Row>
+
+          {batchPointResult.issues.length > 0 ? (
+            <Alert
+              type="error"
+              showIcon
+              message={`发现 ${batchPointResult.issues.length} 个配置问题`}
+              description={batchPointResult.issues
+                .map((issue) => issue.line > 0 ? `第 ${issue.line} 行：${issue.message}` : issue.message)
+                .join('；')}
+            />
+          ) : null}
+
+          <Table<BatchPointDraft>
+            size="small"
+            rowKey="key"
+            pagination={{
+              defaultPageSize: 100,
+              pageSizeOptions: [50, 100, 200],
+              showSizeChanger: true,
+              showTotal: (total) => `共 ${total} 个待添加点位`,
+            }}
+            scroll={{ x: 760, y: 300 }}
+            columns={batchPointPreviewColumns}
+            dataSource={batchPointResult.drafts}
+            locale={{ emptyText: '粘贴点名后显示生成预览' }}
           />
         </Space>
       </Modal>
