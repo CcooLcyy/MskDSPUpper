@@ -69,6 +69,7 @@ import type {
   Iec104LinkInfo,
   Iec104Point,
   Iec104SimulationSnapshot,
+  Iec104SimulationGenerateOptions,
 } from '../../adapters';
 import {
   ImportedPointRoutesError,
@@ -473,6 +474,7 @@ const IEC104: React.FC = () => {
   const [simulationSnapshot, setSimulationSnapshot] = useState<Iec104SimulationSnapshot | null>(null);
   const [simulationLoading, setSimulationLoading] = useState(false);
   const [simulationModalOpen, setSimulationModalOpen] = useState(false);
+  const [simulationMode, setSimulationMode] = useState<Iec104SimulationGenerateOptions['mode']>('random');
   const [pointTypeFilter, setPointTypeFilter] = useState<number>();
   const [ioaCategoryFilter, setIoaCategoryFilter] = useState<IoaCategoryFilterKey>();
   const [pointSearch, setPointSearch] = useState('');
@@ -787,14 +789,16 @@ const IEC104: React.FC = () => {
     if (!selectedConn) return;
     setSimulationLoading(true);
     try {
-      setSimulationSnapshot(await api.iec104GenerateSimulationValues(selectedConn));
-      messageApi.success('已生成固定随机模拟值');
+      setSimulationSnapshot(await api.iec104GenerateSimulationValues(selectedConn, {
+        mode: simulationMode,
+      }));
+      messageApi.success(simulationMode === 'increment' ? '已生成固定递增模拟值' : '已生成固定随机模拟值');
     } catch (error) {
       messageApi.error(`生成模拟值失败: ${formatErrorText(error)}`);
     } finally {
       setSimulationLoading(false);
     }
-  }, [messageApi, selectedConn]);
+  }, [messageApi, selectedConn, simulationMode]);
 
   const handleApplySimulation = useCallback(async () => {
     if (!selectedConn) return;
@@ -2753,12 +2757,22 @@ const IEC104: React.FC = () => {
           />
         ) : null}
         <Space wrap style={{ marginBottom: 12 }}>
+          <Select
+            value={simulationMode}
+            style={{ width: 150 }}
+            options={[
+              { value: 'random', label: '固定随机值' },
+              { value: 'increment', label: '按 IOA 递增' },
+            ]}
+            onChange={setSimulationMode}
+            disabled={simulationLoading || actionsDisabled}
+          />
           <Button
             icon={<ThunderboltOutlined />}
             loading={simulationLoading}
             disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || points.length === 0 || actionsDisabled}
             onClick={() => void handleGenerateSimulation()}
-          >生成随机量</Button>
+          >生成模拟值</Button>
           <Button
             type="primary"
             icon={<LinkOutlined />}
@@ -2773,7 +2787,9 @@ const IEC104: React.FC = () => {
         <Alert
           type="warning"
           showIcon
-          message="模拟值仅在 IEC104 内存中生效，不进入 DataCenter 路由；再次生成才会替换当前值。"
+          message={simulationMode === 'increment'
+            ? '递增模式仅对实际存在的 FLOAT 遥测生效：按 IOA 升序从 1 开始连续编号，缺失 IOA 不占编号；SINGLE 仍生成固定布尔值。'
+            : '随机模式按原逻辑生成固定值。模拟值仅在 IEC104 内存中生效，不进入 DataCenter 路由；再次生成才会替换当前值。'}
           style={{ marginBottom: 12 }}
         />
         <Table

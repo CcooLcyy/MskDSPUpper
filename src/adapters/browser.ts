@@ -32,6 +32,7 @@ import type {
   Iec104Point,
   Iec104PointTable,
   Iec104SimulationSnapshot,
+  Iec104SimulationGenerateOptions,
   LowerUpdateChannel,
   LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
@@ -1055,15 +1056,17 @@ export const browserApi: typeof tauriApi = {
   },
   iec104GetPointTable: async (connName: string) => clone(iec104Tables.get(connName) ?? { conn_name: connName, points: [] }),
   iec104SendTimeSync: async () => {},
-  iec104GenerateSimulationValues: async (connName: string): Promise<Iec104SimulationSnapshot> => {
+  iec104GenerateSimulationValues: async (connName: string, options: Iec104SimulationGenerateOptions): Promise<Iec104SimulationSnapshot> => {
     const table = iec104Tables.get(connName);
     if (!table || table.points.length === 0) throw new Error('浏览器开发模式 mock 点表为空');
     const tsMs = Date.now();
+    let floatIndex = 0;
+    const points = [...table.points].sort((left, right) => left.ioa - right.ioa);
     const snapshot: Iec104SimulationSnapshot = {
       conn_name: connName,
-      points: table.points.map((point) => point.point_type === 2
+      points: points.map((point) => point.point_type === 2
         ? { tag: point.tag, point_type: point.point_type, bool_value: Math.random() >= 0.5, double_value: null, quality: 0, ts_ms: tsMs }
-        : { tag: point.tag, point_type: point.point_type, bool_value: null, double_value: Math.random() * 100, quality: 0, ts_ms: tsMs }),
+        : { tag: point.tag, point_type: point.point_type, bool_value: null, double_value: options.mode === 'increment' ? 1 + floatIndex++ : Math.random() * 100, quality: 0, ts_ms: tsMs }),
     };
     iec104Simulation.set(connName, snapshot);
     return clone(snapshot);

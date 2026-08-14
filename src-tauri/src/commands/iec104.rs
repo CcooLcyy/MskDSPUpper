@@ -412,10 +412,15 @@ impl From<crate::proto::iec104_proto::SimulationSnapshot> for SimulationSnapshot
 
 #[tauri::command]
 pub async fn iec104_generate_simulation_values(
-    state: State<'_, AppState>, conn_name: String,
+    state: State<'_, AppState>, conn_name: String, mode: String,
 ) -> Result<SimulationSnapshotDto, String> {
+    let mode = match mode.as_str() {
+        "increment" => 1,
+        "random" => 0,
+        _ => return Err("模拟值模式不支持".to_string()),
+    };
     let client = Iec104Client::new(&state.conn_manager);
-    client.generate_simulation_values(conn_name.clone()).await.map(Into::into).map_err(|error| {
+    client.generate_simulation_values(conn_name.clone(), mode).await.map(Into::into).map_err(|error| {
         tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "生成模拟值失败");
         error.to_string()
     })

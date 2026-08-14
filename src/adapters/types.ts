@@ -260,6 +260,12 @@ export interface Iec104SimulationSnapshot {
   points: Iec104SimulationPoint[];
 }
 
+export type Iec104SimulationMode = 'random' | 'increment';
+
+export interface Iec104SimulationGenerateOptions {
+  mode: Iec104SimulationMode;
+}
+
 export interface ModbusSerialConfig {
   device: string;
   baud_rate: number;

@@ -36,6 +36,8 @@ export type {
   Iec104PointTable,
   Iec104SimulationPoint,
   Iec104SimulationSnapshot,
+  Iec104SimulationGenerateOptions,
+  Iec104SimulationMode,
 } from './types';
 export type {
   ModbusLinkConfig,
