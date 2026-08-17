@@ -38,6 +38,7 @@ export type {
   Iec104SimulationSnapshot,
   Iec104SimulationGenerateOptions,
   Iec104SimulationMode,
+  Iec104SimulationBoolMode,
 } from './types';
 export type {
   ModbusLinkConfig,

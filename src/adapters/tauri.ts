@@ -218,6 +218,7 @@ export const api = {
     invoke<Iec104SimulationSnapshot>('iec104_generate_simulation_values', {
       connName,
       mode: options.mode,
+      boolMode: options.boolMode,
     }),
   iec104GetSimulationSnapshot: (connName: string) =>
     invoke<Iec104SimulationSnapshot>('iec104_get_simulation_snapshot', { connName }),

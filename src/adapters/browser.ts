@@ -1062,13 +1062,53 @@ export const browserApi: typeof tauriApi = {
     const tsMs = Date.now();
     let floatIndex = 0;
     const points = [...table.points].sort((left, right) => left.ioa - right.ioa);
+    const previous = iec104Simulation.get(connName);
+    const previousBoolValues = new Map(
+      (previous?.points ?? [])
+        .filter((point) => point.point_type === 2 && point.bool_value != null)
+        .map((point) => [point.tag, point.bool_value as boolean]),
+    );
+    if (options.boolMode === 'invert_current') {
+      const missingTag = points.find(
+        (point) => point.point_type === 2 && !previousBoolValues.has(point.tag),
+      )?.tag;
+      if (missingTag) {
+        throw new Error(`浏览器开发模式 mock 没有遥信 ${missingTag} 的当前值`);
+      }
+    }
+    const resolveBoolValue = (tag: string): boolean => {
+      switch (options.boolMode) {
+        case 'all_true':
+          return true;
+        case 'all_false':
+          return false;
+        case 'invert_current':
+          return !previousBoolValues.get(tag);
+        case 'random':
+        default:
+          return Math.random() >= 0.5;
+      }
+    };
     const snapshot: Iec104SimulationSnapshot = {
       conn_name: connName,
       points: points.map((point) => point.point_type === 2
-        ? { tag: point.tag, point_type: point.point_type, bool_value: Math.random() >= 0.5, double_value: null, quality: 0, ts_ms: tsMs }
+        ? {
+          tag: point.tag,
+          point_type: point.point_type,
+          bool_value: resolveBoolValue(point.tag),
+          double_value: null,
+          quality: 0,
+          ts_ms: tsMs,
+        }
         : { tag: point.tag, point_type: point.point_type, bool_value: null, double_value: options.mode === 'increment' ? 1 + floatIndex++ : Math.random() * 100, quality: 0, ts_ms: tsMs }),
     };
     iec104Simulation.set(connName, snapshot);
+    console.info('IEC104 浏览器开发模式已生成模拟值', {
+      connName,
+      floatMode: options.mode,
+      boolMode: options.boolMode,
+      pointCount: snapshot.points.length,
+    });
     return clone(snapshot);
   },
   iec104GetSimulationSnapshot: async (connName: string) => clone(iec104Simulation.get(connName) ?? { conn_name: connName, points: [] }),

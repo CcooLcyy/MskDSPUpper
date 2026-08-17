@@ -109,3 +109,13 @@ test('IEC104 runtime columns use the simulation display resolver', () => {
   assert.match(pageSource, /const actionsDisabled = simulationLoading/);
   assert.match(pageSource, /setSimulationSnapshot\(\{ conn_name: selectedConn, points: \[\] \}\)/);
 });
+
+// 验证模拟面板提供四种遥信模式，并将所选模式传给生成接口。
+test('IEC104 simulation panel exposes deterministic boolean modes', () => {
+  assert.match(pageSource, /boolMode: simulationBoolMode/);
+  assert.match(pageSource, /value: 'random', label: '遥信随机值'/);
+  assert.match(pageSource, /value: 'all_true', label: '遥信全部 true'/);
+  assert.match(pageSource, /value: 'all_false', label: '遥信全部 false'/);
+  assert.match(pageSource, /value: 'invert_current', label: '遥信按当前值取反'/);
+  assert.match(pageSource, /当前模拟值[\s\S]*DataCenter 最新值[\s\S]*缺少当前值/);
+});

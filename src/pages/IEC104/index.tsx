@@ -70,6 +70,7 @@ import type {
   Iec104Point,
   Iec104SimulationSnapshot,
   Iec104SimulationGenerateOptions,
+  Iec104SimulationBoolMode,
 } from '../../adapters';
 import {
   ImportedPointRoutesError,
@@ -110,6 +111,7 @@ const ROLE_LABELS: Record<number, string> = {
 const ROLE_SERVER = 1;
 const ROLE_CLIENT = 2;
 const STATION_ROLE_MASTER = 1;
+const STATION_ROLE_SLAVE = 2;
 const IEC104_MODULE_NAME = 'IEC104';
 const DEFAULT_SERVER_LOCAL_IP = '0.0.0.0';
 const DEFAULT_IEC104_PORT = 2404;
@@ -467,7 +469,10 @@ const isMasterStationConfig = (config: Iec104LinkConfig | null | undefined): boo
   );
 
 const isSimulationSupported = (config: Iec104LinkConfig | null | undefined): boolean =>
-  Boolean(config && config.role === ROLE_SERVER && (config.station_role === 2 || config.station_role === 0));
+  Boolean(config && (
+    config.station_role === STATION_ROLE_SLAVE
+    || (config.station_role === 0 && config.role === ROLE_SERVER)
+  ));
 
 // ── Component ──
 
@@ -479,6 +484,7 @@ const IEC104: React.FC = () => {
   const [simulationLoading, setSimulationLoading] = useState(false);
   const [simulationModalOpen, setSimulationModalOpen] = useState(false);
   const [simulationMode, setSimulationMode] = useState<Iec104SimulationGenerateOptions['mode']>('random');
+  const [simulationBoolMode, setSimulationBoolMode] = useState<Iec104SimulationBoolMode>('random');
   const [pointTypeFilter, setPointTypeFilter] = useState<number>();
   const [ioaCategoryFilter, setIoaCategoryFilter] = useState<IoaCategoryFilterKey>();
   const [pointSearch, setPointSearch] = useState('');
@@ -812,14 +818,23 @@ const IEC104: React.FC = () => {
     try {
       setSimulationSnapshot(await api.iec104GenerateSimulationValues(selectedConn, {
         mode: simulationMode,
+        boolMode: simulationBoolMode,
       }));
-      messageApi.success(simulationMode === 'increment' ? '已生成固定递增模拟值' : '已生成固定随机模拟值');
+      const floatModeLabel = simulationMode === 'increment' ? '递增' : '随机';
+      const boolModeLabel = simulationBoolMode === 'all_true'
+        ? '遥信全真'
+        : simulationBoolMode === 'all_false'
+          ? '遥信全假'
+          : simulationBoolMode === 'invert_current'
+            ? '遥信取反'
+            : '遥信随机';
+      messageApi.success(`已生成固定模拟值（遥测${floatModeLabel}，${boolModeLabel}）`);
     } catch (error) {
       messageApi.error(`生成模拟值失败: ${formatErrorText(error)}`);
     } finally {
       setSimulationLoading(false);
     }
-  }, [messageApi, selectedConn, simulationMode]);
+  }, [messageApi, selectedConn, simulationBoolMode, simulationMode]);
 
   const handleApplySimulation = useCallback(async () => {
     if (!selectedConn) return;
@@ -2806,7 +2821,7 @@ const IEC104: React.FC = () => {
             type="warning"
             showIcon
             message="当前连接不支持模拟数据"
-            description="请先选择角色为 SERVER、站点角色为 SLAVE（被控站）的 IEC104 连接。"
+            description="请先选择站点角色为 SLAVE（被控站）的 IEC104 连接。"
             style={{ marginBottom: 12 }}
           />
         ) : null}
@@ -2819,6 +2834,18 @@ const IEC104: React.FC = () => {
               { value: 'increment', label: '按 IOA 递增' },
             ]}
             onChange={setSimulationMode}
+            disabled={simulationLoading || actionsDisabled}
+          />
+          <Select
+            value={simulationBoolMode}
+            style={{ width: 170 }}
+            options={[
+              { value: 'random', label: '遥信随机值' },
+              { value: 'all_true', label: '遥信全部 true' },
+              { value: 'all_false', label: '遥信全部 false' },
+              { value: 'invert_current', label: '遥信按当前值取反' },
+            ]}
+            onChange={setSimulationBoolMode}
             disabled={simulationLoading || actionsDisabled}
           />
           <Button
@@ -2835,15 +2862,17 @@ const IEC104: React.FC = () => {
             onClick={() => void handleApplySimulation()}
           >应用并发送</Button>
           <Popconfirm title="确认清除当前模拟值？" onConfirm={() => void handleClearSimulation()}>
-            <Button danger icon={<ClearOutlined />} loading={simulationLoading} disabled={!selectedConn || !simulationSnapshot?.points.length || actionsDisabled}>清除模拟值</Button>
+            <Button danger icon={<ClearOutlined />} loading={simulationLoading} disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !simulationSnapshot?.points.length || actionsDisabled}>清除模拟值</Button>
           </Popconfirm>
         </Space>
         <Alert
           type="warning"
           showIcon
-          message={simulationMode === 'increment'
-            ? '递增模式仅对实际存在的 FLOAT 遥测生效：按 IOA 升序从 1 开始连续编号，缺失 IOA 不占编号；SINGLE 仍生成固定布尔值。'
-            : '随机模式按原逻辑生成固定值。模拟值仅在 IEC104 内存中生效，不进入 DataCenter 路由；再次生成才会替换当前值。'}
+          message={simulationBoolMode === 'invert_current'
+            ? '遥信取反优先使用当前模拟值；没有模拟值时读取 DataCenter 最新值，缺少当前值的点会提示错误。遥测仍按所选模式生成。'
+            : simulationMode === 'increment'
+              ? '递增模式仅对实际存在的 FLOAT 遥测生效：按 IOA 升序从 1 开始连续编号，缺失 IOA 不占编号；遥信按右侧模式生成。'
+              : '遥测随机模式按原逻辑生成固定值，遥信按右侧模式生成。模拟值仅在 IEC104 内存中生效，不进入 DataCenter 路由；再次生成才会替换当前值。'}
           style={{ marginBottom: 12 }}
         />
         <Table

@@ -120,11 +120,12 @@ impl<'a> Iec104Client<'a> {
         &self,
         conn_name: String,
         mode: i32,
+        bool_mode: i32,
     ) -> Result<SimulationSnapshot> {
         let channel = self.conn.module_channel("IEC104").await?;
         let mut client = Iec104ServiceClient::new(channel);
         Ok(client
-            .generate_simulation_values(SimulationRequest { conn_name, mode })
+            .generate_simulation_values(SimulationRequest { conn_name, mode, bool_mode })
             .await?
             .into_inner())
     }
@@ -132,20 +133,20 @@ impl<'a> Iec104Client<'a> {
     pub async fn get_simulation_snapshot(&self, conn_name: String) -> Result<SimulationSnapshot> {
         let channel = self.conn.module_channel("IEC104").await?;
         let mut client = Iec104ServiceClient::new(channel);
-        Ok(client.get_simulation_snapshot(SimulationRequest { conn_name, mode: 0 }).await?.into_inner())
+        Ok(client.get_simulation_snapshot(SimulationRequest { conn_name, mode: 0, bool_mode: 0 }).await?.into_inner())
     }
 
     pub async fn apply_simulation_values(&self, conn_name: String) -> Result<()> {
         let channel = self.conn.module_channel("IEC104").await?;
         let mut client = Iec104ServiceClient::new(channel);
-        client.apply_simulation_values(SimulationRequest { conn_name, mode: 0 }).await?;
+        client.apply_simulation_values(SimulationRequest { conn_name, mode: 0, bool_mode: 0 }).await?;
         Ok(())
     }
 
     pub async fn clear_simulation_values(&self, conn_name: String) -> Result<()> {
         let channel = self.conn.module_channel("IEC104").await?;
         let mut client = Iec104ServiceClient::new(channel);
-        client.clear_simulation_values(SimulationRequest { conn_name, mode: 0 }).await?;
+        client.clear_simulation_values(SimulationRequest { conn_name, mode: 0, bool_mode: 0 }).await?;
         Ok(())
     }
 }

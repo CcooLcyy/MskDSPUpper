@@ -262,8 +262,11 @@ export interface Iec104SimulationSnapshot {
 
 export type Iec104SimulationMode = 'random' | 'increment';
 
+export type Iec104SimulationBoolMode = 'random' | 'all_false' | 'all_true' | 'invert_current';
+
 export interface Iec104SimulationGenerateOptions {
   mode: Iec104SimulationMode;
+  boolMode: Iec104SimulationBoolMode;
 }
 
 export interface ModbusSerialConfig {
