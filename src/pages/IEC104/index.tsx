@@ -496,6 +496,7 @@ const IEC104: React.FC = () => {
   const [pointTypeBatchValue, setPointTypeBatchValue] = useState<number>();
   const [batchPointModalOpen, setBatchPointModalOpen] = useState(false);
   const [batchPointText, setBatchPointText] = useState('');
+  const [batchPointCategory, setBatchPointCategory] = useState<IoaCategoryKey>('custom');
   const [batchPointStartIoa, setBatchPointStartIoa] = useState(1);
   const [batchPointStep, setBatchPointStep] = useState(1);
   const [batchPointType, setBatchPointType] = useState(POINT_TYPE_FLOAT);
@@ -626,6 +627,7 @@ const IEC104: React.FC = () => {
     || ioaAdjustModalOpen;
   const isSinglePoint = pointType === 2;
   const pointIoaRange = getIoaCategoryRange(pointIoaCategory ?? 'custom');
+  const batchPointIoaRange = getIoaCategoryRange(batchPointCategory);
   const pointTagTrimmed = typeof pointTag === 'string' ? pointTag.trim() : '';
   const pointTagDuplicate = pointTagTrimmed.length > 0 && points.some(
     (point, index) => index !== editingPointIndex && point.tag.trim() === pointTagTrimmed,
@@ -723,6 +725,7 @@ const IEC104: React.FC = () => {
       text: batchPointText,
       startIoa: batchPointStartIoa,
       step: batchPointStep,
+      ioaCategory: batchPointCategory,
       pointType: batchPointType,
       scale: batchPointScale,
       offset: batchPointOffset,
@@ -730,7 +733,7 @@ const IEC104: React.FC = () => {
       occupiedTags: new Set(points.map((point) => point.tag.trim())),
       occupiedIoas: new Set(points.map((point) => point.ioa)),
     }),
-    [batchPointDeadband, batchPointOffset, batchPointScale, batchPointStartIoa, batchPointStep, batchPointText, batchPointType, points],
+    [batchPointCategory, batchPointDeadband, batchPointOffset, batchPointScale, batchPointStartIoa, batchPointStep, batchPointText, batchPointType, points],
   );
 
   const batchPointIssuesByLine = useMemo(() => {
@@ -1351,6 +1354,7 @@ const IEC104: React.FC = () => {
 
   const openBatchPointModal = useCallback(() => {
     setBatchPointText('');
+    setBatchPointCategory('custom');
     setBatchPointStartIoa(getNextAvailableIoa(new Set(points.map((point) => point.ioa))));
     setBatchPointStep(1);
     setBatchPointType(getDefaultImportedPointType(points));
@@ -1359,6 +1363,23 @@ const IEC104: React.FC = () => {
     setBatchPointDeadband(DEFAULT_POINT_FORM_VALUES.deadband);
     setBatchPointModalOpen(true);
   }, [points]);
+
+  const handleBatchPointCategoryChange = useCallback(
+    (nextCategory: IoaCategoryKey) => {
+      const usedIoas = new Set(points.map((point) => point.ioa));
+      const nextStartIoa = nextCategory === 'custom'
+        ? getNextAvailableIoa(usedIoas)
+        : getSuggestedIoaByCategory(usedIoas, nextCategory);
+
+      setBatchPointCategory(nextCategory);
+      setBatchPointStartIoa(nextStartIoa);
+      console.info('IEC104 批量点位类别已切换', {
+        category: nextCategory,
+        startIoa: nextStartIoa,
+      });
+    },
+    [points],
+  );
 
   const handleBatchPointSubmit = useCallback(async () => {
     if (!selectedConn || pointSubmitting) return;
@@ -1390,6 +1411,7 @@ const IEC104: React.FC = () => {
       console.info('IEC104 批量添加点位完成', {
         connName: selectedConn,
         pointCount: normalizedPoints.length,
+        ioaCategory: batchPointCategory,
         startIoa: batchPointStartIoa,
         step: batchPointStep,
       });
@@ -1408,7 +1430,7 @@ const IEC104: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [batchPointResult, batchPointStartIoa, batchPointStep, messageApi, pointSubmitting, points, runSelectedLinkStopped, selectedConn]);
+  }, [batchPointCategory, batchPointResult, batchPointStartIoa, batchPointStep, messageApi, pointSubmitting, points, runSelectedLinkStopped, selectedConn]);
 
   const openImportPointModal = useCallback(() => {
     setImportSourceConnId(undefined);
@@ -2181,6 +2203,13 @@ const IEC104: React.FC = () => {
       render: (ioa: number) => Number.isInteger(ioa) && ioa >= 1 && ioa <= MAX_IOA
         ? formatIoaDual(ioa)
         : String(ioa),
+    },
+    {
+      title: '业务类别',
+      dataIndex: 'ioa_category',
+      key: 'ioa_category',
+      width: 110,
+      render: (category: IoaCategoryKey) => category === 'custom' ? '自定义' : getIoaCategoryLabel(category),
     },
     {
       title: '类型',
@@ -3316,6 +3345,21 @@ const IEC104: React.FC = () => {
                     style={{ width: '100%' }}
                     onChange={(value) => setBatchPointStep(typeof value === 'number' && Number.isFinite(value) ? value : 0)}
                   />
+                </Col>
+                <Col xs={24}>
+                  <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>统一 IOA 业务类别</Text>
+                  <Select<IoaCategoryKey>
+                    value={batchPointCategory}
+                    options={IOA_CATEGORY_FORM_OPTIONS}
+                    disabled={pointSubmitting}
+                    style={{ width: '100%' }}
+                    onChange={handleBatchPointCategoryChange}
+                  />
+                  <Text type="secondary" style={{ display: 'block', marginTop: 6 }}>
+                    {batchPointIoaRange
+                      ? `自动分配范围：${formatIoaDual(batchPointIoaRange.start)} - ${formatIoaDual(batchPointIoaRange.end)}`
+                      : '自定义模式：使用完整 IOA 范围'}
+                  </Text>
                 </Col>
                 <Col xs={24}>
                   <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>统一点位类型</Text>

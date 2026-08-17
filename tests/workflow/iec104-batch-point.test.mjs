@@ -39,6 +39,68 @@ test('IEC104 batch points allocate sequential IOAs', () => {
   ]);
 });
 
+// 验证选择业务类别后会限制生成地址，并在连续地址跨出类别范围时报错。
+test('IEC104 batch points respect the selected IOA category range', () => {
+  const result = generateBatchPoints({
+    text: 'voltage_a\nvoltage_b\nvoltage_c',
+    startIoa: 0x4001,
+    step: 1,
+    ioaCategory: 'telemetry',
+    pointType: BATCH_POINT_TYPE_FLOAT,
+    scale: 1,
+    offset: 0,
+    deadband: 0,
+  });
+  const crossingResult = generateBatchPoints({
+    text: 'voltage_last\nvoltage_next',
+    startIoa: 0x6200,
+    step: 1,
+    ioaCategory: 'telemetry',
+    pointType: BATCH_POINT_TYPE_FLOAT,
+    scale: 1,
+    offset: 0,
+    deadband: 0,
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(result.drafts.map(({ ioa, ioa_category: ioaCategory }) => ({ ioa, ioaCategory })), [
+    { ioa: 0x4001, ioaCategory: 'telemetry' },
+    { ioa: 0x4002, ioaCategory: 'telemetry' },
+    { ioa: 0x4003, ioaCategory: 'telemetry' },
+  ]);
+  assert.ok(crossingResult.issues.some((issue) =>
+    issue.line === 2 && issue.message.includes('不在遥测 IOA 范围')),
+  );
+});
+
+// 验证全部业务类别都能从各自地址段生成点位，自定义类别保留完整地址范围。
+test('IEC104 batch points support every IOA category', () => {
+  const categories = [
+    { ioaCategory: 'custom', startIoa: 0xC000 },
+    { ioaCategory: 'teleindication', startIoa: 0x0001 },
+    { ioaCategory: 'telemetry', startIoa: 0x4001 },
+    { ioaCategory: 'remoteAdjust', startIoa: 0x6201 },
+    { ioaCategory: 'remoteControl', startIoa: 0x8000 },
+    { ioaCategory: 'parameter', startIoa: 0xA000 },
+  ];
+
+  categories.forEach(({ ioaCategory, startIoa }) => {
+    const result = generateBatchPoints({
+      text: 'point',
+      startIoa,
+      step: 1,
+      ioaCategory,
+      pointType: BATCH_POINT_TYPE_FLOAT,
+      scale: 1,
+      offset: 0,
+      deadband: 0,
+    });
+
+    assert.deepEqual(result.issues, []);
+    assert.equal(result.drafts[0].ioa_category, ioaCategory);
+  });
+});
+
 // 验证已有 Tag/IOA 冲突、非法步长和地址越界都会阻止提交。
 test('IEC104 batch points report conflicts and invalid ranges', () => {
   const result = generateBatchPoints({
@@ -120,6 +182,7 @@ test('IEC104 SINGLE batch points reset engineering parameters', () => {
     sourceLine: 1,
     tag: 'breaker_status',
     ioa: 1,
+    ioa_category: 'custom',
     point_type: BATCH_POINT_TYPE_SINGLE,
     scale: 1,
     offset: 0,
@@ -133,6 +196,9 @@ test('IEC104 page exposes batch point entry', () => {
   assert.match(pageSource, /批量添加点位/);
   assert.match(pageSource, /批量点名/);
   assert.match(pageSource, /起始 IOA/);
+  assert.match(pageSource, /统一 IOA 业务类别/);
+  assert.match(pageSource, /IOA_CATEGORY_FORM_OPTIONS/);
+  assert.match(pageSource, /batchPointCategory/);
   assert.match(pageSource, /const newPoints = \[\.\.\.points, \.\.\.normalizedPoints\]/);
   assert.match(pageSource, /runSelectedLinkStopped\(\(\) => api\.iec104UpsertPointTable\(selectedConn, newPoints, true\)\)/);
   assert.match(pageSource, /pagination=\{\{[\s\S]*defaultPageSize: 100/);

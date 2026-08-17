@@ -1,4 +1,5 @@
 import type { Iec104Point } from '../../adapters';
+import { getIoaCategoryLabel, getIoaCategoryRange, type IoaCategoryKey } from './ioa-category';
 
 export const BATCH_POINT_TYPE_FLOAT = 1;
 export const BATCH_POINT_TYPE_SINGLE = 2;
@@ -7,6 +8,7 @@ const MAX_BATCH_POINT_IOA = 0xFFFFFF;
 export type BatchPointDraft = Iec104Point & {
   key: string;
   sourceLine: number;
+  ioa_category: IoaCategoryKey;
 };
 
 export type BatchPointIssue = {
@@ -18,6 +20,7 @@ export type GenerateBatchPointsOptions = {
   text: string;
   startIoa: number;
   step: number;
+  ioaCategory?: IoaCategoryKey;
   pointType: number;
   scale: number;
   offset: number;
@@ -33,6 +36,9 @@ export type GenerateBatchPointsResult = {
 
 const isFiniteNumber = (value: number): boolean => Number.isFinite(value);
 
+const getBatchPointCategoryLabel = (category: IoaCategoryKey): string =>
+  category === 'custom' ? '自定义' : getIoaCategoryLabel(category);
+
 export const parseBatchPointNames = (text: string): Array<{ line: number; tag: string }> =>
   text
     .split(/\r\n|\n|\r/)
@@ -43,6 +49,7 @@ export const generateBatchPoints = ({
   text,
   startIoa,
   step,
+  ioaCategory = 'custom',
   pointType,
   scale,
   offset,
@@ -55,6 +62,7 @@ export const generateBatchPoints = ({
   const hasValidStart = Number.isInteger(startIoa) && startIoa >= 1 && startIoa <= MAX_BATCH_POINT_IOA;
   const hasValidStep = Number.isInteger(step) && step >= 1;
   const hasValidType = pointType === BATCH_POINT_TYPE_FLOAT || pointType === BATCH_POINT_TYPE_SINGLE;
+  const ioaCategoryRange = getIoaCategoryRange(ioaCategory);
 
   if (names.length === 0) {
     issues.push({ line: 0, message: '请至少输入一个点名' });
@@ -64,6 +72,12 @@ export const generateBatchPoints = ({
   }
   if (!hasValidStep) {
     issues.push({ line: 0, message: '步长必须为正整数' });
+  }
+  if (ioaCategoryRange && hasValidStart && (startIoa < ioaCategoryRange.start || startIoa > ioaCategoryRange.end)) {
+    issues.push({
+      line: 0,
+      message: `起始 IOA 必须位于${getBatchPointCategoryLabel(ioaCategory)}范围 ${ioaCategoryRange.start} - ${ioaCategoryRange.end} 内`,
+    });
   }
   if (!hasValidType) {
     issues.push({ line: 0, message: '请选择有效的点位类型' });
@@ -111,6 +125,12 @@ export const generateBatchPoints = ({
     if (!Number.isInteger(ioa) || ioa < 1 || ioa > MAX_BATCH_POINT_IOA) {
       issues.push({ line, message: `生成的 IOA ${ioa} 超出 1 - ${MAX_BATCH_POINT_IOA} 范围` });
     } else {
+      if (ioaCategoryRange && (ioa < ioaCategoryRange.start || ioa > ioaCategoryRange.end)) {
+        issues.push({
+          line,
+          message: `IOA ${ioa} 不在${getBatchPointCategoryLabel(ioaCategory)} IOA 范围 ${ioaCategoryRange.start} - ${ioaCategoryRange.end} 内`,
+        });
+      }
       if (occupiedIoas.has(ioa)) {
         issues.push({ line, message: `IOA ${ioa} 已存在于当前点表` });
       }
@@ -124,6 +144,7 @@ export const generateBatchPoints = ({
       sourceLine: line,
       tag,
       ioa,
+      ioa_category: ioaCategory,
       point_type: pointType,
       scale: normalizedScale,
       offset: normalizedOffset,
