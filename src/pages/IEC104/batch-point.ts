@@ -1,5 +1,5 @@
 import type { Iec104Point } from '../../adapters';
-import { getIoaCategoryLabel, getIoaCategoryRange, type IoaCategoryKey } from './ioa-category';
+import { getIoaCategoryLabel, getIoaCategoryRange, type IoaCategoryKey } from './ioa-category.ts';
 
 export const BATCH_POINT_TYPE_FLOAT = 1;
 export const BATCH_POINT_TYPE_SINGLE = 2;
