@@ -317,8 +317,8 @@ const SecurityConfig: React.FC = () => {
           className="security-config-network-alert"
           type="warning"
           showIcon
-          message="执行前请确认电脑地址"
-          description="电脑必须使用 11.22.33.41 作为自身 IP 地址。该地址不属于 RTU、网关或纵密配置字段。"
+          message="执行前请确认电脑网段"
+          description="电脑需使用 11.22.33.0/24 网段内的地址访问 11.22.33.44。电脑地址不属于 RTU、网关或纵密配置字段。"
         />
         {deployResult ? (
           <Alert

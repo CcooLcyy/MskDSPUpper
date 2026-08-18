@@ -47,8 +47,8 @@ export function buildVerticalSecurityScript(values: VerticalSecurityScriptValues
 set -Eeuo pipefail
 
 # MskDSP 纵密网络配置脚本
-# 前置条件：电脑必须使用 11.22.33.41 作为自身 IP 地址。
-# 固定网络段：11.22.33.41 为电脑地址，11.22.33.44 为纵密装置地址。
+# 前置条件：电脑必须使用 11.22.33.0/24 网段内的地址访问纵密装置。
+# 固定网络段：11.22.33.0/24 为电脑网段，11.22.33.44 为纵密装置地址。
 
 readonly TARGET_DEVICE=${shellQuote(device)}
 readonly LOCAL_RTU_ADDRESS=${shellQuote(localRtuAddress)}
@@ -57,7 +57,6 @@ readonly LOCAL_GATEWAY_ADDRESS=${shellQuote(localGatewayAddress)}
 readonly REMOTE_RTU_ADDRESS=${shellQuote(remoteRtuAddress)}
 readonly REMOTE_SECURITY_ADDRESS=${shellQuote(remoteSecurityAddress)}
 readonly REMOTE_GATEWAY_ADDRESS=${shellQuote(remoteGatewayAddress)}
-readonly DNAT_COMMENT='mskdsp-vertical-security'
 readonly CONFIG_DIR='/etc/mskdsp'
 readonly CONFIG_FILE="\${CONFIG_DIR}/vertical-security.conf"
 readonly STATUS_DIR='/run/mskdsp-vertical-security'
@@ -124,14 +123,19 @@ sysctl -w 'net.ipv4.conf.eth0/101.proxy_arp=1'
 sysctl -w 'net.ipv4.conf.eth0/108.proxy_arp=0'
 
 ip addr replace 11.22.33.1/32 dev eth0.101
-ip route replace 11.22.33.41/32 dev eth0.101 scope link
+# 清理旧版本的单主机路由，再切换到整个电脑网段。
+ip route del 11.22.33.41/32 dev eth0.101 2>/dev/null || true
+ip route replace 11.22.33.0/24 dev eth0.101 scope link
 
 ip addr replace 11.22.33.2/32 dev eth0.108
 ip route replace 11.22.33.44/32 dev eth0.108 scope link
 
 # 检查后再追加，避免脚本重复执行产生重复 NAT 规则。
-if ! iptables -t nat -C POSTROUTING -o eth0.108 -s 11.22.33.41/32 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2 2>/dev/null; then
-  iptables -t nat -A POSTROUTING -o eth0.108 -s 11.22.33.41/32 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2
+while iptables -t nat -C POSTROUTING -o eth0.108 -s 11.22.33.41/32 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2 2>/dev/null; do
+  iptables -t nat -D POSTROUTING -o eth0.108 -s 11.22.33.41/32 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2
+done
+if ! iptables -t nat -C POSTROUTING -o eth0.108 -s 11.22.33.0/24 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2 2>/dev/null; then
+  iptables -t nat -A POSTROUTING -o eth0.108 -s 11.22.33.0/24 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2
 fi
 complete_step '101 固定网络和 SNAT 配置完成'
 
@@ -174,20 +178,20 @@ begin_step 'remote_security_route' '远程纵密路由' '配置远程纵密经 p
 ip route replace "\${REMOTE_SECURITY_ADDRESS}/32" dev ppp0
 complete_step '远程纵密路由配置完成'
 
-# 仅删除本脚本标记过的旧规则，再插入到 PREROUTING 第 1 条。
+# 目标设备内核可能未启用 comment match，因此按 DNAT 地址精确清理旧规则。
 begin_step 'dnat' 'DNAT 规则' '清理旧规则并插入 ppp0 入站 DNAT'
 remove_managed_dnat_rule() {
   local public_address="$1"
   local private_address="$2"
   [[ -n "\${public_address}" && -n "\${private_address}" ]] || return 0
 
-  while iptables -t nat -C PREROUTING -i ppp0 -d "\${public_address}" -m comment --comment "\${DNAT_COMMENT}" -j DNAT --to-destination "\${private_address}" 2>/dev/null; do
-    iptables -t nat -D PREROUTING -i ppp0 -d "\${public_address}" -m comment --comment "\${DNAT_COMMENT}" -j DNAT --to-destination "\${private_address}"
+  while iptables -t nat -C PREROUTING -i ppp0 -d "\${public_address}" -j DNAT --to-destination "\${private_address}" 2>/dev/null; do
+    iptables -t nat -D PREROUTING -i ppp0 -d "\${public_address}" -j DNAT --to-destination "\${private_address}"
   done
 }
 remove_managed_dnat_rule "\${PREVIOUS_PPP0_ADDRESS}" "\${PREVIOUS_LOCAL_SECURITY_ADDRESS}"
 remove_managed_dnat_rule "\${PPP0_ADDRESS}" "\${LOCAL_SECURITY_ADDRESS}"
-iptables -t nat -I PREROUTING 1 -i ppp0 -d "\${PPP0_ADDRESS}" -m comment --comment "\${DNAT_COMMENT}" -j DNAT --to-destination "\${LOCAL_SECURITY_ADDRESS}"
+iptables -t nat -I PREROUTING 1 -i ppp0 -d "\${PPP0_ADDRESS}" -j DNAT --to-destination "\${LOCAL_SECURITY_ADDRESS}"
 complete_step 'DNAT 规则配置完成'
 
 # 临时缩短连接跟踪超时，等待连接状态刷新后恢复默认值。

@@ -24,7 +24,7 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(routeText, /path: 'security-config'/);
   assert.match(routeText, /<SecurityConfigPage \/>/);
   assert.match(pageText, /<Card title="纵密配置"/);
-  assert.match(pageText, /电脑必须使用 11\.22\.33\.41/);
+  assert.match(pageText, /电脑需使用 11\.22\.33\.0\/24 网段内的地址访问 11\.22\.33\.44/);
   assert.match(pageText, /不属于 RTU、网关或纵密配置字段/);
   assert.match(pageText, /label="目标设备"/);
   assert.match(pageText, /value: 'MskDSP', label: 'MskDSP'/);
@@ -83,6 +83,9 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(rustCommandText, /systemctl show --property=ActiveState --value/);
   assert.match(scriptText, /sysctl -w net\.ipv4\.ip_forward=1/);
   assert.match(scriptText, /ip addr replace 11\.22\.33\.1\/32 dev eth0\.101/);
+  assert.match(scriptText, /ip route del 11\.22\.33\.41\/32 dev eth0\.101/);
+  assert.match(scriptText, /ip route replace 11\.22\.33\.0\/24 dev eth0\.101 scope link/);
+  assert.doesNotMatch(scriptText, /ip route replace 11\.22\.33\.41\/32/);
   assert.match(scriptText, /ip route replace 11\.22\.33\.44\/32 dev eth0\.108 scope link/);
   assert.match(scriptText, /ip addr replace "\\\$\{LOCAL_GATEWAY_ADDRESS\}\/32" dev eth0\.107/);
   assert.match(scriptText, /ip route replace "\\\$\{LOCAL_SECURITY_ADDRESS\}\/32" dev eth0\.107 scope link src "\\\$\{LOCAL_GATEWAY_ADDRESS\}"/);
@@ -100,10 +103,13 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(scriptText, /iptables -t nat -I PREROUTING 1 -i ppp0/);
   assert.match(scriptText, /remove_managed_dnat_rule/);
   assert.match(scriptText, /--to-destination "\\\$\{LOCAL_SECURITY_ADDRESS\}"/);
+  assert.doesNotMatch(scriptText, /-m comment|DNAT_COMMENT/);
   assert.match(scriptText, /net\.netfilter\.nf_conntrack_generic_timeout=3/);
   assert.match(scriptText, /sleep 30/);
   assert.match(scriptText, /net\.netfilter\.nf_conntrack_generic_timeout=600/);
-  assert.match(scriptText, /iptables -t nat -C POSTROUTING/);
+  assert.match(scriptText, /iptables -t nat -D POSTROUTING -o eth0\.108 -s 11\.22\.33\.41\/32 -d 11\.22\.33\.44\/32 -j SNAT --to-source 11\.22\.33\.2/);
+  assert.match(scriptText, /iptables -t nat -C POSTROUTING -o eth0\.108 -s 11\.22\.33\.0\/24 -d 11\.22\.33\.44\/32 -j SNAT --to-source 11\.22\.33\.2/);
+  assert.doesNotMatch(scriptText, /iptables -t nat -A POSTROUTING .* -s 11\.22\.33\.41\/32/);
   assert.match(scriptText, /LOCAL_RTU_ADDRESS=\\\$\{LOCAL_RTU_ADDRESS\}/);
   assert.match(scriptText, /REMOTE_GATEWAY_ADDRESS=\\\$\{REMOTE_GATEWAY_ADDRESS\}/);
 });
