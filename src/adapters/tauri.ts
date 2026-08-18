@@ -42,6 +42,10 @@ import type {
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
   LowerUpdateUploadResult,
+  VerticalSecurityDeployRequest,
+  VerticalSecurityDeployResult,
+  VerticalSecurityStatusRequest,
+  VerticalSecurityStatusResult,
   ModbusLinkConfig,
   ModbusLinkInfo,
   ModbusMqttConfig,
@@ -194,6 +198,10 @@ export const api = {
     invoke<string | null>('get_lower_update_password', { uploadAccount }),
   clearLowerUpdatePassword: (uploadAccount: string) =>
     invoke<void>('clear_lower_update_password', { uploadAccount }),
+  deployVerticalSecurityScript: (request: VerticalSecurityDeployRequest) =>
+    invoke<VerticalSecurityDeployResult>('deploy_vertical_security_script', { request }),
+  getVerticalSecurityStatus: (request: VerticalSecurityStatusRequest) =>
+    invoke<VerticalSecurityStatusResult>('get_vertical_security_status', { request }),
 
   iec104UpsertLink: (config: Iec104LinkConfig, createOnly: boolean) =>
     invoke<Iec104LinkInfo>('iec104_upsert_link', { config, createOnly }),
@@ -327,6 +335,8 @@ export const api = {
 
   saveFullConfigExport: (filePath: string, snapshot: FullConfigExportSnapshot) =>
     invoke<string>('save_full_config_export', { filePath, snapshot }),
+  saveVerticalSecurityScript: (filePath: string, content: string) =>
+    invoke<string>('save_vertical_security_script', { filePath, content }),
   loadFullConfigExport: (filePath: string) =>
     invoke<FullConfigExportSnapshot>('load_full_config_export', { filePath }),
 };

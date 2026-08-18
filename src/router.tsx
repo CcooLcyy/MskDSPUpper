@@ -11,6 +11,7 @@ import {
   ModuleOpsPage,
   OverviewPage,
   RouteSuspense,
+  SecurityConfigPage,
   SettingsPage,
   SoftwareUpdatePage,
 } from './route-components';
@@ -107,6 +108,14 @@ export const router = createBrowserRouter([
         element: (
           <RouteSuspense>
             <SoftwareUpdatePage />
+          </RouteSuspense>
+        ),
+      },
+      {
+        path: 'security-config',
+        element: (
+          <RouteSuspense>
+            <SecurityConfigPage />
           </RouteSuspense>
         ),
       },

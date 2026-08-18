@@ -40,6 +40,11 @@ const LOWER_UPDATE_SSH_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(5 * 60
 const LOWER_UPDATE_UPLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 const LOWER_UPDATE_UPLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const LOWER_UPDATE_INSTALL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const VERTICAL_SECURITY_SCRIPT_NAME: &str = "mskdsp-vertical-security.sh";
+const VERTICAL_SECURITY_INSTALL_PATH: &str = "/usr/local/libexec/mskdsp-vertical-security";
+const VERTICAL_SECURITY_SERVICE_NAME: &str = "mskdsp-vertical-security.service";
+const VERTICAL_SECURITY_SERVICE_PATH: &str = "/etc/systemd/system/mskdsp-vertical-security.service";
+const VERTICAL_SECURITY_MAX_SCRIPT_BYTES: usize = 1024 * 1024;
 const LOWER_UPDATE_RUNTIME_QUERY_COMMAND: &str = concat!(
     "set -e; ",
     "if ! command -v docker >/dev/null 2>&1; then ",
@@ -197,6 +202,52 @@ pub struct LowerUpdateRuntimeInfoDto {
     pub exists: bool,
     pub running: bool,
     pub image_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct VerticalSecurityDeployRequestDto {
+    pub script_content: String,
+    pub upload_account: String,
+    pub install_dir: String,
+    pub auth: LowerUpdateSshAuthDto,
+    pub sudo_password: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct VerticalSecurityDeployResultDto {
+    pub remote_path: String,
+    pub service_name: String,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub success: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct VerticalSecurityStatusRequestDto {
+    pub upload_account: String,
+    pub auth: LowerUpdateSshAuthDto,
+    pub sudo_password: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct VerticalSecurityStepResultDto {
+    pub step_id: String,
+    pub name: String,
+    pub state: String,
+    pub message: String,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct VerticalSecurityStatusResultDto {
+    pub service_name: String,
+    pub active_state: String,
+    pub sub_state: String,
+    pub result: String,
+    pub exit_code: Option<i32>,
+    pub restart_count: u32,
+    pub steps: Vec<VerticalSecurityStepResultDto>,
 }
 
 struct RemoteCommandOutput {
@@ -542,6 +593,22 @@ async fn execute_user_ssh_command(
         }
         LowerUpdateSshAuthDto::Certificate => {
             execute_certificate_ssh_command(target, remote_command, None).await
+        }
+    }
+}
+
+async fn execute_user_ssh_command_with_stdin(
+    target: &LowerUpdateUploadTarget,
+    auth: &LowerUpdateSshAuthDto,
+    remote_command: &str,
+    stdin: &[u8],
+) -> Result<RemoteCommandOutput, String> {
+    match auth {
+        LowerUpdateSshAuthDto::Password { password } => {
+            execute_password_ssh_command(target, password, remote_command, Some(stdin)).await
+        }
+        LowerUpdateSshAuthDto::Certificate => {
+            execute_certificate_ssh_command(target, remote_command, Some(stdin)).await
         }
     }
 }
@@ -967,6 +1034,143 @@ fn build_user_upload_command(install_dir: &str, package_name: &str) -> String {
         tmp = shell_quote(&remote_tmp_path),
         path = shell_quote(&remote_path),
     )
+}
+
+fn build_vertical_security_upload_command(install_dir: &str) -> String {
+    build_user_upload_command(install_dir, VERTICAL_SECURITY_SCRIPT_NAME)
+}
+
+fn build_vertical_security_install_command(remote_path: &str) -> String {
+    let script_path = shell_quote(remote_path);
+    let script_install_path = shell_quote(VERTICAL_SECURITY_INSTALL_PATH);
+    let service_name = shell_quote(VERTICAL_SECURITY_SERVICE_NAME);
+    let service_path = shell_quote(VERTICAL_SECURITY_SERVICE_PATH);
+    format!(
+        "set -e; \
+if ! command -v systemctl >/dev/null 2>&1; then \
+  printf '%s\\n' '设备未检测到 systemctl，无法安装纵密开机自启服务' >&2; exit 127; \
+fi; \
+if systemctl cat {service_name} >/dev/null 2>&1; then \
+  printf '%s\\n' '检测到已有纵密开机自启服务，将更新配置'; \
+else \
+  printf '%s\\n' '未检测到纵密开机自启服务，将创建服务'; \
+fi; \
+test -f {script_path}; \
+install -d -m 0755 /usr/local/libexec /etc/systemd/system; \
+script_tmp=/usr/local/libexec/.mskdsp-vertical-security.tmp.$$; \
+service_tmp=/etc/systemd/system/.mskdsp-vertical-security.service.tmp.$$; \
+cleanup() {{ rm -f -- \"$script_tmp\" \"$service_tmp\"; }}; \
+trap cleanup EXIT HUP INT TERM; \
+bash -n {script_path}; \
+install -m 0755 {script_path} \"$script_tmp\"; \
+mv -f -- \"$script_tmp\" {script_install_path}; \
+cat > \"$service_tmp\" <<'EOF'\n[Unit]\nDescription=MskDSP 纵密配置\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=/usr/local/libexec/mskdsp-vertical-security\nRemainAfterExit=yes\nTimeoutStartSec=infinity\nRestart=on-failure\nRestartSec=10s\n\n[Install]\nWantedBy=multi-user.target\nEOF\ninstall -m 0644 \"$service_tmp\" {service_path}; \
+rm -f -- \"$service_tmp\"; \
+trap - EXIT HUP INT TERM; \
+systemctl daemon-reload; \
+systemctl enable {service_name}; \
+systemctl is-enabled --quiet {service_name}; \
+rm -f -- /run/mskdsp-vertical-security/steps.log /run/mskdsp-vertical-security/current; \
+systemctl restart --no-block {service_name}; \
+service_state=\"$(systemctl show --property=ActiveState --value {service_name})\"; \
+case \"$service_state\" in \
+  active|activating) printf '%s\\n' \"纵密服务已提交启动，当前状态：$service_state\" ;; \
+  *) printf '%s\\n' \"纵密服务启动失败，当前状态：$service_state\" >&2; exit 1 ;; \
+esac",
+        script_path = script_path,
+        script_install_path = script_install_path,
+        service_name = service_name,
+        service_path = service_path,
+    )
+}
+
+fn build_vertical_security_status_command() -> String {
+    let service_name = shell_quote(VERTICAL_SECURITY_SERVICE_NAME);
+    "set -e; \
+printf '%s\\n' \"__MSKDSP_ACTIVE_STATE__=$(systemctl show --property=ActiveState --value ".to_string()
+        + &service_name
+        + ")\"; \
+printf '%s\\n' \"__MSKDSP_SUB_STATE__=$(systemctl show --property=SubState --value "
+        + &service_name
+        + ")\"; \
+printf '%s\\n' \"__MSKDSP_RESULT__=$(systemctl show --property=Result --value "
+        + &service_name
+        + ")\"; \
+printf '%s\\n' \"__MSKDSP_EXIT_CODE__=$(systemctl show --property=ExecMainStatus --value "
+        + &service_name
+        + ")\"; \
+printf '%s\\n' \"__MSKDSP_RESTART_COUNT__=$(systemctl show --property=NRestarts --value "
+        + &service_name
+        + ")\"; \
+printf '%s\\n' '__MSKDSP_STEPS_BEGIN__'; \
+if test -r /run/mskdsp-vertical-security/steps.log; then cat /run/mskdsp-vertical-security/steps.log; fi"
+}
+
+fn parse_vertical_security_status_output(
+    stdout: &str,
+) -> Result<(String, String, String, Option<i32>, u32, Vec<VerticalSecurityStepResultDto>), String> {
+    let mut active_state = String::new();
+    let mut sub_state = String::new();
+    let mut result = String::new();
+    let mut exit_code = None;
+    let mut restart_count = 0;
+    let mut latest_steps = std::collections::BTreeMap::<String, VerticalSecurityStepResultDto>::new();
+    let mut reading_steps = false;
+
+    for line in stdout.lines() {
+        if line == "__MSKDSP_STEPS_BEGIN__" {
+            reading_steps = true;
+            continue;
+        }
+        if !reading_steps {
+            if let Some(value) = line.strip_prefix("__MSKDSP_ACTIVE_STATE__=") {
+                active_state = value.trim().to_string();
+            } else if let Some(value) = line.strip_prefix("__MSKDSP_SUB_STATE__=") {
+                sub_state = value.trim().to_string();
+            } else if let Some(value) = line.strip_prefix("__MSKDSP_RESULT__=") {
+                result = value.trim().to_string();
+            } else if let Some(value) = line.strip_prefix("__MSKDSP_EXIT_CODE__=") {
+                exit_code = value.trim().parse::<i32>().ok();
+            } else if let Some(value) = line.strip_prefix("__MSKDSP_RESTART_COUNT__=") {
+                restart_count = value.trim().parse::<u32>().unwrap_or(0);
+            }
+            continue;
+        }
+
+        let fields: Vec<&str> = line.splitn(5, '\t').collect();
+        if fields.len() != 5 {
+            continue;
+        }
+        let Ok(updated_at) = fields[0].trim().parse::<u64>() else {
+            continue;
+        };
+        let state = fields[3].trim();
+        if !matches!(state, "running" | "waiting" | "success" | "failed") {
+            continue;
+        }
+        latest_steps.insert(
+            fields[1].to_string(),
+            VerticalSecurityStepResultDto {
+                step_id: fields[1].to_string(),
+                name: fields[2].to_string(),
+                state: state.to_string(),
+                message: fields[4].to_string(),
+                updated_at,
+            },
+        );
+    }
+
+    if active_state.is_empty() {
+        return Err("远端未返回纵密服务 ActiveState".to_string());
+    }
+    Ok((
+        active_state,
+        sub_state,
+        result,
+        exit_code,
+        restart_count,
+        latest_steps.into_values().collect(),
+    ))
 }
 
 fn build_upload_preflight_command(install_dir: &str) -> String {
@@ -2248,6 +2452,156 @@ pub async fn upload_lower_update_package(
 }
 
 #[tauri::command]
+pub async fn deploy_vertical_security_script(
+    request: VerticalSecurityDeployRequestDto,
+) -> Result<VerticalSecurityDeployResultDto, String> {
+    let started_at = Instant::now();
+    if request.script_content.trim().is_empty() {
+        return Err("纵密配置脚本内容不能为空".into());
+    }
+    if request.script_content.as_bytes().len() > VERTICAL_SECURITY_MAX_SCRIPT_BYTES {
+        return Err(format!(
+            "纵密配置脚本不能超过 {} 字节",
+            VERTICAL_SECURITY_MAX_SCRIPT_BYTES
+        ));
+    }
+    if request.script_content.contains('\0') {
+        return Err("纵密配置脚本不能包含 NUL 字符".into());
+    }
+
+    let target = parse_upload_account(&request.upload_account)?;
+    let install_dir = normalize_install_dir(&request.install_dir)?;
+    let remote_path = remote_package_path(&install_dir, VERTICAL_SECURITY_SCRIPT_NAME);
+    let upload_command = build_vertical_security_upload_command(&install_dir);
+
+    tracing::info!(
+        operation = "vertical_security_deploy",
+        target = %log_detail(&request.upload_account),
+        remote_path = %remote_path,
+        service = VERTICAL_SECURITY_SERVICE_NAME,
+        "开始部署纵密配置脚本"
+    );
+
+    let preflight = tokio::time::timeout(
+        LOWER_UPDATE_PRECHECK_TIMEOUT,
+        execute_user_ssh_command(
+            &target,
+            &request.auth,
+            &build_upload_preflight_command(&install_dir),
+        ),
+    )
+    .await
+    .map_err(|_| "上传纵密配置脚本前检查目录超时".to_string())??;
+    if preflight.exit_code != Some(0) {
+        return Err(format_remote_command_error(
+            "上传纵密配置脚本前检查目录失败",
+            &preflight,
+        ));
+    }
+    let available_bytes = parse_available_bytes(&preflight.stdout)?;
+    if available_bytes < request.script_content.as_bytes().len() as u64 {
+        return Err(format!(
+            "下位机磁盘空间不足: 需要 {} 字节，可用 {} 字节",
+            request.script_content.as_bytes().len(),
+            available_bytes
+        ));
+    }
+
+    let upload = tokio::time::timeout(
+        LOWER_UPDATE_INSTALL_TIMEOUT,
+        execute_user_ssh_command_with_stdin(
+            &target,
+            &request.auth,
+            &upload_command,
+            request.script_content.as_bytes(),
+        ),
+    )
+    .await
+    .map_err(|_| "上传纵密配置脚本整体超时".to_string())??;
+    if upload.exit_code != Some(0) {
+        return Err(format_remote_command_error("上传纵密配置脚本失败", &upload));
+    }
+
+    let install_command = build_vertical_security_install_command(&remote_path);
+    let output = tokio::time::timeout(
+        LOWER_UPDATE_INSTALL_TIMEOUT,
+        execute_root_ssh_command(
+            &target,
+            &request.auth,
+            &request.sudo_password,
+            &install_command,
+        ),
+    )
+    .await
+    .map_err(|_| "安装纵密配置 systemd 服务整体超时".to_string())??;
+
+    let result = VerticalSecurityDeployResultDto {
+        remote_path,
+        service_name: VERTICAL_SECURITY_SERVICE_NAME.to_string(),
+        exit_code: output.exit_code.map(|code| code as i32),
+        stdout: output.stdout,
+        stderr: output.stderr,
+        success: output.exit_code == Some(0),
+    };
+
+    if result.success {
+        tracing::info!(
+            operation = "vertical_security_deploy",
+            target = %log_detail(&request.upload_account),
+            service = %result.service_name,
+            exit_code = ?result.exit_code,
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            "纵密配置脚本部署完成"
+        );
+    } else {
+        tracing::warn!(
+            operation = "vertical_security_deploy",
+            target = %log_detail(&request.upload_account),
+            service = %result.service_name,
+            exit_code = ?result.exit_code,
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            "纵密配置 systemd 服务执行失败"
+        );
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn get_vertical_security_status(
+    request: VerticalSecurityStatusRequestDto,
+) -> Result<VerticalSecurityStatusResultDto, String> {
+    let target = parse_upload_account(&request.upload_account)?;
+    let output = tokio::time::timeout(
+        LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT,
+        execute_root_ssh_command(
+            &target,
+            &request.auth,
+            &request.sudo_password,
+            &build_vertical_security_status_command(),
+        ),
+    )
+    .await
+    .map_err(|_| "查询纵密服务状态超时".to_string())??;
+
+    if output.exit_code != Some(0) {
+        return Err(format_remote_command_error("查询纵密服务状态失败", &output));
+    }
+
+    let (active_state, sub_state, result, exit_code, restart_count, steps) =
+        parse_vertical_security_status_output(&output.stdout)?;
+    Ok(VerticalSecurityStatusResultDto {
+        service_name: VERTICAL_SECURITY_SERVICE_NAME.to_string(),
+        active_state,
+        sub_state,
+        result,
+        exit_code,
+        restart_count,
+        steps,
+    })
+}
+
+#[tauri::command]
 pub async fn install_lower_update_package(
     request: LowerUpdateInstallRequestDto,
 ) -> Result<LowerUpdateInstallResultDto, String> {
@@ -2332,13 +2686,15 @@ pub async fn install_lower_update_package(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_password_root_shell_command, build_user_upload_command, cache_metadata_path,
-        cleanup_cache_startup_in, clear_cache_root_contents, compute_sha256,
+        build_password_root_shell_command, build_user_upload_command,
+        build_vertical_security_install_command, build_vertical_security_upload_command,
+        build_vertical_security_status_command, parse_vertical_security_status_output,
+        cache_metadata_path, cleanup_cache_startup_in, clear_cache_root_contents, compute_sha256,
         format_upload_remote_error, load_cached_package, parse_available_bytes,
         parse_runtime_query_output, parse_upload_account, persist_cache_metadata,
         should_skip_install, sudo_password_stdin, LowerUpdateAssetDto, LowerUpdateChecksumDto,
         LowerUpdateManifestDto, LowerUpdateRuntimeInfoDto, LowerUpdateSourceDto,
-        LOWER_UPDATE_CONTAINER_NAME,
+        LOWER_UPDATE_CONTAINER_NAME, VERTICAL_SECURITY_SCRIPT_NAME,
     };
     use std::{
         fs,
@@ -2446,6 +2802,82 @@ mod tests {
         assert!(command.contains("trap"));
         assert!(command.contains("cat >"));
         assert!(command.contains("chmod +x"));
+    }
+
+    #[test]
+    fn builds_vertical_security_upload_command_with_fixed_script_name() {
+        let command = build_vertical_security_upload_command("/tmp/mskdsp");
+
+        assert!(command.contains(VERTICAL_SECURITY_SCRIPT_NAME));
+        assert!(command.contains("cat >"));
+        assert!(command.contains("trap"));
+        assert!(!command.contains("sudo"));
+    }
+
+    #[test]
+    fn builds_vertical_security_install_command_with_systemd_lifecycle_checks() {
+        let command = build_vertical_security_install_command(
+            "/tmp/mskdsp/mskdsp-vertical-security.sh",
+        );
+
+        assert!(command.contains("command -v systemctl"));
+        assert!(command.contains("bash -n"));
+        assert!(command.contains("/usr/local/libexec/mskdsp-vertical-security"));
+        assert!(command.contains("/etc/systemd/system/mskdsp-vertical-security.service"));
+        assert!(command.contains("Description=MskDSP 纵密配置"));
+        assert!(command.contains("StartLimitIntervalSec=0"));
+        assert!(command.contains("TimeoutStartSec=infinity"));
+        assert!(command.contains("Restart=on-failure"));
+        assert!(command.contains("RestartSec=10s"));
+        assert!(command.contains("systemctl cat"));
+        assert!(command.contains("systemctl daemon-reload"));
+        assert!(command.contains("systemctl enable"));
+        assert!(command.contains("systemctl is-enabled --quiet"));
+        assert!(command.contains("systemctl restart --no-block"));
+        assert!(command.contains("systemctl show --property=ActiveState --value"));
+        assert!(command.contains("rm -f -- /run/mskdsp-vertical-security/steps.log"));
+        assert!(!command.contains("sudo-secret"));
+    }
+
+    #[test]
+    fn parses_latest_status_for_each_vertical_security_step() {
+        let output = concat!(
+            "__MSKDSP_ACTIVE_STATE__=activating\n",
+            "__MSKDSP_SUB_STATE__=start\n",
+            "__MSKDSP_RESULT__=success\n",
+            "__MSKDSP_EXIT_CODE__=0\n",
+            "__MSKDSP_RESTART_COUNT__=2\n",
+            "__MSKDSP_STEPS_BEGIN__\n",
+            "100\tprecheck\t系统预检查\trunning\t正在检查\n",
+            "101\tprecheck\t系统预检查\tsuccess\t检查完成\n",
+            "102\tppp0_wait\tPPP 链路\twaiting\t等待 ppp0 IPv4 地址\n",
+        );
+        let (active, sub, result, exit_code, restarts, steps) =
+            parse_vertical_security_status_output(output).expect("应解析纵密步骤状态");
+
+        assert_eq!(active, "activating");
+        assert_eq!(sub, "start");
+        assert_eq!(result, "success");
+        assert_eq!(exit_code, Some(0));
+        assert_eq!(restarts, 2);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(
+            steps.iter().find(|step| step.step_id == "ppp0_wait").map(|step| step.state.as_str()),
+            Some("waiting")
+        );
+        assert_eq!(
+            steps.iter().find(|step| step.step_id == "precheck").map(|step| step.state.as_str()),
+            Some("success")
+        );
+    }
+
+    #[test]
+    fn builds_vertical_security_status_command_with_step_log_markers() {
+        let command = build_vertical_security_status_command();
+
+        assert!(command.contains("systemctl show --property=ActiveState --value"));
+        assert!(command.contains("__MSKDSP_STEPS_BEGIN__"));
+        assert!(command.contains("/run/mskdsp-vertical-security/steps.log"));
     }
 
     #[test]

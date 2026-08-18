@@ -3,6 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
@@ -836,6 +839,20 @@ fn ensure_import_path(file_path: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(trimmed))
 }
 
+fn ensure_script_path(file_path: &str) -> Result<PathBuf, String> {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return Err("脚本保存路径不能为空".to_string());
+    }
+
+    let mut path = PathBuf::from(trimmed);
+    if path.extension().is_none() {
+        path.set_extension("sh");
+    }
+
+    Ok(path)
+}
+
 fn write_export_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -884,6 +901,36 @@ pub async fn save_full_config_export(
     })?;
 
     tracing::info!(file_path = %final_path.display(), bytes = bytes.len(), "上位机配置导出完成");
+    Ok(final_path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn save_vertical_security_script(
+    file_path: String,
+    content: String,
+) -> Result<String, String> {
+    let final_path = ensure_script_path(&file_path)?;
+    if content.trim().is_empty() {
+        return Err("纵密配置脚本内容不能为空".to_string());
+    }
+
+    tracing::info!(file_path = %final_path.display(), "开始保存纵密配置脚本");
+    write_export_file(&final_path, content.as_bytes()).map_err(|error| {
+        tracing::error!(file_path = %final_path.display(), error = %error, "写入纵密配置脚本失败");
+        error
+    })?;
+
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&final_path)
+            .map_err(|error| format!("读取纵密配置脚本权限失败: {error}"))?
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&final_path, permissions)
+            .map_err(|error| format!("设置纵密配置脚本权限失败: {error}"))?;
+    }
+
+    tracing::info!(file_path = %final_path.display(), bytes = content.len(), "纵密配置脚本保存完成");
     Ok(final_path.to_string_lossy().into_owned())
 }
 

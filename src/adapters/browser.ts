@@ -44,6 +44,9 @@ import type {
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
   LowerUpdateUploadResult,
+  VerticalSecurityDeployRequest,
+  VerticalSecurityDeployResult,
+  VerticalSecurityStatusResult,
   ModbusLinkConfig,
   ModbusLinkInfo,
   ModbusMqttConfig,
@@ -1317,6 +1320,53 @@ export const browserApi: typeof tauriApi = {
     exportSnapshots.set(key, clone(snapshot));
     return key;
   },
+  saveVerticalSecurityScript: async (filePath: string, content: string) => {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filePath.split(/[\\/]/).pop() || 'mskdsp-vertical-security.sh';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    return filePath;
+  },
+  deployVerticalSecurityScript: async (
+    request: VerticalSecurityDeployRequest,
+  ): Promise<VerticalSecurityDeployResult> => ({
+    remote_path: `${request.install_dir.replace(/\/+$/, '') || '/'}/mskdsp-vertical-security.sh`,
+    service_name: 'mskdsp-vertical-security.service',
+    exit_code: 0,
+    success: true,
+    stdout: '浏览器开发模式已模拟脚本上传、服务安装和启动\n',
+    stderr: '',
+  }),
+  getVerticalSecurityStatus: async (): Promise<VerticalSecurityStatusResult> => ({
+    service_name: 'mskdsp-vertical-security.service',
+    active_state: 'active',
+    sub_state: 'exited',
+    result: 'success',
+    exit_code: 0,
+    restart_count: 0,
+    steps: [
+      ['precheck', '系统预检查', '必要命令和网络接口检查完成'],
+      ['fixed_network', '101 固定网络', '101 固定网络和 SNAT 配置完成'],
+      ['local_security', '107 本地纵密链路', '107 本地纵密链路配置完成'],
+      ['local_rtu', '108 本地 RTU 链路', '108 本地 RTU 链路配置完成'],
+      ['ppp0_wait', 'PPP 链路', '已获取 ppp0 IPv4 地址'],
+      ['remote_security_route', '远程纵密路由', '远程纵密路由配置完成'],
+      ['dnat', 'DNAT 规则', 'DNAT 规则配置完成'],
+      ['conntrack', '连接跟踪超时', '连接跟踪超时已恢复为 600 秒'],
+      ['save_config', '配置保存', '纵密配置文件保存完成'],
+    ].map(([step_id, name, message]) => ({
+      step_id,
+      name,
+      state: 'success',
+      message,
+      updated_at: Math.floor(Date.now() / 1000),
+    })),
+  }),
   loadFullConfigExport: async (filePath: string) => {
     const snapshot = exportSnapshots.get(filePath);
     if (!snapshot) {

@@ -1,0 +1,189 @@
+.security-config-page {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 100%;
+  overflow: auto;
+}
+
+.security-config-card {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 100%;
+  border-radius: 0;
+}
+
+.security-config-device {
+  width: min(100%, 360px);
+}
+
+.security-config-network-alert {
+  margin-bottom: 20px;
+}
+
+.security-config-deploy-result {
+  margin-bottom: 20px;
+}
+
+.security-config-execution {
+  margin-bottom: 20px;
+  padding: 16px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.security-config-execution-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-height: 40px;
+  gap: 16px;
+}
+
+.security-config-service-state {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.security-config-status-error {
+  margin: 12px 0;
+}
+
+.security-config-step-list {
+  margin-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.security-config-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) minmax(150px, auto);
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.security-config-step:last-child {
+  border-bottom: 0;
+}
+
+.security-config-step-index {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.security-config-step-running .security-config-step-index,
+.security-config-step-waiting .security-config-step-index {
+  border-color: #1677ff;
+  color: #69b1ff;
+}
+
+.security-config-step-success .security-config-step-index {
+  border-color: #49aa19;
+  color: #95de64;
+}
+
+.security-config-step-failed .security-config-step-index {
+  border-color: #d32029;
+  color: #ff7875;
+}
+
+.security-config-step-body {
+  min-width: 0;
+}
+
+.security-config-step-name {
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.security-config-step-message {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.security-config-step-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  justify-content: end;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.security-config-section + .security-config-section {
+  margin-top: 12px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.security-config-section-title {
+  margin: 0 0 12px;
+  color: #f0f0f0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.security-config-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 24px;
+}
+
+.security-config-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.security-config-script-preview {
+  max-height: 65vh;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.22);
+  color: #d7e3ed;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
+@media (max-width: 720px) {
+  .security-config-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .security-config-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .security-config-step {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .security-config-step-meta {
+    grid-column: 2;
+    justify-content: start;
+    text-align: left;
+  }
+}

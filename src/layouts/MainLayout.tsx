@@ -10,6 +10,7 @@ import {
   DashboardOutlined,
   EllipsisOutlined,
   NodeIndexOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import ControlHeaderViewSwitcher from '../components/control/ControlHeaderViewSwitcher';
@@ -63,6 +64,11 @@ const menuItems = [
     key: '/control',
     icon: <ControlOutlined />,
     label: '控制策略',
+  },
+  {
+    key: '/security-config',
+    icon: <SafetyCertificateOutlined />,
+    label: '纵密配置',
   },
   {
     key: '/software-update',

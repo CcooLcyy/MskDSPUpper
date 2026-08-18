@@ -194,6 +194,49 @@ export interface LowerUpdateRuntimeInfo {
   image_id: string | null;
 }
 
+export interface VerticalSecurityDeployRequest {
+  script_content: string;
+  upload_account: string;
+  install_dir: string;
+  auth: LowerUpdateSshAuth;
+  sudo_password: string;
+}
+
+export interface VerticalSecurityDeployResult {
+  remote_path: string;
+  service_name: string;
+  exit_code: number | null;
+  success: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+export type VerticalSecurityStepState = 'running' | 'waiting' | 'success' | 'failed';
+
+export interface VerticalSecurityStepResult {
+  step_id: string;
+  name: string;
+  state: VerticalSecurityStepState;
+  message: string;
+  updated_at: number;
+}
+
+export interface VerticalSecurityStatusRequest {
+  upload_account: string;
+  auth: LowerUpdateSshAuth;
+  sudo_password: string;
+}
+
+export interface VerticalSecurityStatusResult {
+  service_name: string;
+  active_state: string;
+  sub_state: string;
+  result: string;
+  exit_code: number | null;
+  restart_count: number;
+  steps: VerticalSecurityStepResult[];
+}
+
 export interface Iec104Endpoint {
   ip: string;
   port: number;
