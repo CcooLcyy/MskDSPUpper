@@ -7,6 +7,7 @@ import {
   Segmented,
   Col,
   Descriptions,
+  Dropdown,
   Form,
   Input,
   InputNumber,
@@ -38,6 +39,7 @@ import {
   SearchOutlined,
   HolderOutlined,
 } from '@ant-design/icons';
+import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
@@ -181,6 +183,8 @@ type DataBusEndpointOption = {
   connName: string;
   tag: string;
 };
+
+type PointDeleteMode = 'all' | 'selected';
 
 type ImportedPointDraft = Iec104Point & {
   key: string;
@@ -491,6 +495,7 @@ const IEC104: React.FC = () => {
   const [pointTableView, setPointTableView] = useState<'config' | 'runtime'>('config');
   const [ioaInputHex, setIoaInputHex] = useState(false);
   const [selectedPointTags, setSelectedPointTags] = useState<string[]>([]);
+  const [pointDeleteConfirmMode, setPointDeleteConfirmMode] = useState<PointDeleteMode | null>(null);
   const [ioaAdjustModalOpen, setIoaAdjustModalOpen] = useState(false);
   const [pointTypeBatchModalOpen, setPointTypeBatchModalOpen] = useState(false);
   const [pointTypeBatchValue, setPointTypeBatchValue] = useState<number>();
@@ -625,6 +630,10 @@ const IEC104: React.FC = () => {
     || batchPointModalOpen
     || importPointModalOpen
     || ioaAdjustModalOpen;
+  const pointDeleteDisabled = !selectedConn || points.length === 0 || actionsDisabled;
+  const selectedPointDeleteDisabled = pointDeleteDisabled
+    || pointTableView !== 'config'
+    || selectedPointTags.length === 0;
   const isSinglePoint = pointType === 2;
   const pointIoaRange = getIoaCategoryRange(pointIoaCategory ?? 'custom');
   const batchPointIoaRange = getIoaCategoryRange(batchPointCategory);
@@ -1883,6 +1892,70 @@ const IEC104: React.FC = () => {
     }
   }, [messageApi, pointSubmitting, selectedConn, runSelectedLinkStopped]);
 
+  const handleDeleteSelectedPoints = useCallback(async () => {
+    if (!selectedConn || pointSubmitting || selectedPointTags.length === 0) return;
+
+    const selectedTags = new Set(selectedPointTags);
+    const selectedPoints = points.filter((point) => selectedTags.has(point.tag));
+    if (selectedPoints.length === 0) {
+      messageApi.info('当前选中的点位已不存在，请重新选择');
+      setSelectedPointTags([]);
+      return;
+    }
+
+    const newPoints = points.filter((point) => !selectedTags.has(point.tag));
+    setPointSubmitting(true);
+    try {
+      const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
+      setPoints(newPoints);
+      setSimulationSnapshot(null);
+      setSelectedPointTags([]);
+      console.info('IEC104 已批量删除选中点位', {
+        connName: selectedConn,
+        pointCount: selectedPoints.length,
+      });
+      messageApi.success(`已删除 ${selectedPoints.length} 个选中点位`);
+      if (restartResult.restartError) {
+        messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
+      } else if (restartResult.stoppedBeforeRun) {
+        messageApi.success('点表已保存并重新启动链路');
+      }
+    } catch (e) {
+      messageApi.error(`删除选中点位失败: ${formatErrorText(e)}`);
+    } finally {
+      setPointSubmitting(false);
+    }
+  }, [messageApi, pointSubmitting, points, runSelectedLinkStopped, selectedConn, selectedPointTags]);
+
+  const pointDeleteMenuItems: MenuProps['items'] = [
+    {
+      key: 'all',
+      label: '删除全部点位',
+      disabled: pointDeleteDisabled,
+    },
+    {
+      key: 'selected',
+      label: `删除选中点位${selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}`,
+      disabled: selectedPointDeleteDisabled,
+    },
+  ];
+
+  const handlePointDeleteMenuClick = useCallback(({ key }: { key: string }) => {
+    if (key === 'all' || key === 'selected') {
+      setPointDeleteConfirmMode(key);
+    }
+  }, []);
+
+  const handlePointDeleteConfirm = useCallback(() => {
+    const mode = pointDeleteConfirmMode;
+    setPointDeleteConfirmMode(null);
+    if (mode === 'all') {
+      void handleDeleteAllPoints();
+    } else if (mode === 'selected') {
+      void handleDeleteSelectedPoints();
+    }
+  }, [handleDeleteAllPoints, handleDeleteSelectedPoints, pointDeleteConfirmMode]);
+
   const handleImportSourceConnChange = useCallback((value: string | undefined) => {
     setImportSourceConnId(value);
     setSelectedImportEndpointValues([]);
@@ -2719,12 +2792,25 @@ const IEC104: React.FC = () => {
                   筛选{pointFilterCount > 0 ? ` (${pointFilterCount})` : ''}
                 </Button>
                 <Popconfirm
-                  title="确认删除全部点位？"
-                  description={`当前连接的 ${points.length} 个点位将被清空`}
-                  onConfirm={() => void handleDeleteAllPoints()}
-                  disabled={!selectedConn || points.length === 0 || actionsDisabled}
+                  title={pointDeleteConfirmMode === 'all' ? '确认删除全部点位？' : '确认删除选中点位？'}
+                  description={pointDeleteConfirmMode === 'all'
+                    ? `当前连接的 ${points.length} 个点位将被清空`
+                    : `当前选中的 ${selectedPointTags.length} 个点位将被删除`}
+                  open={pointDeleteConfirmMode !== null}
+                  onConfirm={handlePointDeleteConfirm}
+                  onCancel={() => setPointDeleteConfirmMode(null)}
                 >
-                  <Button danger size="small" icon={<DeleteOutlined />} disabled={!selectedConn || points.length === 0 || actionsDisabled}>删除全部点位</Button>
+                  <Dropdown
+                    menu={{ items: pointDeleteMenuItems, onClick: handlePointDeleteMenuClick }}
+                    trigger={['click']}
+                    placement="bottomRight"
+                    arrow
+                    disabled={pointDeleteDisabled}
+                  >
+                    <Button danger size="small" icon={<DeleteOutlined />} disabled={pointDeleteDisabled}>
+                      删除点位
+                    </Button>
+                  </Dropdown>
                 </Popconfirm>
                 <Button
                   size="small"

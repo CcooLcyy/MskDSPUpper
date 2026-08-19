@@ -73,7 +73,9 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(rustCommandText, /bash -n \{script_path\}/);
   assert.match(rustCommandText, /Description=MskDSP 纵密配置/);
   assert.match(rustCommandText, /StartLimitIntervalSec=0/);
-  assert.match(rustCommandText, /TimeoutStartSec=infinity/);
+  assert.match(rustCommandText, /Type=exec/);
+  assert.doesNotMatch(rustCommandText, /Type=oneshot/);
+  assert.match(rustCommandText, /TimeoutStartSec=30s/);
   assert.match(rustCommandText, /Restart=on-failure/);
   assert.match(rustCommandText, /RestartSec=10s/);
   assert.match(rustCommandText, /systemctl cat \{service_name\}/);

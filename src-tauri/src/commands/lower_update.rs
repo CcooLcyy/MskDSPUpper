@@ -1064,7 +1064,7 @@ trap cleanup EXIT HUP INT TERM; \
 bash -n {script_path}; \
 install -m 0755 {script_path} \"$script_tmp\"; \
 mv -f -- \"$script_tmp\" {script_install_path}; \
-cat > \"$service_tmp\" <<'EOF'\n[Unit]\nDescription=MskDSP 纵密配置\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=/usr/local/libexec/mskdsp-vertical-security\nRemainAfterExit=yes\nTimeoutStartSec=infinity\nRestart=on-failure\nRestartSec=10s\n\n[Install]\nWantedBy=multi-user.target\nEOF\ninstall -m 0644 \"$service_tmp\" {service_path}; \
+cat > \"$service_tmp\" <<'EOF'\n[Unit]\nDescription=MskDSP 纵密配置\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=exec\nExecStart=/usr/local/libexec/mskdsp-vertical-security\nRemainAfterExit=yes\nTimeoutStartSec=30s\nRestart=on-failure\nRestartSec=10s\n\n[Install]\nWantedBy=multi-user.target\nEOF\ninstall -m 0644 \"$service_tmp\" {service_path}; \
 rm -f -- \"$service_tmp\"; \
 trap - EXIT HUP INT TERM; \
 systemctl daemon-reload; \
@@ -2826,7 +2826,9 @@ mod tests {
         assert!(command.contains("/etc/systemd/system/mskdsp-vertical-security.service"));
         assert!(command.contains("Description=MskDSP 纵密配置"));
         assert!(command.contains("StartLimitIntervalSec=0"));
-        assert!(command.contains("TimeoutStartSec=infinity"));
+        assert!(command.contains("Type=exec"));
+        assert!(!command.contains("Type=oneshot"));
+        assert!(command.contains("TimeoutStartSec=30s"));
         assert!(command.contains("Restart=on-failure"));
         assert!(command.contains("RestartSec=10s"));
         assert!(command.contains("systemctl cat"));
