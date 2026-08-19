@@ -34,14 +34,38 @@ function requireScriptValue(name: string, value: string): string {
   return normalized;
 }
 
+export function isValidIpv4Address(value: unknown): value is string {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const normalized = value.trim();
+  const octets = normalized.split('.');
+  return octets.length === 4 && octets.every((octet) => {
+    if (!/^\d{1,3}$/.test(octet) || (octet.length > 1 && octet.startsWith('0'))) {
+      return false;
+    }
+    const number = Number(octet);
+    return number >= 0 && number <= 255;
+  });
+}
+
+function requireIpv4Address(name: string, value: string): string {
+  const normalized = requireScriptValue(name, value);
+  if (!isValidIpv4Address(normalized)) {
+    throw new Error(`${name}必须是合法 IPv4 地址`);
+  }
+  return normalized;
+}
+
 export function buildVerticalSecurityScript(values: VerticalSecurityScriptValues): string {
   const device = requireScriptValue('目标设备', values.device);
-  const localRtuAddress = requireScriptValue('本地 RTU 地址', values.localRtuAddress);
-  const localSecurityAddress = requireScriptValue('本地纵密地址', values.localSecurityAddress);
-  const localGatewayAddress = requireScriptValue('本地网关地址', values.localGatewayAddress);
-  const remoteRtuAddress = requireScriptValue('远程 RTU 地址', values.remoteRtuAddress);
-  const remoteSecurityAddress = requireScriptValue('远程纵密地址', values.remoteSecurityAddress);
-  const remoteGatewayAddress = requireScriptValue('远程网关地址', values.remoteGatewayAddress);
+  const localRtuAddress = requireIpv4Address('本地 RTU 地址', values.localRtuAddress);
+  const localSecurityAddress = requireIpv4Address('本地纵密地址', values.localSecurityAddress);
+  const localGatewayAddress = requireIpv4Address('本地网关地址', values.localGatewayAddress);
+  const remoteRtuAddress = requireIpv4Address('远程 RTU 地址', values.remoteRtuAddress);
+  const remoteSecurityAddress = requireIpv4Address('远程纵密地址', values.remoteSecurityAddress);
+  const remoteGatewayAddress = requireIpv4Address('远程网关地址', values.remoteGatewayAddress);
 
   return `#!/usr/bin/env bash
 set -Eeuo pipefail

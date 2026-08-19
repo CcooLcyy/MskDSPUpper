@@ -33,6 +33,8 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(pageText, /onChange=\{handleDeviceChange\}/);
   assert.match(pageText, /disabled=\{!selectedDevice\}/);
   assert.match(pageText, /label="本地 RTU 地址"/);
+  assert.match(pageText, /isValidIpv4Address/);
+  assert.match(pageText, /请输入合法 IPv4 地址/);
   assert.match(pageText, /label="本地纵密地址"/);
   assert.match(pageText, /label="本地网关地址"/);
   assert.match(pageText, /label="远程 RTU 地址"/);
@@ -94,6 +96,9 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(scriptText, /src "\\\$\{LOCAL_RTU_ADDRESS\}" onlink/);
   assert.match(scriptText, /ip route replace "\\\$\{REMOTE_SECURITY_ADDRESS\}\/32" dev ppp0/);
   assert.match(scriptText, /wait_for_ppp0_ipv4/);
+  assert.match(scriptText, /export function isValidIpv4Address/);
+  assert.match(scriptText, /requireIpv4Address/);
+  assert.match(scriptText, /必须是合法 IPv4 地址/);
   assert.match(scriptText, /readonly STATUS_LOG="\\\$\{STATUS_DIR\}\/steps\.log"/);
   assert.match(scriptText, /begin_step 'ppp0_wait' 'PPP 链路'/);
   assert.match(scriptText, /write_step_status 'waiting' '等待 ppp0 IPv4 地址'/);

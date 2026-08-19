@@ -34,6 +34,7 @@ import type {
 import {
   buildVerticalSecurityScript,
   deployVerticalSecurityScript,
+  isValidIpv4Address,
 } from '../../utils/vertical-security-script';
 
 type SecurityAuthMethod = 'password' | 'certificate';
@@ -54,7 +55,19 @@ type SecurityConfigValues = {
   remoteGatewayAddress: string;
 };
 
-const ADDRESS_RULES = [{ required: true, whitespace: true, message: '请输入地址' }];
+const ADDRESS_RULES = [
+  { required: true, whitespace: true, message: '请输入地址' },
+  {
+    validator: (_rule: unknown, value: string | undefined) => {
+      if (!value?.trim()) {
+        return Promise.resolve();
+      }
+      return isValidIpv4Address(value)
+        ? Promise.resolve()
+        : Promise.reject(new Error('请输入合法 IPv4 地址'));
+    },
+  },
+];
 const DEVICE_OPTIONS = [{ value: 'MskDSP', label: 'MskDSP' }];
 const DEVICE_CONNECTION_DEFAULTS: Record<string, Partial<SecurityConfigValues>> = {
   MskDSP: {
