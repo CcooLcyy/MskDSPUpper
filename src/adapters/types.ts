@@ -279,6 +279,7 @@ export interface Iec104Point {
   tag: string;
   ioa: number;
   point_type: number;
+  business_type: number;
   scale: number;
   offset: number;
   deadband: number;

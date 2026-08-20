@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
+  getPointBusinessTypeByIoa,
   getIoaCategoryFilterByIoa,
   getIoaCategoryRange,
   matchesIoaCategoryFilter,
@@ -16,6 +17,15 @@ test('IEC104 按固定 IOA 地址段归类四遥和参数', () => {
   assert.deepEqual(getIoaCategoryRange('remoteAdjust'), { start: 0x6201, end: 0x7FFF });
   assert.deepEqual(getIoaCategoryRange('remoteControl'), { start: 0x8000, end: 0x9FFF });
   assert.deepEqual(getIoaCategoryRange('parameter'), { start: 0xA000, end: 0xBFFF });
+});
+
+test('IEC104 IOA 分类可以为旧点表推导业务类型', () => {
+  assert.equal(getPointBusinessTypeByIoa(0x0001), 1);
+  assert.equal(getPointBusinessTypeByIoa(0x4001), 2);
+  assert.equal(getPointBusinessTypeByIoa(0x6201), 3);
+  assert.equal(getPointBusinessTypeByIoa(0x8000), 4);
+  assert.equal(getPointBusinessTypeByIoa(0xA000), 5);
+  assert.equal(getPointBusinessTypeByIoa(0xC000), 0);
 });
 
 test('IEC104 IOA 地址段边界和未分类判断正确', () => {
@@ -46,4 +56,6 @@ test('IEC104 页面使用 IOA 业务类别筛选并显示归类结果', () => {
   assert.match(pageSource, /matchesIoaCategoryFilter\(point\.ioa, ioaCategoryFilter\)/);
   assert.match(pageSource, /placeholder="全部业务类别"[\s\S]*options=\{IOA_CATEGORY_FILTER_OPTIONS\}/);
   assert.match(pageSource, /getIoaCategoryFilterByIoa\(ioa\)[\s\S]*getIoaCategoryLabel\(category\)/);
+  assert.match(pageSource, /business_type/);
+  assert.match(pageSource, /业务类型/);
 });

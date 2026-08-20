@@ -82,11 +82,15 @@ import {
 import {
   IOA_CATEGORY_FILTER_OPTIONS,
   IOA_CATEGORY_FORM_OPTIONS,
+  POINT_BUSINESS_TYPE_OPTIONS,
   MAX_IOA,
   getIoaCategoryByIoa,
   getIoaCategoryFilterByIoa,
   getIoaCategoryLabel,
   getIoaCategoryRange,
+  getPointBusinessTypeByCategory,
+  getPointBusinessTypeByIoa,
+  getPointBusinessTypeLabel,
   matchesIoaCategoryFilter,
   type IoaCategoryFilterKey,
   type IoaCategoryKey,
@@ -365,11 +369,13 @@ const resolveIoaCategoryChange = ({
 };
 
 const getCreatePointInitialValues = (points: Iec104Point[]) => {
+  const ioa = getNextAvailableIoa(new Set(points.map((point) => point.ioa)));
   return {
     ...DEFAULT_POINT_FORM_VALUES,
     ioa_category: 'custom' as IoaCategoryKey,
-    ioa: getNextAvailableIoa(new Set(points.map((point) => point.ioa))),
+    ioa,
     point_type: points[points.length - 1]?.point_type ?? 1,
+    business_type: getPointBusinessTypeByIoa(ioa),
   };
 };
 
@@ -1405,6 +1411,7 @@ const IEC104: React.FC = () => {
       tag: draft.tag,
       ioa: draft.ioa,
       point_type: draft.point_type,
+      business_type: draft.business_type,
       scale: draft.scale,
       offset: draft.offset,
       deadband: draft.deadband,
@@ -1465,6 +1472,7 @@ const IEC104: React.FC = () => {
         ioa: p.ioa,
         ioa_category: getIoaCategoryByIoa(p.ioa),
         point_type: p.point_type,
+        business_type: p.business_type,
         scale: p.scale,
         offset: p.offset,
         deadband: p.deadband,
@@ -1739,15 +1747,17 @@ const IEC104: React.FC = () => {
           .map((point) => point.ioa),
       );
       const currentIoa = pointForm.getFieldValue('ioa');
+      const currentBusinessType = pointForm.getFieldValue('business_type');
 
-      pointForm.setFieldsValue(
-        resolveIoaCategoryChange({
+      pointForm.setFieldsValue({
+        ...resolveIoaCategoryChange({
           usedIoas,
           currentIoa: typeof currentIoa === 'number' ? currentIoa : undefined,
           currentCategory: pointIoaCategory,
           nextCategory,
         }),
-      );
+        business_type: currentBusinessType || getPointBusinessTypeByCategory(nextCategory),
+      });
     },
     [editingPointIndex, pointForm, pointIoaCategory, points],
   );
@@ -1755,9 +1765,11 @@ const IEC104: React.FC = () => {
   const handlePointIoaChange = useCallback(
     (nextValue: number | null) => {
       const normalizedValue = typeof nextValue === 'number' && Number.isFinite(nextValue) ? nextValue : undefined;
+      const currentBusinessType = pointForm.getFieldValue('business_type');
       pointForm.setFieldsValue({
         ioa: normalizedValue,
         ioa_category: getIoaCategoryByIoa(normalizedValue),
+        ...(currentBusinessType ? {} : { business_type: getPointBusinessTypeByIoa(normalizedValue) }),
       });
     },
     [pointForm],
@@ -1772,6 +1784,7 @@ const IEC104: React.FC = () => {
         tag: values.tag.trim(),
         ioa: values.ioa,
         point_type: values.point_type,
+        business_type: values.business_type ?? 0,
         scale: values.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.scale : values.scale ?? 1,
         offset: values.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.offset : values.offset ?? 0,
         deadband: values.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.deadband : values.deadband ?? 0,
@@ -1833,6 +1846,7 @@ const IEC104: React.FC = () => {
       ioa,
       ioa_category: getIoaCategoryByIoa(ioa),
       point_type: source.point_type,
+      business_type: source.business_type,
       scale: source.scale,
       offset: source.offset,
       deadband: source.deadband,
@@ -2005,6 +2019,7 @@ const IEC104: React.FC = () => {
             ioa: nextIoa,
             ioa_category: 'custom',
             point_type: getDefaultImportedPointType(points),
+            business_type: getPointBusinessTypeByIoa(nextIoa),
             scale: DEFAULT_POINT_FORM_VALUES.scale,
             offset: DEFAULT_POINT_FORM_VALUES.offset,
             deadband: DEFAULT_POINT_FORM_VALUES.deadband,
@@ -2053,6 +2068,7 @@ const IEC104: React.FC = () => {
           ...item,
           ioa_category: nextCategory,
           ioa: nextIoa,
+          business_type: item.business_type || getPointBusinessTypeByCategory(nextCategory),
         };
       });
     });
@@ -2082,6 +2098,7 @@ const IEC104: React.FC = () => {
             ? {
                 ...item,
                 ...nextDraftFields,
+                business_type: item.business_type || getPointBusinessTypeByCategory(nextCategory),
               }
             : item,
         );
@@ -2092,12 +2109,15 @@ const IEC104: React.FC = () => {
 
   const handleImportPointIoaChange = useCallback(
     (key: string, nextValue: number | null) => {
+      const normalizedValue = typeof nextValue === 'number' && Number.isFinite(nextValue) ? nextValue : 0;
+      const current = importPointDrafts.find((item) => item.key === key);
       updateImportPointDraft(key, {
-        ioa: typeof nextValue === 'number' && Number.isFinite(nextValue) ? nextValue : 0,
+        ioa: normalizedValue,
         ioa_category: getIoaCategoryByIoa(nextValue),
+        ...(current?.business_type ? {} : { business_type: getPointBusinessTypeByIoa(normalizedValue) }),
       });
     },
-    [updateImportPointDraft],
+    [importPointDrafts, updateImportPointDraft],
   );
 
   const handleRemoveImportPointDraft = useCallback((key: string) => {
@@ -2162,6 +2182,7 @@ const IEC104: React.FC = () => {
         tag,
         ioa: draft.ioa,
         point_type: draft.point_type,
+        business_type: draft.business_type,
         scale: draft.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.scale : draft.scale ?? DEFAULT_POINT_FORM_VALUES.scale,
         offset: draft.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.offset : draft.offset ?? DEFAULT_POINT_FORM_VALUES.offset,
         deadband: draft.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.deadband : draft.deadband ?? DEFAULT_POINT_FORM_VALUES.deadband,
@@ -2292,6 +2313,13 @@ const IEC104: React.FC = () => {
       render: (value: number) => POINT_TYPE_LABELS[value] ?? `未知类型 (${value})`,
     },
     {
+      title: '业务类型',
+      dataIndex: 'business_type',
+      key: 'business_type',
+      width: 110,
+      render: (value: number) => getPointBusinessTypeLabel(value),
+    },
+    {
       title: '状态',
       key: 'status',
       render: (_value: unknown, record: BatchPointDraft) => {
@@ -2335,6 +2363,13 @@ const IEC104: React.FC = () => {
       key: 'point_type',
       width: 220,
       render: (value: number) => POINT_TYPE_LABELS[value] ?? `未知类型 (${value})`,
+    };
+    const businessTypeColumn = {
+      title: '业务类型',
+      dataIndex: 'business_type',
+      key: 'business_type',
+      width: 110,
+      render: (value: number) => getPointBusinessTypeLabel(value),
     };
     const realtimeValueColumn = {
       title: '实时值',
@@ -2433,13 +2468,14 @@ const IEC104: React.FC = () => {
     };
 
     if (pointTableView === 'runtime') {
-      return [tagColumn, ioaColumn, typeColumn, realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
+      return [tagColumn, ioaColumn, typeColumn, businessTypeColumn, realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
     }
 
     return [
       tagColumn,
       ioaColumn,
       typeColumn,
+      businessTypeColumn,
       { title: 'Scale', dataIndex: 'scale', key: 'scale', width: 100 },
       { title: 'Offset', dataIndex: 'offset', key: 'offset', width: 100 },
       { title: 'Deadband', dataIndex: 'deadband', key: 'deadband', width: 110 },
@@ -2534,6 +2570,22 @@ const IEC104: React.FC = () => {
             label,
           }))}
           onChange={(nextValue) => updateImportPointDraft(record.key, { point_type: nextValue })}
+        />
+      ),
+    },
+    {
+      title: '业务类型',
+      dataIndex: 'business_type',
+      key: 'business_type',
+      width: 130,
+      render: (value: number, record) => (
+        <Select
+          size="small"
+          style={{ width: '100%' }}
+          value={value}
+          disabled={importSubmitting}
+          options={POINT_BUSINESS_TYPE_OPTIONS}
+          onChange={(nextValue) => updateImportPointDraft(record.key, { business_type: nextValue })}
         />
       ),
     },
@@ -3292,6 +3344,18 @@ const IEC104: React.FC = () => {
                     label: v,
                   }))}
                   placeholder="选择类型"
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={12}>
+              <Form.Item
+                name="business_type"
+                label="业务类型"
+                rules={[{ required: true, message: '请选择业务类型' }]}
+              >
+                <Select
+                  options={POINT_BUSINESS_TYPE_OPTIONS}
+                  placeholder="选择遥信、遥测、遥调或遥控"
                 />
               </Form.Item>
             </Col>

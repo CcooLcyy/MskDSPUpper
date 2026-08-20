@@ -10,6 +10,39 @@ export type IoaBusinessCategoryKey =
 export type IoaCategoryKey = 'custom' | IoaBusinessCategoryKey;
 export type IoaCategoryFilterKey = IoaBusinessCategoryKey | 'unclassified';
 
+export const POINT_BUSINESS_TYPE_UNSPECIFIED = 0;
+export const POINT_BUSINESS_TYPE_TELEINDICATION = 1;
+export const POINT_BUSINESS_TYPE_TELEMETRY = 2;
+export const POINT_BUSINESS_TYPE_REMOTE_ADJUST = 3;
+export const POINT_BUSINESS_TYPE_REMOTE_CONTROL = 4;
+export const POINT_BUSINESS_TYPE_PARAMETER = 5;
+
+const POINT_BUSINESS_TYPE_BY_CATEGORY: Record<IoaBusinessCategoryKey, number> = {
+  teleindication: POINT_BUSINESS_TYPE_TELEINDICATION,
+  telemetry: POINT_BUSINESS_TYPE_TELEMETRY,
+  remoteAdjust: POINT_BUSINESS_TYPE_REMOTE_ADJUST,
+  remoteControl: POINT_BUSINESS_TYPE_REMOTE_CONTROL,
+  parameter: POINT_BUSINESS_TYPE_PARAMETER,
+};
+
+const POINT_BUSINESS_TYPE_LABELS: Record<number, string> = {
+  [POINT_BUSINESS_TYPE_UNSPECIFIED]: '未分类',
+  [POINT_BUSINESS_TYPE_TELEINDICATION]: '遥信',
+  [POINT_BUSINESS_TYPE_TELEMETRY]: '遥测',
+  [POINT_BUSINESS_TYPE_REMOTE_ADJUST]: '遥调',
+  [POINT_BUSINESS_TYPE_REMOTE_CONTROL]: '遥控',
+  [POINT_BUSINESS_TYPE_PARAMETER]: '参数',
+};
+
+export const POINT_BUSINESS_TYPE_OPTIONS = [
+  { value: POINT_BUSINESS_TYPE_TELEINDICATION, label: POINT_BUSINESS_TYPE_LABELS[POINT_BUSINESS_TYPE_TELEINDICATION] },
+  { value: POINT_BUSINESS_TYPE_TELEMETRY, label: POINT_BUSINESS_TYPE_LABELS[POINT_BUSINESS_TYPE_TELEMETRY] },
+  { value: POINT_BUSINESS_TYPE_REMOTE_ADJUST, label: POINT_BUSINESS_TYPE_LABELS[POINT_BUSINESS_TYPE_REMOTE_ADJUST] },
+  { value: POINT_BUSINESS_TYPE_REMOTE_CONTROL, label: POINT_BUSINESS_TYPE_LABELS[POINT_BUSINESS_TYPE_REMOTE_CONTROL] },
+  { value: POINT_BUSINESS_TYPE_PARAMETER, label: POINT_BUSINESS_TYPE_LABELS[POINT_BUSINESS_TYPE_PARAMETER] },
+  { value: POINT_BUSINESS_TYPE_UNSPECIFIED, label: POINT_BUSINESS_TYPE_LABELS[POINT_BUSINESS_TYPE_UNSPECIFIED] },
+];
+
 export type IoaCategoryOption = {
   value: IoaBusinessCategoryKey;
   label: string;
@@ -39,6 +72,17 @@ export const getIoaCategoryRange = (category: IoaCategoryKey) => {
   const option = IOA_CATEGORY_OPTIONS.find((item) => item.value === category);
   return option ? { start: option.start, end: option.end } : null;
 };
+
+export const getPointBusinessTypeByCategory = (category: IoaCategoryKey): number =>
+  category === 'custom' ? POINT_BUSINESS_TYPE_UNSPECIFIED : POINT_BUSINESS_TYPE_BY_CATEGORY[category];
+
+export const getPointBusinessTypeByIoa = (ioa?: number | null): number => {
+  const category = getIoaCategoryByIoa(ioa);
+  return getPointBusinessTypeByCategory(category);
+};
+
+export const getPointBusinessTypeLabel = (businessType?: number | null): string =>
+  POINT_BUSINESS_TYPE_LABELS[businessType ?? POINT_BUSINESS_TYPE_UNSPECIFIED] ?? '未分类';
 
 export const getIoaCategoryByIoa = (ioa?: number | null): IoaCategoryKey => {
   if (typeof ioa !== 'number' || !Number.isInteger(ioa) || ioa < 1 || ioa > MAX_IOA) {

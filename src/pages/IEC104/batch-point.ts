@@ -1,5 +1,10 @@
 import type { Iec104Point } from '../../adapters';
-import { getIoaCategoryLabel, getIoaCategoryRange, type IoaCategoryKey } from './ioa-category.ts';
+import {
+  getIoaCategoryLabel,
+  getIoaCategoryRange,
+  getPointBusinessTypeByCategory,
+  type IoaCategoryKey,
+} from './ioa-category.ts';
 
 export const BATCH_POINT_TYPE_FLOAT = 1;
 export const BATCH_POINT_TYPE_SINGLE = 2;
@@ -99,6 +104,7 @@ export const generateBatchPoints = ({
   const normalizedScale = pointType === BATCH_POINT_TYPE_SINGLE ? 1 : scale;
   const normalizedOffset = pointType === BATCH_POINT_TYPE_SINGLE ? 0 : offset;
   const normalizedDeadband = pointType === BATCH_POINT_TYPE_SINGLE ? 0 : deadband;
+  const normalizedBusinessType = getPointBusinessTypeByCategory(ioaCategory);
   const batchTagCounts = new Map<string, number>();
   const batchIoaCounts = new Map<number, number>();
 
@@ -146,6 +152,7 @@ export const generateBatchPoints = ({
       ioa,
       ioa_category: ioaCategory,
       point_type: pointType,
+      business_type: normalizedBusinessType,
       scale: normalizedScale,
       offset: normalizedOffset,
       deadband: normalizedDeadband,

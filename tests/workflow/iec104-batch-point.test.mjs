@@ -25,6 +25,7 @@ test('IEC104 batch points allocate sequential IOAs', () => {
     text: 'voltage_a\nvoltage_b\nvoltage_c',
     startIoa: 0x4001,
     step: 1,
+    ioaCategory: 'telemetry',
     pointType: BATCH_POINT_TYPE_FLOAT,
     scale: 0.1,
     offset: -2,
@@ -32,10 +33,10 @@ test('IEC104 batch points allocate sequential IOAs', () => {
   });
 
   assert.deepEqual(result.issues, []);
-  assert.deepEqual(result.drafts.map(({ tag, ioa, scale, offset, deadband }) => ({ tag, ioa, scale, offset, deadband })), [
-    { tag: 'voltage_a', ioa: 0x4001, scale: 0.1, offset: -2, deadband: 0.2 },
-    { tag: 'voltage_b', ioa: 0x4002, scale: 0.1, offset: -2, deadband: 0.2 },
-    { tag: 'voltage_c', ioa: 0x4003, scale: 0.1, offset: -2, deadband: 0.2 },
+  assert.deepEqual(result.drafts.map(({ tag, ioa, business_type: businessType, scale, offset, deadband }) => ({ tag, ioa, businessType, scale, offset, deadband })), [
+    { tag: 'voltage_a', ioa: 0x4001, businessType: 2, scale: 0.1, offset: -2, deadband: 0.2 },
+    { tag: 'voltage_b', ioa: 0x4002, businessType: 2, scale: 0.1, offset: -2, deadband: 0.2 },
+    { tag: 'voltage_c', ioa: 0x4003, businessType: 2, scale: 0.1, offset: -2, deadband: 0.2 },
   ]);
 });
 
@@ -170,6 +171,7 @@ test('IEC104 SINGLE batch points reset engineering parameters', () => {
     text: 'breaker_status',
     startIoa: 1,
     step: 1,
+    ioaCategory: 'teleindication',
     pointType: BATCH_POINT_TYPE_SINGLE,
     scale: 10,
     offset: 5,
@@ -182,8 +184,9 @@ test('IEC104 SINGLE batch points reset engineering parameters', () => {
     sourceLine: 1,
     tag: 'breaker_status',
     ioa: 1,
-    ioa_category: 'custom',
+    ioa_category: 'teleindication',
     point_type: BATCH_POINT_TYPE_SINGLE,
+    business_type: 1,
     scale: 1,
     offset: 0,
     deadband: 0,
@@ -199,6 +202,9 @@ test('IEC104 page exposes batch point entry', () => {
   assert.match(pageSource, /统一 IOA 业务类别/);
   assert.match(pageSource, /IOA_CATEGORY_FORM_OPTIONS/);
   assert.match(pageSource, /batchPointCategory/);
+  assert.doesNotMatch(pageSource, /batchPointBusinessType/);
+  assert.doesNotMatch(pageSource, /统一业务类型/);
+  assert.match(pageSource, /business_type: draft\.business_type/);
   assert.match(pageSource, /const newPoints = \[\.\.\.points, \.\.\.normalizedPoints\]/);
   assert.match(pageSource, /runSelectedLinkStopped\(\(\) => api\.iec104UpsertPointTable\(selectedConn, newPoints, true\)\)/);
   assert.match(pageSource, /pagination=\{\{[\s\S]*defaultPageSize: 100/);
