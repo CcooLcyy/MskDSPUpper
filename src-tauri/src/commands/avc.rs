@@ -75,6 +75,8 @@ pub struct GroupInfoDto {
     pub state: i32,
     pub last_error: String,
     pub default_points: Vec<DefaultPointInfoDto>,
+    pub function_enabled: bool,
+    pub remote_enabled: bool,
 }
 
 impl From<SignalSpec> for SignalSpecDto {
@@ -172,6 +174,8 @@ impl From<GroupInfo> for GroupInfoDto {
             state: group.state,
             last_error: group.last_error,
             default_points: group.default_points.into_iter().map(Into::into).collect(),
+            function_enabled: group.function_enabled,
+            remote_enabled: group.remote_enabled,
         }
     }
 }

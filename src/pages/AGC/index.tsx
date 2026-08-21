@@ -72,6 +72,18 @@ const STATE_MAP: Record<number, { label: string; color: string }> = {
   3: { label: '待删除', color: 'orange' },
 };
 
+const DEFAULT_POINT_KIND_LABELS: Record<number, string> = {
+  0: '未指定',
+  1: '理论可调有功下限',
+  2: '理论可调有功上限',
+  3: '当前可调有功下限',
+  4: '当前可调有功上限',
+  5: '调节返回值',
+  6: 'AGC装机容量',
+  7: 'AGC功能投入',
+  8: 'AGC远方操作',
+};
+
 const VALUE_MODE_LABELS: Record<number, string> = {
   0: '未指定',
   1: '绝对值',
@@ -108,6 +120,8 @@ const AGC_RESERVED_DEFAULT_TAGS = new Set([
   '当前可调有功上限',
   '调节返回值',
   'AGC装机容量',
+  'AGC功能投入',
+  'AGC远方操作',
 ]);
 
 const DEFAULT_SIGNAL: AgcSignalSpec = {
@@ -1191,7 +1205,7 @@ const AGC: React.FC = () => {
       title: '类型',
       key: 'kind',
       width: 180,
-      render: (_, record) => record.name || '未知',
+      render: (_, record) => DEFAULT_POINT_KIND_LABELS[record.kind] ?? record.name ?? '未知',
     },
     {
       title: 'tag',
@@ -1299,7 +1313,7 @@ const AGC: React.FC = () => {
                           </Tag>
                         </Space>
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                          conn_id={item.conn_id} | {commandMode} | 成员 {item.config?.members.length ?? 0}
+                          conn_id={item.conn_id} | {commandMode} | 成员 {item.config?.members.length ?? 0} | 默认点 {item.default_points.length}
                         </Text>
                       </Space>
                     </List.Item>
@@ -1367,6 +1381,16 @@ const AGC: React.FC = () => {
                       <Descriptions.Item label="当前状态">
                         <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
                       </Descriptions.Item>
+                      <Descriptions.Item label="AGC功能投入">
+                        <Tag color={selectedGroup?.function_enabled ? 'green' : 'default'}>
+                          {selectedGroup?.function_enabled ? '投入' : '退出'}
+                        </Tag>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="AGC远方操作">
+                        <Tag color={selectedGroup?.remote_enabled ? 'green' : 'default'}>
+                          {selectedGroup?.remote_enabled ? '远方' : '就地'}
+                        </Tag>
+                      </Descriptions.Item>
                       <Descriptions.Item label="分配方式">
                         {allocationModeLabel(selectedConfig.members)}
                       </Descriptions.Item>
@@ -1417,6 +1441,16 @@ const AGC: React.FC = () => {
                     <div>
                       <Text type="secondary" style={{ marginRight: 12 }}>当前状态</Text>
                       <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
+                    </div>
+                    <div>
+                      <Text type="secondary" style={{ marginRight: 12 }}>AGC功能</Text>
+                      <Tag color={selectedGroup?.function_enabled ? 'green' : 'default'}>
+                        {selectedGroup?.function_enabled ? '投入' : '退出'}
+                      </Tag>
+                      <Text type="secondary" style={{ margin: '0 12px 0 20px' }}>远方操作</Text>
+                      <Tag color={selectedGroup?.remote_enabled ? 'green' : 'default'}>
+                        {selectedGroup?.remote_enabled ? '远方' : '就地'}
+                      </Tag>
                     </div>
                     <div>
                       <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>运行控制</Text>

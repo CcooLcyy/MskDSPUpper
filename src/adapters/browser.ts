@@ -385,6 +385,8 @@ function makeDefaultAgcPoints(): AgcDefaultPointInfo[] {
     { kind: 4, tag: '当前可调有功上限', name: '当前可调有功上限', description: '浏览器开发模式 mock 点' },
     { kind: 5, tag: '调节返回值', name: '调节返回值', description: '浏览器开发模式 mock 点' },
     { kind: 6, tag: 'AGC装机容量', name: 'AGC装机容量', description: '浏览器开发模式 mock 点' },
+    { kind: 7, tag: 'AGC功能投入', name: 'AGC功能投入', description: '浏览器开发模式 mock 点' },
+    { kind: 8, tag: 'AGC远方操作', name: 'AGC远方操作', description: '浏览器开发模式 mock 点' },
   ];
 }
 
@@ -400,6 +402,8 @@ function makeDefaultAvcPoints(): AvcDefaultPointInfo[] {
     { kind: 8, tag: '总无功实测', name: '总无功实测', description: '浏览器开发模式 mock 点' },
     { kind: 9, tag: '总无功偏差', name: '总无功偏差', description: '浏览器开发模式 mock 点' },
     { kind: 10, tag: '电压偏差', name: '电压偏差', description: '浏览器开发模式 mock 点' },
+    { kind: 11, tag: 'AVC功能投入', name: 'AVC功能投入', description: '浏览器开发模式 mock 点' },
+    { kind: 12, tag: 'AVC远方操作', name: 'AVC远方操作', description: '浏览器开发模式 mock 点' },
   ];
 }
 
@@ -702,6 +706,8 @@ function seedDemoData() {
     state: 1,
     last_error: '',
     default_points: makeDefaultAgcPoints(),
+    function_enabled: true,
+    remote_enabled: true,
   });
 
   const agcSecondaryConfig: AgcGroupConfig = {
@@ -732,6 +738,8 @@ function seedDemoData() {
     state: 2,
     last_error: '',
     default_points: makeDefaultAgcPoints(),
+    function_enabled: true,
+    remote_enabled: true,
   });
 
   const avcConfig: AvcGroupConfig = {
@@ -760,6 +768,8 @@ function seedDemoData() {
     state: 2,
     last_error: '',
     default_points: makeDefaultAvcPoints(),
+    function_enabled: true,
+    remote_enabled: true,
   });
 
   const avcSecondaryConfig: AvcGroupConfig = {
@@ -781,6 +791,8 @@ function seedDemoData() {
     state: 1,
     last_error: '',
     default_points: makeDefaultAvcPoints(),
+    function_enabled: true,
+    remote_enabled: true,
   });
 
   const calcConfig: CalcGroupConfig = {
@@ -1294,6 +1306,8 @@ export const browserApi: typeof tauriApi = {
       state: previous?.state ?? 0,
       last_error: '',
       default_points: previous?.default_points ?? makeDefaultAgcPoints(),
+      function_enabled: previous?.function_enabled ?? true,
+      remote_enabled: previous?.remote_enabled ?? true,
     };
     agcGroups.set(config.group_name, value);
     return clone(value);
@@ -1317,6 +1331,8 @@ export const browserApi: typeof tauriApi = {
       state: previous?.state ?? 0,
       last_error: '',
       default_points: previous?.default_points ?? makeDefaultAvcPoints(),
+      function_enabled: previous?.function_enabled ?? true,
+      remote_enabled: previous?.remote_enabled ?? true,
     };
     avcGroups.set(config.group_name, value);
     return clone(value);

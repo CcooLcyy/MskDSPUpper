@@ -157,6 +157,8 @@ const DEFAULT_POINT_KIND_LABELS: Record<number, string> = {
   8: '总无功实测',
   9: '总无功偏差',
   10: '电压偏差',
+  11: 'AVC功能投入',
+  12: 'AVC远方操作',
 };
 
 const AVC_RESERVED_DEFAULT_TAGS = new Set([
@@ -170,6 +172,8 @@ const AVC_RESERVED_DEFAULT_TAGS = new Set([
   '总无功实测',
   '总无功偏差',
   '电压偏差',
+  'AVC功能投入',
+  'AVC远方操作',
 ]);
 
 const VALUE_MODE_OPTIONS = Object.entries(VALUE_MODE_LABELS)
@@ -1770,7 +1774,7 @@ const AVC: React.FC = () => {
                           </Tag>
                         </Space>
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                          conn_id={item.conn_id} | {commandMode} | 成员 {item.config?.members.length ?? 0}
+                          conn_id={item.conn_id} | {commandMode} | 成员 {item.config?.members.length ?? 0} | 默认点 {item.default_points.length}
                         </Text>
                       </Space>
                     </List.Item>
@@ -1841,6 +1845,16 @@ const AVC: React.FC = () => {
                       <Descriptions.Item label="控制状态">
                         <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
                       </Descriptions.Item>
+                      <Descriptions.Item label="AVC功能投入">
+                        <Tag color={selectedGroup?.function_enabled ? 'green' : 'default'}>
+                          {selectedGroup?.function_enabled ? '投入' : '退出'}
+                        </Tag>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="AVC远方操作">
+                        <Tag color={selectedGroup?.remote_enabled ? 'green' : 'default'}>
+                          {selectedGroup?.remote_enabled ? '远方' : '就地'}
+                        </Tag>
+                      </Descriptions.Item>
                       <Descriptions.Item label="分配方式">
                         {allocationModeLabel(selectedConfig.members)}
                       </Descriptions.Item>
@@ -1900,6 +1914,16 @@ const AVC: React.FC = () => {
                     <div>
                       <Text type="secondary" style={{ marginRight: 12 }}>当前状态</Text>
                       <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
+                    </div>
+                    <div>
+                      <Text type="secondary" style={{ marginRight: 12 }}>AVC功能</Text>
+                      <Tag color={selectedGroup?.function_enabled ? 'green' : 'default'}>
+                        {selectedGroup?.function_enabled ? '投入' : '退出'}
+                      </Tag>
+                      <Text type="secondary" style={{ margin: '0 12px 0 20px' }}>远方操作</Text>
+                      <Tag color={selectedGroup?.remote_enabled ? 'green' : 'default'}>
+                        {selectedGroup?.remote_enabled ? '远方' : '就地'}
+                      </Tag>
                     </div>
                     <div>
                       <Text type="secondary" style={{ marginRight: 12 }}>数据状态</Text>

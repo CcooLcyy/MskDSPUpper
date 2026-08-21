@@ -628,6 +628,8 @@ export interface AgcGroupInfo {
   state: number;
   last_error: string;
   default_points: AgcDefaultPointInfo[];
+  function_enabled: boolean;
+  remote_enabled: boolean;
 }
 
 export interface AvcSignalSpec {
@@ -686,6 +688,8 @@ export interface AvcGroupInfo {
   state: number;
   last_error: string;
   default_points: AvcDefaultPointInfo[];
+  function_enabled: boolean;
+  remote_enabled: boolean;
 }
 
 export interface Iec104ExportTask {
