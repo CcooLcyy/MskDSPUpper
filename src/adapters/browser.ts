@@ -1,8 +1,11 @@
 import type { api as tauriApi } from './tauri';
 import type {
+  AgcControlProfile,
   AgcDefaultPointInfo,
   AgcGroupConfig,
   AgcGroupInfo,
+  AgcTuningConfig,
+  AgcTuningStatus,
   AppUpdateDownloadEvent,
   AppSettingsMap,
   CalcGroupConfig,
@@ -124,6 +127,7 @@ const modbusTables = new Map<string, ModbusPointTable>();
 const dlt645Links = new Map<string, Dlt645LinkInfo>();
 const dlt645Tables = new Map<string, Dlt645PointTable>();
 const agcGroups = new Map<string, AgcGroupInfo>();
+const agcTuningStatuses = new Map<string, AgcTuningStatus>();
 const avcGroups = new Map<string, AvcGroupInfo>();
 const calcGroups = new Map<string, CalcGroupInfo>();
 let routes: DcRoute[] = [];
@@ -1321,6 +1325,48 @@ export const browserApi: typeof tauriApi = {
   agcDeleteGroup: async (groupName: string) => deleteByName(agcGroups, groupName),
   agcStartGroup: async (groupName: string) => setLinkState(agcGroups, groupName, 2),
   agcStopGroup: async (groupName: string) => setLinkState(agcGroups, groupName, 1),
+  agcStartTuning: async (groupName: string, config: AgcTuningConfig): Promise<AgcTuningStatus> => {
+    const status: AgcTuningStatus = {
+      group_name: groupName,
+      state: 2,
+      direction: 1,
+      completed_up_tests: 0,
+      completed_down_tests: 0,
+      started_at_ms: Date.now(),
+      elapsed_ms: 0,
+      current_target_kw: config.target_lower_kw,
+      current_total_meas_kw: 0,
+      target_entry_elapsed_seconds: 0,
+      stable_elapsed_seconds: 0,
+      last_error: '',
+      candidate_profile: null,
+    };
+    agcTuningStatuses.set(groupName, status);
+    return clone(status);
+  },
+  agcStopTuning: async (groupName: string): Promise<AgcTuningStatus> => {
+    const status = agcTuningStatuses.get(groupName) ?? {
+      group_name: groupName, state: 1, direction: 0, completed_up_tests: 0, completed_down_tests: 0,
+      started_at_ms: 0, elapsed_ms: 0, current_target_kw: 0, current_total_meas_kw: 0,
+      target_entry_elapsed_seconds: 0, stable_elapsed_seconds: 0, last_error: '', candidate_profile: null,
+    };
+    status.state = 4;
+    status.last_error = '浏览器开发模式未执行真实调试';
+    agcTuningStatuses.set(groupName, status);
+    return clone(status);
+  },
+  agcGetTuningStatus: async (groupName: string): Promise<AgcTuningStatus> => clone(agcTuningStatuses.get(groupName) ?? {
+    group_name: groupName, state: 1, direction: 0, completed_up_tests: 0, completed_down_tests: 0,
+    started_at_ms: 0, elapsed_ms: 0, current_target_kw: 0, current_total_meas_kw: 0,
+    target_entry_elapsed_seconds: 0, stable_elapsed_seconds: 0, last_error: '', candidate_profile: null,
+  }),
+  agcGetControlProfile: async (groupName: string): Promise<AgcControlProfile> => ({
+    group_name: groupName,
+    members: [],
+    version: 0,
+    confirmed_at_ms: 0,
+  }),
+  agcConfirmControlProfile: async (profile: AgcControlProfile): Promise<AgcControlProfile> => clone(profile),
 
   avcUpsertGroup: async (config: AvcGroupConfig, createOnly: boolean) => {
     const previous = avcGroups.get(config.group_name);

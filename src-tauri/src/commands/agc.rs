@@ -5,8 +5,9 @@ use tauri::State;
 
 use crate::grpc::agc::AgcClient;
 use crate::proto::agc_proto::{
-    strategy_config, DefaultPointInfo, DerivedOutputs, GroupConfig, GroupInfo, MemberConfig,
-    SignalSpec, StrategyConfig, ValueSpec, WeightedStrategyConfig,
+    strategy_config, DefaultPointInfo, DerivedOutputs, GroupConfig,
+    GroupControlProfile, GroupInfo, MemberConfig, MemberControlProfile, SignalSpec, StrategyConfig,
+    TuningConfig, TuningStatus, ValueSpec, WeightedStrategyConfig,
 };
 use crate::state::AppState;
 
@@ -76,6 +77,60 @@ pub struct DefaultPointInfoDto {
     pub tag: String,
     pub name: String,
     pub description: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MemberControlProfileDto {
+    pub member_name: String,
+    pub up_p_gain: f64,
+    pub up_i_gain: f64,
+    pub down_p_gain: f64,
+    pub down_i_gain: f64,
+    pub up_bias_kw: f64,
+    pub down_bias_kw: f64,
+    pub integral_limit_kw: f64,
+    pub max_step_kw: f64,
+    pub max_ramp_kw_per_s: f64,
+    pub version: u64,
+    pub confirmed_at_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GroupControlProfileDto {
+    pub group_name: String,
+    pub members: Vec<MemberControlProfileDto>,
+    pub version: u64,
+    pub confirmed_at_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TuningConfigDto {
+    pub target_lower_kw: f64,
+    pub target_upper_kw: f64,
+    pub total_time_minutes: u32,
+    pub attempt_max_time_minutes: u32,
+    pub target_entry_time_seconds: u32,
+    pub stable_hold_time_seconds: u32,
+    pub min_up_tests: u32,
+    pub min_down_tests: u32,
+    pub total_tolerance_kw: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TuningStatusDto {
+    pub group_name: String,
+    pub state: i32,
+    pub direction: i32,
+    pub completed_up_tests: u32,
+    pub completed_down_tests: u32,
+    pub started_at_ms: u64,
+    pub elapsed_ms: u64,
+    pub current_target_kw: f64,
+    pub current_total_meas_kw: f64,
+    pub target_entry_elapsed_seconds: f64,
+    pub stable_elapsed_seconds: f64,
+    pub last_error: String,
+    pub candidate_profile: Option<GroupControlProfileDto>,
 }
 
 impl From<SignalSpec> for SignalSpecDto {
@@ -173,6 +228,102 @@ impl From<GroupInfo> for GroupInfoDto {
             default_points: group.default_points.into_iter().map(Into::into).collect(),
             function_enabled: group.function_enabled,
             remote_enabled: group.remote_enabled,
+        }
+    }
+}
+
+impl From<MemberControlProfile> for MemberControlProfileDto {
+    fn from(member: MemberControlProfile) -> Self {
+        Self {
+            member_name: member.member_name,
+            up_p_gain: member.up_p_gain,
+            up_i_gain: member.up_i_gain,
+            down_p_gain: member.down_p_gain,
+            down_i_gain: member.down_i_gain,
+            up_bias_kw: member.up_bias_kw,
+            down_bias_kw: member.down_bias_kw,
+            integral_limit_kw: member.integral_limit_kw,
+            max_step_kw: member.max_step_kw,
+            max_ramp_kw_per_s: member.max_ramp_kw_per_s,
+            version: member.version,
+            confirmed_at_ms: member.confirmed_at_ms,
+        }
+    }
+}
+
+impl From<GroupControlProfile> for GroupControlProfileDto {
+    fn from(profile: GroupControlProfile) -> Self {
+        Self {
+            group_name: profile.group_name,
+            members: profile.members.into_iter().map(Into::into).collect(),
+            version: profile.version,
+            confirmed_at_ms: profile.confirmed_at_ms,
+        }
+    }
+}
+
+impl From<TuningStatus> for TuningStatusDto {
+    fn from(status: TuningStatus) -> Self {
+        Self {
+            group_name: status.group_name,
+            state: status.state,
+            direction: status.direction,
+            completed_up_tests: status.completed_up_tests,
+            completed_down_tests: status.completed_down_tests,
+            started_at_ms: status.started_at_ms,
+            elapsed_ms: status.elapsed_ms,
+            current_target_kw: status.current_target_kw,
+            current_total_meas_kw: status.current_total_meas_kw,
+            target_entry_elapsed_seconds: status.target_entry_elapsed_seconds,
+            stable_elapsed_seconds: status.stable_elapsed_seconds,
+            last_error: status.last_error,
+            candidate_profile: status.candidate_profile.map(Into::into),
+        }
+    }
+}
+
+impl MemberControlProfileDto {
+    fn to_proto(&self) -> MemberControlProfile {
+        MemberControlProfile {
+            member_name: self.member_name.clone(),
+            up_p_gain: self.up_p_gain,
+            up_i_gain: self.up_i_gain,
+            down_p_gain: self.down_p_gain,
+            down_i_gain: self.down_i_gain,
+            up_bias_kw: self.up_bias_kw,
+            down_bias_kw: self.down_bias_kw,
+            integral_limit_kw: self.integral_limit_kw,
+            max_step_kw: self.max_step_kw,
+            max_ramp_kw_per_s: self.max_ramp_kw_per_s,
+            version: self.version,
+            confirmed_at_ms: self.confirmed_at_ms,
+        }
+    }
+}
+
+impl GroupControlProfileDto {
+    fn to_proto(&self) -> GroupControlProfile {
+        GroupControlProfile {
+            group_name: self.group_name.clone(),
+            members: self.members.iter().map(MemberControlProfileDto::to_proto).collect(),
+            version: self.version,
+            confirmed_at_ms: self.confirmed_at_ms,
+        }
+    }
+}
+
+impl TuningConfigDto {
+    fn to_proto(&self) -> TuningConfig {
+        TuningConfig {
+            target_lower_kw: self.target_lower_kw,
+            target_upper_kw: self.target_upper_kw,
+            total_time_minutes: self.total_time_minutes,
+            attempt_max_time_minutes: self.attempt_max_time_minutes,
+            target_entry_time_seconds: self.target_entry_time_seconds,
+            stable_hold_time_seconds: self.stable_hold_time_seconds,
+            min_up_tests: self.min_up_tests,
+            min_down_tests: self.min_down_tests,
+            total_tolerance_kw: self.total_tolerance_kw,
         }
     }
 }
@@ -447,4 +598,87 @@ pub async fn agc_stop_group(state: State<'_, AppState>, group_name: String) -> R
         })?;
     tracing::info!(control = "AGC", group_name = %group_name, "停止控制组请求完成");
     Ok(())
+}
+
+#[tauri::command]
+pub async fn agc_start_tuning(
+    state: State<'_, AppState>,
+    group_name: String,
+    config: TuningConfigDto,
+) -> Result<TuningStatusDto, String> {
+    tracing::info!(control = "AGC", group_name = %group_name, "开始自动参数调试");
+    let client = AgcClient::new(&state.conn_manager);
+    client
+        .start_tuning(group_name.clone(), config.to_proto())
+        .await
+        .map(Into::into)
+        .map_err(|error| {
+            tracing::error!(control = "AGC", group_name = %group_name, error = %error, "启动自动参数调试失败");
+            error.to_string()
+        })
+}
+
+#[tauri::command]
+pub async fn agc_stop_tuning(
+    state: State<'_, AppState>,
+    group_name: String,
+) -> Result<TuningStatusDto, String> {
+    let client = AgcClient::new(&state.conn_manager);
+    client
+        .stop_tuning(group_name.clone())
+        .await
+        .map(Into::into)
+        .map_err(|error| {
+            tracing::error!(control = "AGC", group_name = %group_name, error = %error, "停止自动参数调试失败");
+            error.to_string()
+        })
+}
+
+#[tauri::command]
+pub async fn agc_get_tuning_status(
+    state: State<'_, AppState>,
+    group_name: String,
+) -> Result<TuningStatusDto, String> {
+    let client = AgcClient::new(&state.conn_manager);
+    client
+        .get_tuning_status(group_name.clone())
+        .await
+        .map(Into::into)
+        .map_err(|error| {
+            tracing::error!(control = "AGC", group_name = %group_name, error = %error, "获取自动调试状态失败");
+            error.to_string()
+        })
+}
+
+#[tauri::command]
+pub async fn agc_get_control_profile(
+    state: State<'_, AppState>,
+    group_name: String,
+) -> Result<GroupControlProfileDto, String> {
+    let client = AgcClient::new(&state.conn_manager);
+    client
+        .get_control_profile(group_name.clone())
+        .await
+        .map(Into::into)
+        .map_err(|error| {
+            tracing::error!(control = "AGC", group_name = %group_name, error = %error, "获取固定控制参数失败");
+            error.to_string()
+        })
+}
+
+#[tauri::command]
+pub async fn agc_confirm_control_profile(
+    state: State<'_, AppState>,
+    profile: GroupControlProfileDto,
+) -> Result<GroupControlProfileDto, String> {
+    let group_name = profile.group_name.clone();
+    let client = AgcClient::new(&state.conn_manager);
+    client
+        .confirm_control_profile(profile.to_proto())
+        .await
+        .map(Into::into)
+        .map_err(|error| {
+            tracing::error!(control = "AGC", group_name = %group_name, error = %error, "确认固定控制参数失败");
+            error.to_string()
+        })
 }

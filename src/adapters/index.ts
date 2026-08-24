@@ -87,6 +87,10 @@ export type {
 } from './types';
 export type {
   AgcDefaultPointInfo,
+  AgcControlProfile,
+  AgcMemberControlProfile,
+  AgcTuningConfig,
+  AgcTuningStatus,
   AvcDefaultPointInfo,
   AvcGroupConfig,
   AvcGroupInfo,

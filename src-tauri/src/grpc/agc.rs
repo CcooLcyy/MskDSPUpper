@@ -2,8 +2,10 @@ use anyhow::Result;
 
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::agc_proto::{
-    agc_service_client::AgcServiceClient, DeleteGroupRequest, Empty, GetGroupRequest, GroupConfig,
-    GroupInfo, ListGroupsResponse, StartGroupRequest, StopGroupRequest, UpsertGroupRequest,
+    agc_service_client::AgcServiceClient, ConfirmControlProfileRequest, DeleteGroupRequest, Empty,
+    GetControlProfileRequest, GetGroupRequest, GetTuningStatusRequest, GroupConfig,
+    GroupControlProfile, GroupInfo, ListGroupsResponse, StartGroupRequest, StartTuningRequest,
+    StopGroupRequest, StopTuningRequest, TuningStatus, TuningConfig, UpsertGroupRequest,
 };
 
 pub struct AgcClient<'a> {
@@ -62,5 +64,47 @@ impl<'a> AgcClient<'a> {
         let mut client = AgcServiceClient::new(channel);
         client.stop_group(StopGroupRequest { group_name }).await?;
         Ok(())
+    }
+
+    pub async fn start_tuning(&self, group_name: String, config: TuningConfig) -> Result<TuningStatus> {
+        let channel = self.conn.module_channel("AGC").await?;
+        let mut client = AgcServiceClient::new(channel);
+        Ok(client
+            .start_tuning(StartTuningRequest { group_name, config: Some(config) })
+            .await?
+            .into_inner())
+    }
+
+    pub async fn stop_tuning(&self, group_name: String) -> Result<TuningStatus> {
+        let channel = self.conn.module_channel("AGC").await?;
+        let mut client = AgcServiceClient::new(channel);
+        Ok(client.stop_tuning(StopTuningRequest { group_name }).await?.into_inner())
+    }
+
+    pub async fn get_tuning_status(&self, group_name: String) -> Result<TuningStatus> {
+        let channel = self.conn.module_channel("AGC").await?;
+        let mut client = AgcServiceClient::new(channel);
+        Ok(client
+            .get_tuning_status(GetTuningStatusRequest { group_name })
+            .await?
+            .into_inner())
+    }
+
+    pub async fn get_control_profile(&self, group_name: String) -> Result<GroupControlProfile> {
+        let channel = self.conn.module_channel("AGC").await?;
+        let mut client = AgcServiceClient::new(channel);
+        Ok(client
+            .get_control_profile(GetControlProfileRequest { group_name })
+            .await?
+            .into_inner())
+    }
+
+    pub async fn confirm_control_profile(&self, profile: GroupControlProfile) -> Result<GroupControlProfile> {
+        let channel = self.conn.module_channel("AGC").await?;
+        let mut client = AgcServiceClient::new(channel);
+        Ok(client
+            .confirm_control_profile(ConfirmControlProfileRequest { profile: Some(profile) })
+            .await?
+            .into_inner())
     }
 }

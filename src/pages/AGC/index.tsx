@@ -37,6 +37,8 @@ import type {
   AgcMemberConfig,
   AgcSignalSpec,
   AgcValueSpec,
+  AgcTuningConfig,
+  AgcTuningStatus,
   DcEndpoint,
   DcPointUpdate,
 } from '../../adapters';
@@ -411,6 +413,8 @@ const AGC: React.FC = () => {
   const runtimeErrorToastRef = useRef<{ text: string; at: number } | null>(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
+  const [tuningModalOpen, setTuningModalOpen] = useState(false);
+  const [tuningStatus, setTuningStatus] = useState<AgcTuningStatus | null>(null);
   const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [memberSubmitting, setMemberSubmitting] = useState(false);
   const [editingGroup, setEditingGroup] = useState<AgcGroupConfig | null>(null);
@@ -432,6 +436,7 @@ const AGC: React.FC = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [groupForm] = Form.useForm<AgcGroupConfig>();
   const [memberForm] = Form.useForm<AgcMemberConfig>();
+  const [tuningForm] = Form.useForm<AgcTuningConfig>();
   const [searchParams] = useSearchParams();
 
   const memberControllable = Form.useWatch('controllable', memberForm) ?? true;
@@ -774,6 +779,69 @@ const AGC: React.FC = () => {
       setRuntimeAction(null);
     }
   }, [messageApi, refreshGroups, selectedGroupName]);
+
+  const openTuning = useCallback(() => {
+    if (!selectedGroupName || selectedGroup?.state === 2) return;
+    const installed = selectedGroup?.config?.members.reduce((sum, member) => sum + (member.capacity_kw || 0), 0) ?? 0;
+    tuningForm.resetFields();
+    tuningForm.setFieldsValue({
+      target_lower_kw: 0,
+      target_upper_kw: installed,
+      total_time_minutes: 120,
+      attempt_max_time_minutes: 5,
+      target_entry_time_seconds: 60,
+      stable_hold_time_seconds: 20,
+      min_up_tests: 3,
+      min_down_tests: 3,
+      total_tolerance_kw: Math.min(300, installed * 0.003),
+    });
+    setTuningStatus(null);
+    setTuningModalOpen(true);
+  }, [selectedGroup, selectedGroupName, tuningForm]);
+
+  const handleStartTuning = useCallback(async () => {
+    if (!selectedGroupName) return;
+    const config = await tuningForm.validateFields();
+    try {
+      const status = await api.agcStartTuning(selectedGroupName, config);
+      setTuningStatus(status);
+      messageApi.success('自动调试已启动');
+    } catch (e) {
+      messageApi.error(`启动自动调试失败: ${e}`);
+    }
+  }, [messageApi, selectedGroupName, tuningForm]);
+
+  const handleStopTuning = useCallback(async () => {
+    if (!selectedGroupName) return;
+    try {
+      const status = await api.agcStopTuning(selectedGroupName);
+      setTuningStatus(status);
+      messageApi.success('自动调试已停止');
+    } catch (e) {
+      messageApi.error(`停止自动调试失败: ${e}`);
+    }
+  }, [messageApi, selectedGroupName]);
+
+  const handleConfirmTuningProfile = useCallback(async () => {
+    const profile = tuningStatus?.candidate_profile;
+    if (!profile) return;
+    try {
+      await api.agcConfirmControlProfile(profile);
+      messageApi.success('调试参数已确认并保存');
+    } catch (e) {
+      messageApi.error(`确认调试参数失败: ${e}`);
+    }
+  }, [messageApi, tuningStatus]);
+
+  useEffect(() => {
+    if (!tuningModalOpen || !selectedGroupName || tuningStatus?.state !== 2) return undefined;
+    const timer = window.setInterval(() => {
+      void api.agcGetTuningStatus(selectedGroupName).then(setTuningStatus).catch((error) => {
+        messageApi.error(`刷新自动调试状态失败: ${error}`);
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [messageApi, selectedGroupName, tuningModalOpen, tuningStatus?.state]);
 
   const handleGroupSubmit = useCallback(async () => {
     if (groupSubmitting) return;
@@ -1495,6 +1563,12 @@ const AGC: React.FC = () => {
                         >
                           停止控制组
                         </Button>
+                        <Button
+                          onClick={openTuning}
+                          disabled={!selectedGroup || selectedGroup.state === 2 || selectedGroup.state === 3}
+                        >
+                          自动调试参数
+                        </Button>
                       </Space>
                     </div>
                     {runtimeRows.map((item) => (
@@ -1566,6 +1640,73 @@ const AGC: React.FC = () => {
           </div>
         </Card>
       )}
+
+      <Modal
+        title="AGC 自动参数调试"
+        open={tuningModalOpen}
+        onCancel={() => setTuningModalOpen(false)}
+        footer={null}
+        destroyOnClose
+        width={620}
+      >
+        <Form form={tuningForm} layout="vertical" size="small" onFinish={() => void handleStartTuning()}>
+          <Space wrap align="start" style={{ width: '100%' }}>
+            <Form.Item name="target_lower_kw" label="目标下限(kW)" rules={[{ required: true }]}>
+              <InputNumber min={0} style={{ width: 130 }} />
+            </Form.Item>
+            <Form.Item name="target_upper_kw" label="目标上限(kW)" rules={[{ required: true }]}>
+              <InputNumber min={0} style={{ width: 130 }} />
+            </Form.Item>
+            <Form.Item name="total_tolerance_kw" label="总量精度(kW)" rules={[{ required: true, min: 0.000001 }]}>
+              <InputNumber min={0.000001} style={{ width: 130 }} />
+            </Form.Item>
+          </Space>
+          <Space wrap align="start" style={{ width: '100%' }}>
+            <Form.Item name="total_time_minutes" label="总测试时间(分钟)" rules={[{ required: true, min: 1 }]}>
+              <InputNumber min={1} style={{ width: 130 }} />
+            </Form.Item>
+            <Form.Item name="attempt_max_time_minutes" label="单轮最大时间(分钟)" rules={[{ required: true, min: 1 }]}>
+              <InputNumber min={1} style={{ width: 150 }} />
+            </Form.Item>
+            <Form.Item name="target_entry_time_seconds" label="进入目标时间(秒)" rules={[{ required: true, min: 1 }]}>
+              <InputNumber min={1} style={{ width: 130 }} />
+            </Form.Item>
+          </Space>
+          <Space wrap align="start" style={{ width: '100%' }}>
+            <Form.Item name="stable_hold_time_seconds" label="稳定保持时间(秒)" rules={[{ required: true, min: 1 }]}>
+              <InputNumber min={1} style={{ width: 140 }} />
+            </Form.Item>
+            <Form.Item name="min_up_tests" label="最少上调次数" rules={[{ required: true, min: 3 }]}>
+              <InputNumber min={3} style={{ width: 130 }} />
+            </Form.Item>
+            <Form.Item name="min_down_tests" label="最少下调次数" rules={[{ required: true, min: 3 }]}>
+              <InputNumber min={3} style={{ width: 130 }} />
+            </Form.Item>
+          </Space>
+          <Space>
+            <Button type="primary" htmlType="submit" disabled={tuningStatus?.state === 2}>
+              启动调试
+            </Button>
+            <Button danger onClick={() => void handleStopTuning()} disabled={!tuningStatus || tuningStatus.state === 1}>
+              停止调试
+            </Button>
+            <Button onClick={() => void handleConfirmTuningProfile()} disabled={tuningStatus?.state !== 3 || !tuningStatus?.candidate_profile}>
+              确认参数
+            </Button>
+          </Space>
+          {tuningStatus ? (
+            <Descriptions size="small" column={2} style={{ marginTop: 16 }}>
+              <Descriptions.Item label="状态">{['未指定', '空闲', '运行中', '已完成', '已停止', '失败'][tuningStatus.state] ?? tuningStatus.state}</Descriptions.Item>
+              <Descriptions.Item label="方向">{tuningStatus.direction === 1 ? '上调' : tuningStatus.direction === 2 ? '下调' : '-'}</Descriptions.Item>
+              <Descriptions.Item label="上调完成">{tuningStatus.completed_up_tests}</Descriptions.Item>
+              <Descriptions.Item label="下调完成">{tuningStatus.completed_down_tests}</Descriptions.Item>
+              <Descriptions.Item label="当前目标(kW)">{tuningStatus.current_target_kw.toFixed(3)}</Descriptions.Item>
+              <Descriptions.Item label="当前总量(kW)">{tuningStatus.current_total_meas_kw.toFixed(3)}</Descriptions.Item>
+              <Descriptions.Item label="错误" span={2}>{tuningStatus.last_error || '无'}</Descriptions.Item>
+            </Descriptions>
+          ) : null}
+        </Form>
+      </Modal>
 
       <Modal
         title={editingGroup ? '编辑 AGC 控制组' : '新增 AGC 控制组'}

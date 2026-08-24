@@ -632,6 +632,56 @@ export interface AgcGroupInfo {
   remote_enabled: boolean;
 }
 
+export interface AgcMemberControlProfile {
+  member_name: string;
+  up_p_gain: number;
+  up_i_gain: number;
+  down_p_gain: number;
+  down_i_gain: number;
+  up_bias_kw: number;
+  down_bias_kw: number;
+  integral_limit_kw: number;
+  max_step_kw: number;
+  max_ramp_kw_per_s: number;
+  version: number;
+  confirmed_at_ms: number;
+}
+
+export interface AgcControlProfile {
+  group_name: string;
+  members: AgcMemberControlProfile[];
+  version: number;
+  confirmed_at_ms: number;
+}
+
+export interface AgcTuningConfig {
+  target_lower_kw: number;
+  target_upper_kw: number;
+  total_time_minutes: number;
+  attempt_max_time_minutes: number;
+  target_entry_time_seconds: number;
+  stable_hold_time_seconds: number;
+  min_up_tests: number;
+  min_down_tests: number;
+  total_tolerance_kw: number;
+}
+
+export interface AgcTuningStatus {
+  group_name: string;
+  state: number;
+  direction: number;
+  completed_up_tests: number;
+  completed_down_tests: number;
+  started_at_ms: number;
+  elapsed_ms: number;
+  current_target_kw: number;
+  current_total_meas_kw: number;
+  target_entry_elapsed_seconds: number;
+  stable_elapsed_seconds: number;
+  last_error: string;
+  candidate_profile: AgcControlProfile | null;
+}
+
 export interface AvcSignalSpec {
   tag: string;
   unit: string;

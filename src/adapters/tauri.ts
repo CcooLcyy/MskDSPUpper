@@ -4,8 +4,11 @@ import { listen } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
 import type {
+  AgcControlProfile,
   AgcGroupConfig,
   AgcGroupInfo,
+  AgcTuningConfig,
+  AgcTuningStatus,
   AppUpdateDownloadEvent,
   AppUpdateInfo,
   AppSettingsMap,
@@ -318,6 +321,16 @@ export const api = {
     invoke<void>('agc_start_group', { groupName }),
   agcStopGroup: (groupName: string) =>
     invoke<void>('agc_stop_group', { groupName }),
+  agcStartTuning: (groupName: string, config: AgcTuningConfig) =>
+    invoke<AgcTuningStatus>('agc_start_tuning', { groupName, config }),
+  agcStopTuning: (groupName: string) =>
+    invoke<AgcTuningStatus>('agc_stop_tuning', { groupName }),
+  agcGetTuningStatus: (groupName: string) =>
+    invoke<AgcTuningStatus>('agc_get_tuning_status', { groupName }),
+  agcGetControlProfile: (groupName: string) =>
+    invoke<AgcControlProfile>('agc_get_control_profile', { groupName }),
+  agcConfirmControlProfile: (profile: AgcControlProfile) =>
+    invoke<AgcControlProfile>('agc_confirm_control_profile', { profile }),
 
   avcUpsertGroup: (config: AvcGroupConfig, createOnly: boolean) =>
     invoke<AvcGroupInfo>('avc_upsert_group', { config, createOnly }),
