@@ -51,6 +51,7 @@ import {
   renderProtocolRealtimeQualityCell,
   renderProtocolRealtimeTimestampCell,
   renderProtocolRealtimeValueCell,
+  type ProtocolRealtimeQueryMode,
   useProtocolRealtime,
 } from '../../components/protocol/protocol-realtime';
 import {
@@ -145,8 +146,8 @@ const LIST_STATE_COLOR_MAP: Record<number, string> = {
 };
 
 const POINT_TYPE_LABELS: Record<number, string> = {
-  1: 'FLOAT (短浮点测量)',
-  2: 'SINGLE (单点遥信)',
+  1: 'FLOAT (短浮点值)',
+  2: 'SINGLE (单点值)',
 };
 
 const POINT_TYPE_FLOAT = 1;
@@ -584,6 +585,9 @@ const IEC104: React.FC = () => {
     () => points.map((point) => point.tag),
     [points],
   );
+  const realtimeQueryMode: ProtocolRealtimeQueryMode = isSlaveStationConfig(selectedLink?.config)
+    ? 'destination'
+    : 'source';
   const {
     realtimeByTag,
     realtimeRevisionByTag,
@@ -592,6 +596,7 @@ const IEC104: React.FC = () => {
   } = useProtocolRealtime(
     selectedLink?.conn_id ?? null,
     realtimeTags,
+    realtimeQueryMode,
   );
   const activeSimulationSnapshot = simulationSnapshot?.conn_name === selectedConn
     ? simulationSnapshot
@@ -1980,6 +1985,38 @@ const IEC104: React.FC = () => {
     }
   }, [handleDeleteAllPoints, handleDeleteSelectedPoints, pointDeleteConfirmMode]);
 
+  const pointAddDisabled = !selectedConn || actionsDisabled;
+  const pointAddMenuItems: MenuProps['items'] = [
+    {
+      key: 'single',
+      label: '添加点位',
+      icon: <PlusOutlined />,
+      disabled: pointAddDisabled,
+    },
+    {
+      key: 'batch',
+      label: '批量添加点位',
+      icon: <FileTextOutlined />,
+      disabled: pointAddDisabled || pointTableView !== 'config',
+    },
+    {
+      key: 'import',
+      label: '从数据总线导入',
+      icon: <UploadOutlined />,
+      disabled: pointAddDisabled,
+    },
+  ];
+
+  const handlePointAddMenuClick = useCallback(({ key }: { key: string }) => {
+    if (key === 'single') {
+      openCreatePoint();
+    } else if (key === 'batch') {
+      openBatchPointModal();
+    } else if (key === 'import') {
+      openImportPointModal();
+    }
+  }, [openBatchPointModal, openCreatePoint, openImportPointModal]);
+
   const handleImportSourceConnChange = useCallback((value: string | undefined) => {
     setImportSourceConnId(value);
     setSelectedImportEndpointValues([]);
@@ -2908,16 +2945,17 @@ const IEC104: React.FC = () => {
                 >
                   批量编辑类型{selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}
                 </Button>
-                <Button
-                  size="small"
-                  icon={<FileTextOutlined />}
-                  disabled={!selectedConn || pointTableView !== 'config' || actionsDisabled}
-                  onClick={openBatchPointModal}
+                <Dropdown
+                  menu={{ items: pointAddMenuItems, onClick: handlePointAddMenuClick }}
+                  trigger={['click']}
+                  placement="bottomRight"
+                  arrow
+                  disabled={pointAddDisabled}
                 >
-                  批量添加点位
-                </Button>
-                <Button size="small" icon={<UploadOutlined />} disabled={!selectedConn || actionsDisabled} onClick={openImportPointModal}>从数据总线导入</Button>
-                <Button type="primary" size="small" icon={<PlusOutlined />} disabled={!selectedConn || actionsDisabled} onClick={openCreatePoint}>添加点位</Button>
+                  <Button type="primary" size="small" icon={<PlusOutlined />} disabled={pointAddDisabled}>
+                    添加点位
+                  </Button>
+                </Dropdown>
               </Space>
             )}
           >
@@ -3405,7 +3443,7 @@ const IEC104: React.FC = () => {
           </Row>
           {pointType === 2 ? (
             <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-              单点遥信按 IEC104 SIQ bit0 解析，质量位按协议转换，无需配置 bit 索引。
+              SINGLE 使用布尔值；作为遥信接收时按 IEC104 SIQ bit0 解析，作为遥控命令时按单点命令处理。
             </Text>
           ) : null}
         </Form>

@@ -1,7 +1,7 @@
 import React, { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { Tag, Typography } from 'antd';
 import { api } from '../../adapters';
-import type { DcPointValue, DcSourcePointUpdate } from '../../adapters';
+import type { DcPointUpdate, DcPointValue, DcSourcePointUpdate } from '../../adapters';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 
 const { Text } = Typography;
@@ -20,6 +20,8 @@ export type ProtocolRealtimeCellRevision = {
   timestamp: number;
   quality: number;
 };
+
+export type ProtocolRealtimeQueryMode = 'source' | 'destination';
 
 type ProtocolRealtimeState = {
   realtimeByTag: Record<string, DcSourcePointUpdate>;
@@ -44,6 +46,17 @@ function createEmptyRealtimeState(): ProtocolRealtimeState {
 function normalizeTags(tags: string[]): string[] {
   // Tags are DataCenter keys; preserve whitespace because it is part of the exact tag identity.
   return Array.from(new Set(tags.filter((tag) => tag.length > 0)));
+}
+
+function normalizeDestinationUpdate(update: DcPointUpdate): DcSourcePointUpdate {
+  return {
+    conn_id: update.dst_conn_id,
+    tag: update.dst_tag,
+    value: update.value,
+    ts_ms: update.ts_ms,
+    quality: update.quality,
+    sequence: 0,
+  };
 }
 
 function buildUpdateMap(updates: DcSourcePointUpdate[], sourceConnId: number): Record<string, DcSourcePointUpdate> {
@@ -155,6 +168,7 @@ function mergeRealtimeUpdates(
 export function useProtocolRealtime(
   sourceConnId: number | null | undefined,
   tags: string[],
+  mode: ProtocolRealtimeQueryMode = 'source',
 ): {
   realtimeByTag: Record<string, DcSourcePointUpdate>;
   realtimeRevisionByTag: Record<string, ProtocolRealtimeCellRevision>;
@@ -179,7 +193,9 @@ export function useProtocolRealtime(
     snapshotRefreshInFlightRef.current = true;
 
     try {
-      const updates = await api.dcGetSourceLatest(connId, targetTags);
+      const updates = mode === 'destination'
+        ? (await api.dcGetLatest(connId, targetTags)).map(normalizeDestinationUpdate)
+        : await api.dcGetSourceLatest(connId, targetTags);
       if (connId !== activeConnIdRef.current) {
         return;
       }
@@ -204,6 +220,17 @@ export function useProtocolRealtime(
     activeConnIdRef.current = sourceConnId ?? null;
     activeTagSetRef.current = new Set(normalizedTags);
   }, [sourceConnId, normalizedTags]);
+
+  useEffect(() => {
+    if (!hasSelection || !sourceConnId) {
+      return;
+    }
+    console.info('协议实时值查询模式已启用', {
+      connId: sourceConnId,
+      mode,
+      tagCount: normalizedTags.length,
+    });
+  }, [hasSelection, sourceConnId, tagSignature, normalizedTags, mode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -238,7 +265,7 @@ export function useProtocolRealtime(
     return () => {
       cancelled = true;
     };
-  }, [hasSelection, sourceConnId, tagSignature, normalizedTags]);
+  }, [hasSelection, sourceConnId, tagSignature, normalizedTags, mode]);
 
   useEffect(() => {
     if (!hasSelection || !sourceConnId) {
@@ -252,7 +279,7 @@ export function useProtocolRealtime(
     return () => {
       window.clearInterval(timer);
     };
-  }, [hasSelection, sourceConnId, tagSignature, normalizedTags]);
+  }, [hasSelection, sourceConnId, tagSignature, normalizedTags, mode]);
 
   return {
     realtimeByTag: hasSelection ? realtimeState.realtimeByTag : {},

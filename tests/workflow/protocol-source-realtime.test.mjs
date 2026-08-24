@@ -12,18 +12,10 @@ const iec104Source = read('../../src/pages/IEC104/index.tsx');
 const modbusSource = read('../../src/pages/ModbusRTU/index.tsx');
 const dlt645Source = read('../../src/pages/DLT645/index.tsx');
 
-// 验证协议页实时值链路使用源端最新值查询，而不是影子连接事件或影子快照。
-test('protocol pages use DataCenter source latest query', () => {
+// 验证协议实时值 Hook 和非 IEC104 从站页面保留 DataCenter 源端查询路径。
+test('protocol realtime source latest path remains available', () => {
   assert.match(realtimeSource, /export function useProtocolRealtime\(/);
   assert.match(realtimeSource, /api\.dcGetSourceLatest\(/);
-  assert.doesNotMatch(realtimeSource, /dcGetProtocolShadowLatest|dcStartProtocolShadowStream|protocol-shadow-update|listen</);
-  assert.doesNotMatch(tauriAdapterSource, /dcGetProtocolShadowLatest|dcStartProtocolShadowStream|protocol-shadow/);
-  assert.doesNotMatch(browserAdapterSource, /dcGetProtocolShadowLatest|dcStartProtocolShadowStream|protocol-shadow/);
-  assert.doesNotMatch(dataCenterCommandSource, /dc_start_protocol_shadow_stream|dc_get_protocol_shadow_latest/);
-  assert.equal(
-    (dataCenterCommandSource.match(/cleanup_legacy_protocol_shadow_connections/g) ?? []).length,
-    3,
-  );
   assert.match(tauriAdapterSource, /dcGetSourceLatest:/);
   assert.match(browserAdapterSource, /dcGetSourceLatest:/);
   assert.match(dataCenterCommandSource, /pub async fn dc_get_source_latest\(/);
@@ -31,4 +23,14 @@ test('protocol pages use DataCenter source latest query', () => {
   assert.match(iec104Source, /useProtocolRealtime/);
   assert.match(modbusSource, /useProtocolRealtime/);
   assert.match(dlt645Source, /useProtocolRealtime/);
+});
+
+// 验证 IEC104 从站运行视图读取路由后的目的端最新值。
+test('IEC104 slave runtime monitor uses destination latest query', () => {
+  assert.match(realtimeSource, /export type ProtocolRealtimeQueryMode = 'source' \| 'destination'/);
+  assert.match(realtimeSource, /mode === 'destination'/);
+  assert.match(realtimeSource, /api\.dcGetLatest\(/);
+  assert.match(realtimeSource, /dst_conn_id[\s\S]*dst_tag/);
+  assert.match(iec104Source, /const realtimeQueryMode[\s\S]*isSlaveStationConfig\(selectedLink\?\.config\)/);
+  assert.match(iec104Source, /useProtocolRealtime\([\s\S]*realtimeQueryMode/);
 });
