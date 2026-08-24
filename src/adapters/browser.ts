@@ -1352,11 +1352,17 @@ export const browserApi: typeof tauriApi = {
     agcTuningStatuses.set(groupName, status);
     return clone(status);
   },
-  agcGetTuningStatus: async (groupName: string): Promise<AgcTuningStatus> => clone(agcTuningStatuses.get(groupName) ?? {
-    group_name: groupName, state: 1, direction: 0, completed_up_tests: 0, completed_down_tests: 0,
-    started_at_ms: 0, elapsed_ms: 0, current_target_kw: 0, current_total_meas_kw: 0,
-    target_entry_elapsed_seconds: 0, stable_elapsed_seconds: 0, last_error: '', candidate_profile: null,
-  }),
+  agcGetTuningStatus: async (groupName: string): Promise<AgcTuningStatus> => {
+    const status = agcTuningStatuses.get(groupName) ?? {
+      group_name: groupName, state: 1, direction: 0, completed_up_tests: 0, completed_down_tests: 0,
+      started_at_ms: 0, elapsed_ms: 0, current_target_kw: 0, current_total_meas_kw: 0,
+      target_entry_elapsed_seconds: 0, stable_elapsed_seconds: 0, last_error: '', candidate_profile: null,
+    };
+    if (status.state === 2 && status.started_at_ms > 0) {
+      status.elapsed_ms = Math.max(0, Date.now() - status.started_at_ms);
+    }
+    return clone(status);
+  },
   agcGetControlProfile: async (groupName: string): Promise<AgcControlProfile> => ({
     group_name: groupName,
     members: [],

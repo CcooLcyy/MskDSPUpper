@@ -11,6 +11,7 @@ import {
   message,
   Modal,
   Popconfirm,
+  Progress,
   Select,
   Space,
   Switch,
@@ -418,6 +419,9 @@ const AGC: React.FC = () => {
   const [memberModalOpen, setMemberModalOpen] = useState(false);
   const [tuningModalOpen, setTuningModalOpen] = useState(false);
   const [tuningStatus, setTuningStatus] = useState<AgcTuningStatus | null>(null);
+  const [tuningConfig, setTuningConfig] = useState<AgcTuningConfig | null>(null);
+  const [tuningConfigGroupName, setTuningConfigGroupName] = useState<string | null>(null);
+  const [tuningAction, setTuningAction] = useState<'start' | 'stop' | null>(null);
   const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [memberSubmitting, setMemberSubmitting] = useState(false);
   const [editingGroup, setEditingGroup] = useState<AgcGroupConfig | null>(null);
@@ -693,6 +697,12 @@ const AGC: React.FC = () => {
     setSelectedGroupName(groupName);
   }, []);
 
+  useEffect(() => {
+    setTuningStatus(null);
+    setTuningConfig(null);
+    setTuningConfigGroupName(null);
+  }, [selectedGroupName]);
+
   const openCreateGroup = useCallback(() => {
     setEditingGroup(null);
     setAllocationMode('equal');
@@ -783,47 +793,109 @@ const AGC: React.FC = () => {
     }
   }, [messageApi, refreshGroups, selectedGroupName]);
 
-  const openTuning = useCallback(() => {
-    if (!selectedGroupName || selectedGroup?.state === 2) return;
+  const openTuning = useCallback(async () => {
+    if (!selectedGroupName || selectedGroup?.state === 3) return;
     const installed = selectedGroup?.config?.members.reduce((sum, member) => sum + (member.capacity_kw || 0), 0) ?? 0;
-    tuningForm.resetFields();
-    tuningForm.setFieldsValue({
+    const defaults: AgcTuningConfig = {
       target_lower_kw: 0,
       target_upper_kw: installed,
       total_time_minutes: 120,
-      attempt_max_time_minutes: 5,
-      target_entry_time_seconds: 60,
+      attempt_max_time_minutes: 1,
+      target_entry_time_seconds: 10,
       stable_hold_time_seconds: 20,
       min_up_tests: 3,
       min_down_tests: 3,
       total_tolerance_kw: Math.min(300, installed * 0.003),
-    });
-    setTuningStatus(null);
+    };
+    const storedConfig = tuningConfigGroupName === selectedGroupName ? tuningConfig : null;
+    tuningForm.resetFields();
+    tuningForm.setFieldsValue(storedConfig ?? defaults);
+    setTuningConfig(storedConfig ?? defaults);
+    setTuningConfigGroupName(selectedGroupName);
     setTuningModalOpen(true);
-  }, [selectedGroup, selectedGroupName, tuningForm]);
+    try {
+      const status = await api.agcGetTuningStatus(selectedGroupName);
+      if (status.state !== 1 || status.started_at_ms > 0) {
+        setTuningStatus(status);
+      } else {
+        setTuningStatus(null);
+      }
+    } catch (e) {
+      messageApi.error(`读取自动调试状态失败: ${e}`);
+    }
+  }, [messageApi, selectedGroup, selectedGroupName, tuningConfig, tuningConfigGroupName, tuningForm]);
 
   const handleStartTuning = useCallback(async () => {
-    if (!selectedGroupName) return;
-    const config = await tuningForm.validateFields();
+    if (!selectedGroupName || tuningAction) return;
+    setTuningAction('start');
     try {
+      const config = await tuningForm.validateFields();
       const status = await api.agcStartTuning(selectedGroupName, config);
+      setTuningConfig(config);
+      setTuningConfigGroupName(selectedGroupName);
       setTuningStatus(status);
       messageApi.success('自动调试已启动');
     } catch (e) {
       messageApi.error(`启动自动调试失败: ${e}`);
+    } finally {
+      setTuningAction(null);
     }
-  }, [messageApi, selectedGroupName, tuningForm]);
+  }, [messageApi, selectedGroupName, tuningAction, tuningForm]);
 
   const handleStopTuning = useCallback(async () => {
-    if (!selectedGroupName) return;
+    if (!selectedGroupName || tuningAction) return;
+    setTuningAction('stop');
     try {
       const status = await api.agcStopTuning(selectedGroupName);
       setTuningStatus(status);
       messageApi.success('自动调试已停止');
+      await refreshGroups();
     } catch (e) {
       messageApi.error(`停止自动调试失败: ${e}`);
+    } finally {
+      setTuningAction(null);
     }
-  }, [messageApi, selectedGroupName]);
+  }, [messageApi, refreshGroups, selectedGroupName, tuningAction]);
+
+  const tuningProgress = useMemo(() => {
+    if (!tuningStatus) return null;
+    const config = tuningConfig;
+    const requiredUp = config?.min_up_tests ?? 3;
+    const requiredDown = config?.min_down_tests ?? 3;
+    const requiredTests = Math.max(1, requiredUp + requiredDown);
+    const completedTests = tuningStatus.completed_up_tests + tuningStatus.completed_down_tests;
+    const testPercent = Math.min(100, Math.round((completedTests / requiredTests) * 100));
+    const totalSeconds = (config?.total_time_minutes ?? 0) * 60;
+    const elapsedSeconds = tuningStatus.elapsed_ms / 1000;
+    const timePercent = totalSeconds > 0
+      ? Math.min(100, Math.round((elapsedSeconds / totalSeconds) * 100))
+      : 0;
+    const tolerance = config?.total_tolerance_kw ?? 0;
+    const errorKw = tuningStatus.current_target_kw - tuningStatus.current_total_meas_kw;
+    const stableTargetSeconds = config?.stable_hold_time_seconds ?? 0;
+    const stablePercent = stableTargetSeconds > 0
+      ? Math.min(100, Math.round((tuningStatus.stable_elapsed_seconds / stableTargetSeconds) * 100))
+      : 0;
+    const phaseLabel = tuningStatus.state !== 2
+      ? '调试已结束'
+      : Math.abs(errorKw) <= tolerance
+        ? '已进入目标精度，正在确认稳定性'
+        : '正在调节并等待进入目标精度';
+    return {
+      requiredUp,
+      requiredDown,
+      completedTests,
+      requiredTests,
+      testPercent,
+      elapsedSeconds,
+      totalSeconds,
+      timePercent,
+      tolerance,
+      errorKw,
+      stablePercent,
+      phaseLabel,
+    };
+  }, [tuningConfig, tuningStatus]);
 
   const handleConfirmTuningProfile = useCallback(async () => {
     const profile = tuningStatus?.candidate_profile;
@@ -839,12 +911,30 @@ const AGC: React.FC = () => {
   useEffect(() => {
     if (!tuningModalOpen || !selectedGroupName || tuningStatus?.state !== 2) return undefined;
     const timer = window.setInterval(() => {
-      void api.agcGetTuningStatus(selectedGroupName).then(setTuningStatus).catch((error) => {
+      void api.agcGetTuningStatus(selectedGroupName).then((status) => {
+        setTuningStatus(status);
+        if (status.state !== 2) void refreshGroups();
+      }).catch((error) => {
         messageApi.error(`刷新自动调试状态失败: ${error}`);
       });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [messageApi, selectedGroupName, tuningModalOpen, tuningStatus?.state]);
+  }, [messageApi, refreshGroups, selectedGroupName, tuningModalOpen, tuningStatus?.state]);
+
+  useEffect(() => {
+    if (!selectedGroupName || selectedGroup?.state !== 2 || tuningModalOpen) return undefined;
+    let cancelled = false;
+    void api.agcGetTuningStatus(selectedGroupName).then((status) => {
+      if (cancelled) return;
+      setTuningStatus(status.state === 2 ? status : null);
+      if (status.state !== 2) void refreshGroups();
+    }).catch(() => {
+      // 正式控制运行时，调试状态查询失败不影响控制组运行。
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshGroups, selectedGroup?.state, selectedGroupName, tuningModalOpen]);
 
   const handleGroupSubmit = useCallback(async () => {
     if (groupSubmitting) return;
@@ -1578,7 +1668,11 @@ const AGC: React.FC = () => {
                         </Button>
                         <Button
                           onClick={openTuning}
-                          disabled={!selectedGroup || selectedGroup.state === 2 || selectedGroup.state === 3}
+                          disabled={
+                            !selectedGroup
+                            || selectedGroup.state === 3
+                            || (selectedGroup.state === 2 && tuningStatus?.state !== 2)
+                          }
                         >
                           自动调试参数
                         </Button>
@@ -1697,10 +1791,10 @@ const AGC: React.FC = () => {
             </Form.Item>
           </Space>
           <Space>
-            <Button type="primary" htmlType="submit" disabled={tuningStatus?.state === 2}>
+            <Button type="primary" htmlType="submit" loading={tuningAction === 'start'} disabled={tuningAction !== null || tuningStatus?.state === 2}>
               启动调试
             </Button>
-            <Button danger onClick={() => void handleStopTuning()} disabled={!tuningStatus || tuningStatus.state === 1}>
+            <Button danger onClick={() => void handleStopTuning()} loading={tuningAction === 'stop'} disabled={tuningAction !== null || !tuningStatus || tuningStatus.state === 1}>
               停止调试
             </Button>
             <Button onClick={() => void handleConfirmTuningProfile()} disabled={tuningStatus?.state !== 3 || !tuningStatus?.candidate_profile}>
@@ -1708,15 +1802,52 @@ const AGC: React.FC = () => {
             </Button>
           </Space>
           {tuningStatus ? (
-            <Descriptions size="small" column={2} style={{ marginTop: 16 }}>
-              <Descriptions.Item label="状态">{['未指定', '空闲', '运行中', '已完成', '已停止', '失败'][tuningStatus.state] ?? tuningStatus.state}</Descriptions.Item>
-              <Descriptions.Item label="方向">{tuningStatus.direction === 1 ? '上调' : tuningStatus.direction === 2 ? '下调' : '-'}</Descriptions.Item>
-              <Descriptions.Item label="上调完成">{tuningStatus.completed_up_tests}</Descriptions.Item>
-              <Descriptions.Item label="下调完成">{tuningStatus.completed_down_tests}</Descriptions.Item>
-              <Descriptions.Item label="当前目标(kW)">{tuningStatus.current_target_kw.toFixed(3)}</Descriptions.Item>
-              <Descriptions.Item label="当前总量(kW)">{tuningStatus.current_total_meas_kw.toFixed(3)}</Descriptions.Item>
-              <Descriptions.Item label="错误" span={2}>{tuningStatus.last_error || '无'}</Descriptions.Item>
-            </Descriptions>
+            <div style={{ marginTop: 16 }}>
+              {tuningProgress ? (
+                <Space direction="vertical" size={8} style={{ width: '100%', marginBottom: 12 }}>
+                  <Text strong>{tuningProgress.phaseLabel}</Text>
+                  <div>
+                    <Text type="secondary">测试次数进度</Text>
+                    <Progress
+                      percent={tuningProgress.testPercent}
+                      status={tuningStatus.state === 5 ? 'exception' : tuningStatus.state === 3 ? 'success' : 'active'}
+                      format={() => `${tuningStatus.completed_up_tests}/${tuningProgress.requiredUp} 上调，${tuningStatus.completed_down_tests}/${tuningProgress.requiredDown} 下调`}
+                    />
+                  </div>
+                  <div>
+                    <Text type="secondary">总时间进度</Text>
+                    <Progress
+                      percent={tuningProgress.timePercent}
+                      status={tuningProgress.timePercent >= 100 && tuningStatus.state === 2 ? 'exception' : 'active'}
+                      format={() => `${Math.floor(tuningProgress.elapsedSeconds)}s / ${Math.floor(tuningProgress.totalSeconds)}s`}
+                    />
+                  </div>
+                  <div>
+                    <Text type="secondary">稳定确认进度</Text>
+                    <Progress
+                      percent={tuningProgress.stablePercent}
+                      status={tuningStatus.state === 3 ? 'success' : 'active'}
+                      format={() => `${tuningStatus.stable_elapsed_seconds.toFixed(1)}s`}
+                    />
+                  </div>
+                </Space>
+              ) : null}
+              <Descriptions size="small" column={2}>
+                <Descriptions.Item label="状态">{['未指定', '空闲', '运行中', '已完成', '已停止', '失败'][tuningStatus.state] ?? tuningStatus.state}</Descriptions.Item>
+                <Descriptions.Item label="方向">{tuningStatus.direction === 1 ? '上调' : tuningStatus.direction === 2 ? '下调' : '-'}</Descriptions.Item>
+                <Descriptions.Item label="上调完成">{tuningStatus.completed_up_tests}</Descriptions.Item>
+                <Descriptions.Item label="下调完成">{tuningStatus.completed_down_tests}</Descriptions.Item>
+                <Descriptions.Item label="当前目标(kW)">{tuningStatus.current_target_kw.toFixed(3)}</Descriptions.Item>
+                <Descriptions.Item label="当前总量(kW)">{tuningStatus.current_total_meas_kw.toFixed(3)}</Descriptions.Item>
+                {tuningProgress ? (
+                  <Descriptions.Item label="当前误差(kW)">
+                    {tuningProgress.errorKw.toFixed(3)}（精度 ±{tuningProgress.tolerance.toFixed(3)}）
+                  </Descriptions.Item>
+                ) : null}
+                <Descriptions.Item label="首次进入目标(s)">{tuningStatus.target_entry_elapsed_seconds.toFixed(1)}</Descriptions.Item>
+                <Descriptions.Item label="错误" span={2}>{tuningStatus.last_error || '无'}</Descriptions.Item>
+              </Descriptions>
+            </div>
           ) : null}
         </Form>
       </Modal>
