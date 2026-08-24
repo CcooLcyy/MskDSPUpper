@@ -77,6 +77,7 @@ import type {
 import {
   ImportedPointRoutesError,
   buildImportedPointRoutes,
+  getImportedPointRouteDirection,
   saveImportedPointsWithOptionalRoutes,
 } from './import-routing';
 import {
@@ -478,6 +479,14 @@ const isMasterStationConfig = (config: Iec104LinkConfig | null | undefined): boo
     ),
   );
 
+const isSlaveStationConfig = (config: Iec104LinkConfig | null | undefined): boolean =>
+  Boolean(
+    config && (
+      config.station_role === STATION_ROLE_SLAVE
+      || (config.station_role === 0 && config.role === ROLE_SERVER)
+    ),
+  );
+
 const isSimulationSupported = (config: Iec104LinkConfig | null | undefined): boolean =>
   Boolean(config && (
     config.station_role === STATION_ROLE_SLAVE
@@ -685,6 +694,7 @@ const IEC104: React.FC = () => {
     [dataBusEndpointOptions, importSourceConnId],
   );
   const importRoutesTriggerCommands = createImportRoutes && isMasterStationConfig(selectedLink?.config);
+  const importStationRole = isSlaveStationConfig(selectedLink?.config) ? 'slave' : 'master';
   const importValidation = useMemo(() => {
     const cellIssues = new Map<string, string[]>();
     const rowIssues = new Map<string, string[]>();
@@ -2147,6 +2157,7 @@ const IEC104: React.FC = () => {
       const tag = draft.tag.trim();
       if (
         createImportRoutes
+        && getImportedPointRouteDirection(draft.business_type, importStationRole) !== 'skip'
         && draft.sourceEndpoint.module_name === IEC104_MODULE_NAME
         && draft.sourceEndpoint.conn_name === selectedConn
       ) {
@@ -2194,6 +2205,7 @@ const IEC104: React.FC = () => {
     setImportSubmitting(true);
     let newPoints: Iec104Point[] = [];
     let routesCreated = 0;
+    let routesSkipped = 0;
 
     try {
       newPoints = [...points, ...normalizedPoints];
@@ -2201,12 +2213,15 @@ const IEC104: React.FC = () => {
         importPointDrafts.map((draft) => ({
           source: draft.sourceEndpoint,
           targetTag: draft.tag.trim(),
+          businessType: draft.business_type,
         })),
         {
           moduleName: IEC104_MODULE_NAME,
           connName: selectedConn,
         },
+        { stationRole: importStationRole },
       );
+      routesSkipped = createImportRoutes ? importPointDrafts.length - importRoutes.length : 0;
       const restartResult = await runSelectedLinkStopped(async () => {
         const saveResult = await saveImportedPointsWithOptionalRoutes({
           createRoutes: createImportRoutes,
@@ -2222,11 +2237,14 @@ const IEC104: React.FC = () => {
         connName: selectedConn,
         pointCount: normalizedPoints.length,
         routeCount: routesCreated,
+        skippedRouteCount: routesSkipped,
       });
       messageApi.success(
         routesCreated > 0
-          ? `已导入 ${normalizedPoints.length} 个点位，并提交 ${routesCreated} 条 DataCenter 路由`
-          : `已导入 ${normalizedPoints.length} 个点位`,
+          ? `已导入 ${normalizedPoints.length} 个点位，并提交 ${routesCreated} 条 DataCenter 路由${routesSkipped > 0 ? `，跳过 ${routesSkipped} 个参数/未分类点位` : ''}`
+          : routesSkipped > 0
+            ? `已导入 ${normalizedPoints.length} 个点位，跳过 ${routesSkipped} 个参数/未分类点位，未创建对应路由`
+            : `已导入 ${normalizedPoints.length} 个点位`,
       );
       if (restartResult.restartError) {
         messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
@@ -2271,6 +2289,7 @@ const IEC104: React.FC = () => {
     points,
     runSelectedLinkStopped,
     selectedConn,
+    importStationRole,
   ]);
 
   // ── Point Table Columns ──
@@ -3963,10 +3982,10 @@ const IEC104: React.FC = () => {
               disabled={importSubmitting}
               onChange={(event) => setCreateImportRoutes(event.target.checked)}
             >
-              导入并创建 DataCenter 路由（来源点位 → 当前 IEC104 点位）
+              导入并按业务类型创建 DataCenter 路由
             </Checkbox>
             <Text type="secondary" style={{ display: 'block', marginTop: 6 }}>
-              路由使用下方最终确认的 Tag，不会自动转换数据类型或工程量单位。
+              路由使用下方最终确认的 Tag，不会自动转换数据类型或工程量单位。从站规则：遥信、遥测：来源点位 → 当前 IEC104 点位；遥控、遥调：当前 IEC104 点位 → 来源点位；参数、未分类点位不自动创建路由。
             </Text>
           </div>
 

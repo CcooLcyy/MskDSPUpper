@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import {
   ImportedPointRoutesError,
   buildImportedPointRoutes,
+  getImportedPointRouteDirection,
   saveImportedPointsWithOptionalRoutes,
 } from '../../src/pages/IEC104/import-routing.ts';
 
@@ -22,12 +23,14 @@ test('IEC104 import builds stable source-to-target DataCenter routes', () => {
           conn_id: 101,
         },
         targetTag: 'meter_1_voltage_a',
+        businessType: 2,
       },
     ],
     {
       moduleName: 'IEC104',
       connName: 'station-1',
     },
+    { stationRole: 'slave' },
   );
 
   assert.deepEqual(routes, [
@@ -45,6 +48,70 @@ test('IEC104 import builds stable source-to-target DataCenter routes', () => {
     },
   ]);
   assert.equal(routes[0].src.conn_id, undefined);
+});
+
+// 验证从站遥控/遥调点作为命令源，路由目标为导入时选中的数据总线点。
+test('IEC104 slave import reverses remote control and adjust routes', () => {
+  const routes = buildImportedPointRoutes(
+    [
+      {
+        source: {
+          module_name: 'AGC',
+          conn_name: 'group-1',
+          tag: 'active_power_setpoint',
+          conn_id: 201,
+        },
+        targetTag: 'station_setpoint',
+        businessType: 3,
+      },
+      {
+        source: {
+          module_name: 'AVC',
+          conn_name: 'group-1',
+          tag: 'breaker_command',
+          conn_id: 202,
+        },
+        targetTag: 'station_breaker_command',
+        businessType: 4,
+      },
+    ],
+    {
+      moduleName: 'IEC104',
+      connName: 'station-1',
+    },
+    { stationRole: 'slave' },
+  );
+
+  assert.deepEqual(routes.map((route) => ({ src: route.src, dst: route.dst })), [
+    {
+      src: { module_name: 'IEC104', conn_name: 'station-1', tag: 'station_setpoint' },
+      dst: { module_name: 'AGC', conn_name: 'group-1', tag: 'active_power_setpoint' },
+    },
+    {
+      src: { module_name: 'IEC104', conn_name: 'station-1', tag: 'station_breaker_command' },
+      dst: { module_name: 'AVC', conn_name: 'group-1', tag: 'breaker_command' },
+    },
+  ]);
+});
+
+// 验证从站参数和未分类点只导入点表，不自动创建 DataCenter 路由。
+test('IEC104 slave import skips parameter and unspecified routes', () => {
+  const drafts = [
+    {
+      source: { module_name: 'AGC', conn_name: 'group-1', tag: 'parameter' },
+      targetTag: 'station_parameter',
+      businessType: 5,
+    },
+    {
+      source: { module_name: 'AGC', conn_name: 'group-1', tag: 'unknown' },
+      targetTag: 'station_unknown',
+      businessType: 0,
+    },
+  ];
+
+  assert.equal(getImportedPointRouteDirection(5, 'slave'), 'skip');
+  assert.equal(getImportedPointRouteDirection(0, 'slave'), 'skip');
+  assert.deepEqual(buildImportedPointRoutes(drafts, { moduleName: 'IEC104', connName: 'station-1' }, { stationRole: 'slave' }), []);
 });
 
 // 验证未勾选自动路由时仅保存 IEC104 点表。
@@ -110,9 +177,13 @@ test('IEC104 import page exposes an opt-in route checkbox and MASTER warning', (
   assert.match(pageSource, /const \[createImportRoutes, setCreateImportRoutes\] = useState\(false\)/);
   assert.match(pageSource, /const openImportPointModal = useCallback\(\(\) => \{[\s\S]*setCreateImportRoutes\(false\)/);
   assert.match(pageSource, /checked=\{createImportRoutes\}/);
-  assert.match(pageSource, /导入并创建 DataCenter 路由（来源点位 → 当前 IEC104 点位）/);
+  assert.match(pageSource, /导入并按业务类型创建 DataCenter 路由/);
   assert.match(pageSource, /当前 IEC104 连接为 MASTER/);
   assert.match(pageSource, /config\.station_role === 0 && config\.role === ROLE_CLIENT/);
+  assert.match(pageSource, /isSlaveStationConfig/);
+  assert.match(pageSource, /遥信、遥测：来源点位 → 当前 IEC104 点位/);
+  assert.match(pageSource, /遥控、遥调：当前 IEC104 点位 → 来源点位/);
+  assert.match(pageSource, /参数、未分类点位不自动创建路由/);
 });
 
 // 验证页面在同一次停链窗口内先保存点表，再增量创建 DataCenter 路由。
