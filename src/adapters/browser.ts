@@ -146,14 +146,11 @@ const IEC104_BUSINESS_TYPE_PARAMETER = 5;
 
 const inferIec104BusinessType = (point: Iec104Point): number => {
   if (point.business_type) return point.business_type;
-  if (point.ioa >= 0x6201 && point.ioa <= 0x7FFF) return IEC104_BUSINESS_TYPE_REMOTE_ADJUST;
-  if (point.ioa >= 0x8000 && point.ioa <= 0x9FFF) return IEC104_BUSINESS_TYPE_REMOTE_CONTROL;
+  if (point.ioa >= 1 && point.ioa <= 0x4000) return IEC104_BUSINESS_TYPE_TELEINDICATION;
+  if (point.ioa >= 0x4001 && point.ioa <= 0x5000) return IEC104_BUSINESS_TYPE_TELEMETRY;
+  if (point.ioa >= 0x6001 && point.ioa <= 0x6100) return IEC104_BUSINESS_TYPE_REMOTE_CONTROL;
+  if (point.ioa >= 0x6201 && point.ioa <= 0x6400) return IEC104_BUSINESS_TYPE_REMOTE_ADJUST;
   if (point.ioa >= 0xA000 && point.ioa <= 0xBFFF) return IEC104_BUSINESS_TYPE_PARAMETER;
-  if (point.ioa >= 1 && point.ioa <= 0x6200) {
-    return point.point_type === 2
-      ? IEC104_BUSINESS_TYPE_TELEINDICATION
-      : IEC104_BUSINESS_TYPE_TELEMETRY;
-  }
   return 0;
 };
 

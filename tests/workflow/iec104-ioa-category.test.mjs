@@ -13,18 +13,21 @@ const pageSource = readFileSync(new URL('../../src/pages/IEC104/index.tsx', impo
 
 test('IEC104 按固定 IOA 地址段归类四遥和参数', () => {
   assert.deepEqual(getIoaCategoryRange('teleindication'), { start: 0x0001, end: 0x4000 });
-  assert.deepEqual(getIoaCategoryRange('telemetry'), { start: 0x4001, end: 0x6200 });
-  assert.deepEqual(getIoaCategoryRange('remoteAdjust'), { start: 0x6201, end: 0x7FFF });
-  assert.deepEqual(getIoaCategoryRange('remoteControl'), { start: 0x8000, end: 0x9FFF });
+  assert.deepEqual(getIoaCategoryRange('telemetry'), { start: 0x4001, end: 0x5000 });
+  assert.deepEqual(getIoaCategoryRange('remoteAdjust'), { start: 0x6201, end: 0x6400 });
+  assert.deepEqual(getIoaCategoryRange('remoteControl'), { start: 0x6001, end: 0x6100 });
   assert.deepEqual(getIoaCategoryRange('parameter'), { start: 0xA000, end: 0xBFFF });
 });
 
 test('IEC104 IOA 分类可以为旧点表推导业务类型', () => {
   assert.equal(getPointBusinessTypeByIoa(0x0001), 1);
   assert.equal(getPointBusinessTypeByIoa(0x4001), 2);
+  assert.equal(getPointBusinessTypeByIoa(0x6001), 4);
   assert.equal(getPointBusinessTypeByIoa(0x6201), 3);
-  assert.equal(getPointBusinessTypeByIoa(0x8000), 4);
   assert.equal(getPointBusinessTypeByIoa(0xA000), 5);
+  assert.equal(getPointBusinessTypeByIoa(0x5001), 0);
+  assert.equal(getPointBusinessTypeByIoa(0x6101), 0);
+  assert.equal(getPointBusinessTypeByIoa(0x6401), 0);
   assert.equal(getPointBusinessTypeByIoa(0xC000), 0);
 });
 
@@ -32,11 +35,16 @@ test('IEC104 IOA 地址段边界和未分类判断正确', () => {
   assert.equal(getIoaCategoryFilterByIoa(0x0001), 'teleindication');
   assert.equal(getIoaCategoryFilterByIoa(0x4000), 'teleindication');
   assert.equal(getIoaCategoryFilterByIoa(0x4001), 'telemetry');
-  assert.equal(getIoaCategoryFilterByIoa(0x6200), 'telemetry');
+  assert.equal(getIoaCategoryFilterByIoa(0x5000), 'telemetry');
+  assert.equal(getIoaCategoryFilterByIoa(0x5001), 'unclassified');
+  assert.equal(getIoaCategoryFilterByIoa(0x6000), 'unclassified');
+  assert.equal(getIoaCategoryFilterByIoa(0x6001), 'remoteControl');
+  assert.equal(getIoaCategoryFilterByIoa(0x6100), 'remoteControl');
+  assert.equal(getIoaCategoryFilterByIoa(0x6101), 'unclassified');
+  assert.equal(getIoaCategoryFilterByIoa(0x6200), 'unclassified');
   assert.equal(getIoaCategoryFilterByIoa(0x6201), 'remoteAdjust');
-  assert.equal(getIoaCategoryFilterByIoa(0x7FFF), 'remoteAdjust');
-  assert.equal(getIoaCategoryFilterByIoa(0x8000), 'remoteControl');
-  assert.equal(getIoaCategoryFilterByIoa(0x9FFF), 'remoteControl');
+  assert.equal(getIoaCategoryFilterByIoa(0x6400), 'remoteAdjust');
+  assert.equal(getIoaCategoryFilterByIoa(0x6401), 'unclassified');
   assert.equal(getIoaCategoryFilterByIoa(0xA000), 'parameter');
   assert.equal(getIoaCategoryFilterByIoa(0xBFFF), 'parameter');
   assert.equal(getIoaCategoryFilterByIoa(0xC000), 'unclassified');
@@ -46,9 +54,10 @@ test('IEC104 IOA 地址段边界和未分类判断正确', () => {
 test('IEC104 IOA 筛选仅匹配所选业务类别', () => {
   assert.equal(matchesIoaCategoryFilter(0x4001, 'telemetry'), true);
   assert.equal(matchesIoaCategoryFilter(0x4001, 'remoteAdjust'), false);
+  assert.equal(matchesIoaCategoryFilter(0x6001, 'remoteControl'), true);
   assert.equal(matchesIoaCategoryFilter(0xC000, 'unclassified'), true);
   assert.equal(matchesIoaCategoryFilter(0xC000, 'parameter'), false);
-  assert.equal(matchesIoaCategoryFilter(0x8000, undefined), true);
+  assert.equal(matchesIoaCategoryFilter(0x6001, undefined), true);
 });
 
 test('IEC104 页面使用 IOA 业务类别筛选并显示归类结果', () => {

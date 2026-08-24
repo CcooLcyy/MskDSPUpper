@@ -54,7 +54,7 @@ test('IEC104 batch points respect the selected IOA category range', () => {
   });
   const crossingResult = generateBatchPoints({
     text: 'voltage_last\nvoltage_next',
-    startIoa: 0x6200,
+    startIoa: 0x5000,
     step: 1,
     ioaCategory: 'telemetry',
     pointType: BATCH_POINT_TYPE_FLOAT,
@@ -81,7 +81,7 @@ test('IEC104 batch points support every IOA category', () => {
     { ioaCategory: 'teleindication', startIoa: 0x0001 },
     { ioaCategory: 'telemetry', startIoa: 0x4001 },
     { ioaCategory: 'remoteAdjust', startIoa: 0x6201 },
-    { ioaCategory: 'remoteControl', startIoa: 0x8000 },
+    { ioaCategory: 'remoteControl', startIoa: 0x6001 },
     { ioaCategory: 'parameter', startIoa: 0xA000 },
   ];
 

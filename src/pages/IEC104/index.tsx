@@ -2078,7 +2078,7 @@ const IEC104: React.FC = () => {
           ...item,
           ioa_category: nextCategory,
           ioa: nextIoa,
-          business_type: item.business_type || getPointBusinessTypeByCategory(nextCategory),
+          business_type: getPointBusinessTypeByCategory(nextCategory),
         };
       });
     });
@@ -2108,7 +2108,7 @@ const IEC104: React.FC = () => {
             ? {
                 ...item,
                 ...nextDraftFields,
-                business_type: item.business_type || getPointBusinessTypeByCategory(nextCategory),
+                business_type: getPointBusinessTypeByCategory(nextCategory),
               }
             : item,
         );
@@ -2221,12 +2221,21 @@ const IEC104: React.FC = () => {
         },
         { stationRole: importStationRole },
       );
+      console.info('IEC104 导入路由方向已确定', {
+        connName: selectedConn,
+        stationRole: importStationRole,
+        routes: importRoutes.map((route) => ({
+          src: `${route.src.module_name}/${route.src.conn_name}/${route.src.tag}`,
+          dst: `${route.dst.module_name}/${route.dst.conn_name}/${route.dst.tag}`,
+        })),
+      });
       routesSkipped = createImportRoutes ? importPointDrafts.length - importRoutes.length : 0;
       const restartResult = await runSelectedLinkStopped(async () => {
         const saveResult = await saveImportedPointsWithOptionalRoutes({
           createRoutes: createImportRoutes,
           routes: importRoutes,
           savePointTable: () => api.iec104UpsertPointTable(selectedConn, newPoints, true),
+          deleteRoutes: (routes) => api.dcDeleteRoutes(routes),
           saveRoutes: (routes) => api.dcUpsertRoutes(routes, false),
         });
         routesCreated = saveResult.routesCreated;

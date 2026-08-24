@@ -52,9 +52,9 @@ export type IoaCategoryOption = {
 
 export const IOA_CATEGORY_OPTIONS: IoaCategoryOption[] = [
   { value: 'teleindication', label: '遥信', start: 0x0001, end: 0x4000 },
-  { value: 'telemetry', label: '遥测', start: 0x4001, end: 0x6200 },
-  { value: 'remoteAdjust', label: '遥调', start: 0x6201, end: 0x7FFF },
-  { value: 'remoteControl', label: '遥控', start: 0x8000, end: 0x9FFF },
+  { value: 'telemetry', label: '遥测', start: 0x4001, end: 0x5000 },
+  { value: 'remoteAdjust', label: '遥调', start: 0x6201, end: 0x6400 },
+  { value: 'remoteControl', label: '遥控', start: 0x6001, end: 0x6100 },
   { value: 'parameter', label: '参数', start: 0xA000, end: 0xBFFF },
 ];
 

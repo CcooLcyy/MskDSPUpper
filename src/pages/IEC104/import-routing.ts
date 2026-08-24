@@ -82,10 +82,14 @@ export const buildImportedPointRoutes = (
       : [{ src: sourcePoint, dst: currentIec104Point }];
   });
 
+export const reverseImportedPointRoutes = (routes: DcRoute[]): DcRoute[] =>
+  routes.map((route) => ({ src: route.dst, dst: route.src }));
+
 export const saveImportedPointsWithOptionalRoutes = async (options: {
   createRoutes: boolean;
   routes: DcRoute[];
   savePointTable: () => Promise<unknown>;
+  deleteRoutes?: (routes: DcRoute[]) => Promise<unknown>;
   saveRoutes: (routes: DcRoute[]) => Promise<unknown>;
 }): Promise<{ routesCreated: number }> => {
   await options.savePointTable();
@@ -95,6 +99,9 @@ export const saveImportedPointsWithOptionalRoutes = async (options: {
   }
 
   try {
+    if (options.deleteRoutes) {
+      await options.deleteRoutes(reverseImportedPointRoutes(options.routes));
+    }
     await options.saveRoutes(options.routes);
   } catch (error) {
     throw new ImportedPointRoutesError(error);
