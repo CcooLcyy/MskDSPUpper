@@ -147,8 +147,7 @@ sysctl -w 'net.ipv4.conf.eth0/101.proxy_arp=1'
 sysctl -w 'net.ipv4.conf.eth0/108.proxy_arp=0'
 
 ip addr replace 11.22.33.1/32 dev eth0.101
-# 清理旧版本的单主机路由，再切换到整个电脑网段。
-ip route del 11.22.33.41/32 dev eth0.101 2>/dev/null || true
+# 配置整个电脑网段。
 ip route replace 11.22.33.0/24 dev eth0.101 scope link
 
 ip addr replace 11.22.33.2/32 dev eth0.108
