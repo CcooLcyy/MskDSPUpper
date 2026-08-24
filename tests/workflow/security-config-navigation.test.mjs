@@ -86,7 +86,7 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(rustCommandText, /systemctl show --property=ActiveState --value/);
   assert.match(scriptText, /sysctl -w net\.ipv4\.ip_forward=1/);
   assert.match(scriptText, /ip addr replace 11\.22\.33\.1\/32 dev eth0\.101/);
-  assert.match(scriptText, /ip route del 11\.22\.33\.41\/32 dev eth0\.101/);
+  assert.doesNotMatch(scriptText, /ip route del 11\.22\.33\.41\/32 dev eth0\.101/);
   assert.match(scriptText, /ip route replace 11\.22\.33\.0\/24 dev eth0\.101 scope link/);
   assert.doesNotMatch(scriptText, /ip route replace 11\.22\.33\.41\/32/);
   assert.match(scriptText, /ip route replace 11\.22\.33\.44\/32 dev eth0\.108 scope link/);

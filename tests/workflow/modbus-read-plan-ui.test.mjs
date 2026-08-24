@@ -59,7 +59,7 @@ test('ModbusRTU 批量读取区间默认收起', () => {
   assert.match(pointTableSource, /DEFAULT_READ_PLAN_EDITOR_EXPANDED\s*=\s*false/);
   assert.match(
     pointTableSource,
-    /useState\(\s*DEFAULT_READ_PLAN_EDITOR_EXPANDED\s*\)/,
+    /useState\(\s*DEFAULT_READ_PLAN_EDITOR_EXPANDED\s*,?\s*\)/,
     '批量读取区间编辑器的初始状态应为收起',
   );
   assert.match(
