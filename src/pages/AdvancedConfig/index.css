@@ -29,6 +29,17 @@
   margin-top: 16px;
 }
 
+.advanced-config-background-download {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(64, 169, 255, 0.35);
+  border-radius: 4px;
+  background: rgba(24, 144, 255, 0.06);
+}
+
 .advanced-config-cached-package {
   margin-top: 16px;
   padding: 10px 12px;

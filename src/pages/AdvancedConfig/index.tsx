@@ -977,6 +977,13 @@ const AdvancedConfigPage: React.FC = () => {
     }
   };
 
+  const closeDownloadModal = (): void => {
+    if (isDownloadingLowerUpdate) {
+      console.info('下位机更新下载已切换到后台运行');
+    }
+    setIsDownloadModalOpen(false);
+  };
+
   const verifyRunningImage = async (expectedImageId: string): Promise<'succeeded' | 'mismatch' | 'failed'> => {
     setCurrentLowerImageId('-');
     setExpectedImageId(expectedImageId);
@@ -1587,7 +1594,7 @@ const AdvancedConfigPage: React.FC = () => {
                 <Button
                   icon={<FileSearchOutlined />}
                   onClick={() => void handleCheckUpdate()}
-                  disabled={hasRuntimeQueryValidationError}
+                  disabled={hasRuntimeQueryValidationError || isDownloadingLowerUpdate}
                   loading={isCheckingLowerUpdate}
                 >
                   检查更新
@@ -1622,6 +1629,24 @@ const AdvancedConfigPage: React.FC = () => {
                   下发并安装
                 </Button>
               </Space>
+              {isDownloadingLowerUpdate ? (
+                <div className="advanced-config-background-download">
+                  <Space wrap size={8}>
+                    <Tag color="processing">后台下载中</Tag>
+                    <Text type="secondary">
+                      {formatPackageSize(downloadedBytes)} / {formatPackageSize(downloadTotalBytes || activeManifest?.asset.size || 0)}
+                    </Text>
+                    <Button
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      onClick={() => setIsDownloadModalOpen(true)}
+                    >
+                      查看进度
+                    </Button>
+                  </Space>
+                  <Progress percent={downloadModalProgress} size="small" />
+                </div>
+              ) : null}
             </div>
           </div>
         </Card>
@@ -1658,16 +1683,12 @@ const AdvancedConfigPage: React.FC = () => {
         <Modal
           open={isDownloadModalOpen}
           title="下载到上位机"
-          okText="完成"
-          okButtonProps={{ disabled: isDownloadingLowerUpdate }}
+          okText={isDownloadingLowerUpdate ? '后台运行' : '完成'}
+          okButtonProps={{ disabled: false }}
           cancelButtonProps={{ style: { display: 'none' } }}
-          maskClosable={!isDownloadingLowerUpdate}
-          onOk={() => setIsDownloadModalOpen(false)}
-          onCancel={() => {
-            if (!isDownloadingLowerUpdate) {
-              setIsDownloadModalOpen(false);
-            }
-          }}
+          maskClosable
+          onOk={closeDownloadModal}
+          onCancel={closeDownloadModal}
         >
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Descriptions size="small" column={1}>
