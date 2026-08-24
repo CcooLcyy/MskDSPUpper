@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { mergeControlRuntimeUpdates } from '../../src/utils/control-runtime-values.ts';
+import {
+  mergeControlRuntimeUpdates,
+  readControlRuntimeBool,
+} from '../../src/utils/control-runtime-values.ts';
 
 const agcSource = readFileSync(new URL('../../src/pages/AGC/index.tsx', import.meta.url), 'utf8');
 const avcSource = readFileSync(new URL('../../src/pages/AVC/index.tsx', import.meta.url), 'utf8');
@@ -49,11 +52,26 @@ test('control runtime values prefer source updates for duplicate tags', () => {
   assert.equal(result.actual_setpoint.dst_tag, 'actual_setpoint');
 });
 
+// 验证控制状态优先使用实时默认点，实时点尚未返回时保留控制组元数据回退值。
+test('control runtime bool states override group metadata when available', () => {
+  const updates = mergeControlRuntimeUpdates([
+    {
+      ...destinationUpdate('AGC功能投入', 0),
+      value: { type: 'Bool', value: false },
+    },
+  ], []);
+
+  assert.equal(readControlRuntimeBool(updates, 'AGC功能投入', true), false);
+  assert.equal(readControlRuntimeBool(updates, 'AGC远方操作', true), true);
+  assert.equal(readControlRuntimeBool(updates, undefined, false), false);
+});
+
 // 验证 AGC、AVC 页面都查询源端值并使用统一合并逻辑。
 test('AGC and AVC runtime monitors include source latest values', () => {
   for (const source of [agcSource, avcSource]) {
     assert.match(source, /api\.dcGetLatest\(selectedGroup\.conn_id, tags\)/);
     assert.match(source, /api\.dcGetSourceLatest\(selectedGroup\.conn_id, tags\)/);
     assert.match(source, /mergeControlRuntimeUpdates\(/);
+    assert.match(source, /readControlRuntimeBool\(/);
   }
 });

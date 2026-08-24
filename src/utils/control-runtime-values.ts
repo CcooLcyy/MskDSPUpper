@@ -2,6 +2,19 @@ import type { DcPointUpdate, DcSourcePointUpdate } from '../adapters';
 
 export type ControlRuntimeUpdates = Record<string, DcPointUpdate>;
 
+/**
+ * Read a BOOL state from the runtime snapshot while retaining the group DTO
+ * value until the corresponding point has been observed.
+ */
+export const readControlRuntimeBool = (
+  updates: ControlRuntimeUpdates,
+  tag: string | null | undefined,
+  fallback: boolean,
+): boolean => {
+  const value = tag ? updates[tag]?.value : null;
+  return value?.type === 'Bool' ? value.value : fallback;
+};
+
 const toDestinationUpdate = (update: DcSourcePointUpdate): DcPointUpdate => ({
   src_conn_id: update.conn_id,
   src_tag: update.tag,

@@ -50,7 +50,10 @@ import {
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
-import { mergeControlRuntimeUpdates } from '../../utils/control-runtime-values';
+import {
+  mergeControlRuntimeUpdates,
+  readControlRuntimeBool,
+} from '../../utils/control-runtime-values';
 import {
   calculateControlAllocationShares,
   inferControlAllocationMode,
@@ -686,6 +689,16 @@ const AVC: React.FC = () => {
   const selectedConfig = selectedGroup?.config ?? null;
   const stateInfo = STATE_MAP[selectedGroup?.state ?? 0] ?? STATE_MAP[0];
   const currentView = normalizeControlView(searchParams.get(CONTROL_VIEW_QUERY_KEY));
+  const functionEnabled = readControlRuntimeBool(
+    runtimeUpdates,
+    selectedGroup?.default_points.find((point) => point.kind === 11)?.tag,
+    selectedGroup?.function_enabled ?? false,
+  );
+  const remoteEnabled = readControlRuntimeBool(
+    runtimeUpdates,
+    selectedGroup?.default_points.find((point) => point.kind === 12)?.tag,
+    selectedGroup?.remote_enabled ?? false,
+  );
 
   const beginGroupOperation = useCallback((operation: GroupOperation) => {
     if (groupOperationRef.current) {
@@ -1844,13 +1857,13 @@ const AVC: React.FC = () => {
                         <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
                       </Descriptions.Item>
                       <Descriptions.Item label="AVC功能投入">
-                        <Tag color={selectedGroup?.function_enabled ? 'green' : 'default'}>
-                          {selectedGroup?.function_enabled ? '投入' : '退出'}
+                        <Tag color={functionEnabled ? 'green' : 'default'}>
+                          {functionEnabled ? '投入' : '退出'}
                         </Tag>
                       </Descriptions.Item>
                       <Descriptions.Item label="AVC远方操作">
-                        <Tag color={selectedGroup?.remote_enabled ? 'green' : 'default'}>
-                          {selectedGroup?.remote_enabled ? '远方' : '就地'}
+                        <Tag color={remoteEnabled ? 'green' : 'default'}>
+                          {remoteEnabled ? '远方' : '就地'}
                         </Tag>
                       </Descriptions.Item>
                       <Descriptions.Item label="分配方式">
@@ -1915,12 +1928,12 @@ const AVC: React.FC = () => {
                     </div>
                     <div>
                       <Text type="secondary" style={{ marginRight: 12 }}>AVC功能</Text>
-                      <Tag color={selectedGroup?.function_enabled ? 'green' : 'default'}>
-                        {selectedGroup?.function_enabled ? '投入' : '退出'}
+                      <Tag color={functionEnabled ? 'green' : 'default'}>
+                        {functionEnabled ? '投入' : '退出'}
                       </Tag>
                       <Text type="secondary" style={{ margin: '0 12px 0 20px' }}>远方操作</Text>
-                      <Tag color={selectedGroup?.remote_enabled ? 'green' : 'default'}>
-                        {selectedGroup?.remote_enabled ? '远方' : '就地'}
+                      <Tag color={remoteEnabled ? 'green' : 'default'}>
+                        {remoteEnabled ? '远方' : '就地'}
                       </Tag>
                     </div>
                     <div>

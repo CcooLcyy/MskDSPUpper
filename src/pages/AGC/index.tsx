@@ -53,7 +53,10 @@ import {
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
-import { mergeControlRuntimeUpdates } from '../../utils/control-runtime-values';
+import {
+  mergeControlRuntimeUpdates,
+  readControlRuntimeBool,
+} from '../../utils/control-runtime-values';
 import {
   calculateControlAllocationShares,
   inferControlAllocationMode,
@@ -1318,6 +1321,16 @@ const AGC: React.FC = () => {
 
   const stateInfo = STATE_MAP[selectedGroup?.state ?? 0] ?? STATE_MAP[0];
   const selectedConfig = selectedGroup?.config ?? null;
+  const functionEnabled = readControlRuntimeBool(
+    runtimeUpdates,
+    selectedGroup?.default_points.find((point) => point.kind === 7)?.tag,
+    selectedGroup?.function_enabled ?? false,
+  );
+  const remoteEnabled = readControlRuntimeBool(
+    runtimeUpdates,
+    selectedGroup?.default_points.find((point) => point.kind === 8)?.tag,
+    selectedGroup?.remote_enabled ?? false,
+  );
 
   const runtimeRows = [
     {
@@ -1471,13 +1484,13 @@ const AGC: React.FC = () => {
                         <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
                       </Descriptions.Item>
                       <Descriptions.Item label="AGC功能投入">
-                        <Tag color={selectedGroup?.function_enabled ? 'green' : 'default'}>
-                          {selectedGroup?.function_enabled ? '投入' : '退出'}
+                        <Tag color={functionEnabled ? 'green' : 'default'}>
+                          {functionEnabled ? '投入' : '退出'}
                         </Tag>
                       </Descriptions.Item>
                       <Descriptions.Item label="AGC远方操作">
-                        <Tag color={selectedGroup?.remote_enabled ? 'green' : 'default'}>
-                          {selectedGroup?.remote_enabled ? '远方' : '就地'}
+                        <Tag color={remoteEnabled ? 'green' : 'default'}>
+                          {remoteEnabled ? '远方' : '就地'}
                         </Tag>
                       </Descriptions.Item>
                       <Descriptions.Item label="分配方式">
@@ -1533,12 +1546,12 @@ const AGC: React.FC = () => {
                     </div>
                     <div>
                       <Text type="secondary" style={{ marginRight: 12 }}>AGC功能</Text>
-                      <Tag color={selectedGroup?.function_enabled ? 'green' : 'default'}>
-                        {selectedGroup?.function_enabled ? '投入' : '退出'}
+                      <Tag color={functionEnabled ? 'green' : 'default'}>
+                        {functionEnabled ? '投入' : '退出'}
                       </Tag>
                       <Text type="secondary" style={{ margin: '0 12px 0 20px' }}>远方操作</Text>
-                      <Tag color={selectedGroup?.remote_enabled ? 'green' : 'default'}>
-                        {selectedGroup?.remote_enabled ? '远方' : '就地'}
+                      <Tag color={remoteEnabled ? 'green' : 'default'}>
+                        {remoteEnabled ? '远方' : '就地'}
                       </Tag>
                     </div>
                     <div>
