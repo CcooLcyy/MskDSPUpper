@@ -50,6 +50,7 @@ import {
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
+import { mergeControlRuntimeUpdates } from '../../utils/control-runtime-values';
 import {
   calculateControlAllocationShares,
   inferControlAllocationMode,
@@ -811,20 +812,17 @@ const AVC: React.FC = () => {
 
     setRuntimeLoading(true);
     try {
-      const updates = await api.dcGetLatest(selectedGroup.conn_id, tags);
+      const [destinationUpdates, sourceUpdates] = await Promise.all([
+        api.dcGetLatest(selectedGroup.conn_id, tags),
+        api.dcGetSourceLatest(selectedGroup.conn_id, tags),
+      ]);
       if (requestId !== runtimeRequestIdRef.current) {
         return;
       }
-      const nextUpdates: Record<string, DcPointUpdate> = {};
-      updates.forEach((update) => {
-        const tag = update.dst_tag || update.src_tag;
-        if (tag) {
-          nextUpdates[tag] = update;
-        }
-      });
+      const nextUpdates = mergeControlRuntimeUpdates(destinationUpdates, sourceUpdates);
       setRuntimeUpdates(nextUpdates);
       setRuntimeStatus({
-        state: updates.length > 0 ? 'ok' : 'stale',
+        state: Object.keys(nextUpdates).length > 0 ? 'ok' : 'stale',
         error: null,
         updatedAt: Date.now(),
       });

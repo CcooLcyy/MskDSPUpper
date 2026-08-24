@@ -51,6 +51,7 @@ import {
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
+import { mergeControlRuntimeUpdates } from '../../utils/control-runtime-values';
 import {
   calculateControlAllocationShares,
   inferControlAllocationMode,
@@ -82,6 +83,17 @@ const DEFAULT_POINT_KIND_LABELS: Record<number, string> = {
   6: 'AGC装机容量',
   7: 'AGC功能投入',
   8: 'AGC远方操作',
+};
+
+const DEFAULT_POINT_DIRECTION_LABELS: Record<number, { label: string; color: string }> = {
+  1: { label: '上传（AGC → 数据中心）', color: 'blue' },
+  2: { label: '上传（AGC → 数据中心）', color: 'blue' },
+  3: { label: '上传（AGC → 数据中心）', color: 'blue' },
+  4: { label: '上传（AGC → 数据中心）', color: 'blue' },
+  5: { label: '上传（命令回显）', color: 'blue' },
+  6: { label: '上传（AGC → 数据中心）', color: 'blue' },
+  7: { label: '双向（状态上传 / BOOL命令接收）', color: 'orange' },
+  8: { label: '双向（状态上传 / BOOL命令接收）', color: 'orange' },
 };
 
 const VALUE_MODE_LABELS: Record<number, string> = {
@@ -523,12 +535,11 @@ const AGC: React.FC = () => {
 
     setRuntimeLoading(true);
     try {
-      const updates = await api.dcGetLatest(selectedGroup.conn_id, tags);
-      const nextUpdates: Record<string, DcPointUpdate> = {};
-      updates.forEach((update) => {
-        const tag = update.dst_tag || update.src_tag;
-        if (tag) nextUpdates[tag] = update;
-      });
+      const [destinationUpdates, sourceUpdates] = await Promise.all([
+        api.dcGetLatest(selectedGroup.conn_id, tags),
+        api.dcGetSourceLatest(selectedGroup.conn_id, tags),
+      ]);
+      const nextUpdates = mergeControlRuntimeUpdates(destinationUpdates, sourceUpdates);
       setRuntimeUpdates(nextUpdates);
       runtimeErrorToastRef.current = null;
     } catch (e) {
@@ -1215,6 +1226,16 @@ const AGC: React.FC = () => {
       render: (value: string) => value || '-',
     },
     {
+      title: '数据方向',
+      key: 'direction',
+      width: 260,
+      render: (_, record) => {
+        const direction = DEFAULT_POINT_DIRECTION_LABELS[record.kind]
+          ?? { label: '上传（AGC → 数据中心）', color: 'blue' };
+        return <Tag color={direction.color}>{direction.label}</Tag>;
+      },
+    },
+    {
       title: '最新值',
       key: 'value',
       width: 120,
@@ -1503,7 +1524,7 @@ const AGC: React.FC = () => {
                   dataSource={selectedGroup?.default_points ?? []}
                   pagination={false}
                   size="small"
-                  scroll={{ x: 760 }}
+                  scroll={{ x: 990 }}
                   locale={{ emptyText: selectedGroup ? '当前控制组暂无默认点' : '请先选择控制组' }}
                 />
               </div>
