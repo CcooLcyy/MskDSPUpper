@@ -55,6 +55,20 @@ test('ModbusRTU 批量读取区间支持折叠并限制列表高度', () => {
   assert.match(protocolPageCssSource, /\.protocol-read-plan-block-list[\s\S]*overflow-y:\s*auto/);
 });
 
+test('ModbusRTU 批量读取区间默认收起', () => {
+  assert.match(pointTableSource, /DEFAULT_READ_PLAN_EDITOR_EXPANDED\s*=\s*false/);
+  assert.match(
+    pointTableSource,
+    /useState\(\s*DEFAULT_READ_PLAN_EDITOR_EXPANDED\s*\)/,
+    '批量读取区间编辑器的初始状态应为收起',
+  );
+  assert.match(
+    pointTableSource,
+    /:\s*DEFAULT_READ_PLAN_EDITOR_EXPANDED/,
+    '读取方案来源变化时也应回到收起状态',
+  );
+});
+
 function getArrowFunctionSource(functionName) {
   const start = pointTableSource.indexOf(`const ${functionName} =`);
   assert.notEqual(start, -1, `PointTable 应提供 ${functionName} 操作处理函数`);

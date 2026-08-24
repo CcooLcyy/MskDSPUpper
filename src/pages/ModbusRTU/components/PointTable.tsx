@@ -64,7 +64,7 @@ const DATA_TYPE_LABELS: Record<number, string> = {
 
 const WORD_ORDER_LABELS: Record<number, string> = { 0: '默认 (HL)', 1: 'HL', 2: 'LH' };
 const BYTE_ORDER_LABELS: Record<number, string> = { 0: '默认 (AB)', 1: 'AB', 2: 'BA' };
-const READ_PLAN_COLLAPSE_THRESHOLD = 4;
+const DEFAULT_READ_PLAN_EDITOR_EXPANDED = false;
 const MODBUS_MAX_ADDRESS = 65535;
 const MODBUS_MAX_READ_QUANTITY = 125;
 
@@ -136,7 +136,7 @@ const PointTable: React.FC<Props> = ({
   const [draftReadPlanMode, setDraftReadPlanMode] = useState(savedReadPlan.mode || 1);
   const [draftReadPlanBlocks, setDraftReadPlanBlocks] = useState(savedReadPlan.blocks.map((block) => ({ ...block })));
   const [draftReadPlanEditorExpanded, setDraftReadPlanEditorExpanded] = useState(
-    savedReadPlan.blocks.length <= READ_PLAN_COLLAPSE_THRESHOLD,
+    DEFAULT_READ_PLAN_EDITOR_EXPANDED,
   );
   const draftIsCurrent = activeDraftSourceKey === draftSourceKey;
   // A connection/address-base change is an external boundary. Derive the current view from
@@ -145,7 +145,7 @@ const PointTable: React.FC<Props> = ({
   const readPlanBlocks = draftIsCurrent ? draftReadPlanBlocks : savedReadPlan.blocks;
   const readPlanEditorExpanded = draftIsCurrent
     ? draftReadPlanEditorExpanded
-    : savedReadPlan.blocks.length <= READ_PLAN_COLLAPSE_THRESHOLD;
+    : DEFAULT_READ_PLAN_EDITOR_EXPANDED;
 
   const registerPoints = useMemo(
     () => points.filter((point) => isExplicitReadFunction(point.function)),
@@ -247,7 +247,7 @@ const PointTable: React.FC<Props> = ({
     setDraftReadPlanEditorExpanded((current) => {
       const base = activeDraftSourceKey === draftSourceKey
         ? current
-        : savedReadPlan.blocks.length <= READ_PLAN_COLLAPSE_THRESHOLD;
+        : DEFAULT_READ_PLAN_EDITOR_EXPANDED;
       return typeof next === 'function' ? next(base) : next;
     });
   };
