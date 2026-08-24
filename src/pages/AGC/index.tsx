@@ -1651,35 +1651,35 @@ const AGC: React.FC = () => {
       >
         <Form form={tuningForm} layout="vertical" size="small" onFinish={() => void handleStartTuning()}>
           <Space wrap align="start" style={{ width: '100%' }}>
-            <Form.Item name="target_lower_kw" label="目标下限(kW)" rules={[{ required: true }]}>
+            <Form.Item name="target_lower_kw" label="目标下限(kW)" rules={[{ required: true, type: 'number' }]}>
               <InputNumber min={0} style={{ width: 130 }} />
             </Form.Item>
-            <Form.Item name="target_upper_kw" label="目标上限(kW)" rules={[{ required: true }]}>
+            <Form.Item name="target_upper_kw" label="目标上限(kW)" rules={[{ required: true, type: 'number' }]}>
               <InputNumber min={0} style={{ width: 130 }} />
             </Form.Item>
-            <Form.Item name="total_tolerance_kw" label="总量精度(kW)" rules={[{ required: true, min: 0.000001 }]}>
+            <Form.Item name="total_tolerance_kw" label="总量精度(kW)" rules={[{ required: true, type: 'number', min: 0.000001 }]}>
               <InputNumber min={0.000001} style={{ width: 130 }} />
             </Form.Item>
           </Space>
           <Space wrap align="start" style={{ width: '100%' }}>
-            <Form.Item name="total_time_minutes" label="总测试时间(分钟)" rules={[{ required: true, min: 1 }]}>
+            <Form.Item name="total_time_minutes" label="总测试时间(分钟)" rules={[{ required: true, type: 'number', min: 1 }]}>
               <InputNumber min={1} style={{ width: 130 }} />
             </Form.Item>
-            <Form.Item name="attempt_max_time_minutes" label="单轮最大时间(分钟)" rules={[{ required: true, min: 1 }]}>
+            <Form.Item name="attempt_max_time_minutes" label="单轮最大时间(分钟)" rules={[{ required: true, type: 'number', min: 1 }]}>
               <InputNumber min={1} style={{ width: 150 }} />
             </Form.Item>
-            <Form.Item name="target_entry_time_seconds" label="进入目标时间(秒)" rules={[{ required: true, min: 1 }]}>
+            <Form.Item name="target_entry_time_seconds" label="进入目标时间(秒)" rules={[{ required: true, type: 'number', min: 1 }]}>
               <InputNumber min={1} style={{ width: 130 }} />
             </Form.Item>
           </Space>
           <Space wrap align="start" style={{ width: '100%' }}>
-            <Form.Item name="stable_hold_time_seconds" label="稳定保持时间(秒)" rules={[{ required: true, min: 1 }]}>
+            <Form.Item name="stable_hold_time_seconds" label="稳定保持时间(秒)" rules={[{ required: true, type: 'number', min: 1 }]}>
               <InputNumber min={1} style={{ width: 140 }} />
             </Form.Item>
-            <Form.Item name="min_up_tests" label="最少上调次数" rules={[{ required: true, min: 3 }]}>
+            <Form.Item name="min_up_tests" label="最少上调次数" rules={[{ required: true, type: 'number', min: 3 }]}>
               <InputNumber min={3} style={{ width: 130 }} />
             </Form.Item>
-            <Form.Item name="min_down_tests" label="最少下调次数" rules={[{ required: true, min: 3 }]}>
+            <Form.Item name="min_down_tests" label="最少下调次数" rules={[{ required: true, type: 'number', min: 3 }]}>
               <InputNumber min={3} style={{ width: 130 }} />
             </Form.Item>
           </Space>
