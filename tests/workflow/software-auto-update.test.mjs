@@ -27,12 +27,17 @@ test('upper updater separates download from install and keeps the 30 second time
   assert.doesNotMatch(provider, /downloadAndInstallAppUpdate/);
 });
 
-// 验证下位机后台任务只使用 stable 清单和本地下载接口。
-test('lower updater auto coordinator downloads stable packages without deployment', () => {
+// 验证下位机后台任务检查全部通道，只使用本地下载接口，不执行部署。
+test('lower updater auto coordinator downloads every channel without deployment', () => {
   const coordinator = source('src/components/lower-update/LowerUpdateAutoProvider.tsx');
+  const design = source('doc/软件自动更新方案.md');
 
   assert.match(coordinator, /30_000/);
-  assert.match(coordinator, /checkLowerUpdate\(['"]stable['"]\)/);
+  for (const channel of ['stable', 'beta', 'nightly', 'ci']) {
+    assert.match(coordinator, new RegExp(`checkLowerUpdate\\(['"]${channel}['"]\\)`));
+    assert.match(coordinator, new RegExp(`listCachedLowerUpdates\\(['"]${channel}['"]\\)`));
+  }
+  assert.match(design, /`stable`、`beta`、`nightly`、`ci` 四个通道/);
   assert.match(coordinator, /downloadLowerUpdate/);
   assert.doesNotMatch(coordinator, /uploadLowerUpdatePackage/);
   assert.doesNotMatch(coordinator, /installLowerUpdatePackage/);

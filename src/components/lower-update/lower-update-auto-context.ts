@@ -3,6 +3,7 @@ import type {
   LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
   LowerUpdateManifest,
+  LowerUpdateChannel,
 } from '../../adapters';
 
 export type LowerUpdateAutoStatusKind =
@@ -13,7 +14,8 @@ export type LowerUpdateAutoStatusKind =
   | 'cached'
   | 'error';
 
-export interface LowerUpdateAutoStatus {
+export interface LowerUpdateAutoChannelStatus {
+  channel: LowerUpdateChannel;
   kind: LowerUpdateAutoStatusKind;
   message: string;
   manifest: LowerUpdateManifest | null;
@@ -22,13 +24,29 @@ export interface LowerUpdateAutoStatus {
   lastCheckedAt: number | null;
 }
 
+export interface LowerUpdateAutoStatus {
+  channels: Record<LowerUpdateChannel, LowerUpdateAutoChannelStatus>;
+}
+
+function createInitialChannelStatus(channel: LowerUpdateChannel): LowerUpdateAutoChannelStatus {
+  return {
+    channel,
+    kind: 'idle',
+    message: '尚未检查下位机更新',
+    manifest: null,
+    cachedPackage: null,
+    progress: null,
+    lastCheckedAt: null,
+  };
+}
+
 export const initialLowerUpdateAutoStatus: LowerUpdateAutoStatus = {
-  kind: 'idle',
-  message: '尚未检查下位机更新',
-  manifest: null,
-  cachedPackage: null,
-  progress: null,
-  lastCheckedAt: null,
+  channels: {
+    stable: createInitialChannelStatus('stable'),
+    beta: createInitialChannelStatus('beta'),
+    nightly: createInitialChannelStatus('nightly'),
+    ci: createInitialChannelStatus('ci'),
+  },
 };
 
 export const LowerUpdateAutoContext = createContext<LowerUpdateAutoStatus>(
