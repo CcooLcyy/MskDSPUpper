@@ -4,6 +4,7 @@ import { ADVANCED_CONFIG_PATH } from './utils/advanced-config-auth';
 import {
   ControlPage,
   CalcPage,
+  ControlOrchestratorPage,
   DataBusPage,
   DLT645Page,
   IEC104Page,
@@ -141,6 +142,14 @@ export const router = createBrowserRouter([
         element: (
           <RouteSuspense>
             <CalcPage />
+          </RouteSuspense>
+        ),
+      },
+      {
+        path: 'control-orchestrator',
+        element: (
+          <RouteSuspense>
+            <ControlOrchestratorPage />
           </RouteSuspense>
         ),
       },

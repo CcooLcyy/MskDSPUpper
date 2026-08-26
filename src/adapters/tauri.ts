@@ -70,6 +70,9 @@ import type {
   CacheClearResult,
   CalcGroupConfig,
   CalcGroupInfo,
+  ControlOrchestratorWorkflowConfig,
+  ControlOrchestratorExecuteRequest,
+  ControlOrchestratorExecuteResponse,
 } from './types';
 import { getLowerUpdateStaticBaseUrl } from './lower-update-source';
 
@@ -400,6 +403,17 @@ export const api = {
     invoke<void>('calc_start_group', { groupName }),
   calcStopGroup: (groupName: string) =>
     invoke<void>('calc_stop_group', { groupName }),
+
+  controlOrchestratorUpsertSequence: (config: ControlOrchestratorWorkflowConfig, createOnly: boolean) =>
+    invoke<ControlOrchestratorWorkflowConfig>('control_orchestrator_upsert_sequence', { config, createOnly }),
+  controlOrchestratorGetSequence: (sequenceName: string) =>
+    invoke<ControlOrchestratorWorkflowConfig>('control_orchestrator_get_sequence', { sequenceName }),
+  controlOrchestratorListSequences: () =>
+    invoke<ControlOrchestratorWorkflowConfig[]>('control_orchestrator_list_sequences'),
+  controlOrchestratorDeleteSequence: (sequenceName: string) =>
+    invoke<void>('control_orchestrator_delete_sequence', { sequenceName }),
+  controlOrchestratorExecuteSequence: (request: ControlOrchestratorExecuteRequest) =>
+    invoke<ControlOrchestratorExecuteResponse>('control_orchestrator_execute_sequence', { request }),
 
   agcUpsertGroup: (config: AgcGroupConfig, createOnly: boolean) =>
     invoke<AgcGroupInfo>('agc_upsert_group', { config, createOnly }),

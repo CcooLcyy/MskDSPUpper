@@ -48,3 +48,7 @@ pub mod export_config_proto {
 pub mod mqtt_manager_proto {
     include!("proto_gen/mqtt_manager_proto.rs");
 }
+
+pub mod control_orchestrator_proto {
+    include!("proto_gen/control_orchestrator_proto.rs");
+}

@@ -1,0 +1,9 @@
+.orchestrator-page { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; gap: 8px; padding: 12px; overflow: auto; }
+.orchestrator-toolbar, .orchestrator-list { border-radius: 0; }
+.orchestrator-list { flex: 1 1 auto; min-height: 0; }
+.orchestrator-selected-row > td { background: rgba(22, 119, 255, 0.16) !important; }
+.orchestrator-detail { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-top: 12px; }
+.orchestrator-empty { padding: 40px; color: #888; text-align: center; }
+.orchestrator-step-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 12px; }
+.orchestrator-step-grid .ant-form-item { margin-bottom: 10px; }
+@media (max-width: 900px) { .orchestrator-step-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

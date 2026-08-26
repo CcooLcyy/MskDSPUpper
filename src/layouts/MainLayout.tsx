@@ -7,6 +7,7 @@ import {
   CalculatorOutlined,
   CloudDownloadOutlined,
   ControlOutlined,
+  OrderedListOutlined,
   DashboardOutlined,
   EllipsisOutlined,
   NodeIndexOutlined,
@@ -67,6 +68,11 @@ const menuItems = [
     label: '控制策略',
   },
   {
+    key: '/control-orchestrator',
+    icon: <OrderedListOutlined />,
+    label: '控制编排',
+  },
+  {
     key: '/security-config',
     icon: <SafetyCertificateOutlined />,
     label: '纵密配置',
@@ -124,7 +130,7 @@ const MainLayout: React.FC = () => {
   const isDataBusPage = location.pathname.startsWith('/data-bus');
   const isSoftwareUpdatePage = location.pathname.startsWith('/software-update');
   const suppressHeaderTitle = isProtocolPage || isControlPage;
-  const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage || isControlPage || location.pathname.startsWith('/calc') ? 'hidden' : 'auto';
+  const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage || isControlPage || location.pathname.startsWith('/calc') || location.pathname.startsWith('/control-orchestrator') ? 'hidden' : 'auto';
 
   return (
     <Layout style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>

@@ -13,6 +13,9 @@ import type {
   CalcItemInfo,
   CalcOperandSpec,
   CalcOperandStatus,
+  ControlOrchestratorExecuteRequest,
+  ControlOrchestratorExecuteResponse,
+  ControlOrchestratorWorkflowConfig,
   AvcDefaultPointInfo,
   AvcGroupConfig,
   AvcGroupInfo,
@@ -128,10 +131,11 @@ const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('AGC'),
   makeModuleInfo('AVC'),
   makeModuleInfo('Calc'),
+  makeModuleInfo('ControlOrchestrator'),
   makeModuleInfo('MQTTManager'),
 ];
 
-const runningModules = new Set(['ModuleManager', 'DataCenter', 'IEC104', 'IEC61850', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc']);
+const runningModules = new Set(['ModuleManager', 'DataCenter', 'IEC104', 'IEC61850', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc', 'ControlOrchestrator']);
 const iec104Links = new Map<string, Iec104LinkInfo>();
 const iec104Tables = new Map<string, Iec104PointTable>();
 const iec104Simulation = new Map<string, Iec104SimulationSnapshot>();
@@ -146,6 +150,7 @@ const agcGroups = new Map<string, AgcGroupInfo>();
 const agcTuningStatuses = new Map<string, AgcTuningStatus>();
 const avcGroups = new Map<string, AvcGroupInfo>();
 const calcGroups = new Map<string, CalcGroupInfo>();
+const controlOrchestratorSequences = new Map<string, ControlOrchestratorWorkflowConfig>();
 let routes: DcRoute[] = [];
 let modbusMqtt: ModbusMqttConfig | null = null;
 let dlt645Mqtt: Dlt645MqttConfig | null = null;
@@ -1418,6 +1423,39 @@ export const browserApi: typeof tauriApi = {
   calcDeleteGroup: async (groupName: string) => deleteByName(calcGroups, groupName),
   calcStartGroup: async (groupName: string) => setLinkState(calcGroups, groupName, 2),
   calcStopGroup: async (groupName: string) => setLinkState(calcGroups, groupName, 1),
+
+  controlOrchestratorUpsertSequence: async (config: ControlOrchestratorWorkflowConfig, createOnly: boolean) => {
+    if (createOnly && controlOrchestratorSequences.has(config.sequence_name)) {
+      throw new Error(`浏览器开发模式 mock 已存在: ${config.sequence_name}`);
+    }
+    const normalized = clone(config);
+    controlOrchestratorSequences.set(normalized.sequence_name, normalized);
+    return clone(normalized);
+  },
+  controlOrchestratorGetSequence: async (sequenceName: string) => {
+    const config = controlOrchestratorSequences.get(sequenceName);
+    if (!config) throw new Error(`浏览器开发模式 mock 未找到: ${sequenceName}`);
+    return clone(config);
+  },
+  controlOrchestratorListSequences: async () => clone([...controlOrchestratorSequences.values()]),
+  controlOrchestratorDeleteSequence: async (sequenceName: string) => {
+    if (!controlOrchestratorSequences.delete(sequenceName)) {
+      throw new Error(`浏览器开发模式 mock 未找到: ${sequenceName}`);
+    }
+  },
+  controlOrchestratorExecuteSequence: async (
+    request: ControlOrchestratorExecuteRequest,
+  ): Promise<ControlOrchestratorExecuteResponse> => {
+    const config = controlOrchestratorSequences.get(request.sequence_name);
+    if (!config) throw new Error(`浏览器开发模式 mock 未找到: ${request.sequence_name}`);
+    return {
+      accepted: true,
+      executed_steps: config.steps.length,
+      failed_step_index: 0,
+      failed_step_name: '',
+      reason: '浏览器开发模式 mock 已接受执行',
+    };
+  },
 
   agcUpsertGroup: async (config: AgcGroupConfig, createOnly: boolean) => {
     const previous = agcGroups.get(config.group_name);

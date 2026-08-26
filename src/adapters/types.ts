@@ -624,6 +624,36 @@ export interface DcRoute {
   dst: DcEndpoint;
 }
 
+export interface ControlOrchestratorCommandStep {
+  step_name: string;
+  source: DcEndpoint;
+  value: DcPointValue | null;
+  use_trigger_value: boolean;
+  timeout_ms: number;
+  delay_after_ms: number;
+}
+
+export interface ControlOrchestratorWorkflowConfig {
+  sequence_name: string;
+  steps: ControlOrchestratorCommandStep[];
+}
+
+export interface ControlOrchestratorExecuteRequest {
+  sequence_name: string;
+  trigger?: DcEndpoint | null;
+  trigger_value?: DcPointValue | null;
+  request_id?: string;
+  timeout_ms?: number;
+}
+
+export interface ControlOrchestratorExecuteResponse {
+  accepted: boolean;
+  executed_steps: number;
+  failed_step_index: number;
+  failed_step_name: string;
+  reason: string;
+}
+
 export type DcPointValue =
   | { type: 'Bool'; value: boolean }
   | { type: 'Int'; value: number }

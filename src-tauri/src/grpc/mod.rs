@@ -1,6 +1,7 @@
 pub mod agc;
 pub mod avc;
 pub mod calc;
+pub mod control_orchestrator;
 pub mod connection;
 pub mod data_center;
 pub mod dlt645;

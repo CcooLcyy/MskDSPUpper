@@ -1,5 +1,6 @@
 .iec61850-page { padding: 16px; gap: 16px; }
 .iec61850-toolbar, .iec61850-detail-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.iec61850-model-message { flex-shrink: 0; }
 .iec61850-shell { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 16px; min-height: 0; flex: 1; }
 .iec61850-list, .iec61850-detail { min-height: 0; overflow: hidden; }
 .iec61850-list .ant-card-body { padding: 8px; overflow: auto; }
@@ -7,6 +8,8 @@
 .iec61850-list-item:hover, .iec61850-list-item.selected { background: #1d3b56; }
 .iec61850-empty { display: flex; min-height: 180px; align-items: center; justify-content: center; color: #888; }
 .iec61850-empty-action { flex-direction: column; gap: 14px; }
+.iec61850-empty-content { width: min(100%, 920px); margin: 0 auto; }
+.iec61850-model-catalog { margin-top: 18px; text-align: left; }
 .iec61850-detail > .ant-card-body { height: 100%; overflow: auto; }
 .iec61850-config-grid { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(360px, 1.2fr); gap: 12px; }
 .iec61850-channel { display: grid; grid-template-columns: 82px 1fr 1fr 1fr 120px; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid #303238; }

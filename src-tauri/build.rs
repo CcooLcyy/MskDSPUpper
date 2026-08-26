@@ -32,6 +32,7 @@ fn main() {
         proto_dir.join("IEC61850.proto"),
         proto_dir.join("ExportConfig.proto"),
         proto_dir.join("MQTTManager.proto"),
+        proto_dir.join("ControlOrchestrator.proto"),
     ];
 
     for proto in &protos {
