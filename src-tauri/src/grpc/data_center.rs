@@ -6,7 +6,7 @@ use crate::proto::data_center_proto::{
     data_center_service_client::DataCenterServiceClient, ConnTags, ConnectionInfo, ConnectionKey,
     DeleteConnectionRequest, Empty, GetConnTagsRequest, GetLatestRequest, GetLatestResponse,
     GetOrCreateConnectionRequest, GetSourceLatestRequest, GetSourceLatestResponse,
-    ListConnectionsResponse, ListRoutesRequest, PointUpdate, SubscribeRequest,
+    ListConnectionsResponse, ListRoutesRequest, PointUpdate, SubscribeRequest, ThroughputSnapshot,
     UpsertConnTagsRequest,
 };
 
@@ -193,6 +193,13 @@ impl<'a> DataCenterClient<'a> {
         let channel = self.conn.module_channel("DataCenter").await?;
         let mut client = DataCenterServiceClient::new(channel);
         let resp = client.get_source_latest(request).await?;
+        Ok(resp.into_inner())
+    }
+
+    pub async fn get_throughput_snapshot(&self) -> Result<ThroughputSnapshot> {
+        let channel = self.conn.module_channel("DataCenter").await?;
+        let mut client = DataCenterServiceClient::new(channel);
+        let resp = client.get_throughput_snapshot(Empty {}).await?;
         Ok(resp.into_inner())
     }
 

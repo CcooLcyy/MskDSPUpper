@@ -41,6 +41,7 @@ const menuItems = [
     label: '协议接入',
     children: [
       { key: '/protocol/iec104', label: 'IEC104' },
+      { key: '/protocol/iec61850', label: 'IEC61850' },
       { key: '/protocol/modbus-rtu', label: 'Modbus RTU' },
       { key: '/protocol/dlt645', label: 'DLT645' },
     ],
@@ -118,6 +119,7 @@ const MainLayout: React.FC = () => {
       .find((child) => child.key === selectedKey)?.label ||
     'MskDSP';
   const isProtocolPage = location.pathname.startsWith('/protocol/');
+  const isIec61850Page = location.pathname === '/protocol/iec61850';
   const isControlPage = location.pathname.startsWith('/control');
   const isDataBusPage = location.pathname.startsWith('/data-bus');
   const isSoftwareUpdatePage = location.pathname.startsWith('/software-update');
@@ -184,7 +186,7 @@ const MainLayout: React.FC = () => {
                 {currentLabel}
               </Text>
             ) : null}
-            {isProtocolPage ? <ProtocolHeaderViewSwitcher /> : null}
+            {isProtocolPage && !isIec61850Page ? <ProtocolHeaderViewSwitcher /> : null}
             {isControlPage ? <ControlHeaderViewSwitcher /> : null}
             {isDataBusPage ? <DataBusHeaderViewSwitcher /> : null}
             {isSoftwareUpdatePage ? <SoftwareUpdateHeaderViewSwitcher /> : null}

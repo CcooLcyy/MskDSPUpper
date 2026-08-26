@@ -44,6 +44,8 @@ export type AppUpdateStatusKind =
   | 'checking'
   | 'up-to-date'
   | 'available'
+  | 'downloading'
+  | 'ready-to-install'
   | 'installing'
   | 'ready-to-restart'
   | 'error';
@@ -290,6 +292,134 @@ export interface Iec104PointTable {
   points: Iec104Point[];
 }
 
+export interface Iec61850ModelSummary {
+  model_name: string;
+  source_name: string;
+  document_kind: number;
+  source_checksum: string;
+  ied_count: number;
+  logical_node_count: number;
+  data_attribute_count: number;
+  data_set_count: number;
+  report_control_count: number;
+  gse_control_count: number;
+  sampled_value_control_count: number;
+  external_reference_count: number;
+}
+
+export interface Iec61850ValidationIssue {
+  severity: number;
+  code: string;
+  path: string;
+  message: string;
+}
+
+export interface Iec61850ImportResult {
+  summary: Iec61850ModelSummary | null;
+  issues: Iec61850ValidationIssue[];
+}
+
+export interface Iec61850NetworkChannelConfig {
+  channel: number;
+  enabled: boolean;
+  interface_name: string;
+  subnetwork_name: string;
+  local_ip: string;
+  remote_ip: string;
+  remote_port: number;
+}
+
+export interface Iec61850ProtectionRule {
+  rule_id: string;
+  conditions: Array<Record<string, unknown>>;
+  interlock_signal_ids: number[];
+  output_subscription_id: number;
+  assert_values: Array<Record<string, unknown>>;
+  release_values: Array<Record<string, unknown>>;
+  assert_delay_ms: number;
+  release_delay_ms: number;
+  output_control_ref: string;
+  interlock_signals: Array<Record<string, unknown>>;
+}
+
+export interface Iec61850IedConfig {
+  conn_name: string;
+  model_name: string;
+  ied_name: string;
+  access_point: string;
+  channels: Iec61850NetworkChannelConfig[];
+  enable_mms: boolean;
+  enable_goose: boolean;
+  enable_sv: boolean;
+  auto_start: boolean;
+  mms_event_queue_capacity: number;
+  publish_batch_size: number;
+  publish_batch_window_ms: number;
+  protection_rules: Iec61850ProtectionRule[];
+  nominal_frequency_hz: number;
+  realtime_cpu_indices: number[];
+  realtime_scheduling: number;
+  realtime_priority: number;
+  realtime_failure_mode: number;
+}
+
+export interface Iec61850ChannelInfo {
+  config: Iec61850NetworkChannelConfig | null;
+  state: number;
+  last_error: string;
+}
+
+export interface Iec61850IedInfo {
+  config: Iec61850IedConfig | null;
+  conn_id: number;
+  state: number;
+  active_channel: number;
+  channels: Iec61850ChannelInfo[];
+  last_error: string;
+  data_center_available: boolean;
+}
+
+export interface Iec61850PointMapping {
+  tag: string;
+  data_ref: string;
+  fc: number;
+  source: number;
+  value_type: number;
+  scale: number;
+  offset: number;
+  deadband: number;
+}
+
+export interface Iec61850PointMappings {
+  conn_name: string;
+  points: Iec61850PointMapping[];
+}
+
+export interface Iec61850RuntimeStatistics {
+  conn_name: string;
+  mms_reports_received: number;
+  mms_events_dropped: number;
+  mms_queue_high_watermark: number;
+  data_center_batches_published: number;
+  data_center_publish_failures: number;
+  goose_frames_received: number;
+  goose_frames_sent: number;
+  goose_frames_invalid: number;
+  goose_timeouts: number;
+  sv_frames_received: number;
+  sv_frames_invalid: number;
+  sv_samples_dropped: number;
+  reconnect_count: number;
+  last_event_ts_ms: number;
+  mms_values_unmapped: number;
+  mms_values_type_mismatch: number;
+  mms_values_invalid: number;
+  mms_values_deadband_filtered: number;
+  mms_values_oversized: number;
+  mms_reports_oversized: number;
+  mms_queue_bytes_high_watermark: number;
+}
+
 export interface Iec104SimulationPoint {
   tag: string;
   point_type: number;
@@ -518,6 +648,22 @@ export interface DcSourcePointUpdate {
   ts_ms: number;
   quality: number;
   sequence: number;
+}
+
+export type DataBusThroughputSource = 'backend' | 'browser-demo' | 'unavailable';
+
+export interface DataBusThroughputSample {
+  timestamp_ms: number;
+  routed_points_per_second: number;
+}
+
+export interface DataBusThroughputSnapshot {
+  source: DataBusThroughputSource;
+  process_start_time_ms: number | null;
+  samples: DataBusThroughputSample[];
+  current_points_per_second: number;
+  peak_points_per_second: number;
+  updated_at_ms: number | null;
 }
 
 export interface CalcTypedConstant {

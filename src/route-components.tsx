@@ -3,6 +3,7 @@ import { Suspense, lazy, type ReactNode } from 'react';
 export const OverviewPage = lazy(() => import('./pages/Overview'));
 export const ModuleOpsPage = lazy(() => import('./pages/ModuleOps'));
 export const IEC104Page = lazy(() => import('./pages/IEC104'));
+export const IEC61850Page = lazy(() => import('./pages/IEC61850'));
 export const ModbusRTUPage = lazy(() => import('./pages/ModbusRTU'));
 export const DLT645Page = lazy(() => import('./pages/DLT645'));
 export const DataBusPage = lazy(() => import('./pages/DataBus'));

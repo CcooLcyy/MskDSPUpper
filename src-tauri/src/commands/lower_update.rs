@@ -1322,8 +1322,40 @@ fn replace_cache_metadata_file(source: &Path, destination: &Path) -> io::Result<
     std_fs::rename(source, destination)
 }
 
+#[cfg(not(target_os = "windows"))]
+fn replace_downloaded_package(source: &Path, destination: &Path) -> io::Result<()> {
+    std_fs::rename(source, destination)
+}
+
 #[cfg(target_os = "windows")]
 fn replace_cache_metadata_file(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn replace_downloaded_package(source: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -1956,15 +1988,12 @@ pub async fn download_lower_update(
                 });
             }
 
-            tracing::error!(
+            tracing::warn!(
                 operation = "download",
                 package = %manifest.asset.name,
                 cache_path = %output_path.display(),
-                "下位机更新包缓存校验失效，将重新下载"
+                "下位机更新包缓存与当前清单不匹配，将下载新版本并在校验通过后替换"
             );
-            fs::remove_file(&output_path)
-                .await
-                .map_err(|e| format!("移除旧的下位机更新包失败: {e}"))?;
         } else if output_path.exists() {
             return Err("下位机更新缓存路径已存在但不是文件".into());
         }
@@ -2038,9 +2067,14 @@ pub async fn download_lower_update(
             ));
         }
 
-        fs::rename(&partial_path, &output_path)
-            .await
-            .map_err(|e| format!("保存下位机更新包失败: {e}"))?;
+        let package_source = partial_path.clone();
+        let package_destination = output_path.clone();
+        tokio::task::spawn_blocking(move || {
+            replace_downloaded_package(&package_source, &package_destination)
+        })
+        .await
+        .map_err(|e| format!("替换下位机更新包任务失败: {e}"))?
+        .map_err(|e| format!("保存下位机更新包失败: {e}"))?;
         let cleanup_dir = output_dir.clone();
         let keep_path = output_path.clone();
         run_blocking_cache_cleanup(move || {

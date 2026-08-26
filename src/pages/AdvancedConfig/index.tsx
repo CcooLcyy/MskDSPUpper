@@ -503,6 +503,10 @@ function getAppUpdateTagColor(kind: AppUpdateStatusKind): string {
       return 'success';
     case 'available':
       return 'gold';
+    case 'downloading':
+      return 'blue';
+    case 'ready-to-install':
+      return 'cyan';
     case 'installing':
       return 'blue';
     case 'ready-to-restart':
@@ -522,6 +526,10 @@ function getAppUpdateTagLabel(kind: AppUpdateStatusKind): string {
       return '已是最新';
     case 'available':
       return '发现更新';
+    case 'downloading':
+      return '下载中';
+    case 'ready-to-install':
+      return '待安装';
     case 'installing':
       return '安装中';
     case 'ready-to-restart':
@@ -605,7 +613,9 @@ const AdvancedConfigPage: React.FC = () => {
     availableUpdate,
     updateStatus,
     isCheckingUpdate,
+    isDownloadingUpdate,
     isInstallingUpdate,
+    isUpdateDownloaded,
     downloadedBytes: appDownloadedBytes,
     totalBytes: appTotalBytes,
     checkForUpdate,
@@ -696,9 +706,9 @@ const AdvancedConfigPage: React.FC = () => {
   const handleInstallAppUpdate = async (): Promise<void> => {
     try {
       const update = await installUpdate();
-      messageApi.success(`客户端 ${update.version} 已下载安装完成`);
+      messageApi.success(`客户端 ${update.version} 已安装完成`);
     } catch (error) {
-      messageApi.error(`安装更新失败: ${error}`);
+      messageApi.error(`安装客户端更新失败: ${error}`);
     }
   };
 
@@ -1360,7 +1370,7 @@ const AdvancedConfigPage: React.FC = () => {
         </Paragraph>
       ) : null}
 
-      {isInstallingUpdate && appTotalBytes !== null ? (
+      {isDownloadingUpdate && appTotalBytes !== null ? (
         <Progress percent={appDownloadPercent} size="small" status="active" style={{ marginBottom: 12 }} />
       ) : null}
 
@@ -1375,10 +1385,10 @@ const AdvancedConfigPage: React.FC = () => {
         <Button
           type="primary"
           onClick={() => void handleInstallAppUpdate()}
-          disabled={!availableUpdate}
+          disabled={!isUpdateDownloaded}
           loading={isInstallingUpdate}
         >
-          下载安装
+          安装更新
         </Button>
         <Button onClick={() => void handleRelaunchApp()} disabled={updateStatus.kind !== 'ready-to-restart'}>
           重启上位机

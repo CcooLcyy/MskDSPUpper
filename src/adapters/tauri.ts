@@ -19,6 +19,7 @@ import type {
   DcPointUpdate,
   DcSourcePointUpdate,
   DcRoute,
+  DataBusThroughputSnapshot,
   Dlt645Block,
   Dlt645LinkConfig,
   Dlt645LinkInfo,
@@ -33,6 +34,13 @@ import type {
   Iec104PointTable,
   Iec104SimulationSnapshot,
   Iec104SimulationGenerateOptions,
+  Iec61850IedConfig,
+  Iec61850IedInfo,
+  Iec61850ImportResult,
+  Iec61850ModelSummary,
+  Iec61850PointMapping,
+  Iec61850PointMappings,
+  Iec61850RuntimeStatistics,
   LowerUpdateChannel,
   LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
@@ -68,21 +76,27 @@ import { getLowerUpdateStaticBaseUrl } from './lower-update-source';
 type PendingAppUpdate = Awaited<ReturnType<typeof check>>;
 
 let pendingAppUpdate: PendingAppUpdate = null;
+let downloadedAppUpdate: PendingAppUpdate = null;
 const LOWER_UPDATE_DOWNLOAD_PROGRESS_EVENT = 'lower-update-download-progress';
 const LOWER_UPDATE_UPLOAD_PROGRESS_EVENT = 'lower-update-upload-progress';
 
 async function disposePendingAppUpdate() {
-  if (!pendingAppUpdate) {
+  const updates = [pendingAppUpdate, downloadedAppUpdate].filter(
+    (update, index, all): update is NonNullable<PendingAppUpdate> => Boolean(update) && all.indexOf(update) === index,
+  );
+  pendingAppUpdate = null;
+  downloadedAppUpdate = null;
+
+  if (updates.length === 0) {
     return;
   }
 
-  const update = pendingAppUpdate;
-  pendingAppUpdate = null;
-
-  try {
-    await update.close();
-  } catch {
-    // Best-effort resource cleanup for repeated checks.
+  for (const update of updates) {
+    try {
+      await update.close();
+    } catch {
+      // 更新资源清理失败不影响后续检查。
+    }
   }
 }
 
@@ -94,6 +108,60 @@ function toAppUpdateInfo(update: NonNullable<PendingAppUpdate>): AppUpdateInfo {
     body: update.body,
     rawJson: update.rawJson as Record<string, unknown>,
   };
+}
+
+async function downloadAppUpdate(
+  onEvent?: (event: AppUpdateDownloadEvent) => void,
+): Promise<AppUpdateInfo> {
+  const update = pendingAppUpdate ?? (await check());
+
+  if (!update) {
+    throw new Error('没有可下载的客户端更新');
+  }
+
+  pendingAppUpdate = update;
+  try {
+    await update.download((event) => {
+      onEvent?.(event as AppUpdateDownloadEvent);
+    });
+    downloadedAppUpdate = update;
+    return toAppUpdateInfo(update);
+  } catch (error) {
+    downloadedAppUpdate = null;
+    throw error;
+  }
+}
+
+async function installAppUpdate(): Promise<AppUpdateInfo> {
+  const update = downloadedAppUpdate;
+  if (!update) {
+    throw new Error('没有已下载的客户端更新包');
+  }
+
+  try {
+    await update.install();
+    return toAppUpdateInfo(update);
+  } finally {
+    if (pendingAppUpdate === update) {
+      pendingAppUpdate = null;
+    }
+    if (downloadedAppUpdate === update) {
+      downloadedAppUpdate = null;
+    }
+
+    try {
+      await update.close();
+    } catch {
+      // 安装可能触发进程退出，资源清理失败可忽略。
+    }
+  }
+}
+
+async function downloadAndInstallAppUpdate(
+  onEvent?: (event: AppUpdateDownloadEvent) => void,
+): Promise<AppUpdateInfo> {
+  await downloadAppUpdate(onEvent);
+  return installAppUpdate();
 }
 
 export const api = {
@@ -125,35 +193,10 @@ export const api = {
 
     return update ? toAppUpdateInfo(update) : null;
   },
-  downloadAndInstallAppUpdate: async (
-    onEvent?: (event: AppUpdateDownloadEvent) => void,
-  ): Promise<AppUpdateInfo> => {
-    const update = pendingAppUpdate ?? (await check());
-
-    if (!update) {
-      throw new Error('No update available');
-    }
-
-    pendingAppUpdate = update;
-
-    try {
-      await update.downloadAndInstall((event) => {
-        onEvent?.(event as AppUpdateDownloadEvent);
-      });
-
-      return toAppUpdateInfo(update);
-    } finally {
-      if (pendingAppUpdate === update) {
-        pendingAppUpdate = null;
-      }
-
-      try {
-        await update.close();
-      } catch {
-        // Windows install may terminate the app mid-flow, so cleanup is best-effort.
-      }
-    }
-  },
+  downloadAppUpdate,
+  installAppUpdate,
+  // 保留旧适配器接口，供外部集成在升级期间平滑迁移。
+  downloadAndInstallAppUpdate,
   relaunchApp: () => relaunch(),
   disposePendingAppUpdate,
   checkLowerUpdate: (channel: LowerUpdateChannel) =>
@@ -238,6 +281,35 @@ export const api = {
   iec104ClearSimulationValues: (connName: string) =>
     invoke<void>('iec104_clear_simulation_values', { connName }),
 
+  iec61850ImportScl: (modelName: string, sourceName: string, content: number[], validateOnly: boolean, replace: boolean) =>
+    invoke<Iec61850ImportResult>('iec61850_import_scl', {
+      modelName,
+      sourceName,
+      content,
+      validateOnly,
+      replace,
+    }),
+  iec61850ListModels: () => invoke<Iec61850ModelSummary[]>('iec61850_list_models'),
+  iec61850DeleteModel: (modelName: string) =>
+    invoke<void>('iec61850_delete_model', { modelName }),
+  iec61850UpsertIed: (config: Iec61850IedConfig, createOnly: boolean) =>
+    invoke<Iec61850IedInfo>('iec61850_upsert_ied', { config, createOnly }),
+  iec61850GetIed: (connName: string) =>
+    invoke<Iec61850IedInfo>('iec61850_get_ied', { connName }),
+  iec61850ListIeds: () => invoke<Iec61850IedInfo[]>('iec61850_list_ieds'),
+  iec61850DeleteIed: (connName: string) =>
+    invoke<void>('iec61850_delete_ied', { connName }),
+  iec61850StartIed: (connName: string) =>
+    invoke<void>('iec61850_start_ied', { connName }),
+  iec61850StopIed: (connName: string) =>
+    invoke<void>('iec61850_stop_ied', { connName }),
+  iec61850UpsertPointMappings: (connName: string, points: Iec61850PointMapping[], replace: boolean) =>
+    invoke<void>('iec61850_upsert_point_mappings', { connName, points, replace }),
+  iec61850GetPointMappings: (connName: string) =>
+    invoke<Iec61850PointMappings>('iec61850_get_point_mappings', { connName }),
+  iec61850GetRuntimeStatistics: (connName: string) =>
+    invoke<Iec61850RuntimeStatistics>('iec61850_get_runtime_statistics', { connName }),
+
   modbusRtuUpdateConfig: (mqtt: ModbusMqttConfig) =>
     invoke<ModbusUpdateConfigResponse>('modbus_rtu_update_config', { mqtt }),
   modbusRtuUpsertLink: (config: ModbusLinkConfig, createOnly: boolean) =>
@@ -295,6 +367,19 @@ export const api = {
     invoke<DcPointUpdate[]>('dc_get_latest', { connId, tags }),
   dcGetSourceLatest: (connId: number, tags: string[]) =>
     invoke<DcSourcePointUpdate[]>('dc_get_source_latest', { connId, tags }),
+  getDataBusThroughputSnapshot: async (): Promise<DataBusThroughputSnapshot> => {
+    const snapshot = await invoke<Omit<DataBusThroughputSnapshot, 'source'>>(
+      'dc_get_throughput_snapshot',
+    );
+    return {
+      source: 'backend',
+      process_start_time_ms: snapshot.process_start_time_ms > 0 ? snapshot.process_start_time_ms : null,
+      samples: snapshot.samples,
+      current_points_per_second: snapshot.current_points_per_second,
+      peak_points_per_second: snapshot.peak_points_per_second,
+      updated_at_ms: snapshot.updated_at_ms > 0 ? snapshot.updated_at_ms : null,
+    };
+  },
 
   calcUpsertGroup: (config: CalcGroupConfig, createOnly: boolean) =>
     invoke<CalcGroupInfo>('calc_upsert_group', { config, createOnly }),

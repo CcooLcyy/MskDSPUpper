@@ -22,6 +22,8 @@ import type {
   DcSourcePointUpdate,
   DcPointValue,
   DcRoute,
+  DataBusThroughputSample,
+  DataBusThroughputSnapshot,
   Dlt645Block,
   Dlt645LinkConfig,
   Dlt645LinkInfo,
@@ -36,6 +38,13 @@ import type {
   Iec104PointTable,
   Iec104SimulationSnapshot,
   Iec104SimulationGenerateOptions,
+  Iec61850IedConfig,
+  Iec61850IedInfo,
+  Iec61850ImportResult,
+  Iec61850ModelSummary,
+  Iec61850PointMapping,
+  Iec61850PointMappings,
+  Iec61850RuntimeStatistics,
   LowerUpdateChannel,
   LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
@@ -64,6 +73,7 @@ import { buildLowerUpdateLatestUrl } from './lower-update-source';
 
 const DEFAULT_MANAGER_ADDR = '127.0.0.1:17000';
 const BROWSER_SETTINGS_KEY = 'mskdsp_browser_app_settings_v1';
+const BROWSER_THROUGHPUT_HISTORY_SIZE = 48;
 
 // IEC104 LinkState values mirror IEC104.proto.
 const IEC104_LINK_STATE = {
@@ -75,6 +85,8 @@ const IEC104_LINK_STATE = {
 
 let managerAddr = DEFAULT_MANAGER_ADDR;
 let nextConnId = 100;
+const browserThroughputSamples: DataBusThroughputSample[] = [];
+const browserThroughputProcessStartTime = Date.now();
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
@@ -110,6 +122,7 @@ const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('ModuleManager'),
   makeModuleInfo('DataCenter'),
   makeModuleInfo('IEC104'),
+  makeModuleInfo('IEC61850'),
   makeModuleInfo('ModbusRTU'),
   makeModuleInfo('DLT645'),
   makeModuleInfo('AGC'),
@@ -118,7 +131,7 @@ const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('MQTTManager'),
 ];
 
-const runningModules = new Set(['ModuleManager', 'DataCenter', 'IEC104', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc']);
+const runningModules = new Set(['ModuleManager', 'DataCenter', 'IEC104', 'IEC61850', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc']);
 const iec104Links = new Map<string, Iec104LinkInfo>();
 const iec104Tables = new Map<string, Iec104PointTable>();
 const iec104Simulation = new Map<string, Iec104SimulationSnapshot>();
@@ -126,6 +139,9 @@ const modbusLinks = new Map<string, ModbusLinkInfo>();
 const modbusTables = new Map<string, ModbusPointTable>();
 const dlt645Links = new Map<string, Dlt645LinkInfo>();
 const dlt645Tables = new Map<string, Dlt645PointTable>();
+const iec61850Models = new Map<string, Iec61850ModelSummary>();
+const iec61850Ieds = new Map<string, Iec61850IedInfo>();
+const iec61850Mappings = new Map<string, Iec61850PointMappings>();
 const agcGroups = new Map<string, AgcGroupInfo>();
 const agcTuningStatuses = new Map<string, AgcTuningStatus>();
 const avcGroups = new Map<string, AvcGroupInfo>();
@@ -260,6 +276,7 @@ function connectionInfo(moduleName: string, connName: string, connId: number): D
 function listConnections(): DcConnectionInfo[] {
   return [
     ...[...iec104Links.values()].map((item) => connectionInfo('IEC104', item.config?.conn_name ?? '', item.conn_id)),
+    ...[...iec61850Ieds.values()].map((item) => connectionInfo('IEC61850', item.config?.conn_name ?? '', item.conn_id)),
     ...[...modbusLinks.values()].map((item) => connectionInfo('ModbusRTU', item.config?.conn_name ?? '', item.conn_id)),
     ...[...dlt645Links.values()].map((item) => connectionInfo('DLT645', item.config?.conn_name ?? '', item.conn_id)),
     ...[...agcGroups.values()].map((item) => connectionInfo('AGC', item.config?.group_name ?? '', item.conn_id)),
@@ -290,6 +307,11 @@ function tagsForConnection(connId: number): string[] {
   const modbus = [...modbusLinks.values()].find((item) => item.conn_id === connId);
   if (modbus?.config) {
     return (modbusTables.get(modbus.config.conn_name)?.points ?? []).map((item) => item.tag);
+  }
+
+  const iec61850 = [...iec61850Ieds.values()].find((item) => item.conn_id === connId);
+  if (iec61850?.config) {
+    return (iec61850Mappings.get(iec61850.config.conn_name)?.points ?? []).map((item) => item.tag);
   }
 
   const dlt645 = [...dlt645Links.values()].find((item) => item.conn_id === connId);
@@ -376,6 +398,52 @@ function getSourceLatestUpdates(connId: number, tags: string[]): Promise<DcSourc
     quality: 0,
     sequence: index + 1,
   })));
+}
+
+function getBrowserThroughputValue(timestamp: number): number {
+  const seconds = timestamp / 1000;
+  return Math.max(
+    0,
+    Math.round(110 + Math.sin(seconds / 7) * 16 + Math.sin(seconds / 2.4) * 5),
+  );
+}
+
+function seedBrowserThroughputSamples(timestamp: number): void {
+  if (browserThroughputSamples.length > 0) {
+    return;
+  }
+
+  for (let index = BROWSER_THROUGHPUT_HISTORY_SIZE; index >= 1; index -= 1) {
+    const sampleTimestamp = timestamp - index * 1000;
+    browserThroughputSamples.push({
+      timestamp_ms: sampleTimestamp,
+      routed_points_per_second: getBrowserThroughputValue(sampleTimestamp),
+    });
+  }
+}
+
+function getBrowserThroughputSnapshot(): Promise<DataBusThroughputSnapshot> {
+  const timestamp = Date.now();
+  seedBrowserThroughputSamples(timestamp);
+  const routedPointsPerSecond = getBrowserThroughputValue(timestamp);
+  browserThroughputSamples.push({
+    timestamp_ms: timestamp,
+    routed_points_per_second: routedPointsPerSecond,
+  });
+
+  if (browserThroughputSamples.length > 60) {
+    browserThroughputSamples.shift();
+  }
+
+  const samples = clone(browserThroughputSamples);
+  return Promise.resolve({
+    source: 'browser-demo',
+    process_start_time_ms: browserThroughputProcessStartTime,
+    samples,
+    current_points_per_second: routedPointsPerSecond,
+    peak_points_per_second: Math.max(...samples.map((sample) => sample.routed_points_per_second)),
+    updated_at_ms: timestamp,
+  });
 }
 
 function makeDefaultAgcPoints(): AgcDefaultPointInfo[] {
@@ -928,9 +996,15 @@ export const browserApi: typeof tauriApi = {
 
   getAppVersion: async () => '0.5.0-browser-dev',
   checkAppUpdate: async () => null,
-  downloadAndInstallAppUpdate: async (onEvent?: (event: AppUpdateDownloadEvent) => void) => {
+  downloadAppUpdate: async (onEvent?: (event: AppUpdateDownloadEvent) => void) => {
     onEvent?.({ event: 'Started', data: { contentLength: 0 } });
     onEvent?.({ event: 'Finished' });
+    throw new Error('浏览器开发模式不支持下载客户端更新');
+  },
+  installAppUpdate: async () => {
+    throw new Error('浏览器开发模式不支持安装客户端更新');
+  },
+  downloadAndInstallAppUpdate: async () => {
     throw new Error('浏览器开发模式不支持下载安装客户端更新');
   },
   relaunchApp: async () => {},
@@ -1166,6 +1240,52 @@ export const browserApi: typeof tauriApi = {
   },
   iec104ClearSimulationValues: async (connName: string) => { iec104Simulation.delete(connName); },
 
+  iec61850ImportScl: async (modelName: string, sourceName: string, content: number[], validateOnly: boolean, replace: boolean): Promise<Iec61850ImportResult> => {
+    if (!modelName.trim() || content.length === 0) throw new Error('浏览器开发模式 mock：模型名称和 SCL 文件内容不能为空');
+    const summary: Iec61850ModelSummary = {
+      model_name: modelName.trim(), source_name: sourceName || modelName, document_kind: 1,
+      source_checksum: `browser-${content.length.toString(16)}`, ied_count: 1, logical_node_count: 12,
+      data_attribute_count: 96, data_set_count: 4, report_control_count: 3, gse_control_count: 2,
+      sampled_value_control_count: 1, external_reference_count: 8,
+    };
+    if (!validateOnly) {
+      if (!replace && iec61850Models.has(summary.model_name)) throw new Error(`浏览器开发模式 mock 已存在模型: ${summary.model_name}`);
+      iec61850Models.set(summary.model_name, clone(summary));
+    }
+    return { summary: clone(summary), issues: [] };
+  },
+  iec61850ListModels: async () => clone([...iec61850Models.values()]),
+  iec61850DeleteModel: async (modelName: string) => {
+    if ([...iec61850Ieds.values()].some((ied) => ied.config?.model_name === modelName)) throw new Error('模型仍被 IED 配置引用，无法删除');
+    iec61850Models.delete(modelName);
+  },
+  iec61850UpsertIed: async (config: Iec61850IedConfig, createOnly: boolean): Promise<Iec61850IedInfo> => {
+    if (!config.conn_name.trim() || !config.model_name.trim() || !config.ied_name.trim()) throw new Error('IED 连接名、模型名和 IED 名称不能为空');
+    if (!iec61850Models.has(config.model_name)) throw new Error(`浏览器开发模式 mock 未找到模型: ${config.model_name}`);
+    return upsertByName(iec61850Ieds, config.conn_name, createOnly, (connId, previous) => ({
+      config: clone(config), conn_id: connId, state: previous?.state ?? 1, active_channel: previous?.active_channel ?? 0,
+      channels: config.channels.map((item) => ({ config: clone(item), state: item.enabled ? 2 : 1, last_error: '' })),
+      last_error: '', data_center_available: true,
+    }));
+  },
+  iec61850GetIed: async (connName: string) => {
+    const value = iec61850Ieds.get(connName); if (!value) throw new Error(`浏览器开发模式 mock 未找到 IED: ${connName}`); return clone(value);
+  },
+  iec61850ListIeds: async () => clone([...iec61850Ieds.values()]),
+  iec61850DeleteIed: async (connName: string) => { iec61850Ieds.delete(connName); iec61850Mappings.delete(connName); },
+  iec61850StartIed: async (connName: string) => setLinkState(iec61850Ieds, connName, 3),
+  iec61850StopIed: async (connName: string) => setLinkState(iec61850Ieds, connName, 1),
+  iec61850UpsertPointMappings: async (connName: string, points: Iec61850PointMapping[], replace: boolean) => {
+    if (!iec61850Ieds.has(connName)) throw new Error(`浏览器开发模式 mock 未找到 IED: ${connName}`);
+    const previous = iec61850Mappings.get(connName)?.points ?? [];
+    iec61850Mappings.set(connName, { conn_name: connName, points: clone(replace ? points : mergeByTag(previous, points)) });
+  },
+  iec61850GetPointMappings: async (connName: string) => clone(iec61850Mappings.get(connName) ?? { conn_name: connName, points: [] }),
+  iec61850GetRuntimeStatistics: async (connName: string): Promise<Iec61850RuntimeStatistics> => {
+    if (!iec61850Ieds.has(connName)) throw new Error(`浏览器开发模式 mock 未找到 IED: ${connName}`);
+    return { conn_name: connName, mms_reports_received: 1248, mms_events_dropped: 0, mms_queue_high_watermark: 18, data_center_batches_published: 642, data_center_publish_failures: 0, goose_frames_received: 320, goose_frames_sent: 24, goose_frames_invalid: 0, goose_timeouts: 0, sv_frames_received: 12000, sv_frames_invalid: 0, sv_samples_dropped: 0, reconnect_count: 2, last_event_ts_ms: Date.now(), mms_values_unmapped: 3, mms_values_type_mismatch: 0, mms_values_invalid: 0, mms_values_deadband_filtered: 56, mms_values_oversized: 0, mms_reports_oversized: 0, mms_queue_bytes_high_watermark: 4096 };
+  },
+
   modbusRtuUpdateConfig: async (mqtt: ModbusMqttConfig): Promise<ModbusUpdateConfigResponse> => {
     modbusMqtt = clone(mqtt);
     return { ok: true, message: '浏览器开发模式 mock 已保存 ModbusRTU MQTT 配置' };
@@ -1264,6 +1384,7 @@ export const browserApi: typeof tauriApi = {
   },
   dcGetLatest: getLatestUpdates,
   dcGetSourceLatest: getSourceLatestUpdates,
+  getDataBusThroughputSnapshot: getBrowserThroughputSnapshot,
 
   calcUpsertGroup: async (config: CalcGroupConfig, createOnly: boolean) => {
     const previous = calcGroups.get(config.group_name);

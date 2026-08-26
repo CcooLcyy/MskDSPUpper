@@ -8,7 +8,7 @@ use crate::grpc::data_center::{
 };
 use crate::proto::data_center_proto::{
     point_value, ConnectionInfo, GetLatestRequest, GetSourceLatestRequest, ListRoutesRequest,
-    PointUpdate, SourcePointUpdate,
+    PointUpdate, SourcePointUpdate, ThroughputSnapshot,
 };
 use crate::state::AppState;
 
@@ -63,6 +63,21 @@ pub struct SourcePointUpdateDto {
     pub ts_ms: i64,
     pub quality: i32,
     pub sequence: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ThroughputSampleDto {
+    pub timestamp_ms: i64,
+    pub routed_points_per_second: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ThroughputSnapshotDto {
+    pub process_start_time_ms: i64,
+    pub samples: Vec<ThroughputSampleDto>,
+    pub current_points_per_second: u64,
+    pub peak_points_per_second: u64,
+    pub updated_at_ms: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -179,6 +194,25 @@ impl From<SourcePointUpdate> for SourcePointUpdateDto {
             ts_ms: update.ts_ms,
             quality: update.quality,
             sequence: update.sequence,
+        }
+    }
+}
+
+impl From<ThroughputSnapshot> for ThroughputSnapshotDto {
+    fn from(snapshot: ThroughputSnapshot) -> Self {
+        Self {
+            process_start_time_ms: snapshot.process_start_time_ms,
+            samples: snapshot
+                .samples
+                .into_iter()
+                .map(|sample| ThroughputSampleDto {
+                    timestamp_ms: sample.timestamp_ms,
+                    routed_points_per_second: sample.routed_points_per_second,
+                })
+                .collect(),
+            current_points_per_second: snapshot.current_points_per_second,
+            peak_points_per_second: snapshot.peak_points_per_second,
+            updated_at_ms: snapshot.updated_at_ms,
         }
     }
 }
@@ -358,4 +392,22 @@ pub async fn dc_get_source_latest(
         .into_iter()
         .map(SourcePointUpdateDto::from)
         .collect())
+}
+
+#[tauri::command]
+pub async fn dc_get_throughput_snapshot(
+    state: State<'_, AppState>,
+) -> Result<ThroughputSnapshotDto, String> {
+    let client = DataCenterClient::new(&state.conn_manager);
+    let snapshot = client.get_throughput_snapshot().await.map_err(|error| {
+        tracing::error!(error = %error, "获取 DataCenter 吞吐量快照失败");
+        error.to_string()
+    })?;
+    tracing::debug!(
+        samples = snapshot.samples.len(),
+        current_points_per_second = snapshot.current_points_per_second,
+        peak_points_per_second = snapshot.peak_points_per_second,
+        "获取 DataCenter 吞吐量快照完成"
+    );
+    Ok(snapshot.into())
 }

@@ -10,7 +10,9 @@ export interface AppUpdateContextValue {
   availableUpdate: AppUpdateInfo | null;
   updateStatus: AppUpdateStatus;
   isCheckingUpdate: boolean;
+  isDownloadingUpdate: boolean;
   isInstallingUpdate: boolean;
+  isUpdateDownloaded: boolean;
   downloadedBytes: number;
   totalBytes: number | null;
   hasAvailableUpdate: boolean;

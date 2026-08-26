@@ -47,6 +47,19 @@ export type {
   Iec104SimulationBoolMode,
 } from './types';
 export type {
+  Iec61850ChannelInfo,
+  Iec61850IedConfig,
+  Iec61850IedInfo,
+  Iec61850ImportResult,
+  Iec61850ModelSummary,
+  Iec61850NetworkChannelConfig,
+  Iec61850PointMapping,
+  Iec61850PointMappings,
+  Iec61850ProtectionRule,
+  Iec61850RuntimeStatistics,
+  Iec61850ValidationIssue,
+} from './types';
+export type {
   ModbusLinkConfig,
   ModbusLinkInfo,
   ModbusMqttConfig,
@@ -75,6 +88,9 @@ export type {
   DcSourcePointUpdate,
   DcPointValue,
   DcRoute,
+  DataBusThroughputSample,
+  DataBusThroughputSnapshot,
+  DataBusThroughputSource,
 } from './types';
 export type {
   CalcGroupConfig,

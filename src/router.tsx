@@ -7,6 +7,7 @@ import {
   DataBusPage,
   DLT645Page,
   IEC104Page,
+  IEC61850Page,
   ModbusRTUPage,
   ModuleOpsPage,
   OverviewPage,
@@ -52,6 +53,14 @@ export const router = createBrowserRouter([
         element: (
           <RouteSuspense>
             <IEC104Page />
+          </RouteSuspense>
+        ),
+      },
+      {
+        path: 'protocol/iec61850',
+        element: (
+          <RouteSuspense>
+            <IEC61850Page />
           </RouteSuspense>
         ),
       },
