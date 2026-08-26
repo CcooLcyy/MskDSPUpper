@@ -31,12 +31,14 @@ test('upper updater separates download from install and keeps the 30 second time
 test('lower updater auto coordinator downloads every channel without deployment', () => {
   const coordinator = source('src/components/lower-update/LowerUpdateAutoProvider.tsx');
   const design = source('doc/软件自动更新方案.md');
+  const context = source('src/components/lower-update/lower-update-auto-context.ts');
 
   assert.match(coordinator, /30_000/);
-  for (const channel of ['stable', 'beta', 'nightly', 'ci']) {
-    assert.match(coordinator, new RegExp(`checkLowerUpdate\\(['"]${channel}['"]\\)`));
-    assert.match(coordinator, new RegExp(`listCachedLowerUpdates\\(['"]${channel}['"]\\)`));
-  }
+  assert.match(coordinator, /const LOWER_UPDATE_CHANNELS[^\n]*stable[^\n]*beta[^\n]*nightly[^\n]*ci/);
+  assert.match(coordinator, /api\.checkLowerUpdate\(channel\)/);
+  assert.match(coordinator, /api\.listCachedLowerUpdates\(channel\)/);
+  assert.match(coordinator, /api\.downloadLowerUpdate\(manifest/);
+  assert.match(context, /channels: Record<LowerUpdateChannel, LowerUpdateAutoChannelStatus>/);
   assert.match(design, /`stable`、`beta`、`nightly`、`ci` 四个通道/);
   assert.match(coordinator, /downloadLowerUpdate/);
   assert.doesNotMatch(coordinator, /uploadLowerUpdatePackage/);

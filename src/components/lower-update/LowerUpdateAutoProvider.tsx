@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { api } from '../../adapters';
 import type {
   LowerUpdateCachedPackage,
+  LowerUpdateChannel,
   LowerUpdateManifest,
 } from '../../adapters';
 import {
@@ -12,6 +13,7 @@ import {
 import type { LowerUpdateAutoStatus } from './lower-update-auto-context';
 
 const LOWER_UPDATE_CHECK_INTERVAL_MS = 30_000;
+const LOWER_UPDATE_CHANNELS: LowerUpdateChannel[] = ['stable', 'beta', 'nightly', 'ci'];
 
 function cacheKey(manifest: LowerUpdateManifest): string {
   return [
@@ -39,68 +41,76 @@ function matchesManifest(
 export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<LowerUpdateAutoStatus>(initialLowerUpdateAutoStatus);
   const mountedRef = useRef(true);
-  const runningPromiseRef = useRef<Promise<void> | null>(null);
-  const downloadedManifestKeyRef = useRef<string | null>(null);
+  const runningPromiseRef = useRef<Partial<Record<LowerUpdateChannel, Promise<void>>>>({});
+  const downloadedManifestKeyRef = useRef<Partial<Record<LowerUpdateChannel, string>>>({});
 
-  const runCheckAndDownload = useCallback(async (): Promise<void> => {
-    if (runningPromiseRef.current) {
-      return runningPromiseRef.current;
+  const updateChannelStatus = useCallback(
+    (channel: LowerUpdateChannel, next: Partial<LowerUpdateAutoStatus['channels'][LowerUpdateChannel]>) => {
+      if (!mountedRef.current) {
+        return;
+      }
+      setStatus((previous) => ({
+        channels: {
+          ...previous.channels,
+          [channel]: {
+            ...previous.channels[channel],
+            ...next,
+          },
+        },
+      }));
+    },
+    [],
+  );
+
+  const runChannelCheckAndDownload = useCallback(async (channel: LowerUpdateChannel): Promise<void> => {
+    const runningPromise = runningPromiseRef.current[channel];
+    if (runningPromise) {
+      return runningPromise;
     }
 
     const promise = (async () => {
       const checkedAt = Date.now();
-      if (mountedRef.current) {
-        setStatus((previous) => ({
-          ...previous,
-          kind: 'checking',
-          message: '正在检查下位机更新...',
-          progress: null,
-        }));
-      }
+      updateChannelStatus(channel, {
+        kind: 'checking',
+        message: `正在检查下位机 ${channel} 通道更新...`,
+        progress: null,
+      });
 
       try {
-        const manifest = await api.checkLowerUpdate('stable');
+        const manifest = await api.checkLowerUpdate(channel);
         const manifestKey = cacheKey(manifest);
 
-        const cachedPackages = await api.listCachedLowerUpdates('stable');
+        const cachedPackages = await api.listCachedLowerUpdates(channel);
         const cachedPackage = cachedPackages.find((item) => matchesManifest(manifest, item)) ?? null;
-        if (cachedPackage || downloadedManifestKeyRef.current === manifestKey) {
-          if (mountedRef.current) {
-            setStatus({
-              kind: 'cached',
-              message: `下位机 ${manifest.version} 已缓存到上位机，可手动下发`,
-              manifest,
-              cachedPackage,
-              progress: null,
-              lastCheckedAt: checkedAt,
-            });
-          }
+        if (cachedPackage || downloadedManifestKeyRef.current[channel] === manifestKey) {
+          updateChannelStatus(channel, {
+            kind: 'cached',
+            message: `下位机 ${channel} 通道 ${manifest.version} 已缓存到上位机，可手动下发`,
+            manifest,
+            cachedPackage,
+            progress: null,
+            lastCheckedAt: checkedAt,
+          });
           return;
         }
 
-        if (mountedRef.current) {
-          setStatus((previous) => ({
-            ...previous,
-            kind: 'available',
-            message: `发现下位机新版本 ${manifest.version}，准备自动下载`,
-            manifest,
-            cachedPackage: null,
-            progress: null,
-            lastCheckedAt: checkedAt,
-          }));
-        }
+        updateChannelStatus(channel, {
+          kind: 'available',
+          message: `发现下位机 ${channel} 通道新版本 ${manifest.version}，准备自动下载`,
+          manifest,
+          cachedPackage: null,
+          progress: null,
+          lastCheckedAt: checkedAt,
+        });
 
         const result = await api.downloadLowerUpdate(manifest, (progress) => {
-          if (mountedRef.current) {
-            setStatus((previous) => ({
-              ...previous,
-              kind: 'downloading',
-              message: `正在下载下位机 ${manifest.version}`,
-              manifest,
-              progress,
-              lastCheckedAt: checkedAt,
-            }));
-          }
+          updateChannelStatus(channel, {
+            kind: 'downloading',
+            message: `正在下载下位机 ${channel} 通道 ${manifest.version}`,
+            manifest,
+            progress,
+            lastCheckedAt: checkedAt,
+          });
         });
 
         const downloadedPackage: LowerUpdateCachedPackage = {
@@ -110,49 +120,48 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
           package_size: result.downloaded_bytes,
           sha256: result.sha256,
         };
-        downloadedManifestKeyRef.current = manifestKey;
-        if (mountedRef.current) {
-          setStatus({
-            kind: 'cached',
-            message: `下位机 ${manifest.version} 已缓存到上位机，可手动下发`,
-            manifest,
-            cachedPackage: downloadedPackage,
-            progress: null,
-            lastCheckedAt: checkedAt,
-          });
-        }
+        downloadedManifestKeyRef.current[channel] = manifestKey;
+        updateChannelStatus(channel, {
+          kind: 'cached',
+          message: `下位机 ${channel} 通道 ${manifest.version} 已缓存到上位机，可手动下发`,
+          manifest,
+          cachedPackage: downloadedPackage,
+          progress: null,
+          lastCheckedAt: checkedAt,
+        });
       } catch (error) {
-        if (mountedRef.current) {
-          setStatus((previous) => ({
-            ...previous,
-            kind: 'error',
-            message: `下位机自动更新失败: ${String(error)}`,
-            progress: null,
-            lastCheckedAt: checkedAt,
-          }));
-        }
+        updateChannelStatus(channel, {
+          kind: 'error',
+          message: `下位机 ${channel} 通道自动更新失败: ${String(error)}`,
+          progress: null,
+          lastCheckedAt: checkedAt,
+        });
       } finally {
-        runningPromiseRef.current = null;
+        delete runningPromiseRef.current[channel];
       }
     })();
 
-    runningPromiseRef.current = promise;
+    runningPromiseRef.current[channel] = promise;
     return promise;
-  }, []);
+  }, [updateChannelStatus]);
+
+  const runAllChannels = useCallback(async (): Promise<void> => {
+    await Promise.all(LOWER_UPDATE_CHANNELS.map((channel) => runChannelCheckAndDownload(channel)));
+  }, [runChannelCheckAndDownload]);
 
   useEffect(() => {
     mountedRef.current = true;
-    void runCheckAndDownload();
+    void runAllChannels();
 
     const timer = window.setInterval(() => {
-      void runCheckAndDownload();
+      void runAllChannels();
     }, LOWER_UPDATE_CHECK_INTERVAL_MS);
 
     return () => {
       mountedRef.current = false;
       window.clearInterval(timer);
     };
-  }, [runCheckAndDownload]);
+  }, [runAllChannels]);
 
   const contextValue = useMemo(() => status, [status]);
   return (
