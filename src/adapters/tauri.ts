@@ -373,11 +373,17 @@ export const api = {
     );
     return {
       source: 'backend',
-      process_start_time_ms: snapshot.process_start_time_ms > 0 ? snapshot.process_start_time_ms : null,
+      process_start_time_ms:
+        snapshot.process_start_time_ms !== null && snapshot.process_start_time_ms > 0
+          ? snapshot.process_start_time_ms
+          : null,
       samples: snapshot.samples,
       current_points_per_second: snapshot.current_points_per_second,
       peak_points_per_second: snapshot.peak_points_per_second,
-      updated_at_ms: snapshot.updated_at_ms > 0 ? snapshot.updated_at_ms : null,
+      updated_at_ms:
+        snapshot.updated_at_ms !== null && snapshot.updated_at_ms > 0
+          ? snapshot.updated_at_ms
+          : null,
     };
   },
 

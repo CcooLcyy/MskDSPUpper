@@ -1,41 +1,17 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../../adapters';
 import type {
   LowerUpdateCachedPackage,
-  LowerUpdateDownloadProgress,
   LowerUpdateManifest,
 } from '../../adapters';
+import {
+  initialLowerUpdateAutoStatus,
+  LowerUpdateAutoContext,
+} from './lower-update-auto-context';
+import type { LowerUpdateAutoStatus } from './lower-update-auto-context';
 
 const LOWER_UPDATE_CHECK_INTERVAL_MS = 30_000;
-
-export type LowerUpdateAutoStatusKind =
-  | 'idle'
-  | 'checking'
-  | 'available'
-  | 'downloading'
-  | 'cached'
-  | 'error';
-
-export interface LowerUpdateAutoStatus {
-  kind: LowerUpdateAutoStatusKind;
-  message: string;
-  manifest: LowerUpdateManifest | null;
-  cachedPackage: LowerUpdateCachedPackage | null;
-  progress: LowerUpdateDownloadProgress | null;
-  lastCheckedAt: number | null;
-}
-
-const initialStatus: LowerUpdateAutoStatus = {
-  kind: 'idle',
-  message: '尚未检查下位机更新',
-  manifest: null,
-  cachedPackage: null,
-  progress: null,
-  lastCheckedAt: null,
-};
-
-const LowerUpdateAutoContext = createContext<LowerUpdateAutoStatus>(initialStatus);
 
 function cacheKey(manifest: LowerUpdateManifest): string {
   return [
@@ -60,12 +36,8 @@ function matchesManifest(
     && cachedPackage.package_size === manifest.asset.size;
 }
 
-export function useLowerUpdateAuto(): LowerUpdateAutoStatus {
-  return useContext(LowerUpdateAutoContext);
-}
-
 export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<LowerUpdateAutoStatus>(initialStatus);
+  const [status, setStatus] = useState<LowerUpdateAutoStatus>(initialLowerUpdateAutoStatus);
   const mountedRef = useRef(true);
   const runningPromiseRef = useRef<Promise<void> | null>(null);
   const downloadedManifestKeyRef = useRef<string | null>(null);
