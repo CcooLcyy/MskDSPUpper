@@ -342,6 +342,7 @@ impl FullConfigExportConfigDto {
             avc: Some(self.avc.to_proto()),
             calc: None,
             iec61850: None,
+            control_orchestrator: None,
         }
     }
 
@@ -357,6 +358,7 @@ impl FullConfigExportConfigDto {
             avc: None,
             calc: None,
             iec61850: None,
+            control_orchestrator: None,
         });
 
         Ok(Self {
