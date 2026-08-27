@@ -19,6 +19,28 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Prepare local tool paths
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $candidatePaths = @(
+            "C:\Users\runneradmin\.cargo\bin",
+            "C:\Users\runneradmin\bin",
+            "C:\Program Files\protoc\bin",
+            "C:\Program Files\Git\cmd",
+            "C:\Program Files\nodejs"
+          )
+          $candidatePaths += Get-ChildItem -Path "C:\Users" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            Join-Path $_.FullName ".cargo\bin"
+          }
+          $existingPaths = @($candidatePaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -Unique)
+          if ($existingPaths.Count -eq 0) {
+            throw "未找到本地 Runner 工具目录"
+          }
+          $env:PATH = (($existingPaths + $env:PATH.Split(';')) | Select-Object -Unique) -join ';'
+          $existingPaths | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "追加本地工具目录：$($existingPaths -join '; ')"
+
       - name: Check runner identity and tools
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
@@ -55,7 +77,7 @@ jobs:
             throw "VsDevCmd.bat not found: $devCmd"
           }
           Write-Host "visual_studio=$vsPath"
-          cmd.exe /d /s /c "\"$devCmd\" -arch=x64 && where cl && cl 2>&1" | Select-Object -Last 8
+          cmd.exe /d /s /c "`"$devCmd`" -arch=x64 && where cl && cl 2>&1" | Select-Object -Last 8
           if ($LASTEXITCODE -ne 0) {
             throw "MSVC cl.exe could not be initialized"
           }
