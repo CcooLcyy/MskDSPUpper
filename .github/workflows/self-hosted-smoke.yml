@@ -1,0 +1,74 @@
+name: Self-hosted Runner Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, Windows, X64, mskdsp-upper]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Check runner identity and tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "runner=$env:RUNNER_NAME"
+          Write-Host "os=$([System.Environment]::OSVersion.VersionString)"
+          Write-Host "user=$(whoami)"
+          Write-Host "cargo_home=$env:CARGO_HOME"
+          Write-Host "rustup_home=$env:RUSTUP_HOME"
+
+          $required = @("git", "node", "rustc", "cargo", "protoc")
+          $missing = @()
+          foreach ($name in $required) {
+            $command = Get-Command $name -ErrorAction SilentlyContinue
+            if ($command) {
+              Write-Host "$name=$($command.Source)"
+              & $name --version 2>&1 | Select-Object -First 1
+            } else {
+              Write-Host "$name=missing"
+              $missing += $name
+            }
+          }
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere)) {
+            throw "vswhere.exe not found: $vswhere"
+          }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vsPath)) {
+            throw "Visual Studio C++ workload was not found"
+          }
+          $devCmd = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
+          if (-not (Test-Path -LiteralPath $devCmd)) {
+            throw "VsDevCmd.bat not found: $devCmd"
+          }
+          Write-Host "visual_studio=$vsPath"
+          cmd.exe /d /s /c "\"$devCmd\" -arch=x64 && where cl && cl 2>&1" | Select-Object -Last 8
+          if ($LASTEXITCODE -ne 0) {
+            throw "MSVC cl.exe could not be initialized"
+          }
+
+          if ($missing.Count -gt 0) {
+            throw "Required tools are missing from the runner service PATH: $($missing -join ', ')"
+          }
+
+      - name: Check Rust target and project metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          rustup show active-toolchain
+          rustup target list --installed
+          cargo metadata --locked --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml | Out-Null
+          Write-Host "Rust project metadata check passed"
