@@ -20,7 +20,7 @@ jobs:
           submodules: false
 
       - name: Check runner identity and tools
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
           Write-Host "runner=$env:RUNNER_NAME"
@@ -65,7 +65,7 @@ jobs:
           }
 
       - name: Check Rust target and project metadata
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
           rustup show active-toolchain
