@@ -26,6 +26,8 @@ jobs:
           $candidatePaths = @(
             "C:\Users\runneradmin\.cargo\bin",
             "C:\Users\runneradmin\bin",
+            "C:\Users\Docker\.cargo\bin",
+            "C:\protoc\bin",
             "C:\Program Files\protoc\bin",
             "C:\Program Files\Git\cmd",
             "C:\Program Files\nodejs"
@@ -33,7 +35,7 @@ jobs:
           $candidatePaths += Get-ChildItem -Path "C:\Users" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
             Join-Path $_.FullName ".cargo\bin"
           }
-          $existingPaths = @($candidatePaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -Unique)
+          $existingPaths = @($candidatePaths | Where-Object { Test-Path -LiteralPath $_ -ErrorAction SilentlyContinue } | Select-Object -Unique)
           if ($existingPaths.Count -eq 0) {
             throw "未找到本地 Runner 工具目录"
           }
