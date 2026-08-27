@@ -51,7 +51,7 @@ jobs:
 
       - name: Resolve beta ref
         id: resolve_beta
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           ALLOW_MISSING_BETA: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
         run: |
@@ -109,55 +109,55 @@ jobs:
           cache-bin: 'false'
 
       - name: Prepare package/log directories
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           New-Item -ItemType Directory -Path package\logs -Force | Out-Null
 
       - name: Prepare submodule access
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           SUBMODULE_TOKEN: ${{ secrets.SUBMODULE_TOKEN }}
           SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
         run: .\scripts\workflow\Prepare-SubmoduleAccess.ps1
 
       - name: Sync and update submodules
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           git submodule sync --recursive
           git submodule update --init --recursive
           git submodule status | Tee-Object -FilePath package\logs\git-submodule-status.log
 
       - name: Install Node dependencies
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           npm ci 2>&1 | Tee-Object -FilePath package\logs\npm-ci.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run workflow helper tests
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           npm run test:workflow 2>&1 | Tee-Object -FilePath package\logs\workflow-tests.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run lint
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           npm run lint 2>&1 | Tee-Object -FilePath package\logs\lint.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run cargo tests
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           cargo test --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET 2>&1 | Tee-Object -FilePath package\logs\cargo-test.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Render debug tauri config
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/render-tauri-config.mjs --output package/generated/tauri.beta.verify.conf.json --endpoint "$env:STATIC_UPDATE_BASE_URL/beta/latest.json" --updater-artifacts false
 
       - name: Build debug validation bundle
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           MSKDSP_UPPER_SOURCEMAP: 'false'
         run: |
@@ -166,7 +166,7 @@ jobs:
 
       - name: Show sccache stats
         if: always()
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $statsScript = '.\scripts\workflow\Show-SccacheStats.ps1'
           if (Test-Path -LiteralPath $statsScript) {
@@ -177,7 +177,7 @@ jobs:
 
       - name: Collect diagnostics on failure
         if: failure()
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/collect-diagnostics.mjs --channel beta --phase verify --build-log package/logs/tauri-beta-debug-build.log
 
@@ -206,7 +206,7 @@ jobs:
 
       - name: Capture beta HEAD SHA
         id: beta_head
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           "sha=$(git rev-parse HEAD)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
@@ -239,48 +239,48 @@ jobs:
           cache-bin: 'false'
 
       - name: Prepare package/log directories
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           New-Item -ItemType Directory -Path package\logs -Force | Out-Null
 
       - name: Prepare submodule access
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           SUBMODULE_TOKEN: ${{ secrets.SUBMODULE_TOKEN }}
           SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
         run: .\scripts\workflow\Prepare-SubmoduleAccess.ps1
 
       - name: Sync and update submodules
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           git submodule sync --recursive
           git submodule update --init --recursive
           git submodule status | Tee-Object -FilePath package\logs\git-submodule-status.log
 
       - name: Install Node dependencies
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           npm ci 2>&1 | Tee-Object -FilePath package\logs\npm-ci.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Emit build metadata
         id: metadata
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/emit-build-metadata.mjs --channel beta --repository ${{ github.repository }} --ref ${{ needs.resolve-beta.outputs.beta_ref }} --beta-line ${{ needs.resolve-beta.outputs.beta_line }} --sha ${{ steps.beta_head.outputs.sha }} --target-triple $env:RUST_TARGET --platform $env:PLATFORM_ID --output package/metadata/beta.json
 
       - name: Apply channel version
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/apply-channel-version.mjs --metadata-file package/metadata/beta.json --backup-dir package/.manifest-backup
 
       - name: Render beta tauri config
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/render-tauri-config.mjs --metadata-file package/metadata/beta.json --output package/generated/tauri.beta.conf.json --endpoint "$env:STATIC_UPDATE_BASE_URL/beta/latest.json" --bundle-targets nsis --updater-artifacts true
 
       - name: Build beta package
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           MSKDSP_UPPER_SOURCEMAP: 'true'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -291,7 +291,7 @@ jobs:
 
       - name: Show sccache stats
         if: always()
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $statsScript = '.\scripts\workflow\Show-SccacheStats.ps1'
           if (Test-Path -LiteralPath $statsScript) {
@@ -301,23 +301,23 @@ jobs:
           }
 
       - name: Stage artifacts
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/stage-release.mjs --metadata-file package/metadata/beta.json --build-log package/logs/tauri-beta-build.log --submodule-status-file package/logs/git-submodule-status.log --asset-base-url "$env:STATIC_UPDATE_BASE_URL/beta/$env:PLATFORM_ID"
 
       - name: Create delivery bundle
         id: bundle
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/create-delivery-bundle.mjs --metadata-file package/metadata/beta.json
 
       - name: Write SHA256 sums
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/write-sha256sums.mjs --metadata-file package/metadata/beta.json --output-dir ${{ steps.bundle.outputs.output_dir }}
 
       - name: Sync beta static updater source
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           STATIC_UPDATE_SSH_KEY: ${{ secrets.UPDATE_STATIC_SSH_KEY }}
         run: |
@@ -333,7 +333,7 @@ jobs:
 
       - name: Resolve latest stable tag
         id: stable_tag
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $stableTag = git tag --list 'v*' --sort=-version:refname | Select-Object -First 1
           "tag=$stableTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -346,7 +346,7 @@ jobs:
           if-no-files-found: error
 
       - name: Cleanup stale prereleases on the same beta line
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -359,7 +359,7 @@ jobs:
           }
 
       - name: Create GitHub prerelease
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -375,7 +375,7 @@ jobs:
           gh @args
 
       - name: Create or update rolling beta release
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -399,13 +399,13 @@ jobs:
 
       - name: Restore manifests
         if: always()
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/restore-manifests.mjs --backup-dir package/.manifest-backup
 
       - name: Collect diagnostics on failure
         if: failure()
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/collect-diagnostics.mjs --channel beta --phase publish --metadata-file package/metadata/beta.json --build-log package/logs/tauri-beta-build.log
 

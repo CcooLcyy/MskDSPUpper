@@ -55,7 +55,7 @@ jobs:
 
       - name: Resolve source release
         id: source
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $channel = "${{ github.event.inputs.channel }}"
           $inputTag = "${{ github.event.inputs.release_tag }}"
@@ -78,12 +78,12 @@ jobs:
           "platform=${{ github.event.inputs.platform || 'windows-x64' }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Prepare package directory
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           New-Item -ItemType Directory -Path package\static-updater-source -Force | Out-Null
 
       - name: Download GitHub release assets
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -93,7 +93,7 @@ jobs:
             --clobber
 
       - name: Verify downloaded source assets
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $files = Get-ChildItem -LiteralPath package\static-updater-source -File
           if (-not ($files | Where-Object { $_.Name -eq "latest.json" })) {
@@ -105,7 +105,7 @@ jobs:
           $files | Sort-Object Name | ForEach-Object { Write-Host $_.Name }
 
       - name: Rewrite manifest URLs for static source
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/rewrite-static-updater-manifest.mjs `
             --package-output-dir package/static-updater-source `
@@ -114,7 +114,7 @@ jobs:
             --base-url "$env:STATIC_UPDATE_BASE_URL"
 
       - name: Sync static updater source
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           STATIC_UPDATE_SSH_KEY: ${{ secrets.UPDATE_STATIC_SSH_KEY }}
         run: |

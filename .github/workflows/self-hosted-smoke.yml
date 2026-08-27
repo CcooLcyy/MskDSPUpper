@@ -20,7 +20,7 @@ jobs:
           submodules: false
 
       - name: Check runner identity and tools
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           Write-Host "runner=$env:RUNNER_NAME"
@@ -65,7 +65,7 @@ jobs:
           }
 
       - name: Check Rust target and project metadata
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
           rustup show active-toolchain
