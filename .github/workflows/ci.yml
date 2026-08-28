@@ -99,7 +99,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "protoc check failed" }
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sccache = Get-Command sccache -ErrorAction SilentlyContinue
+          if ($sccache) {
+            "SCCACHE_PATH=$($sccache.Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            Write-Host "Using local sccache: $($sccache.Source)"
+          } else {
+            "RUSTC_WRAPPER=" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            Write-Host "Local sccache not found; building without compiler cache"
+          }
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -258,7 +268,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "protoc check failed" }
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sccache = Get-Command sccache -ErrorAction SilentlyContinue
+          if ($sccache) {
+            "SCCACHE_PATH=$($sccache.Source)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            Write-Host "Using local sccache: $($sccache.Source)"
+          } else {
+            "RUSTC_WRAPPER=" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            Write-Host "Local sccache not found; building without compiler cache"
+          }
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
