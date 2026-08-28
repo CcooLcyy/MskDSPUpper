@@ -8,6 +8,7 @@ import { DeleteOutlined, ImportOutlined, PlusOutlined, ReloadOutlined, SaveOutli
 import { api } from '../../adapters';
 import type {
   Iec61850IedConfig, Iec61850IedInfo, Iec61850ModelSummary,
+  Iec61850SclAccessPointSummary, Iec61850SclIedSummary,
   Iec61850NetworkChannelConfig, Iec61850PointMapping, Iec61850RuntimeStatistics,
 } from '../../adapters';
 import './index.css';
@@ -58,10 +59,48 @@ const IEC61850Page: React.FC = () => {
   const [sourceName, setSourceName] = useState('');
   const [modelMessage, setModelMessage] = useState<string | null>(null);
   const [modelMessageType, setModelMessageType] = useState<'success' | 'warning' | 'error'>('success');
+  const [iedForm] = Form.useForm<Iec61850IedConfig>();
+  const [iedDraftModelName, setIedDraftModelName] = useState('');
+  const [iedDraftName, setIedDraftName] = useState('');
   const [messageApi, contextHolder] = message.useMessage();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const selectedIed = useMemo(() => ieds.find((item) => item.config?.conn_name === selectedConn) ?? null, [ieds, selectedConn]);
+  const selectedModelCatalog = useMemo(
+    () => models.find((model) => model.model_name === iedDraftModelName) ?? null,
+    [iedDraftModelName, models],
+  );
+  const selectedModelIeds = useMemo<Iec61850SclIedSummary[]>(
+    () => selectedModelCatalog?.ieds ?? [],
+    [selectedModelCatalog],
+  );
+  const selectedIedAccessPoints = useMemo<Iec61850SclAccessPointSummary[]>(
+    () => selectedModelIeds.find((item) => item.name === iedDraftName)?.access_points ?? [],
+    [iedDraftName, selectedModelIeds],
+  );
+  const chooseModelForIedForm = (modelName: string) => {
+    const model = models.find((item) => item.model_name === modelName);
+    const modelIeds = model?.ieds ?? [];
+    const nextIed = modelIeds.length === 1 ? modelIeds[0].name : '';
+    const nextAccessPoints = modelIeds.find((item) => item.name === nextIed)?.access_points ?? [];
+    const nextServerAccessPoints = nextAccessPoints.filter((item) => item.has_server);
+    const nextAccessPoint = nextServerAccessPoints.length === 1 ? nextServerAccessPoints[0].name : '';
+    console.info('IEC61850新增IED已切换模型目录', { modelName, iedCount: modelIeds.length, selectedIed: nextIed });
+    setIedDraftModelName(modelName);
+    setIedDraftName(nextIed);
+    iedForm.setFieldsValue({ model_name: modelName, ied_name: nextIed, access_point: nextAccessPoint });
+    setConfig((current) => ({ ...current, model_name: modelName, ied_name: nextIed, access_point: nextAccessPoint }));
+  };
+
+  const chooseIedForForm = (iedName: string) => {
+    const accessPoints = selectedModelIeds.find((item) => item.name === iedName)?.access_points ?? [];
+    const nextServerAccessPoints = accessPoints.filter((item) => item.has_server);
+    const nextAccessPoint = nextServerAccessPoints.length === 1 ? nextServerAccessPoints[0].name : '';
+    console.info('IEC61850新增IED已切换IED目录', { iedName, accessPointCount: accessPoints.length, selectedAccessPoint: nextAccessPoint });
+    setIedDraftName(iedName);
+    iedForm.setFieldsValue({ ied_name: iedName, access_point: nextAccessPoint });
+    setConfig((current) => ({ ...current, ied_name: iedName, access_point: nextAccessPoint }));
+  };
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -183,7 +222,18 @@ const IEC61850Page: React.FC = () => {
       return;
     }
     setEditingConn(null);
-    setConfig(defaultConfig(models[0]?.model_name ?? ''));
+    const nextConfig = defaultConfig(models[0]?.model_name ?? '');
+    const firstModelIeds = models[0]?.ieds ?? [];
+    const firstIed = firstModelIeds.length === 1 ? firstModelIeds[0] : undefined;
+    const firstServerAccessPoints = firstIed?.access_points.filter((item) => item.has_server) ?? [];
+    const firstAccessPoint = firstServerAccessPoints.length === 1 ? firstServerAccessPoints[0].name : '';
+    nextConfig.ied_name = firstIed?.name ?? '';
+    nextConfig.access_point = firstAccessPoint;
+    setConfig(nextConfig);
+    setIedDraftModelName(nextConfig.model_name);
+    setIedDraftName(nextConfig.ied_name);
+    iedForm.resetFields();
+    iedForm.setFieldsValue(nextConfig);
     setIedModalOpen(true);
   };
 
@@ -232,7 +282,7 @@ const IEC61850Page: React.FC = () => {
         {!selectedIed ? <div className="iec61850-empty-content"><div className="iec61850-empty-action"><Text type="secondary">导入 SCL 模型后，再创建 IED 进行通信配置</Text><Space><Button type="primary" icon={<ImportOutlined />} onClick={() => setModelModalOpen(true)}>导入 SCL 模型</Button><Button icon={<PlusOutlined />} onClick={openCreateIed}>新增 IED</Button></Space></div><Card size="small" title={`已导入的 SCL 模型 (${models.length})`} className="iec61850-model-catalog"><Table rowKey="model_name" size="small" pagination={false} dataSource={models} locale={{ emptyText: '尚未导入 SCL 模型' }} columns={[{ title: '模型名称', dataIndex: 'model_name' }, { title: '来源文件', dataIndex: 'source_name' }, { title: '类型', dataIndex: 'document_kind', render: (value) => documentKindMap[value] ?? '未知' }, { title: 'IED 数', dataIndex: 'ied_count' }, { title: '逻辑节点', dataIndex: 'logical_node_count' }, { title: '数据属性', dataIndex: 'data_attribute_count' }, { title: '操作', width: 86, render: (_, model) => <Button type="text" danger icon={<DeleteOutlined />} onClick={() => void deleteModel(model.model_name)} /> }]} /></Card></div> : <>
           <div className="iec61850-detail-header"><div><Title level={4} style={{ margin: 0 }}>{config.conn_name}</Title><Text type="secondary">{config.ied_name} · {config.model_name}</Text></div><Space><Tag color={stateMap[selectedIed.state]?.color}>{stateMap[selectedIed.state]?.label}</Tag><Button icon={selectedIed.state === 3 ? <StopOutlined /> : <PlayCircleOutlined />} onClick={() => void toggleRuntime()}>{selectedIed.state === 3 ? '停止' : '启动'}</Button><Button danger icon={<DeleteOutlined />} onClick={() => void deleteSelected()}>删除</Button></Space></div>
           <Tabs items={[{
-            key: 'config', label: '通信配置', children: <div className="iec61850-config-grid"><Card size="small" title="IED 基本信息"><Space direction="vertical" style={{ width: '100%' }}><Input addonBefore="连接名" value={config.conn_name} onChange={(e) => setConfig({ ...config, conn_name: e.target.value })} /><Input addonBefore="模型" value={config.model_name} disabled /><Input addonBefore="IED 名称" value={config.ied_name} onChange={(e) => setConfig({ ...config, ied_name: e.target.value })} /><Input addonBefore="访问点" value={config.access_point} onChange={(e) => setConfig({ ...config, access_point: e.target.value })} /><Divider style={{ margin: '8px 0' }} /><Space> <Text>MMS</Text><Switch checked={config.enable_mms} onChange={(value) => setConfig({ ...config, enable_mms: value })} /><Text>GOOSE</Text><Switch checked={config.enable_goose} onChange={(value) => setConfig({ ...config, enable_goose: value })} /><Text>SV</Text><Switch checked={config.enable_sv} onChange={(value) => setConfig({ ...config, enable_sv: value })} /></Space><Button type="primary" icon={<SaveOutlined />} onClick={() => void saveConfig()}>保存配置</Button></Space></Card><Card size="small" title="A/B 网络通道">{config.channels.map((channel, index) => <div className="iec61850-channel" key={channel.channel}><Space align="start"><Tag color={channel.channel === 1 ? 'blue' : 'cyan'}>{channel.channel === 1 ? 'A' : 'B'}</Tag><Switch checked={channel.enabled} onChange={(value) => updateChannel(index, { enabled: value })} /></Space><Input placeholder="网卡接口" value={channel.interface_name} onChange={(e) => updateChannel(index, { interface_name: e.target.value })} /><Input placeholder="本地 IP" value={channel.local_ip} onChange={(e) => updateChannel(index, { local_ip: e.target.value })} /><Input placeholder="对端 IP" value={channel.remote_ip} onChange={(e) => updateChannel(index, { remote_ip: e.target.value })} /><InputNumber min={1} max={65535} placeholder="MMS 端口" value={channel.remote_port} onChange={(value) => updateChannel(index, { remote_port: value ?? 102 })} /></div>)}<Alert type="info" showIcon message="启用双网时，下位机会按 A/B 通道状态选择活动链路。" /></Card></div>,
+            key: 'config', label: '通信配置', children: <div className="iec61850-config-grid"><Card size="small" title="IED 基本信息"><Space direction="vertical" style={{ width: '100%' }}><Input addonBefore="连接名" value={config.conn_name} onChange={(e) => setConfig({ ...config, conn_name: e.target.value })} /><Input addonBefore="模型" value={config.model_name} disabled /><Select aria-label="IED 名称" value={config.ied_name || undefined} placeholder="选择 IED 名称" options={(models.find((model) => model.model_name === config.model_name)?.ieds ?? []).map((item) => ({ value: item.name, label: item.name }))} onChange={(value) => { const accessPoints = (models.find((model) => model.model_name === config.model_name)?.ieds ?? []).find((item) => item.name === value)?.access_points ?? []; const serverAccessPoints = accessPoints.filter((item) => item.has_server); setConfig({ ...config, ied_name: value, access_point: serverAccessPoints.length === 1 ? serverAccessPoints[0].name : '' }); }} /><Select aria-label="访问点" value={config.access_point || undefined} placeholder="选择访问点" options={((models.find((model) => model.model_name === config.model_name)?.ieds ?? []).find((item) => item.name === config.ied_name)?.access_points ?? []).map((item) => ({ value: item.name, label: item.has_server ? item.name : `${item.name}（无 Server）`, disabled: !item.has_server }))} onChange={(value) => setConfig({ ...config, access_point: value })} /><Divider style={{ margin: '8px 0' }} /><Space> <Text>MMS</Text><Switch checked={config.enable_mms} onChange={(value) => setConfig({ ...config, enable_mms: value })} /><Text>GOOSE</Text><Switch checked={config.enable_goose} onChange={(value) => setConfig({ ...config, enable_goose: value })} /><Text>SV</Text><Switch checked={config.enable_sv} onChange={(value) => setConfig({ ...config, enable_sv: value })} /></Space><Button type="primary" icon={<SaveOutlined />} onClick={() => void saveConfig()}>保存配置</Button></Space></Card><Card size="small" title="A/B 网络通道">{config.channels.map((channel, index) => <div className="iec61850-channel" key={channel.channel}><Space align="start"><Tag color={channel.channel === 1 ? 'blue' : 'cyan'}>{channel.channel === 1 ? 'A' : 'B'}</Tag><Switch checked={channel.enabled} onChange={(value) => updateChannel(index, { enabled: value })} /></Space><Input placeholder="网卡接口" value={channel.interface_name} onChange={(e) => updateChannel(index, { interface_name: e.target.value })} /><Input placeholder="本地 IP" value={channel.local_ip} onChange={(e) => updateChannel(index, { local_ip: e.target.value })} /><Input placeholder="对端 IP" value={channel.remote_ip} onChange={(e) => updateChannel(index, { remote_ip: e.target.value })} /><InputNumber min={1} max={65535} placeholder="MMS 端口" value={channel.remote_port} onChange={(value) => updateChannel(index, { remote_port: value ?? 102 })} /></div>)}<Alert type="info" showIcon message="启用双网时，下位机会按 A/B 通道状态选择活动链路。" /></Card></div>,
           }, {
             key: 'models', label: 'SCL 模型', children: <Card size="small" title="模型导入" extra={<Button icon={<ImportOutlined />} onClick={() => setModelModalOpen(true)}>导入 SCL</Button>}><Table rowKey="model_name" size="small" pagination={false} dataSource={models} columns={[{ title: '模型', dataIndex: 'model_name' }, { title: '来源', dataIndex: 'source_name' }, { title: '类型', dataIndex: 'document_kind', render: (value) => documentKindMap[value] ?? '未知' }, { title: 'IED', dataIndex: 'ied_count' }, { title: '逻辑节点', dataIndex: 'logical_node_count' }, { title: '数据属性', dataIndex: 'data_attribute_count' }, { title: '校验摘要', dataIndex: 'source_checksum', ellipsis: true }, { title: '操作', width: 70, render: (_, model) => <Button type="text" danger icon={<DeleteOutlined />} onClick={() => void deleteModel(model.model_name)} /> }]} /></Card>,
           }, {
@@ -244,7 +294,7 @@ const IEC61850Page: React.FC = () => {
       </Card>
     </div>
     <Modal title="导入 SCL 模型" open={modelModalOpen} onCancel={() => setModelModalOpen(false)} onOk={() => void importScl(false)} okText="导入" cancelText="取消"><Space direction="vertical" style={{ width: '100%' }}><Input placeholder="模型名称（可选，默认使用文件名）" value={modelName} onChange={(e) => setModelName(e.target.value)} /><Input placeholder="来源名称（可选）" value={sourceName} onChange={(e) => setSourceName(e.target.value)} /><input ref={fileRef} type="file" accept=".scd,.cid,.icd,.xml" /><Button onClick={() => void importScl(true)}>仅校验文件</Button></Space></Modal>
-    <Modal title={editingConn ? '编辑 IED' : '新增 IED'} open={iedModalOpen} onCancel={() => setIedModalOpen(false)} footer={null}><Form initialValues={config} onFinish={(values) => void saveIed({ ...config, ...values })} layout="vertical"><Alert type="info" showIcon message="先保存模型关联信息；网卡、IP、MMS/GOOSE/SV 开关请在保存后到“通信配置”中设置。" style={{ marginBottom: 16 }} /><Form.Item label="连接名" name="conn_name" rules={[{ required: true, message: '请输入连接名' }]}><Input /></Form.Item><Form.Item label="模型" name="model_name" rules={[{ required: true, message: '请选择模型' }]}><Select options={models.map((model) => ({ value: model.model_name, label: model.model_name }))} /></Form.Item><Form.Item label="IED 名称" name="ied_name" rules={[{ required: true, message: '请输入 IED 名称' }]}><Input placeholder="必须与 SCL 中 IED 的 name 完全一致" /></Form.Item><Form.Item label="访问点" name="access_point"><Input placeholder="必须与 SCL 中 AccessPoint 的 name 完全一致" /></Form.Item><Form.Item label="启用功能"><Space><Form.Item name="enable_mms" valuePropName="checked" noStyle><Switch checkedChildren="MMS" unCheckedChildren="MMS" disabled={!editingConn} /></Form.Item><Form.Item name="enable_goose" valuePropName="checked" noStyle><Switch checkedChildren="GOOSE" unCheckedChildren="GOOSE" disabled={!editingConn} /></Form.Item><Form.Item name="enable_sv" valuePropName="checked" noStyle><Switch checkedChildren="SV" unCheckedChildren="SV" disabled={!editingConn} /></Form.Item></Space></Form.Item><Form.Item label="自动启动" name="auto_start" valuePropName="checked"><Switch disabled={!editingConn} /></Form.Item><Button type="primary" htmlType="submit" block>保存 IED</Button></Form></Modal>
+    <Modal title={editingConn ? '编辑 IED' : '新增 IED'} open={iedModalOpen} onCancel={() => setIedModalOpen(false)} footer={null}><Form form={iedForm} initialValues={config} onFinish={(values) => void saveIed({ ...config, ...values })} layout="vertical"><Alert type="info" showIcon message="先保存模型关联信息；网卡、IP、MMS/GOOSE/SV 开关请在保存后到“通信配置”中设置。" style={{ marginBottom: 16 }} /><Form.Item label="连接名" name="conn_name" rules={[{ required: true, message: '请输入连接名' }]}><Input /></Form.Item><Form.Item label="模型" name="model_name" rules={[{ required: true, message: '请选择模型' }]}><Select options={models.map((model) => ({ value: model.model_name, label: model.model_name }))} onChange={chooseModelForIedForm} /></Form.Item><Form.Item label="IED 名称" name="ied_name" rules={[{ required: true, message: '请选择 IED 名称' }]}><Select placeholder="选择 SCL 中的 IED" options={selectedModelIeds.map((item) => ({ value: item.name, label: item.name }))} onChange={chooseIedForForm} /></Form.Item><Form.Item label="访问点" name="access_point" rules={[{ required: true, message: '请选择访问点' }]}><Select placeholder="选择 SCL 中的 AccessPoint" options={selectedIedAccessPoints.map((item) => ({ value: item.name, label: item.has_server ? item.name : `${item.name}（无 Server）`, disabled: !item.has_server }))} notFoundContent="当前 IED 没有可用 AccessPoint" /></Form.Item><Form.Item label="启用功能"><Space><Form.Item name="enable_mms" valuePropName="checked" noStyle><Switch checkedChildren="MMS" unCheckedChildren="MMS" disabled={!editingConn} /></Form.Item><Form.Item name="enable_goose" valuePropName="checked" noStyle><Switch checkedChildren="GOOSE" unCheckedChildren="GOOSE" disabled={!editingConn} /></Form.Item><Form.Item name="enable_sv" valuePropName="checked" noStyle><Switch checkedChildren="SV" unCheckedChildren="SV" disabled={!editingConn} /></Form.Item></Space></Form.Item><Form.Item label="自动启动" name="auto_start" valuePropName="checked"><Switch disabled={!editingConn} /></Form.Item><Button type="primary" htmlType="submit" block>保存 IED</Button></Form></Modal>
   </div>;
 };
 

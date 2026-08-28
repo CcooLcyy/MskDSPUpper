@@ -1252,10 +1252,15 @@ export const browserApi: typeof tauriApi = {
       source_checksum: `browser-${content.length.toString(16)}`, ied_count: 1, logical_node_count: 12,
       data_attribute_count: 96, data_set_count: 4, report_control_count: 3, gse_control_count: 2,
       sampled_value_control_count: 1, external_reference_count: 8,
+      ieds: [{ name: 'IED1', access_points: [{ name: 'AP1', has_server: true }, { name: 'AP2', has_server: false }] }],
     };
     if (!validateOnly) {
       if (!replace && iec61850Models.has(summary.model_name)) throw new Error(`浏览器开发模式 mock 已存在模型: ${summary.model_name}`);
       iec61850Models.set(summary.model_name, clone(summary));
+      console.info('IEC61850 浏览器开发模式已保存模型目录', {
+        modelName: summary.model_name,
+        iedCount: summary.ieds.length,
+      });
     }
     return { summary: clone(summary), issues: [] };
   },

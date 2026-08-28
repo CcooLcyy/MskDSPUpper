@@ -305,6 +305,17 @@ export interface Iec61850ModelSummary {
   gse_control_count: number;
   sampled_value_control_count: number;
   external_reference_count: number;
+  ieds: Iec61850SclIedSummary[];
+}
+
+export interface Iec61850SclAccessPointSummary {
+  name: string;
+  has_server: boolean;
+}
+
+export interface Iec61850SclIedSummary {
+  name: string;
+  access_points: Iec61850SclAccessPointSummary[];
 }
 
 export interface Iec61850ValidationIssue {

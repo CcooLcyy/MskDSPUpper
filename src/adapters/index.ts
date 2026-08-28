@@ -52,6 +52,8 @@ export type {
   Iec61850IedInfo,
   Iec61850ImportResult,
   Iec61850ModelSummary,
+  Iec61850SclAccessPointSummary,
+  Iec61850SclIedSummary,
   Iec61850NetworkChannelConfig,
   Iec61850PointMapping,
   Iec61850PointMappings,

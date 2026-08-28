@@ -31,6 +31,19 @@ pub struct SclModelSummaryDto {
     pub gse_control_count: u32,
     pub sampled_value_control_count: u32,
     pub external_reference_count: u32,
+    pub ieds: Vec<SclIedSummaryDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SclAccessPointSummaryDto {
+    pub name: String,
+    pub has_server: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SclIedSummaryDto {
+    pub name: String,
+    pub access_points: Vec<SclAccessPointSummaryDto>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -265,6 +278,25 @@ impl From<SclModelSummary> for SclModelSummaryDto {
             gse_control_count: v.gse_control_count,
             sampled_value_control_count: v.sampled_value_control_count,
             external_reference_count: v.external_reference_count,
+            ieds: v.ieds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+impl From<crate::proto::iec61850_proto::SclAccessPointSummary>
+    for SclAccessPointSummaryDto
+{
+    fn from(v: crate::proto::iec61850_proto::SclAccessPointSummary) -> Self {
+        Self {
+            name: v.name,
+            has_server: v.has_server,
+        }
+    }
+}
+impl From<crate::proto::iec61850_proto::SclIedSummary> for SclIedSummaryDto {
+    fn from(v: crate::proto::iec61850_proto::SclIedSummary) -> Self {
+        Self {
+            name: v.name,
+            access_points: v.access_points.into_iter().map(Into::into).collect(),
         }
     }
 }
