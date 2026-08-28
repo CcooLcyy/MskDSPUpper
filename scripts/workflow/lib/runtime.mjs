@@ -56,7 +56,8 @@ export function runCommand(command, args = [], options = {}) {
 
   // Node does not resolve .cmd shims when spawnSync is called without a shell.
   if (result.error?.code === 'ENOENT' && process.platform === 'win32' && !command.endsWith('.cmd')) {
-    result = spawnSync(`${command}.cmd`, args, {
+    const cmd = process.env.ComSpec ?? 'cmd.exe';
+    result = spawnSync(cmd, ['/d', '/s', '/c', formatCommand(`${command}.cmd`, args)], {
       cwd,
       env: { ...process.env, ...env },
       input,
