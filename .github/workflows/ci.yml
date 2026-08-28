@@ -46,10 +46,49 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Prepare local tool paths
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $candidatePaths = @(
+            "C:\Users\runneradmin\.cargo\bin",
+            "C:\Users\runneradmin\bin",
+            "C:\Users\Docker\.cargo\bin",
+            "C:\protoc\bin",
+            "C:\Program Files\protoc\bin",
+            "C:\Program Files\Git\cmd",
+            "C:\Program Files\nodejs"
+          )
+          $candidatePaths += Get-ChildItem -Path "C:\Users" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            Join-Path $_.FullName ".cargo\bin"
+          }
+          $existingPaths = @($candidatePaths | Where-Object { Test-Path -LiteralPath $_ -ErrorAction SilentlyContinue } | Select-Object -Unique)
+          if ($existingPaths.Count -eq 0) {
+            throw "未找到本地 Runner 工具目录"
+          }
+          $env:PATH = (($existingPaths + $env:PATH.Split(';')) | Select-Object -Unique) -join ';'
+          $existingPaths | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "追加本地工具目录：$($existingPaths -join '; ')"
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ env.RUST_TARGET }}
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rustup = Get-Command rustup -ErrorAction Stop
+          $toolchains = @(& $rustup.Source toolchain list)
+          if (-not ($toolchains -match '^stable(?:-|\s|$)')) {
+            & $rustup.Source toolchain install stable --profile minimal
+            if ($LASTEXITCODE -ne 0) { throw "安装 stable Rust 工具链失败" }
+          }
+          & $rustup.Source default stable
+          if ($LASTEXITCODE -ne 0) { throw "设置 stable Rust 工具链失败" }
+          $targets = @(& $rustup.Source target list --installed)
+          if ($targets -notcontains $env:RUST_TARGET) {
+            & $rustup.Source target add $env:RUST_TARGET --toolchain stable
+            if ($LASTEXITCODE -ne 0) { throw "安装 Rust 目标失败：$env:RUST_TARGET" }
+          }
+          rustc --version
+          rustup target list --installed
 
       - name: Setup protoc
         uses: arduino/setup-protoc@v3
@@ -163,10 +202,49 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Prepare local tool paths
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $candidatePaths = @(
+            "C:\Users\runneradmin\.cargo\bin",
+            "C:\Users\runneradmin\bin",
+            "C:\Users\Docker\.cargo\bin",
+            "C:\protoc\bin",
+            "C:\Program Files\protoc\bin",
+            "C:\Program Files\Git\cmd",
+            "C:\Program Files\nodejs"
+          )
+          $candidatePaths += Get-ChildItem -Path "C:\Users" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            Join-Path $_.FullName ".cargo\bin"
+          }
+          $existingPaths = @($candidatePaths | Where-Object { Test-Path -LiteralPath $_ -ErrorAction SilentlyContinue } | Select-Object -Unique)
+          if ($existingPaths.Count -eq 0) {
+            throw "未找到本地 Runner 工具目录"
+          }
+          $env:PATH = (($existingPaths + $env:PATH.Split(';')) | Select-Object -Unique) -join ';'
+          $existingPaths | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "追加本地工具目录：$($existingPaths -join '; ')"
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ env.RUST_TARGET }}
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rustup = Get-Command rustup -ErrorAction Stop
+          $toolchains = @(& $rustup.Source toolchain list)
+          if (-not ($toolchains -match '^stable(?:-|\s|$)')) {
+            & $rustup.Source toolchain install stable --profile minimal
+            if ($LASTEXITCODE -ne 0) { throw "安装 stable Rust 工具链失败" }
+          }
+          & $rustup.Source default stable
+          if ($LASTEXITCODE -ne 0) { throw "设置 stable Rust 工具链失败" }
+          $targets = @(& $rustup.Source target list --installed)
+          if ($targets -notcontains $env:RUST_TARGET) {
+            & $rustup.Source target add $env:RUST_TARGET --toolchain stable
+            if ($LASTEXITCODE -ne 0) { throw "安装 Rust 目标失败：$env:RUST_TARGET" }
+          }
+          rustc --version
+          rustup target list --installed
 
       - name: Setup protoc
         uses: arduino/setup-protoc@v3
