@@ -90,9 +90,13 @@ jobs:
           rustup target list --installed
 
       - name: Setup protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ github.token }}
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $protoc = Get-Command protoc -ErrorAction Stop
+          Write-Host "protoc=$($protoc.Source)"
+          & $protoc.Source --version
+          if ($LASTEXITCODE -ne 0) { throw "protoc check failed" }
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.10
@@ -245,9 +249,13 @@ jobs:
           rustup target list --installed
 
       - name: Setup protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ github.token }}
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $protoc = Get-Command protoc -ErrorAction Stop
+          Write-Host "protoc=$($protoc.Source)"
+          & $protoc.Source --version
+          if ($LASTEXITCODE -ne 0) { throw "protoc check failed" }
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.10
