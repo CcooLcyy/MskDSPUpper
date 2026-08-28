@@ -47,12 +47,22 @@ export function runCommand(command, args = [], options = {}) {
   const rendered = formatCommand(command, args);
   logInfo('执行命令', { cwd: cwd ?? process.cwd(), command: rendered });
 
-  const result = spawnSync(command, args, {
+  let result = spawnSync(command, args, {
     cwd,
     env: { ...process.env, ...env },
     input,
     encoding: 'utf8',
   });
+
+  // Node does not resolve .cmd shims when spawnSync is called without a shell.
+  if (result.error?.code === 'ENOENT' && process.platform === 'win32' && !command.endsWith('.cmd')) {
+    result = spawnSync(`${command}.cmd`, args, {
+      cwd,
+      env: { ...process.env, ...env },
+      input,
+      encoding: 'utf8',
+    });
+  }
 
   if (result.error) {
     throw result.error;
