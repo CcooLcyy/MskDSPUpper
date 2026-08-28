@@ -30,7 +30,7 @@ env:
 
 jobs:
   verify-debug:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, mskdsp-upper]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -145,7 +145,7 @@ jobs:
   package-main:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: verify-debug
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, mskdsp-upper]
     permissions:
       contents: read
     steps:
