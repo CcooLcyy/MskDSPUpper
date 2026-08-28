@@ -159,6 +159,7 @@ jobs:
       - name: Run cargo tests
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $ErrorActionPreference = "Continue"
           cargo test --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET 2>&1 | Tee-Object -FilePath package\logs\cargo-test.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -172,6 +173,7 @@ jobs:
         env:
           MSKDSP_UPPER_SOURCEMAP: 'false'
         run: |
+          $ErrorActionPreference = "Continue"
           npx tauri build --debug --no-bundle --target $env:RUST_TARGET --ci --config package/generated/tauri.verify.conf.json 2>&1 | Tee-Object -FilePath package\logs\tauri-debug-build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -337,6 +339,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          $ErrorActionPreference = "Continue"
           npx tauri build --bundles nsis --target $env:RUST_TARGET --ci --config package/generated/tauri.ci.conf.json 2>&1 | Tee-Object -FilePath package\logs\tauri-release-build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
