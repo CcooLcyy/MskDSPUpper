@@ -42,6 +42,21 @@ const defaultConfig = (modelName = '', communicationReady = false): Iec61850IedC
   nominal_frequency_hz: 50, realtime_cpu_indices: [], realtime_scheduling: 0, realtime_priority: 0, realtime_failure_mode: 1,
 });
 
+type Iec61850IedFormValues = Pick<Iec61850IedConfig,
+  'conn_name' | 'model_name' | 'ied_name' | 'access_point'
+  | 'enable_mms' | 'enable_goose' | 'enable_sv' | 'auto_start'>;
+
+const toIedFormValues = (config: Iec61850IedConfig): Iec61850IedFormValues => ({
+  conn_name: config.conn_name,
+  model_name: config.model_name,
+  ied_name: config.ied_name,
+  access_point: config.access_point,
+  enable_mms: config.enable_mms,
+  enable_goose: config.enable_goose,
+  enable_sv: config.enable_sv,
+  auto_start: config.auto_start,
+});
+
 const formatNumber = (value: number) => value.toLocaleString('zh-CN');
 
 const IEC61850Page: React.FC = () => {
@@ -59,7 +74,7 @@ const IEC61850Page: React.FC = () => {
   const [sourceName, setSourceName] = useState('');
   const [modelMessage, setModelMessage] = useState<string | null>(null);
   const [modelMessageType, setModelMessageType] = useState<'success' | 'warning' | 'error'>('success');
-  const [iedForm] = Form.useForm<Iec61850IedConfig>();
+  const [iedForm] = Form.useForm<Iec61850IedFormValues>();
   const [iedDraftModelName, setIedDraftModelName] = useState('');
   const [iedDraftName, setIedDraftName] = useState('');
   const [messageApi, contextHolder] = message.useMessage();
@@ -183,9 +198,10 @@ const IEC61850Page: React.FC = () => {
     }
   };
 
-  const saveIed = async (values: Iec61850IedConfig) => {
+  const saveIed = async (values: Iec61850IedFormValues) => {
     try {
-      const result = await api.iec61850UpsertIed(values, !editingConn);
+      const nextConfig: Iec61850IedConfig = { ...config, ...values };
+      const result = await api.iec61850UpsertIed(nextConfig, !editingConn);
       setIedModalOpen(false); setSelectedConn(result.config?.conn_name ?? values.conn_name); await refresh();
       messageApi.success('IED 配置已保存');
     } catch (error) { messageApi.error(`保存 IED 失败: ${String(error)}`); }
@@ -233,7 +249,7 @@ const IEC61850Page: React.FC = () => {
     setIedDraftModelName(nextConfig.model_name);
     setIedDraftName(nextConfig.ied_name);
     iedForm.resetFields();
-    iedForm.setFieldsValue(nextConfig);
+    iedForm.setFieldsValue(toIedFormValues(nextConfig));
     setIedModalOpen(true);
   };
 
