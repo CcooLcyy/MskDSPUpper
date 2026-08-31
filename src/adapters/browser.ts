@@ -133,9 +133,11 @@ const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('Calc'),
   makeModuleInfo('ControlOrchestrator'),
   makeModuleInfo('MQTTManager'),
+  makeModuleInfo('DigitalInput'),
 ];
 
-const runningModules = new Set(['ModuleManager', 'DataCenter', 'IEC104', 'IEC61850', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc', 'ControlOrchestrator']);
+const runningModules = new Set(['ModuleManager', 'DataCenter', 'DigitalInput', 'IEC104', 'IEC61850', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc', 'ControlOrchestrator']);
+const digitalInputConnId = 99;
 const iec104Links = new Map<string, Iec104LinkInfo>();
 const iec104Tables = new Map<string, Iec104PointTable>();
 const iec104Simulation = new Map<string, Iec104SimulationSnapshot>();
@@ -280,6 +282,7 @@ function connectionInfo(moduleName: string, connName: string, connId: number): D
 
 function listConnections(): DcConnectionInfo[] {
   return [
+    connectionInfo('DigitalInput', 'board-di', digitalInputConnId),
     ...[...iec104Links.values()].map((item) => connectionInfo('IEC104', item.config?.conn_name ?? '', item.conn_id)),
     ...[...iec61850Ieds.values()].map((item) => connectionInfo('IEC61850', item.config?.conn_name ?? '', item.conn_id)),
     ...[...modbusLinks.values()].map((item) => connectionInfo('ModbusRTU', item.config?.conn_name ?? '', item.conn_id)),
@@ -304,6 +307,10 @@ function collectValueSpec(value: { signal: { tag: string } | null; base_tag: str
 }
 
 function tagsForConnection(connId: number): string[] {
+  if (connId === digitalInputConnId) {
+    return ['DI1', 'DI2', 'DI3', 'DI4'];
+  }
+
   const iec104 = [...iec104Links.values()].find((item) => item.conn_id === connId);
   if (iec104?.config) {
     return (iec104Tables.get(iec104.config.conn_name)?.points ?? []).map((item) => item.tag);
@@ -386,7 +393,9 @@ function getLatestUpdates(connId: number, tags: string[]): Promise<DcPointUpdate
     src_tag: tag,
     dst_conn_id: connId,
     dst_tag: tag,
-    value: makePointValue(ts / 1000 + index),
+    value: connId === digitalInputConnId
+      ? { type: 'Bool', value: index % 2 === 0 } satisfies DcPointValue
+      : makePointValue(ts / 1000 + index),
     ts_ms: ts,
     quality: 0,
   })));
@@ -398,7 +407,9 @@ function getSourceLatestUpdates(connId: number, tags: string[]): Promise<DcSourc
   return Promise.resolve(activeTags.map((tag, index) => ({
     conn_id: connId,
     tag,
-    value: makePointValue(ts / 1000 + index),
+    value: connId === digitalInputConnId
+      ? { type: 'Bool', value: index % 2 === 0 } satisfies DcPointValue
+      : makePointValue(ts / 1000 + index),
     ts_ms: ts,
     quality: 0,
     sequence: index + 1,
