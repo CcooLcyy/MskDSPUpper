@@ -3,8 +3,8 @@ use anyhow::Result;
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::modbus_rtu_proto::{
     modbus_rtu_service_client::ModbusRtuServiceClient, DeleteLinkRequest, Empty, GetLinkRequest,
-    GetPointTableRequest, LinkConfig, LinkInfo, MqttConfig, Point, PointTable, RenameLinkRequest,
-    StartLinkRequest, StopLinkRequest, UpdateConfigRequest, UpdateConfigResponse,
+    GetConfigResponse, GetPointTableRequest, LinkConfig, LinkInfo, MqttConfig, Point, PointTable,
+    RenameLinkRequest, StartLinkRequest, StopLinkRequest, UpdateConfigRequest, UpdateConfigResponse,
     UpsertLinkRequest, UpsertPointTableRequest,
 };
 
@@ -23,6 +23,13 @@ impl<'a> ModbusRtuClient<'a> {
         let resp = client
             .update_config(UpdateConfigRequest { mqtt: Some(mqtt) })
             .await?;
+        Ok(resp.into_inner())
+    }
+
+    pub async fn get_config(&self) -> Result<GetConfigResponse> {
+        let channel = self.conn.module_channel("ModbusRTU").await?;
+        let mut client = ModbusRtuServiceClient::new(channel);
+        let resp = client.get_config(Empty {}).await?;
         Ok(resp.into_inner())
     }
 

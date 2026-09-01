@@ -3,8 +3,8 @@ use tauri::State;
 
 use crate::grpc::modbus_rtu::ModbusRtuClient;
 use crate::proto::modbus_rtu_proto::{
-    LinkConfig, LinkInfo, MqttConfig as ProtoMqttConfig, Point, PointTable, ReadBlock, ReadPlan,
-    SerialConfig, UpdateConfigResponse,
+    GetConfigResponse, LinkConfig, LinkInfo, MqttConfig as ProtoMqttConfig, Point, PointTable,
+    ReadBlock, ReadPlan, SerialConfig, UpdateConfigResponse,
 };
 use crate::state::AppState;
 
@@ -91,6 +91,13 @@ pub struct ModbusPointTableDto {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModbusUpdateConfigResponseDto {
     pub ok: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ModbusMqttConfigStatusDto {
+    pub configured: bool,
+    pub mqtt: Option<ModbusMqttConfigDto>,
     pub message: String,
 }
 
@@ -207,6 +214,16 @@ impl From<UpdateConfigResponse> for ModbusUpdateConfigResponseDto {
     }
 }
 
+impl From<GetConfigResponse> for ModbusMqttConfigStatusDto {
+    fn from(resp: GetConfigResponse) -> Self {
+        Self {
+            configured: resp.configured,
+            mqtt: resp.mqtt.map(Into::into),
+            message: resp.message,
+        }
+    }
+}
+
 impl ModbusSerialConfigDto {
     pub(crate) fn to_proto(&self) -> SerialConfig {
         SerialConfig {
@@ -306,6 +323,20 @@ pub async fn modbus_rtu_update_config(
             error.to_string()
         })?;
     tracing::info!(protocol = "ModbusRTU", "更新 MQTT 配置完成");
+    Ok(resp.into())
+}
+
+#[tauri::command]
+pub async fn modbus_rtu_get_config(
+    state: State<'_, AppState>,
+) -> Result<ModbusMqttConfigStatusDto, String> {
+    tracing::info!(protocol = "ModbusRTU", "开始查询 MQTT 配置");
+    let client = ModbusRtuClient::new(&state.conn_manager);
+    let resp = client.get_config().await.map_err(|error| {
+        tracing::error!(protocol = "ModbusRTU", error = %error, "查询 MQTT 配置失败");
+        error.to_string()
+    })?;
+    tracing::info!(protocol = "ModbusRTU", configured = resp.configured, "查询 MQTT 配置完成");
     Ok(resp.into())
 }
 

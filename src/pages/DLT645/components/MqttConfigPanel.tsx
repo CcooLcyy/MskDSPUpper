@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, Form, Input, InputNumber, Modal, Switch, message } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 import { api } from '../../../adapters';
 import type { Dlt645MqttConfig } from '../../../adapters';
 import { createDefaultMqttConfig, loadStoredMqttConfig, saveStoredMqttConfig } from '../../../utils/mqtt';
+import { initializeMqttConfig } from '../../../utils/mqtt-initialization';
 
 interface Props {
   block?: boolean;
@@ -18,26 +19,55 @@ const DEFAULT_MQTT_CONFIG: Dlt645MqttConfig = createDefaultMqttConfig({
 });
 
 const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
-  const [initialMqttConfig] = useState<Dlt645MqttConfig>(() =>
-    loadStoredMqttConfig<Dlt645MqttConfig>(STORAGE_KEY) ?? DEFAULT_MQTT_CONFIG,
+  const [storedMqttConfig] = useState<Dlt645MqttConfig | null>(() =>
+    loadStoredMqttConfig<Dlt645MqttConfig>(STORAGE_KEY),
   );
+  const [initialMqttConfig] = useState<Dlt645MqttConfig>(() => storedMqttConfig ?? DEFAULT_MQTT_CONFIG);
   const [mqttConfig, setMqttConfig] = useState<Dlt645MqttConfig>(() => initialMqttConfig);
   const [modalOpen, setModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const [form] = Form.useForm<Dlt645MqttConfig>();
+  const initializationVersionRef = useRef(0);
 
   useEffect(() => {
-    const syncDefaultConfig = async (): Promise<void> => {
+    const initializationVersion = ++initializationVersionRef.current;
+    const initialize = async (): Promise<void> => {
       try {
-        await api.dlt645UpdateConfig(initialMqttConfig);
-        await saveStoredMqttConfig(STORAGE_KEY, initialMqttConfig);
+        const result = await initializeMqttConfig({
+          getConfig: api.dlt645GetConfig,
+          updateConfig: api.dlt645UpdateConfig,
+          refreshRuntime: api.getRunningModuleInfo,
+          storedConfig: storedMqttConfig,
+          defaultConfig: DEFAULT_MQTT_CONFIG,
+          isCancelled: () => initializationVersion !== initializationVersionRef.current,
+          onRetry: (attempt, error) => {
+            console.warn(`DLT645 MQTT 配置初始化第 ${attempt} 次尝试失败，将重试: ${String(error)}`);
+          },
+        });
+        if (result.cancelled || initializationVersion !== initializationVersionRef.current) {
+          return;
+        }
+        setMqttConfig(result.config);
+        try {
+          await saveStoredMqttConfig(STORAGE_KEY, result.config);
+        } catch (error) {
+          console.warn(`DLT645 MQTT 配置已下发，但本地缓存保存失败: ${String(error)}`);
+        }
+        console.info(
+          result.initialized
+            ? 'DLT645 MQTT 默认配置已自动初始化'
+            : 'DLT645 MQTT 配置已从模块端同步',
+        );
       } catch (error) {
-        console.warn('Failed to apply default DLT645 MQTT config automatically:', error);
+        if (initializationVersion === initializationVersionRef.current) {
+          console.warn(`DLT645 MQTT 配置初始化失败: ${String(error)}`);
+        }
       }
     };
 
-    void syncDefaultConfig();
-  }, [initialMqttConfig]);
+    void initialize();
+  }, [storedMqttConfig]);
 
   const openModal = (): void => {
     form.setFieldsValue(mqttConfig);
@@ -45,6 +75,11 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
   };
 
   const handleSubmit = async (): Promise<void> => {
+    if (submitting) {
+      return;
+    }
+    initializationVersionRef.current += 1;
+    setSubmitting(true);
     try {
       const values = await form.validateFields();
       const payload: Dlt645MqttConfig = {
@@ -64,6 +99,8 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
       setModalOpen(false);
     } catch (error) {
       messageApi.error(`保存 MQTT 配置失败: ${error}`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -79,6 +116,9 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         onOk={() => void handleSubmit()}
+        confirmLoading={submitting}
+        maskClosable={!submitting}
+        closable={!submitting}
         destroyOnClose
       >
         <Form form={form} layout="vertical" size="small">

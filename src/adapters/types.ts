@@ -306,11 +306,19 @@ export interface Iec61850ModelSummary {
   sampled_value_control_count: number;
   external_reference_count: number;
   ieds: Iec61850SclIedSummary[];
+  connected_access_points: Iec61850SclConnectedApSummary[];
 }
 
 export interface Iec61850SclAccessPointSummary {
   name: string;
   has_server: boolean;
+}
+
+export interface Iec61850SclConnectedApSummary {
+  ied_name: string;
+  ap_name: string;
+  subnetwork_name: string;
+  network_type: string;
 }
 
 export interface Iec61850SclIedSummary {
@@ -474,6 +482,12 @@ export interface ModbusMqttConfig {
   connect_timeout_ms: number;
 }
 
+export interface ModbusMqttConfigStatus {
+  configured: boolean;
+  mqtt: ModbusMqttConfig | null;
+  message: string;
+}
+
 export interface ModbusReadBlock {
   function: number;
   start: number;
@@ -540,6 +554,12 @@ export interface Dlt645MqttConfig {
   keepalive_sec: number;
   clean_session: boolean;
   connect_timeout_ms: number;
+}
+
+export interface Dlt645MqttConfigStatus {
+  configured: boolean;
+  mqtt: Dlt645MqttConfig | null;
+  message: string;
 }
 
 export interface Dlt645LinkConfig {
@@ -642,11 +662,25 @@ export interface ControlOrchestratorCommandStep {
   use_trigger_value: boolean;
   timeout_ms: number;
   delay_after_ms: number;
+  verification?: ControlOrchestratorStepVerification | null;
+}
+
+export type ControlOrchestratorFailureAction = 'STOP' | 'RETRY_COMMAND';
+
+export interface ControlOrchestratorStepVerification {
+  status_source: DcEndpoint;
+  expected_value: DcPointValue;
+  wait_timeout_ms: number;
+  poll_interval_ms: number;
+  failure_action: ControlOrchestratorFailureAction;
+  max_retries: number;
+  retry_interval_ms: number;
 }
 
 export interface ControlOrchestratorWorkflowConfig {
   sequence_name: string;
   steps: ControlOrchestratorCommandStep[];
+  trigger?: DcEndpoint | null;
 }
 
 export interface ControlOrchestratorExecuteRequest {
@@ -663,6 +697,7 @@ export interface ControlOrchestratorExecuteResponse {
   failed_step_index: number;
   failed_step_name: string;
   reason: string;
+  failed_command_status: number;
 }
 
 export type DcPointValue =

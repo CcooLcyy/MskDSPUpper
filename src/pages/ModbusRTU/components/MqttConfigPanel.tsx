@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, Col, Form, Input, InputNumber, Modal, Row, Switch, message } from 'antd';
 import { SettingOutlined } from '@ant-design/icons';
 import { api } from '../../../adapters';
 import type { ModbusMqttConfig } from '../../../adapters';
 import { createDefaultMqttConfig, loadStoredMqttConfig, saveStoredMqttConfig } from '../../../utils/mqtt';
+import { initializeMqttConfig } from '../../../utils/mqtt-initialization';
 
 interface Props {
   block?: boolean;
@@ -18,14 +19,55 @@ const DEFAULT_MQTT_CONFIG: ModbusMqttConfig = createDefaultMqttConfig({
 });
 
 const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
-  const [initialMqttConfig] = useState<ModbusMqttConfig>(() =>
-    loadStoredMqttConfig<ModbusMqttConfig>(STORAGE_KEY) ?? DEFAULT_MQTT_CONFIG,
+  const [storedMqttConfig] = useState<ModbusMqttConfig | null>(() =>
+    loadStoredMqttConfig<ModbusMqttConfig>(STORAGE_KEY),
   );
+  const [initialMqttConfig] = useState<ModbusMqttConfig>(() => storedMqttConfig ?? DEFAULT_MQTT_CONFIG);
   const [mqttConfig, setMqttConfig] = useState<ModbusMqttConfig>(() => initialMqttConfig);
   const [modalOpen, setModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const [form] = Form.useForm<ModbusMqttConfig>();
+  const initializationVersionRef = useRef(0);
+
+  useEffect(() => {
+    const initializationVersion = ++initializationVersionRef.current;
+    const initialize = async (): Promise<void> => {
+      try {
+        const result = await initializeMqttConfig({
+          getConfig: api.modbusRtuGetConfig,
+          updateConfig: api.modbusRtuUpdateConfig,
+          refreshRuntime: api.getRunningModuleInfo,
+          storedConfig: storedMqttConfig,
+          defaultConfig: DEFAULT_MQTT_CONFIG,
+          isCancelled: () => initializationVersion !== initializationVersionRef.current,
+          onRetry: (attempt, error) => {
+            console.warn(`ModbusRTU MQTT 配置初始化第 ${attempt} 次尝试失败，将重试: ${String(error)}`);
+          },
+        });
+        if (result.cancelled || initializationVersion !== initializationVersionRef.current) {
+          return;
+        }
+        setMqttConfig(result.config);
+        try {
+          await saveStoredMqttConfig(STORAGE_KEY, result.config);
+        } catch (error) {
+          console.warn(`ModbusRTU MQTT 配置已下发，但本地缓存保存失败: ${String(error)}`);
+        }
+        console.info(
+          result.initialized
+            ? 'ModbusRTU MQTT 默认配置已自动初始化'
+            : 'ModbusRTU MQTT 配置已从模块端同步',
+        );
+      } catch (error) {
+        if (initializationVersion === initializationVersionRef.current) {
+          console.warn(`ModbusRTU MQTT 配置初始化失败: ${String(error)}`);
+        }
+      }
+    };
+
+    void initialize();
+  }, [storedMqttConfig]);
 
   const openModal = (): void => {
     form.setFieldsValue(mqttConfig);
@@ -33,6 +75,7 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
   };
 
   const handleSubmit = async (): Promise<void> => {
+    initializationVersionRef.current += 1;
     let values: ModbusMqttConfig;
     try {
       values = await form.validateFields();

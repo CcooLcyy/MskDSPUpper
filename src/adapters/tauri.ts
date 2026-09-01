@@ -24,6 +24,7 @@ import type {
   Dlt645LinkConfig,
   Dlt645LinkInfo,
   Dlt645MqttConfig,
+  Dlt645MqttConfigStatus,
   Dlt645Point,
   Dlt645PointTable,
   Dlt645UpdateConfigResponse,
@@ -60,6 +61,7 @@ import type {
   ModbusLinkConfig,
   ModbusLinkInfo,
   ModbusMqttConfig,
+  ModbusMqttConfigStatus,
   ModbusPoint,
   ModbusPointTable,
   ModbusUpdateConfigResponse,
@@ -315,6 +317,8 @@ export const api = {
 
   modbusRtuUpdateConfig: (mqtt: ModbusMqttConfig) =>
     invoke<ModbusUpdateConfigResponse>('modbus_rtu_update_config', { mqtt }),
+  modbusRtuGetConfig: () =>
+    invoke<ModbusMqttConfigStatus>('modbus_rtu_get_config'),
   modbusRtuUpsertLink: (config: ModbusLinkConfig, createOnly: boolean) =>
     invoke<ModbusLinkInfo>('modbus_rtu_upsert_link', { config, createOnly }),
   modbusRtuRenameLink: (oldConnName: string, newConnName: string) =>
@@ -335,6 +339,8 @@ export const api = {
 
   dlt645UpdateConfig: (mqtt: Dlt645MqttConfig) =>
     invoke<Dlt645UpdateConfigResponse>('dlt645_update_config', { mqtt }),
+  dlt645GetConfig: () =>
+    invoke<Dlt645MqttConfigStatus>('dlt645_get_config'),
   dlt645UpsertLink: (config: Dlt645LinkConfig, createOnly: boolean) =>
     invoke<Dlt645LinkInfo>('dlt645_upsert_link', { config, createOnly }),
   dlt645RenameLink: (oldConnName: string, newConnName: string) =>
@@ -358,8 +364,12 @@ export const api = {
     invoke<Dlt645PointTable>('dlt645_get_point_table', { connName }),
 
   dcListConnections: () => invoke<DcConnectionInfo[]>('dc_list_connections'),
+  dcGetOrCreateConnection: (moduleName: string, connName: string) =>
+    invoke<DcConnectionInfo>('dc_get_or_create_connection', { moduleName, connName }),
   dcGetConnTags: (connId: number) =>
     invoke<DcConnTags>('dc_get_conn_tags', { connId }),
+  dcUpsertConnTags: (connId: number, tags: string[], replace: boolean) =>
+    invoke<void>('dc_upsert_conn_tags', { connId, tags, replace }),
   dcListRoutes: (srcConnId: number, srcTag: string, dstConnId: number, dstTag: string) =>
     invoke<DcRoute[]>('dc_list_routes', { srcConnId, srcTag, dstConnId, dstTag }),
   dcUpsertRoutes: (routes: DcRoute[], replace: boolean) =>

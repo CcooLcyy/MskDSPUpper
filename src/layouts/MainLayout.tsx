@@ -126,7 +126,7 @@ const MainLayout: React.FC = () => {
     'MskDSP';
   const isProtocolPage = location.pathname.startsWith('/protocol/');
   const isIec61850Page = location.pathname === '/protocol/iec61850';
-  const isControlPage = location.pathname.startsWith('/control');
+  const isControlPage = location.pathname === '/control' || location.pathname.startsWith('/control/');
   const isDataBusPage = location.pathname.startsWith('/data-bus');
   const isSoftwareUpdatePage = location.pathname.startsWith('/software-update');
   const suppressHeaderTitle = isProtocolPage || isControlPage;

@@ -32,6 +32,15 @@ pub struct SclModelSummaryDto {
     pub sampled_value_control_count: u32,
     pub external_reference_count: u32,
     pub ieds: Vec<SclIedSummaryDto>,
+    pub connected_access_points: Vec<SclConnectedApSummaryDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SclConnectedApSummaryDto {
+    pub ied_name: String,
+    pub ap_name: String,
+    pub subnetwork_name: String,
+    pub network_type: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -279,12 +288,25 @@ impl From<SclModelSummary> for SclModelSummaryDto {
             sampled_value_control_count: v.sampled_value_control_count,
             external_reference_count: v.external_reference_count,
             ieds: v.ieds.into_iter().map(Into::into).collect(),
+            connected_access_points: v
+                .connected_access_points
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         }
     }
 }
-impl From<crate::proto::iec61850_proto::SclAccessPointSummary>
-    for SclAccessPointSummaryDto
-{
+impl From<crate::proto::iec61850_proto::SclConnectedApSummary> for SclConnectedApSummaryDto {
+    fn from(v: crate::proto::iec61850_proto::SclConnectedApSummary) -> Self {
+        Self {
+            ied_name: v.ied_name,
+            ap_name: v.ap_name,
+            subnetwork_name: v.subnetwork_name,
+            network_type: v.network_type,
+        }
+    }
+}
+impl From<crate::proto::iec61850_proto::SclAccessPointSummary> for SclAccessPointSummaryDto {
     fn from(v: crate::proto::iec61850_proto::SclAccessPointSummary) -> Self {
         Self {
             name: v.name,

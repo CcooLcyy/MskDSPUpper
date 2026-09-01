@@ -12,7 +12,7 @@
 .iec61850-model-catalog { margin-top: 18px; text-align: left; }
 .iec61850-detail > .ant-card-body { height: 100%; overflow: auto; }
 .iec61850-config-grid { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(360px, 1.2fr); gap: 12px; }
-.iec61850-channel { display: grid; grid-template-columns: 82px 1fr 1fr 1fr 120px; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid #303238; }
+.iec61850-channel { display: grid; grid-template-columns: 82px repeat(4, minmax(0, 1fr)) 120px; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid #303238; }
 .iec61850-channel:last-of-type { margin-bottom: 12px; }
 .iec61850-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 1px; background: #303238; }
 .iec61850-stat-grid > div { display: flex; flex-direction: column; gap: 6px; padding: 14px; background: #202124; }

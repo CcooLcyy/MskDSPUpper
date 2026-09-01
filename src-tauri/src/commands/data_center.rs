@@ -272,6 +272,40 @@ pub async fn dc_get_conn_tags(
 }
 
 #[tauri::command]
+pub async fn dc_get_or_create_connection(
+    state: State<'_, AppState>,
+    module_name: String,
+    conn_name: String,
+) -> Result<ConnectionInfoDto, String> {
+    let client = DataCenterClient::new(&state.conn_manager);
+    client
+        .get_or_create_connection(module_name, conn_name)
+        .await
+        .map(Into::into)
+        .map_err(|error| {
+            tracing::error!(error = %error, "注册 DataCenter 连接失败");
+            error.to_string()
+        })
+}
+
+#[tauri::command]
+pub async fn dc_upsert_conn_tags(
+    state: State<'_, AppState>,
+    conn_id: u32,
+    tags: Vec<String>,
+    replace: bool,
+) -> Result<(), String> {
+    let client = DataCenterClient::new(&state.conn_manager);
+    client
+        .upsert_conn_tags(conn_id, tags, replace)
+        .await
+        .map_err(|error| {
+            tracing::error!(conn_id, error = %error, "保存 DataCenter 连接标签失败");
+            error.to_string()
+        })
+}
+
+#[tauri::command]
 pub async fn dc_list_routes(
     state: State<'_, AppState>,
     src_conn_id: u32,

@@ -31,6 +31,7 @@ import type {
   Dlt645LinkConfig,
   Dlt645LinkInfo,
   Dlt645MqttConfig,
+  Dlt645MqttConfigStatus,
   Dlt645Point,
   Dlt645PointTable,
   Dlt645UpdateConfigResponse,
@@ -65,6 +66,7 @@ import type {
   ModbusLinkConfig,
   ModbusLinkInfo,
   ModbusMqttConfig,
+  ModbusMqttConfigStatus,
   ModbusPoint,
   ModbusPointTable,
   ModbusUpdateConfigResponse,
@@ -153,6 +155,8 @@ const agcTuningStatuses = new Map<string, AgcTuningStatus>();
 const avcGroups = new Map<string, AvcGroupInfo>();
 const calcGroups = new Map<string, CalcGroupInfo>();
 const controlOrchestratorSequences = new Map<string, ControlOrchestratorWorkflowConfig>();
+const dataCenterExtraConnections = new Map<string, DcConnectionInfo>();
+const dataCenterExtraTags = new Map<number, string[]>();
 let routes: DcRoute[] = [];
 let modbusMqtt: ModbusMqttConfig | null = null;
 let dlt645Mqtt: Dlt645MqttConfig | null = null;
@@ -290,6 +294,7 @@ function listConnections(): DcConnectionInfo[] {
     ...[...agcGroups.values()].map((item) => connectionInfo('AGC', item.config?.group_name ?? '', item.conn_id)),
     ...[...avcGroups.values()].map((item) => connectionInfo('AVC', item.config?.group_name ?? '', item.conn_id)),
     ...[...calcGroups.values()].map((item) => connectionInfo('Calc', item.config?.group_name ?? '', item.conn_id)),
+    ...[...dataCenterExtraConnections.values()],
   ].filter((item) => item.conn_name);
 }
 
@@ -310,6 +315,8 @@ function tagsForConnection(connId: number): string[] {
   if (connId === digitalInputConnId) {
     return ['DI1', 'DI2', 'DI3', 'DI4'];
   }
+  const extraTags = dataCenterExtraTags.get(connId);
+  if (extraTags) return clone(extraTags);
 
   const iec104 = [...iec104Links.values()].find((item) => item.conn_id === connId);
   if (iec104?.config) {
@@ -1264,6 +1271,10 @@ export const browserApi: typeof tauriApi = {
       data_attribute_count: 96, data_set_count: 4, report_control_count: 3, gse_control_count: 2,
       sampled_value_control_count: 1, external_reference_count: 8,
       ieds: [{ name: 'IED1', access_points: [{ name: 'AP1', has_server: true }, { name: 'AP2', has_server: false }] }],
+      connected_access_points: [
+        { ied_name: 'IED1', ap_name: 'AP1', subnetwork_name: 'NETA', network_type: '8-MMS' },
+        { ied_name: 'IED1', ap_name: 'AP1', subnetwork_name: 'NETB', network_type: '8-MMS' },
+      ],
     };
     if (!validateOnly) {
       if (!replace && iec61850Models.has(summary.model_name)) throw new Error(`浏览器开发模式 mock 已存在模型: ${summary.model_name}`);
@@ -1311,6 +1322,11 @@ export const browserApi: typeof tauriApi = {
     modbusMqtt = clone(mqtt);
     return { ok: true, message: '浏览器开发模式 mock 已保存 ModbusRTU MQTT 配置' };
   },
+  modbusRtuGetConfig: async (): Promise<ModbusMqttConfigStatus> => ({
+    configured: modbusMqtt !== null,
+    mqtt: modbusMqtt ? clone(modbusMqtt) : null,
+    message: modbusMqtt ? 'MQTT 配置已配置' : 'MQTT 配置未配置',
+  }),
   modbusRtuUpsertLink: async (config: ModbusLinkConfig, createOnly: boolean) =>
     upsertByName(modbusLinks, config.conn_name, createOnly, (connId, previous) => ({
       config: clone(config),
@@ -1340,6 +1356,11 @@ export const browserApi: typeof tauriApi = {
     dlt645Mqtt = clone(mqtt);
     return { ok: true, message: '浏览器开发模式 mock 已保存 DLT645 MQTT 配置' };
   },
+  dlt645GetConfig: async (): Promise<Dlt645MqttConfigStatus> => ({
+    configured: dlt645Mqtt !== null,
+    mqtt: dlt645Mqtt ? clone(dlt645Mqtt) : null,
+    message: dlt645Mqtt ? 'MQTT 配置已配置' : 'MQTT 配置未配置',
+  }),
   dlt645UpsertLink: async (config: Dlt645LinkConfig, createOnly: boolean) =>
     upsertByName(dlt645Links, config.conn_name, createOnly, (connId, previous) => ({
       config: clone(config),
@@ -1370,7 +1391,18 @@ export const browserApi: typeof tauriApi = {
     clone(dlt645Tables.get(connName) ?? { conn_name: connName, points: [], blocks: [] }),
 
   dcListConnections: async () => clone(listConnections()),
+  dcGetOrCreateConnection: async (moduleName: string, connName: string) => {
+    const existing = listConnections().find((item) => item.module_name === moduleName && item.conn_name === connName);
+    if (existing) return clone(existing);
+    const created = connectionInfo(moduleName, connName, nextId());
+    dataCenterExtraConnections.set(`${moduleName}\u0000${connName}`, created);
+    return clone(created);
+  },
   dcGetConnTags: async (connId: number): Promise<DcConnTags> => ({ conn_id: connId, tags: tagsForConnection(connId) }),
+  dcUpsertConnTags: async (connId: number, tags: string[], replace: boolean) => {
+    const previous = dataCenterExtraTags.get(connId) ?? [];
+    dataCenterExtraTags.set(connId, replace ? clone(tags) : [...new Set([...previous, ...tags])]);
+  },
   dcListRoutes: async (srcConnId: number, srcTag: string, dstConnId: number, dstTag: string) =>
     clone(routes.filter((route) => {
       const srcMatches = !srcConnId || route.src.conn_id === srcConnId;
@@ -1470,6 +1502,7 @@ export const browserApi: typeof tauriApi = {
       failed_step_index: 0,
       failed_step_name: '',
       reason: '浏览器开发模式 mock 已接受执行',
+      failed_command_status: 0,
     };
   },
 

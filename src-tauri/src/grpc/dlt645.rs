@@ -3,8 +3,8 @@ use anyhow::Result;
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::dlt645_proto::{
     dlt645_service_client::Dlt645ServiceClient, Block, DeleteLinkRequest, Empty, GetLinkRequest,
-    GetPointTableRequest, LinkConfig, LinkInfo, ListLinksResponse, MqttConfig, Point, PointTable,
-    RenameLinkRequest, StartLinkRequest, StopLinkRequest, UpdateConfigRequest,
+    GetConfigResponse, GetPointTableRequest, LinkConfig, LinkInfo, ListLinksResponse, MqttConfig,
+    Point, PointTable, RenameLinkRequest, StartLinkRequest, StopLinkRequest, UpdateConfigRequest,
     UpdateConfigResponse, UpsertLinkRequest, UpsertPointTableRequest,
 };
 
@@ -23,6 +23,13 @@ impl<'a> Dlt645Client<'a> {
         let resp = client
             .update_config(UpdateConfigRequest { mqtt: Some(mqtt) })
             .await?;
+        Ok(resp.into_inner())
+    }
+
+    pub async fn get_config(&self) -> Result<GetConfigResponse> {
+        let channel = self.conn.module_channel("DLT645").await?;
+        let mut client = Dlt645ServiceClient::new(channel);
+        let resp = client.get_config(crate::proto::dlt645_proto::Empty {}).await?;
         Ok(resp.into_inner())
     }
 

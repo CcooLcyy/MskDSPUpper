@@ -3,8 +3,8 @@ use tauri::State;
 
 use crate::grpc::dlt645::Dlt645Client;
 use crate::proto::dlt645_proto::{
-    Block, BlockItem, LinkConfig, LinkInfo, MqttConfig as ProtoMqttConfig, Point, PointTable,
-    UpdateConfigResponse,
+    Block, BlockItem, GetConfigResponse, LinkConfig, LinkInfo, MqttConfig as ProtoMqttConfig,
+    Point, PointTable, UpdateConfigResponse,
 };
 use crate::state::AppState;
 
@@ -97,6 +97,13 @@ pub struct Dlt645UpdateConfigResponseDto {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Dlt645MqttConfigStatusDto {
+    pub configured: bool,
+    pub mqtt: Option<Dlt645MqttConfigDto>,
+    pub message: String,
+}
+
 impl From<ProtoMqttConfig> for Dlt645MqttConfigDto {
     fn from(config: ProtoMqttConfig) -> Self {
         Self {
@@ -108,6 +115,16 @@ impl From<ProtoMqttConfig> for Dlt645MqttConfigDto {
             keepalive_sec: config.keepalive_sec,
             clean_session: config.clean_session,
             connect_timeout_ms: config.connect_timeout_ms,
+        }
+    }
+}
+
+impl From<GetConfigResponse> for Dlt645MqttConfigStatusDto {
+    fn from(resp: GetConfigResponse) -> Self {
+        Self {
+            configured: resp.configured,
+            mqtt: resp.mqtt.map(Into::into),
+            message: resp.message,
         }
     }
 }
@@ -308,6 +325,20 @@ pub async fn dlt645_update_config(
             error.to_string()
         })?;
     tracing::info!(protocol = "DLT645", "更新 MQTT 配置完成");
+    Ok(resp.into())
+}
+
+#[tauri::command]
+pub async fn dlt645_get_config(
+    state: State<'_, AppState>,
+) -> Result<Dlt645MqttConfigStatusDto, String> {
+    tracing::info!(protocol = "DLT645", "开始查询 MQTT 配置");
+    let client = Dlt645Client::new(&state.conn_manager);
+    let resp = client.get_config().await.map_err(|error| {
+        tracing::error!(protocol = "DLT645", error = %error, "查询 MQTT 配置失败");
+        error.to_string()
+    })?;
+    tracing::info!(protocol = "DLT645", configured = resp.configured, "查询 MQTT 配置完成");
     Ok(resp.into())
 }
 

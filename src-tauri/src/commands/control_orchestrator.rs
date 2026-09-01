@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::grpc::control_orchestrator::ControlOrchestratorClient;
-use crate::proto::control_orchestrator_proto::{CommandStep, WorkflowConfig};
+use crate::proto::control_orchestrator_proto::{
+    step_verification, CommandStep, StepVerification, WorkflowConfig,
+};
 use crate::proto::data_center_proto::{point_value, Endpoint, PointValue};
 use crate::state::AppState;
 
@@ -16,12 +18,34 @@ pub struct CommandStepDto {
     pub use_trigger_value: bool,
     pub timeout_ms: u32,
     pub delay_after_ms: u32,
+    #[serde(default)]
+    pub verification: Option<StepVerificationDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StepVerificationDto {
+    pub status_source: EndpointDto,
+    pub expected_value: PointValueDto,
+    pub wait_timeout_ms: u32,
+    pub poll_interval_ms: u32,
+    #[serde(default = "default_failure_action")]
+    pub failure_action: String,
+    #[serde(default)]
+    pub max_retries: u32,
+    #[serde(default)]
+    pub retry_interval_ms: u32,
+}
+
+fn default_failure_action() -> String {
+    "STOP".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WorkflowConfigDto {
     pub sequence_name: String,
     pub steps: Vec<CommandStepDto>,
+    #[serde(default)]
+    pub trigger: Option<EndpointDto>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -44,26 +68,31 @@ pub struct ExecuteSequenceResponseDto {
     pub failed_step_index: u32,
     pub failed_step_name: String,
     pub reason: String,
+    pub failed_command_status: i32,
 }
 
 fn point_value_to_proto(value: Option<PointValueDto>) -> Option<PointValue> {
-    value.map(|value| PointValue { kind: Some(match value {
-        PointValueDto::Bool(v) => point_value::Kind::BoolValue(v),
-        PointValueDto::Int(v) => point_value::Kind::IntValue(v),
-        PointValueDto::Double(v) => point_value::Kind::DoubleValue(v),
-        PointValueDto::String(v) => point_value::Kind::StringValue(v),
-        PointValueDto::Bytes(v) => point_value::Kind::BytesValue(v),
-    }) })
+    value.map(|value| PointValue {
+        kind: Some(match value {
+            PointValueDto::Bool(v) => point_value::Kind::BoolValue(v),
+            PointValueDto::Int(v) => point_value::Kind::IntValue(v),
+            PointValueDto::Double(v) => point_value::Kind::DoubleValue(v),
+            PointValueDto::String(v) => point_value::Kind::StringValue(v),
+            PointValueDto::Bytes(v) => point_value::Kind::BytesValue(v),
+        }),
+    })
 }
 
 fn point_value_from_proto(value: Option<PointValue>) -> Option<PointValueDto> {
-    value.and_then(|value| value.kind.map(|kind| match kind {
-        point_value::Kind::BoolValue(v) => PointValueDto::Bool(v),
-        point_value::Kind::IntValue(v) => PointValueDto::Int(v),
-        point_value::Kind::DoubleValue(v) => PointValueDto::Double(v),
-        point_value::Kind::StringValue(v) => PointValueDto::String(v),
-        point_value::Kind::BytesValue(v) => PointValueDto::Bytes(v),
-    }))
+    value.and_then(|value| {
+        value.kind.map(|kind| match kind {
+            point_value::Kind::BoolValue(v) => PointValueDto::Bool(v),
+            point_value::Kind::IntValue(v) => PointValueDto::Int(v),
+            point_value::Kind::DoubleValue(v) => PointValueDto::Double(v),
+            point_value::Kind::StringValue(v) => PointValueDto::String(v),
+            point_value::Kind::BytesValue(v) => PointValueDto::Bytes(v),
+        })
+    })
 }
 
 fn endpoint_to_proto(value: EndpointDto) -> Endpoint {
@@ -94,6 +123,19 @@ impl CommandStepDto {
             use_trigger_value: self.use_trigger_value,
             timeout_ms: self.timeout_ms,
             delay_after_ms: self.delay_after_ms,
+            verification: self.verification.map(|verification| StepVerification {
+                status_source: Some(endpoint_to_proto(verification.status_source)),
+                expected_value: point_value_to_proto(Some(verification.expected_value)),
+                wait_timeout_ms: verification.wait_timeout_ms,
+                poll_interval_ms: verification.poll_interval_ms,
+                failure_action: if verification.failure_action == "RETRY_COMMAND" {
+                    step_verification::FailureAction::RetryCommand as i32
+                } else {
+                    step_verification::FailureAction::Stop as i32
+                },
+                max_retries: verification.max_retries,
+                retry_interval_ms: verification.retry_interval_ms,
+            }),
         }
     }
 }
@@ -107,6 +149,21 @@ impl From<CommandStep> for CommandStepDto {
             use_trigger_value: value.use_trigger_value,
             timeout_ms: value.timeout_ms,
             delay_after_ms: value.delay_after_ms,
+            verification: value.verification.map(|verification| StepVerificationDto {
+                status_source: endpoint_from_proto(verification.status_source),
+                expected_value: point_value_from_proto(verification.expected_value)
+                    .unwrap_or(PointValueDto::Bool(false)),
+                wait_timeout_ms: verification.wait_timeout_ms,
+                poll_interval_ms: verification.poll_interval_ms,
+                failure_action: step_verification::FailureAction::try_from(
+                    verification.failure_action,
+                )
+                .unwrap_or(step_verification::FailureAction::Stop)
+                .as_str_name()
+                .to_string(),
+                max_retries: verification.max_retries,
+                retry_interval_ms: verification.retry_interval_ms,
+            }),
         }
     }
 }
@@ -115,7 +172,12 @@ impl WorkflowConfigDto {
     fn to_proto(self) -> WorkflowConfig {
         WorkflowConfig {
             sequence_name: self.sequence_name,
-            steps: self.steps.into_iter().map(CommandStepDto::to_proto).collect(),
+            steps: self
+                .steps
+                .into_iter()
+                .map(CommandStepDto::to_proto)
+                .collect(),
+            trigger: self.trigger.map(endpoint_to_proto),
         }
     }
 }
@@ -125,6 +187,7 @@ impl From<WorkflowConfig> for WorkflowConfigDto {
         Self {
             sequence_name: value.sequence_name,
             steps: value.steps.into_iter().map(Into::into).collect(),
+            trigger: value.trigger.map(endpoint_from_proto),
         }
     }
 }
@@ -197,5 +260,6 @@ pub async fn control_orchestrator_execute_sequence(
         failed_step_index: response.failed_step_index,
         failed_step_name: response.failed_step_name,
         reason: response.reason,
+        failed_command_status: response.failed_command_status,
     })
 }
