@@ -187,7 +187,9 @@ impl From<WorkflowConfig> for WorkflowConfigDto {
         Self {
             sequence_name: value.sequence_name,
             steps: value.steps.into_iter().map(Into::into).collect(),
-            trigger: value.trigger.map(endpoint_from_proto),
+            trigger: value
+                .trigger
+                .map(|trigger| endpoint_from_proto(Some(trigger))),
         }
     }
 }
