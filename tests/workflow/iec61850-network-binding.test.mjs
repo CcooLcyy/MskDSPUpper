@@ -15,7 +15,8 @@ test('IEC61850 exposes SCL network candidates for A/B channel binding', () => {
   assert.match(types, /interface Iec61850SclConnectedApSummary/);
   assert.match(page, /getConnectedApCandidates/);
   assert.match(page, /选择 SCL 网段/);
-  assert.match(page, /currentNetworkCandidates\.length === 1/);
+  assert.match(page, /currentNetworkCandidates\.length !== 1/);
+  assert.match(page, /currentNetworkCandidates\[0\]\.subnetwork_name/);
   assert.match(page, /subnetwork_name: value \?\? ''/);
   assert.match(browser, /subnetwork_name: 'NETA'/);
   assert.match(browser, /subnetwork_name: 'NETB'/);

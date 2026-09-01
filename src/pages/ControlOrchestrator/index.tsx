@@ -159,10 +159,13 @@ async function syncBinding(previous: ControlOrchestratorWorkflowConfig | null, n
   const routes = await api.dcListRoutes(0, '', 0, '');
   const previousKey = previous?.trigger ? endpointKey(previous.trigger) : null;
   const previousRouteTag = previous ? `trigger:${previous.sequence_name}` : null;
-  const conflict = next.trigger && routes.find((route) => route.dst.module_name === orchestratorConnection.module_name
-    && route.dst.conn_name === orchestratorConnection.conn_name
-    && endpointKey(route.src) === endpointKey(next.trigger)
-    && route.dst.tag !== routeTag);
+  const trigger = next.trigger;
+  const conflict = trigger
+    ? routes.find((route) => route.dst.module_name === orchestratorConnection.module_name
+      && route.dst.conn_name === orchestratorConnection.conn_name
+      && endpointKey(route.src) === endpointKey(trigger)
+      && route.dst.tag !== routeTag)
+    : undefined;
   if (conflict) throw new Error('该触发源点已绑定其他编排，请先解除原绑定');
   const connection = await api.dcGetOrCreateConnection(orchestratorConnection.module_name, orchestratorConnection.conn_name);
   const activeConfigs = await api.controlOrchestratorListSequences();
