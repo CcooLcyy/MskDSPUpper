@@ -658,7 +658,7 @@ const DataBus: React.FC = () => {
       style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
     >
       <div style={{ padding: '10px 12px 6px' }}><Text type="secondary" style={{ fontSize: 12 }}>连接由协议/控制页面自动注册，本页只用于选择端点和诊断。</Text></div>
-      <div style={{ flex: 1, minHeight: 150, overflow: 'auto' }}>
+      <div style={{ flex: '1 1 0', minHeight: 0, minWidth: 0, overflowY: 'auto', scrollbarGutter: 'stable' }}>
         <List dataSource={connections} locale={{ emptyText: '暂无已注册连接' }} renderItem={(item) => {
           const active = item.conn_id === selectedConnId;
           const tagCount = allConnTags.get(item.conn_id)?.length ?? 0;

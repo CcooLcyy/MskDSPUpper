@@ -1736,8 +1736,8 @@ const AVC: React.FC = () => {
             title="控制组列表"
             size="small"
             bordered
-            style={{ width: '100%', flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}
-            styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', padding: '8px 0' } }}
+            style={{ width: '100%', minWidth: 0, minHeight: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+            styles={{ body: { flex: '1 1 auto', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '8px 0' } }}
             extra={
               <Button
                 type="text"
@@ -1748,7 +1748,7 @@ const AVC: React.FC = () => {
               />
             }
           >
-            <div style={{ flex: 1, overflow: 'auto' }}>
+            <div style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0, overflowY: 'auto', scrollbarGutter: 'stable' }}>
               <List
                 dataSource={groups}
                 locale={{ emptyText: '暂无 AVC 控制组' }}

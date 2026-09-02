@@ -24,8 +24,8 @@ const StatusPanel: React.FC<Props> = ({ link }) => {
         <Descriptions.Item label="当前状态">
           <Tag color={state.color}>{state.label}</Tag>
         </Descriptions.Item>
-        <Descriptions.Item label="最近错误">
-          <Text>{link?.last_error || 'None'}</Text>
+        <Descriptions.Item label="当前错误">
+          <Text>{link?.last_error || '无错误'}</Text>
         </Descriptions.Item>
       </Descriptions>
     </Card>

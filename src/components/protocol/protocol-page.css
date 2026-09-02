@@ -204,6 +204,22 @@
   z-index: 1;
 }
 
+.protocol-connection-list-card {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.protocol-connection-list-card > .ant-card-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.protocol-connection-list-scroll {
+  scrollbar-gutter: stable;
+}
+
 @keyframes protocol-realtime-pulse {
   0% {
     background: rgba(24, 144, 255, 0.24);

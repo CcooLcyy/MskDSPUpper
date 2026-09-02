@@ -60,11 +60,12 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
 }: ProtocolConnectionListProps<T>) {
   return (
     <Card
+      className="protocol-connection-list-card"
       title={title}
       size="small"
       bordered
-      style={{ width, flexShrink: 0, display: 'flex', flexDirection: 'column' }}
-      styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', padding: '8px 0' } }}
+      style={{ width, minWidth: 0, minHeight: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column' }}
+      styles={{ body: { flex: '1 1 auto', minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '8px 0' } }}
       extra={(
         <Button
           type="text"
@@ -78,7 +79,7 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
         />
       )}
     >
-      <div style={{ flex: 1, overflow: 'auto', padding: '0 8px' }}>
+      <div className="protocol-connection-list-scroll" style={{ flex: '1 1 auto', minHeight: 0, minWidth: 0, overflowY: 'auto', padding: '0 8px' }}>
         <List
           dataSource={links}
           locale={{ emptyText }}

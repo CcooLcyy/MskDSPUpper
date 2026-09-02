@@ -190,7 +190,7 @@ const ConnectionConfig: React.FC<Props> = ({
               className="modbus-last-error"
               type="error"
               showIcon
-              message="最近错误"
+              message="当前错误"
               description={link.last_error}
             />
           ) : null}
