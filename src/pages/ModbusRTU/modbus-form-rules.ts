@@ -4,6 +4,7 @@ export const MODBUS_FUNCTION = Object.freeze({
   READ_INPUT_REGISTERS: 3,
   WRITE_SINGLE_REGISTER: 4,
   WRITE_MULTIPLE_REGISTERS: 5,
+  WRITE_SINGLE_COIL: 6,
 } as const);
 
 export const MODBUS_DATA_TYPE = Object.freeze({
@@ -41,8 +42,12 @@ const REGISTER_TYPES: readonly ModbusDataType[] = Object.freeze([
   MODBUS_DATA_TYPE.INT32,
 ]);
 const SINGLE_REGISTER_TYPES: readonly ModbusDataType[] = Object.freeze([
+  MODBUS_DATA_TYPE.BOOL,
   MODBUS_DATA_TYPE.UINT16,
   MODBUS_DATA_TYPE.INT16,
+]);
+const SINGLE_COIL_TYPES: readonly ModbusDataType[] = Object.freeze([
+  MODBUS_DATA_TYPE.BOOL,
 ]);
 
 const DATA_TYPES_BY_FUNCTION: Readonly<Record<ModbusFunctionCode, readonly ModbusDataType[]>> = Object.freeze({
@@ -51,6 +56,7 @@ const DATA_TYPES_BY_FUNCTION: Readonly<Record<ModbusFunctionCode, readonly Modbu
   [MODBUS_FUNCTION.READ_INPUT_REGISTERS]: REGISTER_READ_TYPES,
   [MODBUS_FUNCTION.WRITE_SINGLE_REGISTER]: SINGLE_REGISTER_TYPES,
   [MODBUS_FUNCTION.WRITE_MULTIPLE_REGISTERS]: REGISTER_TYPES,
+  [MODBUS_FUNCTION.WRITE_SINGLE_COIL]: SINGLE_COIL_TYPES,
 });
 
 export function getAllowedDataTypes(functionCode: number): readonly ModbusDataType[] {
@@ -86,6 +92,24 @@ export function getAllowedRegCounts(dataType: number): readonly number[] {
     return TWO_REGISTERS;
   }
   return EMPTY_NUMBERS;
+}
+
+/** 返回指定功能码和数据类型组合允许的地址占用数量。 */
+export function getAllowedRegCountsForFunction(
+  functionCode: number,
+  dataType: number,
+): readonly number[] {
+  if (!getAllowedDataTypes(functionCode).includes(dataType as ModbusDataType)) {
+    return EMPTY_NUMBERS;
+  }
+  if (
+    functionCode === MODBUS_FUNCTION.READ_COILS
+    || functionCode === MODBUS_FUNCTION.WRITE_SINGLE_COIL
+    || functionCode === MODBUS_FUNCTION.WRITE_SINGLE_REGISTER
+  ) {
+    return ONE_REGISTER;
+  }
+  return getAllowedRegCounts(dataType);
 }
 
 export function isValidRegCount(dataType: number, regCount: number): boolean {

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const modbusSource = readFileSync(new URL('../../src/pages/ModbusRTU/index.tsx', import.meta.url), 'utf8');
+const modbusRulesSource = readFileSync(new URL('../../src/pages/ModbusRTU/modbus-form-rules.ts', import.meta.url), 'utf8');
 const mqttPanelSource = readFileSync(
   new URL('../../src/pages/ModbusRTU/components/MqttConfigPanel.tsx', import.meta.url),
   'utf8',
@@ -34,6 +35,13 @@ test('Modbus 点表支持复制点位并递增地址', () => {
   assert.match(modbusSource, /useEffect\(\(\) => \{[\s\S]*pointForm\.setFields\(\[\{ name: 'tag', errors: \['Tag 已存在'\] \}\]\)/);
   assert.match(modbusSource, /getNextDuplicatePointAddress\(point, points\)/);
   assert.match(modbusSource, /onCopy=\{\(index\) => openCopyPoint\(index\)\}/);
+});
+
+test('Modbus 点表允许 0x05 写单线圈和 0x06 BOOL 写单寄存器', () => {
+  assert.match(modbusRulesSource, /WRITE_SINGLE_COIL:\s*6/);
+  assert.match(modbusSource, /0x05 写单线圈/);
+  assert.match(modbusSource, /getAllowedRegCountsForFunction\(value, nextType\)/);
+  assert.match(modbusSource, /getAllowedRegCountsForFunction\(pointFunction, value\)/);
 });
 
 // 验证打开 Modbus 页面不会静默覆盖模块 MQTT 全局配置。

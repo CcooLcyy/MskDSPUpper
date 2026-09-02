@@ -11,6 +11,7 @@ import {
   getCoveredReadPlanTags,
   getAllowedDataTypes,
   getAllowedRegCounts,
+  getAllowedRegCountsForFunction,
   getDefaultRegCount,
   getDuplicatePointAddress,
   getNextDuplicatePointAddress,
@@ -44,13 +45,14 @@ test('Modbus 功能码只返回后端支持的数据类型', () => {
     INT16,
     INT32,
   ]);
-  assert.deepEqual(getAllowedDataTypes(MODBUS_FUNCTION.WRITE_SINGLE_REGISTER), [UINT16, INT16]);
+  assert.deepEqual(getAllowedDataTypes(MODBUS_FUNCTION.WRITE_SINGLE_REGISTER), [BOOL, UINT16, INT16]);
   assert.deepEqual(getAllowedDataTypes(MODBUS_FUNCTION.WRITE_MULTIPLE_REGISTERS), [
     UINT16,
     UINT32,
     INT16,
     INT32,
   ]);
+  assert.deepEqual(getAllowedDataTypes(MODBUS_FUNCTION.WRITE_SINGLE_COIL), [BOOL]);
   assert.deepEqual(getAllowedDataTypes(0), []);
 });
 
@@ -81,6 +83,11 @@ test('Modbus 数据类型决定默认值和合法寄存器数量', () => {
   assert.equal(isValidRegCount(UINT16, 2), false);
   assert.equal(isValidRegCount(UINT32, 2), true);
   assert.equal(isValidRegCount(UINT32, 1), false);
+
+  assert.deepEqual(getAllowedRegCountsForFunction(MODBUS_FUNCTION.READ_COILS, BOOL), [1]);
+  assert.deepEqual(getAllowedRegCountsForFunction(MODBUS_FUNCTION.WRITE_SINGLE_COIL, BOOL), [1]);
+  assert.deepEqual(getAllowedRegCountsForFunction(MODBUS_FUNCTION.WRITE_SINGLE_REGISTER, BOOL), [1]);
+  assert.deepEqual(getAllowedRegCountsForFunction(MODBUS_FUNCTION.WRITE_MULTIPLE_REGISTERS, BOOL), []);
 });
 
 test('Modbus 地址基准决定表单允许的最小地址', () => {

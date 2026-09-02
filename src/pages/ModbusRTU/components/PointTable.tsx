@@ -51,6 +51,7 @@ const FUNCTION_CODE_LABELS: Record<number, string> = {
   3: '0x04 读输入寄存器',
   4: '0x06 写单寄存器',
   5: '0x10 写多寄存器',
+  6: '0x05 写单线圈',
 };
 
 const DATA_TYPE_LABELS: Record<number, string> = {

@@ -18,7 +18,7 @@ import {
   MODBUS_FUNCTION,
   createDefaultModbusPoint,
   getAllowedDataTypes,
-  getAllowedRegCounts,
+  getAllowedRegCountsForFunction,
   getDefaultRegCount,
   getNextDuplicatePointAddress,
   getMinimumAddress,
@@ -53,6 +53,7 @@ const ALL_FUNCTION_CODE_OPTIONS = [
   ...READ_FUNCTION_CODE_OPTIONS,
   { value: 4, label: '0x06 写单寄存器' },
   { value: 5, label: '0x10 写多寄存器' },
+  { value: 6, label: '0x05 写单线圈' },
 ];
 const LIST_STATE_COLOR_MAP: Record<number, string> = {
   0: '#8c8c8c',
@@ -152,12 +153,14 @@ const ModbusRTU: React.FC = () => {
   const pointDataType = Form.useWatch('data_type', pointForm);
   const pointRegCount = Form.useWatch('reg_count', pointForm);
   const pointAddressBase = Form.useWatch('address_base', pointForm);
-  const isCoilPoint = pointFunction === MODBUS_FUNCTION.READ_COILS;
   const isRegisterBoolPoint = pointDataType === MODBUS_DATA_TYPE.BOOL
     && (pointFunction === MODBUS_FUNCTION.READ_HOLDING_REGISTERS || pointFunction === MODBUS_FUNCTION.READ_INPUT_REGISTERS);
   const pointDataTypeOptions = getAllowedDataTypes(pointFunction ?? MODBUS_FUNCTION.READ_HOLDING_REGISTERS)
     .map((value) => ({ value, label: MODBUS_DATA_TYPE_LABELS[value] }));
-  const pointRegCountOptions = (isCoilPoint ? [1] : getAllowedRegCounts(pointDataType ?? MODBUS_DATA_TYPE.UINT16))
+  const pointRegCountOptions = getAllowedRegCountsForFunction(
+    pointFunction ?? MODBUS_FUNCTION.READ_HOLDING_REGISTERS,
+    pointDataType ?? MODBUS_DATA_TYPE.UINT16,
+  )
     .map((value) => ({ value, label: `${value} 个寄存器` }));
   const pointBitMax = (pointRegCount ?? 1) * 16 - 1;
   const pointTagTrimmed = typeof pointTag === 'string' ? pointTag.trim() : '';
@@ -685,9 +688,7 @@ const ModbusRTU: React.FC = () => {
     }
 
     const allowedDataTypes = getAllowedDataTypes(values.function);
-    const allowedRegCounts = values.function === MODBUS_FUNCTION.READ_COILS
-      ? [1]
-      : getAllowedRegCounts(values.data_type);
+    const allowedRegCounts = getAllowedRegCountsForFunction(values.function, values.data_type);
     if (!allowedDataTypes.includes(values.data_type) || !allowedRegCounts.includes(values.reg_count)) {
       messageApi.error('功能码、数据类型和寄存器数不匹配');
       return;
@@ -1040,9 +1041,8 @@ const ModbusRTU: React.FC = () => {
                     && (value === MODBUS_FUNCTION.READ_HOLDING_REGISTERS || value === MODBUS_FUNCTION.READ_INPUT_REGISTERS);
                   pointForm.setFieldsValue({
                     data_type: nextType,
-                    reg_count: value === MODBUS_FUNCTION.READ_COILS
-                      ? 1
-                      : (getDefaultRegCount(nextType) ?? 1),
+                    reg_count: getAllowedRegCountsForFunction(value, nextType)[0]
+                      ?? (getDefaultRegCount(nextType) ?? 1),
                     bit_index: registerBool ? (pointForm.getFieldValue('bit_index') ?? 0) : null,
                   });
                 }}
@@ -1073,9 +1073,8 @@ const ModbusRTU: React.FC = () => {
                   const registerBool = value === MODBUS_DATA_TYPE.BOOL
                     && (pointFunction === MODBUS_FUNCTION.READ_HOLDING_REGISTERS || pointFunction === MODBUS_FUNCTION.READ_INPUT_REGISTERS);
                   pointForm.setFieldsValue({
-                    reg_count: pointFunction === MODBUS_FUNCTION.READ_COILS
-                      ? 1
-                      : (getDefaultRegCount(value) ?? 1),
+                    reg_count: getAllowedRegCountsForFunction(pointFunction, value)[0]
+                      ?? (getDefaultRegCount(value) ?? 1),
                     bit_index: registerBool ? 0 : null,
                   });
                 }}
