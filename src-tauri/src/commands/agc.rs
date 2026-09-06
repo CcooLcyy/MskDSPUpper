@@ -302,7 +302,7 @@ impl MemberControlProfileDto {
 }
 
 impl GroupControlProfileDto {
-    fn to_proto(&self) -> GroupControlProfile {
+    pub(crate) fn to_proto(&self) -> GroupControlProfile {
         GroupControlProfile {
             group_name: self.group_name.clone(),
             members: self.members.iter().map(MemberControlProfileDto::to_proto).collect(),

@@ -130,6 +130,7 @@ export type {
   ConfigExportSectionId,
   AgcDerivedOutputs,
   AgcExportTask,
+  CalcExportTask,
   AgcGroupConfig,
   AgcGroupInfo,
   AgcMemberConfig,
@@ -141,6 +142,8 @@ export type {
   Iec104ExportTask,
   ModbusRtuExportTask,
   StableDataBusEndpoint,
+  StableDataBusConnection,
+  StableDataBusConnTags,
   StableDataBusRoute,
 } from './types';
 import { browserApi } from './browser';

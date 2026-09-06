@@ -1004,6 +1004,12 @@ export interface AgcExportTask {
   };
 }
 
+export interface CalcExportTask {
+  upsert: {
+    config: CalcGroupConfig;
+  };
+}
+
 export interface AvcExportTask {
   upsert: {
     config: AvcGroupConfig;
@@ -1017,12 +1023,30 @@ export interface StableDataBusEndpoint {
   conn_id?: number;
 }
 
+export interface StableDataBusConnection {
+  module_name: string;
+  conn_name: string;
+}
+
+export interface StableDataBusConnTags {
+  module_name: string;
+  conn_name: string;
+  tags: string[];
+}
+
 export interface StableDataBusRoute {
   src: StableDataBusEndpoint;
   dst: StableDataBusEndpoint;
 }
 
-export type ConfigExportSectionId = 'iec104' | 'modbus_rtu' | 'dlt645' | 'agc' | 'avc' | 'data_bus';
+export type ConfigExportSectionId =
+  | 'iec104'
+  | 'modbus_rtu'
+  | 'dlt645'
+  | 'agc'
+  | 'avc'
+  | 'calc'
+  | 'data_bus';
 
 export interface ConfigExportMetadata {
   scope: 'full' | 'partial';
@@ -1058,12 +1082,18 @@ export interface FullConfigExportSnapshot {
     avc: {
       groups: AvcExportTask[];
     };
+    calc: {
+      groups: CalcExportTask[];
+    };
     data_bus: {
+      connections: StableDataBusConnection[];
+      conn_tags: StableDataBusConnTags[];
       routes: {
         replace: true;
         items: StableDataBusRoute[];
       };
     };
   };
+  agc_control_profiles: AgcControlProfile[];
   metadata: ConfigExportMetadata;
 }

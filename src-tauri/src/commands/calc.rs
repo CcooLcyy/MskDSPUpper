@@ -207,7 +207,7 @@ impl From<CalcGroupConfig> for CalcGroupConfigDto {
 }
 
 impl CalcGroupConfigDto {
-    fn to_proto(&self) -> Result<CalcGroupConfig, String> {
+    pub(crate) fn to_proto(&self) -> Result<CalcGroupConfig, String> {
         Ok(CalcGroupConfig {
             group_name: self.group_name.trim().to_string(),
             items: self

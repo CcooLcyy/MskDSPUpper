@@ -12,20 +12,22 @@ use serde::{Deserialize, Serialize};
 use crate::{
     commands::{
         agc::GroupConfigDto as AgcGroupConfigDto,
+        agc::GroupControlProfileDto as AgcControlProfileDto,
         avc::GroupConfigDto as AvcGroupConfigDto,
+        calc::CalcGroupConfigDto,
         dlt645::{Dlt645BlockDto, Dlt645LinkConfigDto, Dlt645MqttConfigDto, Dlt645PointDto},
         iec104::{LinkConfigDto as Iec104LinkConfigDto, PointDto as Iec104PointDto},
         modbus_rtu::{ModbusLinkConfigDto, ModbusMqttConfigDto, ModbusPointDto},
     },
     proto::{
         config_pusher_proto::{
-            AgcConfig, AgcGroupTask, AvcConfig, AvcGroupTask, Config, DataCenterEndpoint,
-            DataCenterRoute, DataCenterRoutes, Dlt645Config, Dlt645LinkTask, Iec104Config,
-            Iec104LinkTask, ModbusRtuConfig, ModbusRtuLinkTask,
+            AgcConfig, AgcGroupTask, AvcConfig, AvcGroupTask, CalcConfig, CalcGroupTask, Config,
+            DataCenterEndpoint, DataCenterRoute, DataCenterRoutes, Dlt645Config, Dlt645LinkTask,
+            Iec104Config, Iec104LinkTask, ModbusRtuConfig, ModbusRtuLinkTask,
         },
         export_config_proto::{
-            DataBusConfig as ExportDataBusConfig, ExportMetadata, FullConfigExport, ModuleStartup,
-            SourceInfo,
+            DataBusConfig as ExportDataBusConfig, DataBusConnTags, DataBusConnection,
+            ExportMetadata, FullConfigExport, ModuleStartup, SourceInfo,
         },
     },
 };
@@ -43,6 +45,8 @@ pub struct FullConfigExportSnapshotDto {
     pub source: ExportSourceDto,
     pub module_startup: ModuleStartupDto,
     pub config: FullConfigExportConfigDto,
+    #[serde(default)]
+    pub agc_control_profiles: Vec<AgcControlProfileDto>,
     #[serde(default)]
     pub metadata: ExportMetadataDto,
 }
@@ -73,6 +77,8 @@ pub struct FullConfigExportConfigDto {
     pub agc: AgcExportConfigDto,
     #[serde(default)]
     pub avc: AvcExportConfigDto,
+    #[serde(default)]
+    pub calc: CalcExportConfigDto,
     pub data_bus: DataBusExportConfigDto,
 }
 
@@ -178,9 +184,41 @@ pub struct AvcUpsertRequestDto {
     pub config: AvcGroupConfigDto,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct CalcExportConfigDto {
+    pub groups: Vec<CalcExportTaskDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CalcExportTaskDto {
+    pub upsert: CalcUpsertRequestDto,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CalcUpsertRequestDto {
+    pub config: CalcGroupConfigDto,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DataBusExportConfigDto {
+    #[serde(default)]
+    pub connections: Vec<DataBusConnectionDto>,
+    #[serde(default)]
+    pub conn_tags: Vec<DataBusConnTagsDto>,
     pub routes: DataBusRoutesDto,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataBusConnectionDto {
+    pub module_name: String,
+    pub conn_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DataBusConnTagsDto {
+    pub module_name: String,
+    pub conn_name: String,
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -211,9 +249,14 @@ impl FullConfigExportSnapshotDto {
             exported_at: self.exported_at.clone(),
             source: Some(self.source.to_proto()),
             module_startup: Some(self.module_startup.to_proto()?),
-            config: Some(self.config.to_proto()),
+            config: Some(self.config.to_proto()?),
             data_bus: Some(self.config.data_bus.to_proto()),
             metadata: Some(self.metadata.to_proto()?),
+            agc_control_profiles: self
+                .agc_control_profiles
+                .iter()
+                .map(AgcControlProfileDto::to_proto)
+                .collect(),
         })
     }
 
@@ -234,6 +277,11 @@ impl FullConfigExportSnapshotDto {
                 }),
             module_startup: ModuleStartupDto::from_proto(export.module_startup)?,
             config: FullConfigExportConfigDto::from_proto(export.config, export.data_bus)?,
+            agc_control_profiles: export
+                .agc_control_profiles
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             metadata: ExportMetadataDto::from_proto(export.metadata)?,
         })
     }
@@ -333,17 +381,17 @@ impl ExportMetadataDto {
 }
 
 impl FullConfigExportConfigDto {
-    fn to_proto(&self) -> Config {
-        Config {
+    fn to_proto(&self) -> Result<Config, String> {
+        Ok(Config {
             iec104: Some(self.iec104.to_proto()),
             modbus_rtu: Some(self.modbus_rtu.to_proto()),
             dlt645: Some(self.dlt645.to_proto()),
             agc: Some(self.agc.to_proto()),
             avc: Some(self.avc.to_proto()),
-            calc: None,
+            calc: Some(self.calc.to_proto()?),
             iec61850: None,
             control_orchestrator: None,
-        }
+        })
     }
 
     fn from_proto(
@@ -367,6 +415,7 @@ impl FullConfigExportConfigDto {
             dlt645: Dlt645ExportConfigDto::from_proto(config.dlt645)?,
             agc: AgcExportConfigDto::from_proto(config.agc)?,
             avc: AvcExportConfigDto::from_proto(config.avc)?,
+            calc: CalcExportConfigDto::from_proto(config.calc)?,
             data_bus: DataBusExportConfigDto::from_proto(data_bus)?,
         })
     }
@@ -684,6 +733,60 @@ impl AgcExportTaskDto {
     }
 }
 
+impl CalcExportConfigDto {
+    fn to_proto(&self) -> Result<CalcConfig, String> {
+        Ok(CalcConfig {
+            groups: self
+                .groups
+                .iter()
+                .map(CalcExportTaskDto::to_proto)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+
+    fn from_proto(config: Option<CalcConfig>) -> Result<Self, String> {
+        let Some(config) = config else {
+            return Ok(Self { groups: Vec::new() });
+        };
+
+        Ok(Self {
+            groups: config
+                .groups
+                .into_iter()
+                .enumerate()
+                .map(|(index, task)| CalcExportTaskDto::from_proto(index, task))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl CalcExportTaskDto {
+    fn to_proto(&self) -> Result<CalcGroupTask, String> {
+        Ok(CalcGroupTask {
+            upsert: Some(crate::proto::calc_proto::UpsertGroupRequest {
+                config: Some(self.upsert.config.to_proto()?),
+                create_only: false,
+            }),
+            start: false,
+        })
+    }
+
+    fn from_proto(index: usize, task: CalcGroupTask) -> Result<Self, String> {
+        let upsert = task
+            .upsert
+            .ok_or_else(|| format!("Calc 导出计算组第 {} 项缺少 upsert", index + 1))?;
+        let config = upsert
+            .config
+            .ok_or_else(|| format!("Calc 导出计算组第 {} 项缺少 upsert.config", index + 1))?;
+
+        Ok(Self {
+            upsert: CalcUpsertRequestDto {
+                config: config.into(),
+            },
+        })
+    }
+}
+
 impl AvcExportConfigDto {
     fn to_proto(&self) -> AvcConfig {
         AvcConfig {
@@ -738,11 +841,55 @@ impl DataBusExportConfigDto {
     fn to_proto(&self) -> ExportDataBusConfig {
         ExportDataBusConfig {
             routes: Some(self.routes.to_proto()),
+            connections: self
+                .connections
+                .iter()
+                .map(|connection| DataBusConnection {
+                    module_name: connection.module_name.clone(),
+                    conn_name: connection.conn_name.clone(),
+                })
+                .collect(),
+            conn_tags: self
+                .conn_tags
+                .iter()
+                .map(|tags| DataBusConnTags {
+                    module_name: tags.module_name.clone(),
+                    conn_name: tags.conn_name.clone(),
+                    tags: tags.tags.clone(),
+                })
+                .collect(),
         }
     }
 
     fn from_proto(data_bus: Option<ExportDataBusConfig>) -> Result<Self, String> {
         Ok(Self {
+            connections: data_bus
+                .as_ref()
+                .map(|config| {
+                    config
+                        .connections
+                        .iter()
+                        .map(|connection| DataBusConnectionDto {
+                            module_name: connection.module_name.clone(),
+                            conn_name: connection.conn_name.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            conn_tags: data_bus
+                .as_ref()
+                .map(|config| {
+                    config
+                        .conn_tags
+                        .iter()
+                        .map(|tags| DataBusConnTagsDto {
+                            module_name: tags.module_name.clone(),
+                            conn_name: tags.conn_name.clone(),
+                            tags: tags.tags.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             routes: DataBusRoutesDto::from_proto(data_bus.and_then(|config| config.routes))?,
         })
     }
@@ -960,10 +1107,10 @@ mod tests {
     use prost::Message;
 
     use super::{
-        AgcExportConfigDto, AvcExportConfigDto, DataBusExportConfigDto, DataBusRoutesDto,
-        Dlt645ExportConfigDto, ExportMetadataDto, ExportSourceDto, FullConfigExportConfigDto,
-        FullConfigExportSnapshotDto, Iec104ExportConfigDto, ModbusRtuExportConfigDto,
-        ModuleStartupDto,
+        AgcExportConfigDto, AvcExportConfigDto, CalcExportConfigDto, DataBusExportConfigDto,
+        DataBusRoutesDto, Dlt645ExportConfigDto, ExportMetadataDto, ExportSourceDto,
+        FullConfigExportConfigDto, FullConfigExportSnapshotDto, Iec104ExportConfigDto,
+        ModbusRtuExportConfigDto, ModuleStartupDto,
     };
 
     #[test]
@@ -1006,7 +1153,10 @@ mod tests {
                 },
                 agc: AgcExportConfigDto { groups: Vec::new() },
                 avc: AvcExportConfigDto { groups: Vec::new() },
+                calc: CalcExportConfigDto { groups: Vec::new() },
                 data_bus: DataBusExportConfigDto {
+                    connections: Vec::new(),
+                    conn_tags: Vec::new(),
                     routes: DataBusRoutesDto {
                         replace: true,
                         items: vec![super::StableDataBusRouteDto {
@@ -1026,6 +1176,7 @@ mod tests {
                     },
                 },
             },
+            agc_control_profiles: Vec::new(),
             metadata: ExportMetadataDto {
                 scope: "partial".to_string(),
                 included_sections: vec!["agc".to_string(), "data_bus".to_string()],
@@ -1092,6 +1243,7 @@ mod tests {
                 config: None,
                 data_bus: None,
                 metadata: None,
+                agc_control_profiles: Vec::new(),
             },
         )
         .unwrap_err();
@@ -1133,13 +1285,17 @@ mod tests {
                 },
                 agc: AgcExportConfigDto { groups: Vec::new() },
                 avc: AvcExportConfigDto { groups: Vec::new() },
+                calc: CalcExportConfigDto { groups: Vec::new() },
                 data_bus: DataBusExportConfigDto {
+                    connections: Vec::new(),
+                    conn_tags: Vec::new(),
                     routes: DataBusRoutesDto {
                         replace: false,
                         items: Vec::new(),
                     },
                 },
             },
+            agc_control_profiles: Vec::new(),
             metadata: ExportMetadataDto {
                 scope: "full".to_string(),
                 included_sections: vec![

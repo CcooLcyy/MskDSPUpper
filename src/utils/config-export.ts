@@ -1,8 +1,10 @@
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { api } from '../adapters';
 import type {
+  AgcControlProfile,
   AgcGroupConfig,
   AvcGroupConfig,
+  CalcGroupConfig,
   ConfigExportSectionId,
   DcConnectionInfo,
   DcEndpoint,
@@ -14,6 +16,8 @@ import type {
   ModbusLinkConfig,
   ModbusMqttConfig,
   ModuleInfo,
+  StableDataBusConnection,
+  StableDataBusConnTags,
   StableDataBusEndpoint,
 } from '../adapters';
 import { buildDuplicateConnectionName } from './connection-copy';
@@ -28,6 +32,7 @@ const MODULE_MODBUS_RTU = 'ModbusRTU';
 const MODULE_DLT645 = 'DLT645';
 const MODULE_AGC = 'AGC';
 const MODULE_AVC = 'AVC';
+const MODULE_CALC = 'Calc';
 const MODULE_DATA_CENTER = 'DataCenter';
 const MODULE_CONFIG_PUSHER = 'ConfigPusher';
 const UNCONTROLLED_MODULE_NAMES = new Set([MODULE_CONFIG_PUSHER.toLowerCase()]);
@@ -97,12 +102,22 @@ const CONFIG_SECTION_DEFINITIONS = [
       snapshot ? `${snapshot.config.avc?.groups.length ?? 0} 个控制组` : '控制组配置',
   },
   {
+    key: 'calc',
+    label: 'Calc',
+    groupLabel: '其他配置',
+    moduleName: MODULE_CALC,
+    describe: (snapshot?: FullConfigExportSnapshot) =>
+      snapshot ? `${snapshot.config.calc?.groups.length ?? 0} 个计算组` : '计算组配置',
+  },
+  {
     key: 'data_bus',
     label: '数据总线',
     groupLabel: '其他配置',
     moduleName: MODULE_DATA_CENTER,
     describe: (snapshot?: FullConfigExportSnapshot) =>
-      snapshot ? `${snapshot.config.data_bus.routes.items.length} 条路由` : 'DataBus 路由配置',
+      snapshot
+        ? `${snapshot.config.data_bus.routes.items.length} 条路由，${snapshot.config.data_bus.connections?.length ?? 0} 个连接`
+        : 'DataCenter 连接、标签与路由配置',
   },
 ] as const;
 
@@ -144,6 +159,7 @@ export interface FullConfigImportResult {
     dlt645Links: number;
     agcGroups: number;
     avcGroups: number;
+    calcGroups: number;
     dataBusRoutes: number;
   };
 }
@@ -360,15 +376,23 @@ function scopeConfigSnapshot(
       dlt645: includedSectionSet.has('dlt645') ? snapshot.config.dlt645 : { mqtt: null, links: [] },
       agc: includedSectionSet.has('agc') ? snapshot.config.agc : { groups: [] },
       avc: includedSectionSet.has('avc') ? snapshot.config.avc ?? { groups: [] } : { groups: [] },
+      calc: includedSectionSet.has('calc') ? snapshot.config.calc ?? { groups: [] } : { groups: [] },
       data_bus: includedSectionSet.has('data_bus')
-        ? snapshot.config.data_bus
+        ? {
+            connections: snapshot.config.data_bus.connections ?? [],
+            conn_tags: snapshot.config.data_bus.conn_tags ?? [],
+            routes: snapshot.config.data_bus.routes,
+          }
         : {
+            connections: [],
+            conn_tags: [],
             routes: {
               replace: true,
               items: [],
             },
-          },
+        },
     },
+    agc_control_profiles: includedSectionSet.has('agc') ? snapshot.agc_control_profiles ?? [] : [],
     metadata: buildConfigExportMetadata(includedSections),
   };
 }
@@ -521,6 +545,37 @@ async function loadAgcConfig(runningModules: Set<string>): Promise<FullConfigExp
   };
 }
 
+async function loadAgcControlProfiles(
+  runningModules: Set<string>,
+): Promise<AgcControlProfile[]> {
+  if (!runningModules.has(MODULE_AGC)) {
+    return [];
+  }
+
+  const groups = await api.agcListGroups();
+  return Promise.all(
+    groups
+      .map((group) => group.config?.group_name)
+      .filter((groupName): groupName is string => Boolean(groupName))
+      .map((groupName) => api.agcGetControlProfile(groupName)),
+  );
+}
+
+async function loadCalcConfig(runningModules: Set<string>): Promise<FullConfigExportSnapshot['config']['calc']> {
+  if (!runningModules.has(MODULE_CALC)) {
+    return { groups: [] };
+  }
+
+  const groups = await api.calcListGroups();
+  return {
+    groups: groups.map((groupInfo, index) => ({
+      upsert: {
+        config: assertModuleConfig<CalcGroupConfig>(MODULE_CALC, index, groupInfo.config),
+      },
+    })),
+  };
+}
+
 async function loadAvcConfig(runningModules: Set<string>): Promise<FullConfigExportSnapshot['config']['avc']> {
   if (!runningModules.has(MODULE_AVC)) {
     return { groups: [] };
@@ -570,6 +625,8 @@ async function loadDataBusConfig(
 ): Promise<FullConfigExportSnapshot['config']['data_bus']> {
   if (!runningModules.has(MODULE_DATA_CENTER)) {
     return {
+      connections: [],
+      conn_tags: [],
       routes: {
         replace: true,
         items: [],
@@ -582,6 +639,14 @@ async function loadDataBusConfig(
     api.dcListRoutes(0, '', 0, ''),
   ]);
 
+  const connTags = await Promise.all(
+    connections.map(async (connection): Promise<StableDataBusConnTags> => ({
+      module_name: connection.module_name,
+      conn_name: connection.conn_name,
+      tags: (await api.dcGetConnTags(connection.conn_id)).tags,
+    })),
+  );
+
   const connectionMap = new Map(
     connections.map((connection) => [
       connection.conn_id,
@@ -593,6 +658,11 @@ async function loadDataBusConfig(
   );
 
   return {
+    connections: connections.map(({ module_name, conn_name }): StableDataBusConnection => ({
+      module_name,
+      conn_name,
+    })),
+    conn_tags: connTags,
     routes: {
       replace: true,
       items: routes.map((route) => ({
@@ -761,11 +831,32 @@ function collectDesiredModules(snapshot: FullConfigExportSnapshot): Set<string> 
     modules.add(MODULE_AVC);
   }
 
-  if (snapshot.config.data_bus.routes.items.length > 0) {
+  if ((snapshot.config.calc?.groups.length ?? 0) > 0) {
+    modules.add(MODULE_CALC);
+  }
+
+  if (
+    (snapshot.config.data_bus.connections?.length ?? 0) > 0
+    || (snapshot.config.data_bus.conn_tags?.length ?? 0) > 0
+    || snapshot.config.data_bus.routes.items.length > 0
+  ) {
     modules.add(MODULE_DATA_CENTER);
   }
 
   return modules;
+}
+
+function assertExportModulesRunning(
+  runningModules: Set<string>,
+  sections: readonly ConfigExportSectionId[],
+): void {
+  const missingModules = Array.from(getSectionModuleNames(sections))
+    .filter((moduleName) => !runningModules.has(moduleName));
+
+  if (missingModules.length > 0) {
+    console.error(`[配置导出] 所选配置分区对应的模块未启动：${missingModules.join('、')}`);
+    throw new Error(`导出失败：所选配置分区对应的模块未启动：${missingModules.join('、')}`);
+  }
 }
 
 function sortModulesByDependency(targetModules: Set<string>, moduleMap: Map<string, ModuleInfo>): string[] {
@@ -1120,8 +1211,54 @@ async function syncAgc(
       for (const task of snapshot.config.agc.groups) {
         await api.agcUpsertGroup(task.upsert.config, false);
       }
+
+      for (const profile of snapshot.agc_control_profiles ?? []) {
+        if (profile.members.length > 0 || profile.version > 0 || profile.confirmed_at_ms > 0) {
+          await api.agcConfirmControlProfile(profile);
+        }
+      }
     },
   );
+  console.info(`[配置导入] AGC 已恢复 ${snapshot.config.agc.groups.length} 个控制组和 ${(snapshot.agc_control_profiles ?? []).length} 个固定参数 profile`);
+}
+
+async function syncCalc(
+  snapshot: FullConfigExportSnapshot,
+  mode: ConfigImportMode,
+  warnings: string[],
+): Promise<void> {
+  const targetNames = new Set(snapshot.config.calc.groups.map((task) => task.upsert.config.group_name));
+  const currentGroups = await api.calcListGroups();
+  const restartPlan = buildRuntimeRestartPlan(
+    currentGroups
+      .map((group) => ({ name: group.config?.group_name ?? '', state: group.state }))
+      .filter((item) => item.name),
+    targetNames,
+    mode === 'replace',
+  );
+
+  await withStoppedRuntimeItems(
+    MODULE_CALC,
+    restartPlan,
+    api.calcStopGroup,
+    api.calcStartGroup,
+    warnings,
+    async () => {
+      if (mode === 'replace') {
+        for (const currentGroup of currentGroups) {
+          const groupName = currentGroup.config?.group_name;
+          if (groupName && !targetNames.has(groupName)) {
+            await api.calcDeleteGroup(groupName);
+          }
+        }
+      }
+
+      for (const task of snapshot.config.calc.groups) {
+        await api.calcUpsertGroup(task.upsert.config, false);
+      }
+    },
+  );
+  console.info(`[配置导入] Calc 已恢复 ${snapshot.config.calc.groups.length} 个计算组`);
 }
 
 async function syncAvc(
@@ -1220,8 +1357,24 @@ async function syncDataBus(snapshot: FullConfigExportSnapshot, mode: ConfigImpor
   const replace = mode === 'replace';
   const routeItems = snapshot.config.data_bus.routes.items;
 
+  const connectionMap = new Map<string, DcConnectionInfo>();
+  for (const connection of snapshot.config.data_bus.connections ?? []) {
+    const resolved = await api.dcGetOrCreateConnection(connection.module_name, connection.conn_name);
+    connectionMap.set(connectionKey(connection.module_name, connection.conn_name), resolved);
+  }
+
+  for (const connTags of snapshot.config.data_bus.conn_tags ?? []) {
+    const resolved = connectionMap.get(connectionKey(connTags.module_name, connTags.conn_name))
+      ?? await api.dcGetOrCreateConnection(connTags.module_name, connTags.conn_name);
+    connectionMap.set(connectionKey(connTags.module_name, connTags.conn_name), resolved);
+    await api.dcUpsertConnTags(resolved.conn_id, connTags.tags, replace);
+  }
+
   if (routeItems.length === 0) {
     await api.dcUpsertRoutes([], replace);
+    console.info(
+      `[配置导入] DataCenter 已恢复 ${connectionMap.size} 个连接、${(snapshot.config.data_bus.conn_tags ?? []).length} 组标签和 0 条路由`,
+    );
     return;
   }
 
@@ -1231,9 +1384,15 @@ async function syncDataBus(snapshot: FullConfigExportSnapshot, mode: ConfigImpor
     requiredKeys.add(connectionKey(route.dst.module_name, route.dst.conn_name));
   }
 
-  const connectionMap = await waitForConnectionMap(requiredKeys);
+  const availableConnectionMap = await waitForConnectionMap(requiredKeys);
+  for (const [key, connection] of availableConnectionMap) {
+    connectionMap.set(key, connection);
+  }
   const routes = routeItems.map((route) => toDcRoute(route, connectionMap));
   await api.dcUpsertRoutes(routes, replace);
+  console.info(
+    `[配置导入] DataCenter 已恢复 ${connectionMap.size} 个连接、${(snapshot.config.data_bus.conn_tags ?? []).length} 组标签和 ${routes.length} 条路由`,
+  );
 }
 
 export async function buildConfigExportSnapshot(
@@ -1248,14 +1407,18 @@ export async function buildConfigExportSnapshot(
       .map((moduleInfo) => moduleInfo.module_name)
       .filter(isUpperControlledModuleName),
   );
+  const normalizedSections = dedupeConfigSections(sections);
+  assertExportModulesRunning(runningModules, normalizedSections);
   const exportedAt = new Date().toISOString();
-  const [iec104, modbusRtu, dlt645, agc, avc, dataBus] = await Promise.all([
+  const [iec104, modbusRtu, dlt645, agc, avc, calc, dataBus, agcControlProfiles] = await Promise.all([
     loadIec104Config(runningModules),
     loadModbusRtuConfig(runningModules),
     loadDlt645Config(runningModules),
     loadAgcConfig(runningModules),
     loadAvcConfig(runningModules),
+    loadCalcConfig(runningModules),
     loadDataBusConfig(runningModules),
+    loadAgcControlProfiles(runningModules),
   ]);
 
   const snapshot: FullConfigExportSnapshot = {
@@ -1276,12 +1439,18 @@ export async function buildConfigExportSnapshot(
       dlt645,
       agc,
       avc,
+      calc,
       data_bus: dataBus,
     },
+    agc_control_profiles: agcControlProfiles,
     metadata: buildConfigExportMetadata(ALL_CONFIG_SECTION_IDS),
   };
 
-  return scopeConfigSnapshot(snapshot, sections);
+  console.info(
+    `[配置导出] 已读取 Calc ${calc.groups.length} 个计算组、AGC ${agcControlProfiles.length} 个固定参数 profile、DataCenter ${dataBus.connections.length} 个连接`,
+  );
+
+  return scopeConfigSnapshot(snapshot, normalizedSections);
 }
 
 export async function buildFullConfigExportSnapshot(): Promise<FullConfigExportSnapshot> {
@@ -1397,6 +1566,12 @@ export async function applyConfigImport(
     warnings.push('AVC 未运行，已跳过其控制组导入');
   }
 
+  if (desiredModules.has(MODULE_CALC) && runningModules.has(MODULE_CALC)) {
+    syncTasks.push(syncCalc(snapshot, mode, warnings));
+  } else if (desiredModules.has(MODULE_CALC)) {
+    warnings.push('Calc 未运行，已跳过其计算组导入');
+  }
+
   await Promise.all(syncTasks);
 
   if (desiredModules.has(MODULE_DATA_CENTER) && runningModules.has(MODULE_DATA_CENTER)) {
@@ -1417,6 +1592,7 @@ export async function applyConfigImport(
       dlt645Links: snapshot.config.dlt645.links.length,
       agcGroups: snapshot.config.agc.groups.length,
       avcGroups: snapshot.config.avc.groups.length,
+      calcGroups: snapshot.config.calc.groups.length,
       dataBusRoutes: snapshot.config.data_bus.routes.items.length,
     },
   };

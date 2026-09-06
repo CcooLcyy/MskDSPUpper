@@ -56,6 +56,10 @@ function formatImportSummary(result: FullConfigImportResult): string {
     parts.push(`AVC ${result.summary.avcGroups}`);
   }
 
+  if (result.sections.includes('calc')) {
+    parts.push(`Calc ${result.summary.calcGroups}`);
+  }
+
   if (result.sections.includes('data_bus')) {
     parts.push(`DataBus ${result.summary.dataBusRoutes}`);
   }
