@@ -952,7 +952,8 @@ async function withStoppedRuntimeItems(
     throw error;
   }
 
-  await restoreRuntimeItems(moduleLabel, stoppedItems, start, warnings);
+  // 成功导入后只保留配置，运行项由用户完成编辑后手动启动；失败时仍恢复导入前运行状态。
+  console.info(`[配置导入] ${moduleLabel} 配置已保存，运行项保持停止状态，等待手动启动`);
 }
 
 async function waitForRunningModules(targetModules: string[]): Promise<Set<string>> {
