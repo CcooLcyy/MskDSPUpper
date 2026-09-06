@@ -152,41 +152,88 @@ function configFromDraft(draft: WorkflowDraft): ControlOrchestratorWorkflowConfi
 
 const endpointKey = (endpoint: DcEndpoint) => `${endpoint.module_name}\u0000${endpoint.conn_name}\u0000${endpoint.tag}`;
 const orchestratorConnection = { module_name: 'ControlOrchestrator', conn_name: 'control-orchestrator' };
+const internalOutputTag = (sequenceName: string, stepName: string) => `step:${sequenceName}:${stepName}`;
 
-async function syncBinding(previous: ControlOrchestratorWorkflowConfig | null, next: ControlOrchestratorWorkflowConfig) {
-  if (!previous?.trigger && !next.trigger) return;
-  const routeTag = `trigger:${next.sequence_name}`;
+const isOrchestratorEndpoint = (endpoint: DcEndpoint) => endpoint.module_name === orchestratorConnection.module_name
+  && endpoint.conn_name === orchestratorConnection.conn_name;
+
+const isManagedRouteForSequence = (route: { src: DcEndpoint; dst: DcEndpoint }, sequenceName: string) => {
+  const triggerTag = `trigger:${sequenceName}`;
+  const stepPrefix = `step:${sequenceName}:`;
+  return (isOrchestratorEndpoint(route.dst) && route.dst.tag === triggerTag)
+    || (isOrchestratorEndpoint(route.src) && route.src.tag.startsWith(stepPrefix));
+};
+
+async function syncBinding(
+  previous: ControlOrchestratorWorkflowConfig | null,
+  next: ControlOrchestratorWorkflowConfig | null,
+) {
+  if (!previous?.trigger && !next?.trigger) return;
+  const sequenceName = next?.sequence_name ?? previous?.sequence_name ?? '';
+  if (!sequenceName) return;
   const routes = await api.dcListRoutes(0, '', 0, '');
-  const previousKey = previous?.trigger ? endpointKey(previous.trigger) : null;
-  const previousRouteTag = previous ? `trigger:${previous.sequence_name}` : null;
-  const trigger = next.trigger;
+  const routeTag = `trigger:${sequenceName}`;
+  const previousRouteTags = previous
+    ? new Set([`trigger:${previous.sequence_name}`, ...previous.steps.map((step) => internalOutputTag(previous.sequence_name, step.step_name))])
+    : new Set<string>();
+  const trigger = next?.trigger ?? null;
   const conflict = trigger
     ? routes.find((route) => route.dst.module_name === orchestratorConnection.module_name
       && route.dst.conn_name === orchestratorConnection.conn_name
       && endpointKey(route.src) === endpointKey(trigger)
-      && route.dst.tag !== routeTag)
+      && route.dst.tag !== routeTag
+      && !previousRouteTags.has(route.dst.tag))
     : undefined;
   if (conflict) throw new Error('该触发源点已绑定其他编排，请先解除原绑定');
+  const directConflict = trigger
+    ? routes.find((route) => endpointKey(route.src) === endpointKey(trigger)
+      && !isOrchestratorEndpoint(route.dst)
+      && !isManagedRouteForSequence(route, previous?.sequence_name ?? sequenceName))
+    : undefined;
+  if (directConflict) throw new Error('该触发源点已有数据总线直达路由，请先删除直达路由再启用编排');
   const connection = await api.dcGetOrCreateConnection(orchestratorConnection.module_name, orchestratorConnection.conn_name);
   const activeConfigs = await api.controlOrchestratorListSequences();
-  const activeRouteTags = activeConfigs
+  const effectiveConfigs = activeConfigs
+    .filter((config) => config.sequence_name !== previous?.sequence_name)
+    .concat(next?.trigger ? [next] : []);
+  const activeRouteTags = effectiveConfigs
     .filter((config) => config.trigger)
-    .map((config) => `trigger:${config.sequence_name}`);
-  if (next.trigger && !activeRouteTags.includes(routeTag)) activeRouteTags.push(routeTag);
-  await api.dcUpsertConnTags(connection.conn_id, activeRouteTags, true);
+    .flatMap((config) => [
+      `trigger:${config.sequence_name}`,
+      ...config.steps.map((step) => internalOutputTag(config.sequence_name, step.step_name)),
+    ]);
+  await api.dcUpsertConnTags(connection.conn_id, [...new Set(activeRouteTags)], true);
   const staleRoutes = routes.filter((route) => {
-    if (route.dst.module_name !== orchestratorConnection.module_name || route.dst.conn_name !== orchestratorConnection.conn_name) return false;
-    return route.dst.tag === routeTag || (previousKey !== null && route.dst.tag === previousRouteTag
-      && endpointKey(route.src) === previousKey);
+    return previousRouteTags.has(route.dst.tag) && isOrchestratorEndpoint(route.dst)
+      || (previous?.sequence_name ? isManagedRouteForSequence(route, previous.sequence_name) : false)
+      || isManagedRouteForSequence(route, sequenceName);
   });
   if (staleRoutes.length > 0) await api.dcDeleteRoutes(staleRoutes);
-  if (next.trigger) {
-    await api.dcUpsertRoutes([{ src: next.trigger, dst: {
-      module_name: orchestratorConnection.module_name,
-      conn_name: orchestratorConnection.conn_name,
-      tag: routeTag,
-      conn_id: connection.conn_id,
-    } }], false);
+  if (next?.trigger) {
+    const routesToAdd: Array<{ src: DcEndpoint; dst: DcEndpoint }> = [{
+      src: next.trigger,
+      dst: {
+        module_name: orchestratorConnection.module_name,
+        conn_name: orchestratorConnection.conn_name,
+        tag: routeTag,
+        conn_id: connection.conn_id,
+      },
+    }, ...next.steps.map((step) => ({
+      src: {
+        module_name: orchestratorConnection.module_name,
+        conn_name: orchestratorConnection.conn_name,
+        tag: internalOutputTag(next.sequence_name, step.step_name),
+        conn_id: connection.conn_id,
+      },
+      dst: step.source,
+    }))];
+    await api.dcUpsertRoutes(routesToAdd, false);
+    console.info('控制编排自动路由已同步', {
+      sequenceName: next.sequence_name,
+      routeCount: routesToAdd.length,
+    });
+  } else {
+    console.info('控制编排自动路由已清理', { sequenceName });
   }
 }
 
@@ -336,7 +383,7 @@ const ControlOrchestratorPage: React.FC = () => {
       try {
         await syncBinding(previous, config);
       } catch (error) {
-        messageApi.error(`编排已保存，但触发路由同步失败：${String(error)}`);
+        messageApi.error(`编排已保存，但自动路由同步失败：${String(error)}`);
         await refresh();
         return;
       }
@@ -350,14 +397,14 @@ const ControlOrchestratorPage: React.FC = () => {
   const remove = async () => {
     if (!selected) return;
     try {
-      await api.controlOrchestratorDeleteSequence(selected.sequence_name);
       try {
-        await syncBinding(selected, { ...selected, trigger: null });
+        await syncBinding(selected, null);
       } catch (error) {
-        messageApi.error(`编排已删除，但触发路由清理失败：${String(error)}`);
+        messageApi.error(`自动路由清理失败，编排未删除：${String(error)}`);
         await refresh();
         return;
       }
+      await api.controlOrchestratorDeleteSequence(selected.sequence_name);
       messageApi.success('编排已删除'); await refresh();
     }
     catch (error) { messageApi.error(`删除失败：${String(error)}`); }

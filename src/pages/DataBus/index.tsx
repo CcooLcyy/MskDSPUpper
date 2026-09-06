@@ -53,6 +53,12 @@ const routeKey = (route: DcRoute): string => `${endpointKey(route.src)}->${endpo
 const endpointLabel = (endpoint: DcRoute['src']): string =>
   `${endpoint.module_name}/${endpoint.conn_name} : ${endpoint.tag}`;
 
+const isControlOrchestratorConnection = (connection: { module_name: string; conn_name: string } | null): boolean =>
+  connection?.module_name === 'ControlOrchestrator' && connection.conn_name === 'control-orchestrator';
+
+const isControlOrchestratorRoute = (route: DcRoute): boolean =>
+  isControlOrchestratorConnection(route.src) || isControlOrchestratorConnection(route.dst);
+
 type RouteBatchMode = 'ordered' | 'custom';
 
 type CustomMapping = {
@@ -168,6 +174,10 @@ const DataBus: React.FC = () => {
   const [routeSourceFilter, setRouteSourceFilter] = useState<number | 'all'>('all');
   const [routeDestinationFilter, setRouteDestinationFilter] = useState<number | 'all'>('all');
   const [routeSearch, setRouteSearch] = useState('');
+  const visibleRoutes = useMemo(
+    () => routes.filter((route) => !isControlOrchestratorRoute(route)),
+    [routes],
+  );
 
   const refreshConnections = useCallback(async () => {
     setLoading(true);
@@ -184,7 +194,12 @@ const DataBus: React.FC = () => {
 
   const refreshRoutes = useCallback(async () => {
     try {
-      setRoutes(await api.dcListRoutes(0, '', 0, ''));
+      const nextRoutes = await api.dcListRoutes(0, '', 0, '');
+      setRoutes(nextRoutes);
+      console.info('DataBus 路由列表已刷新，控制编排自动路由仅保留在内部', {
+        routeCount: nextRoutes.length,
+        hiddenRouteCount: nextRoutes.filter(isControlOrchestratorRoute).length,
+      });
     } catch (e) {
       messageApi.error(`刷新路由列表失败: ${e}`);
     }
@@ -252,8 +267,13 @@ const DataBus: React.FC = () => {
   const selectedConn = connections.find((conn) => conn.conn_id === selectedConnId) ?? null;
   const routeSourceConn = connections.find((conn) => conn.conn_id === routeSourceConnId) ?? null;
   const routeDestinationConn = connections.find((conn) => conn.conn_id === routeDestinationConnId) ?? null;
-  const routeSourceTags = routeSourceConnId === null ? [] : (allConnTags.get(routeSourceConnId) ?? []);
-  const routeDestinationTags = routeDestinationConnId === null ? [] : (allConnTags.get(routeDestinationConnId) ?? []);
+  const routeSourceTags = routeSourceConnId === null || isControlOrchestratorConnection(routeSourceConn)
+    ? [] : (allConnTags.get(routeSourceConnId) ?? []);
+  const routeDestinationTags = routeDestinationConnId === null || isControlOrchestratorConnection(routeDestinationConn)
+    ? [] : (allConnTags.get(routeDestinationConnId) ?? []);
+  const routeConnectionOptions = connections
+    .filter((connection) => !isControlOrchestratorConnection(connection))
+    .map((connection) => ({ value: connection.conn_id, label: `${connection.module_name}/${connection.conn_name}` }));
   const occupiedDestinationTags = useMemo(() => {
     if (!routeDestinationConn) return new Set<string>();
     return new Set(
@@ -265,7 +285,11 @@ const DataBus: React.FC = () => {
 
   const openCreateRoute = useCallback(() => {
     const directionId = Date.now();
-    setRouteDirections([createRouteDirectionDraft(directionId, selectedConnId ?? connections[0]?.conn_id ?? null, null)]);
+    const selectedConnection = connections.find((connection) => connection.conn_id === selectedConnId) ?? null;
+    const defaultSourceConnId = isControlOrchestratorConnection(selectedConnection)
+      ? connections.find((connection) => !isControlOrchestratorConnection(connection))?.conn_id ?? null
+      : selectedConnId ?? connections.find((connection) => !isControlOrchestratorConnection(connection))?.conn_id ?? null;
+    setRouteDirections([createRouteDirectionDraft(directionId, defaultSourceConnId, null)]);
     setActiveRouteDirectionId(directionId);
     setRouteDrag(null);
     setRouteModalOpen(true);
@@ -546,7 +570,7 @@ const DataBus: React.FC = () => {
   }, [deleteRouteBatch]);
 
   const handleDeleteSelectedRoutes = useCallback(() => {
-    const selectedRoutes = routes.filter((route) => selectedRouteKeys.includes(routeKey(route)));
+    const selectedRoutes = visibleRoutes.filter((route) => selectedRouteKeys.includes(routeKey(route)));
     modal.confirm({
       title: '确认删除选中的路由？',
       content: `将删除 ${selectedRoutes.length} 条路由，此操作不可撤销。`,
@@ -555,18 +579,18 @@ const DataBus: React.FC = () => {
       okButtonProps: { danger: true },
       onOk: () => deleteRouteBatch(selectedRoutes, `已删除 ${selectedRoutes.length} 条路由`),
     });
-  }, [deleteRouteBatch, modal, routes, selectedRouteKeys]);
+  }, [deleteRouteBatch, modal, selectedRouteKeys, visibleRoutes]);
 
   const handleDeleteAllRoutes = useCallback(() => {
     modal.confirm({
       title: '确认删除全部路由？',
-      content: `当前共 ${routes.length} 条路由，将全部删除，此操作不可撤销。`,
+      content: `当前共 ${visibleRoutes.length} 条可管理路由，将全部删除，此操作不可撤销。`,
       okText: '全部删除',
       cancelText: '取消',
       okButtonProps: { danger: true },
-      onOk: () => deleteRouteBatch(routes, `已删除全部 ${routes.length} 条路由`),
+      onOk: () => deleteRouteBatch(visibleRoutes, `已删除全部 ${visibleRoutes.length} 条路由`),
     });
-  }, [deleteRouteBatch, modal, routes]);
+  }, [deleteRouteBatch, modal, visibleRoutes]);
 
   const connTagColumns: ColumnsType<{ tag: string; key: string }> = [
     { title: '标签', dataIndex: 'tag', key: 'tag', ellipsis: true, render: (tag: string) => <Text strong>{tag}</Text> },
@@ -627,7 +651,7 @@ const DataBus: React.FC = () => {
         || (endpoint.module_name === connection.module_name && endpoint.conn_name === connection.conn_name);
     };
 
-    return routes.filter((route) => {
+    return visibleRoutes.filter((route) => {
       if (!matchesConnection(route.src, sourceConnection) || !matchesConnection(route.dst, destinationConnection)) {
         return false;
       }
@@ -644,7 +668,7 @@ const DataBus: React.FC = () => {
       ].map(String).join(' ').toLowerCase();
       return searchable.includes(query);
     });
-  }, [connections, routeDestinationFilter, routeSearch, routeSourceFilter, routes]);
+  }, [connections, routeDestinationFilter, routeSearch, routeSourceFilter, visibleRoutes]);
 
   const routeData = filteredRoutes.map((route) => ({ ...route, key: routeKey(route) }));
   const connTagData = connTags.map((tag) => ({ tag, key: tag }));
@@ -687,13 +711,13 @@ const DataBus: React.FC = () => {
       storageKey="mskdsp.layout.data-bus.config"
     >
       <div style={{ minHeight: 0 }}>{connectionPanel}</div>
-      <Card title={<Space size={8}><span>路由配置</span><Tag color="blue">{routes.length}</Tag></Space>} size="small" extra={<Space><Button danger icon={<DeleteOutlined />} disabled={selectedRouteKeys.length === 0} loading={routeDeleting} onClick={handleDeleteSelectedRoutes}>删除选中</Button><Button danger type="text" disabled={routes.length === 0} loading={routeDeleting} onClick={handleDeleteAllRoutes}>全部删除</Button><Button icon={<ReloadOutlined />} onClick={() => void refreshRoutes()}>刷新</Button><Button type="primary" icon={<PlusOutlined />} onClick={openCreateRoute}>新增路由</Button></Space>} styles={{ body: { padding: 0, minHeight: 0, height: '100%' } }} style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid #3e3e42' }}><Text type="secondary">单向转发绑定。源端点的最新值会转发到目标端点；同一对点位不允许同时配置两个方向。</Text></div>
+      <Card title={<Space size={8}><span>路由配置</span><Tag color="blue">{visibleRoutes.length}</Tag></Space>} size="small" extra={<Space><Button danger icon={<DeleteOutlined />} disabled={selectedRouteKeys.length === 0} loading={routeDeleting} onClick={handleDeleteSelectedRoutes}>删除选中</Button><Button danger type="text" disabled={visibleRoutes.length === 0} loading={routeDeleting} onClick={handleDeleteAllRoutes}>全部删除</Button><Button icon={<ReloadOutlined />} onClick={() => void refreshRoutes()}>刷新</Button><Button type="primary" icon={<PlusOutlined />} onClick={openCreateRoute}>新增路由</Button></Space>} styles={{ body: { padding: 0, minHeight: 0, height: '100%' } }} style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid #3e3e42' }}><Text type="secondary">单向转发绑定。源端点的最新值会转发到目标端点；同一对点位不允许同时配置两个方向。控制编排自动维护的内部路由不在本页显示。</Text></div>
         <div className="route-filter-toolbar">
           <Select<number | 'all'>
             value={routeSourceFilter}
             onChange={(value) => setRouteSourceFilter(value ?? 'all')}
-            options={[{ value: 'all', label: '全部源连接' }, ...connections.map((connection) => ({ value: connection.conn_id, label: `${connection.module_name}/${connection.conn_name}` }))]}
+            options={[{ value: 'all', label: '全部源连接' }, ...routeConnectionOptions]}
             showSearch
             optionFilterProp="label"
             style={{ width: 190 }}
@@ -701,7 +725,7 @@ const DataBus: React.FC = () => {
           <Select<number | 'all'>
             value={routeDestinationFilter}
             onChange={(value) => setRouteDestinationFilter(value ?? 'all')}
-            options={[{ value: 'all', label: '全部目标连接' }, ...connections.map((connection) => ({ value: connection.conn_id, label: `${connection.module_name}/${connection.conn_name}` }))]}
+            options={[{ value: 'all', label: '全部目标连接' }, ...routeConnectionOptions]}
             showSearch
             optionFilterProp="label"
             style={{ width: 190 }}
@@ -721,7 +745,7 @@ const DataBus: React.FC = () => {
           >
             清空筛选
           </Button>
-          <Text type="secondary" className="route-filter-count">显示 {filteredRoutes.length} / 共 {routes.length} 条</Text>
+          <Text type="secondary" className="route-filter-count">显示 {filteredRoutes.length} / 共 {visibleRoutes.length} 条</Text>
         </div>
         <Table
           rowKey="key"
@@ -734,7 +758,7 @@ const DataBus: React.FC = () => {
           pagination={false}
           size="middle"
           scroll={{ x: 880, y: 'calc(100vh - 330px)' }}
-          locale={{ emptyText: routes.length > 0 ? '没有符合条件的路由' : '暂无路由配置，点击右上角新增第一条路由' }}
+          locale={{ emptyText: visibleRoutes.length > 0 ? '没有符合条件的路由' : '暂无路由配置，点击右上角新增第一条路由' }}
         />
       </Card>
     </ResizableSplit> : <Card title={<Space size={8}><span>实时值</span><Tag color={autoRefresh ? 'green' : 'default'} icon={autoRefresh ? <SyncOutlined spin /> : undefined}>{autoRefresh ? '自动刷新 3 秒' : '已暂停'}</Tag></Space>} size="small" extra={<Space><Text type="secondary" style={{ fontSize: 12 }}>{lastRealtimeAt ? `上次更新 ${formatTimestamp(lastRealtimeAt)}` : '尚未更新'}</Text><Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="暂停" onChange={setAutoRefresh} /><Button icon={<ReloadOutlined />} loading={realtimeLoading} onClick={() => void refreshRealtime()}>刷新</Button></Space>} styles={{ body: { padding: 0, minHeight: 0 } }} style={{ flex: 1, minHeight: 0 }}>
@@ -788,7 +812,7 @@ const DataBus: React.FC = () => {
               showSearch
               value={routeSourceConnId ?? undefined}
               placeholder="选择源连接"
-              options={connections.map((conn) => ({ value: conn.conn_id, label: `${conn.module_name}/${conn.conn_name}` }))}
+              options={routeConnectionOptions}
               onChange={(value) => updateActiveDirection({ sourceConnId: value, sourceTags: [], customMappings: [{ id: Date.now() }] })}
               style={{ width: '100%', marginTop: 8 }}
               optionFilterProp="label"
@@ -801,7 +825,7 @@ const DataBus: React.FC = () => {
               showSearch
               value={routeDestinationConnId ?? undefined}
               placeholder="选择目标连接"
-              options={connections.map((conn) => ({ value: conn.conn_id, label: `${conn.module_name}/${conn.conn_name}` }))}
+              options={routeConnectionOptions}
               onChange={(value) => updateActiveDirection({ destinationConnId: value, destinationTags: [], customMappings: [{ id: Date.now() }] })}
               style={{ width: '100%', marginTop: 8 }}
               optionFilterProp="label"

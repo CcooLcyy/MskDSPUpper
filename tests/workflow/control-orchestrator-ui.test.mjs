@@ -17,6 +17,9 @@ test('control orchestrator exposes a linear workflow CRUD and execute page', () 
   assert.match(page, /RETRY_COMMAND/);
   assert.match(page, /dcGetOrCreateConnection/);
   assert.match(page, /dcUpsertConnTags/);
+  assert.match(page, /internalOutputTag/);
+  assert.match(page, /step:\$\{sequenceName\}:\$\{stepName\}/);
+  assert.match(page, /自动路由已同步/);
   assert.match(page, /dcListConnections/);
   assert.match(page, /dcGetConnTags/);
   assert.match(page, /选择模块/);
@@ -25,6 +28,17 @@ test('control orchestrator exposes a linear workflow CRUD and execute page', () 
   assert.match(router, /control-orchestrator/);
   assert.match(tauri, /control_orchestrator_list_sequences/);
   assert.match(tauri, /control_orchestrator_delete_sequence/);
+});
+
+// 验证控制编排保存和删除时会维护触发路由及每一步的内部输出路由。
+test('control orchestrator owns trigger and step output routes', () => {
+  const page = fs.readFileSync(path.join(root, 'src/pages/ControlOrchestrator/index.tsx'), 'utf8');
+
+  assert.match(page, /syncBinding\(previous, config\)/);
+  assert.match(page, /syncBinding\(selected, null\)/);
+  assert.match(page, /dcDeleteRoutes\(staleRoutes\)/);
+  assert.match(page, /dcUpsertRoutes\(routesToAdd, false\)/);
+  assert.match(page, /dcUpsertConnTags\(connection\.conn_id, \[\.\.\.new Set\(activeRouteTags\)\], true\)/);
 });
 
 // 验证控制编排页不会被路径前缀误判为控制策略页。
