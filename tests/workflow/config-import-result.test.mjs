@@ -7,7 +7,8 @@ const exportSource = readFileSync(new URL('../../src/utils/config-export.ts', im
 
 // 验证成功导入只恢复配置并保持运行项停止，失败时仍尝试恢复原运行状态。
 test('config import keeps runtime items stopped after successful restore', () => {
-  const runtimeSource = exportSource.match(/async function withStoppedRuntimeItems\([\s\S]*?\n}\n/)?.[0] ?? '';
+  const normalizedExportSource = exportSource.replace(/\r\n/g, '\n');
+  const runtimeSource = normalizedExportSource.match(/async function withStoppedRuntimeItems\([\s\S]*?\n}\n/)?.[0] ?? '';
 
   assert.match(exportSource, /配置已保存，运行项保持停止状态，等待手动启动/);
   assert.match(runtimeSource, /restoreRuntimeItems\(moduleLabel, stoppedItems, start, warnings, true\)/);
