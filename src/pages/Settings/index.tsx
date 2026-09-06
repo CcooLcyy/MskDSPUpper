@@ -135,14 +135,19 @@ const Settings: React.FC = () => {
 
   const showImportResult = useCallback(
     (result: FullConfigImportResult, successMessage: string) => {
-      messageApi.success(successMessage);
+      const hasWarnings = result.warnings.length > 0;
+      if (hasWarnings) {
+        messageApi.warning(`${successMessage}（存在运行告警）`);
+      } else {
+        messageApi.success(successMessage);
+      }
 
       if (result.warnings.length === 0 && result.startedModules.length === 0) {
         return;
       }
 
-      modal.info({
-        title: '导入完成',
+      modal[hasWarnings ? 'warning' : 'info']({
+        title: hasWarnings ? '配置已导入，但存在运行告警' : '导入完成',
         width: 680,
         content: (
           <div style={{ marginTop: 12 }}>
