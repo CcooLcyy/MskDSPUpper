@@ -930,6 +930,27 @@ async function restoreRuntimeItems(
   }
 }
 
+type ImportedControlGroupTask<TConfig extends { group_name: string }> = {
+  upsert: {
+    config: TConfig;
+  };
+};
+
+async function upsertImportedControlGroups<TConfig extends { group_name: string }>(
+  moduleLabel: string,
+  tasks: readonly ImportedControlGroupTask<TConfig>[],
+  upsert: (config: TConfig, createOnly: boolean) => Promise<unknown>,
+  stop: (groupName: string) => Promise<void>,
+): Promise<void> {
+  for (const task of tasks) {
+    const groupName = task.upsert.config.group_name;
+    await upsert(task.upsert.config, false);
+    // AGC/AVC/Calc 的 Upsert 接口会自动启动就绪分组；导入必须保持分组停止，便于继续写入配置。
+    await stop(groupName);
+    console.info(`[配置导入] ${moduleLabel} 控制组配置已下发并停止: group_name=${groupName}`);
+  }
+}
+
 async function withStoppedRuntimeItems(
   moduleLabel: string,
   restartPlan: RuntimeRestartPlan[],
@@ -1209,9 +1230,12 @@ async function syncAgc(
         }
       }
 
-      for (const task of snapshot.config.agc.groups) {
-        await api.agcUpsertGroup(task.upsert.config, false);
-      }
+      await upsertImportedControlGroups(
+        MODULE_AGC,
+        snapshot.config.agc.groups,
+        api.agcUpsertGroup,
+        api.agcStopGroup,
+      );
 
       for (const profile of snapshot.agc_control_profiles ?? []) {
         if (profile.members.length > 0 || profile.version > 0 || profile.confirmed_at_ms > 0) {
@@ -1254,9 +1278,12 @@ async function syncCalc(
         }
       }
 
-      for (const task of snapshot.config.calc.groups) {
-        await api.calcUpsertGroup(task.upsert.config, false);
-      }
+      await upsertImportedControlGroups(
+        MODULE_CALC,
+        snapshot.config.calc.groups,
+        api.calcUpsertGroup,
+        api.calcStopGroup,
+      );
     },
   );
   console.info(`[配置导入] Calc 已恢复 ${snapshot.config.calc.groups.length} 个计算组`);
@@ -1296,9 +1323,12 @@ async function syncAvc(
         }
       }
 
-      for (const task of snapshot.config.avc.groups) {
-        await api.avcUpsertGroup(task.upsert.config, false);
-      }
+      await upsertImportedControlGroups(
+        MODULE_AVC,
+        snapshot.config.avc.groups,
+        api.avcUpsertGroup,
+        api.avcStopGroup,
+      );
     },
   );
 }
