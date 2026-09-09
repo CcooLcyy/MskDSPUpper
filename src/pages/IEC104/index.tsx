@@ -536,8 +536,8 @@ const IEC104: React.FC = () => {
   const [batchPointScale, setBatchPointScale] = useState(DEFAULT_POINT_FORM_VALUES.scale);
   const [batchPointOffset, setBatchPointOffset] = useState(DEFAULT_POINT_FORM_VALUES.offset);
   const [batchPointDeadband, setBatchPointDeadband] = useState(DEFAULT_POINT_FORM_VALUES.deadband);
-  const [batchRemoteControlType, setBatchRemoteControlType] = useState(DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type);
-  const [batchCommandExecutionMode, setBatchCommandExecutionMode] = useState(DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode);
+  const [batchRemoteControlType, setBatchRemoteControlType] = useState<number>(DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type);
+  const [batchCommandExecutionMode, setBatchCommandExecutionMode] = useState<number>(DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode);
   const [ioaAdjustDrafts, setIoaAdjustDrafts] = useState<IoaAdjustmentDraft[]>([]);
   const [ioaAdjustStrategy, setIoaAdjustStrategy] = useState<IoaAdjustmentStrategy>('offset');
   const [ioaAdjustStart, setIoaAdjustStart] = useState(1);
