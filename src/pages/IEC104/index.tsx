@@ -105,6 +105,15 @@ import {
   buildIec104SimulationUpdates,
   resolveIec104RuntimeDisplay,
 } from './simulation-realtime';
+import {
+  COMMAND_EXECUTION_MODE_OPTIONS,
+  DEFAULT_REMOTE_CONTROL_FIELDS,
+  REMOTE_CONTROL_TYPE_OPTIONS,
+  getCommandExecutionModeLabel,
+  getRemoteControlTypeLabel,
+  isRemoteControlBusinessType,
+  normalizeRemoteControlFields,
+} from './remote-control';
 
 const { Text } = Typography;
 
@@ -374,6 +383,7 @@ const getCreatePointInitialValues = (points: Iec104Point[]) => {
   const ioa = getNextAvailableIoa(new Set(points.map((point) => point.ioa)));
   return {
     ...DEFAULT_POINT_FORM_VALUES,
+    ...DEFAULT_REMOTE_CONTROL_FIELDS,
     ioa_category: 'custom' as IoaCategoryKey,
     ioa,
     point_type: points[points.length - 1]?.point_type ?? 1,
@@ -515,6 +525,8 @@ const IEC104: React.FC = () => {
   const [ioaAdjustModalOpen, setIoaAdjustModalOpen] = useState(false);
   const [pointTypeBatchModalOpen, setPointTypeBatchModalOpen] = useState(false);
   const [pointTypeBatchValue, setPointTypeBatchValue] = useState<number>();
+  const [pointRemoteControlTypeBatchValue, setPointRemoteControlTypeBatchValue] = useState<number>();
+  const [pointCommandExecutionModeBatchValue, setPointCommandExecutionModeBatchValue] = useState<number>();
   const [batchPointModalOpen, setBatchPointModalOpen] = useState(false);
   const [batchPointText, setBatchPointText] = useState('');
   const [batchPointCategory, setBatchPointCategory] = useState<IoaCategoryKey>('custom');
@@ -524,6 +536,8 @@ const IEC104: React.FC = () => {
   const [batchPointScale, setBatchPointScale] = useState(DEFAULT_POINT_FORM_VALUES.scale);
   const [batchPointOffset, setBatchPointOffset] = useState(DEFAULT_POINT_FORM_VALUES.offset);
   const [batchPointDeadband, setBatchPointDeadband] = useState(DEFAULT_POINT_FORM_VALUES.deadband);
+  const [batchRemoteControlType, setBatchRemoteControlType] = useState(DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type);
+  const [batchCommandExecutionMode, setBatchCommandExecutionMode] = useState(DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode);
   const [ioaAdjustDrafts, setIoaAdjustDrafts] = useState<IoaAdjustmentDraft[]>([]);
   const [ioaAdjustStrategy, setIoaAdjustStrategy] = useState<IoaAdjustmentStrategy>('offset');
   const [ioaAdjustStart, setIoaAdjustStart] = useState(1);
@@ -553,6 +567,8 @@ const IEC104: React.FC = () => {
   const [importPointDrafts, setImportPointDrafts] = useState<ImportedPointDraft[]>([]);
   const [importBatchType, setImportBatchType] = useState<number>();
   const [importBatchCategory, setImportBatchCategory] = useState<IoaCategoryKey>();
+  const [importBatchRemoteControlType, setImportBatchRemoteControlType] = useState<number>();
+  const [importBatchCommandExecutionMode, setImportBatchCommandExecutionMode] = useState<number>();
   const [importAllocationStart, setImportAllocationStart] = useState(1);
   const [importAllocationStep, setImportAllocationStep] = useState(1);
   const [importAllocationSkipOccupied, setImportAllocationSkipOccupied] = useState(true);
@@ -567,6 +583,7 @@ const IEC104: React.FC = () => {
   const linkRole = Form.useWatch('role', linkForm);
   const pointIoaCategory = Form.useWatch('ioa_category', pointForm) as IoaCategoryKey | undefined;
   const pointType = Form.useWatch('point_type', pointForm);
+  const pointBusinessType = Form.useWatch('business_type', pointForm);
   const pointTag = Form.useWatch('tag', pointForm);
   const pointIoa = Form.useWatch('ioa', pointForm);
 
@@ -700,6 +717,10 @@ const IEC104: React.FC = () => {
   );
   const importRoutesTriggerCommands = createImportRoutes && isMasterStationConfig(selectedLink?.config);
   const importStationRole = isSlaveStationConfig(selectedLink?.config) ? 'slave' : 'master';
+  const hasRemoteControlImportDrafts = importPointDrafts.some((draft) =>
+    isRemoteControlBusinessType(draft.business_type));
+  const selectedRemoteControlPointCount = points.filter((point) =>
+    selectedPointTags.includes(point.tag) && isRemoteControlBusinessType(point.business_type)).length;
   const importValidation = useMemo(() => {
     const cellIssues = new Map<string, string[]>();
     const rowIssues = new Map<string, string[]>();
@@ -760,10 +781,12 @@ const IEC104: React.FC = () => {
       scale: batchPointScale,
       offset: batchPointOffset,
       deadband: batchPointDeadband,
+      remoteControlType: batchRemoteControlType,
+      commandExecutionMode: batchCommandExecutionMode,
       occupiedTags: new Set(points.map((point) => point.tag.trim())),
       occupiedIoas: new Set(points.map((point) => point.ioa)),
     }),
-    [batchPointCategory, batchPointDeadband, batchPointOffset, batchPointScale, batchPointStartIoa, batchPointStep, batchPointText, batchPointType, points],
+    [batchCommandExecutionMode, batchPointCategory, batchPointDeadband, batchPointOffset, batchPointScale, batchPointStartIoa, batchPointStep, batchPointText, batchPointType, batchRemoteControlType, points],
   );
 
   const batchPointIssuesByLine = useMemo(() => {
@@ -816,7 +839,7 @@ const IEC104: React.FC = () => {
           if (requestId !== pointLoadRequestRef.current) {
             return;
           }
-          setPoints(pt.points);
+          setPoints(pt.points.map(normalizeRemoteControlFields));
         } catch (error) {
           if (requestId !== pointLoadRequestRef.current) {
             return;
@@ -1391,6 +1414,8 @@ const IEC104: React.FC = () => {
     setBatchPointScale(DEFAULT_POINT_FORM_VALUES.scale);
     setBatchPointOffset(DEFAULT_POINT_FORM_VALUES.offset);
     setBatchPointDeadband(DEFAULT_POINT_FORM_VALUES.deadband);
+    setBatchRemoteControlType(DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type);
+    setBatchCommandExecutionMode(DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode);
     setBatchPointModalOpen(true);
   }, [points]);
 
@@ -1427,6 +1452,8 @@ const IEC104: React.FC = () => {
       ioa: draft.ioa,
       point_type: draft.point_type,
       business_type: draft.business_type,
+      remote_control_type: draft.remote_control_type,
+      command_execution_mode: draft.command_execution_mode,
       scale: draft.scale,
       offset: draft.offset,
       deadband: draft.deadband,
@@ -1469,6 +1496,8 @@ const IEC104: React.FC = () => {
     setImportPointDrafts([]);
     setImportBatchType(undefined);
     setImportBatchCategory(undefined);
+    setImportBatchRemoteControlType(undefined);
+    setImportBatchCommandExecutionMode(undefined);
     setImportAllocationStart(getNextAvailableIoa(new Set(points.map((point) => point.ioa))));
     setImportAllocationStep(1);
     setImportAllocationSkipOccupied(true);
@@ -1488,6 +1517,8 @@ const IEC104: React.FC = () => {
         ioa_category: getIoaCategoryByIoa(p.ioa),
         point_type: p.point_type,
         business_type: p.business_type,
+        remote_control_type: p.remote_control_type || DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
+        command_execution_mode: p.command_execution_mode || DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
         scale: p.scale,
         offset: p.offset,
         deadband: p.deadband,
@@ -1579,11 +1610,21 @@ const IEC104: React.FC = () => {
       return;
     }
     setPointTypeBatchValue(undefined);
+    setPointRemoteControlTypeBatchValue(undefined);
+    setPointCommandExecutionModeBatchValue(undefined);
     setPointTypeBatchModalOpen(true);
   }, [messageApi, points, selectedPointTags]);
 
   const handlePointTypeBatchSubmit = useCallback(async () => {
-    if (!selectedConn || pointSubmitting || pointTypeBatchValue === undefined) return;
+    if (
+      !selectedConn
+      || pointSubmitting
+      || (
+        pointTypeBatchValue === undefined
+        && pointRemoteControlTypeBatchValue === undefined
+        && pointCommandExecutionModeBatchValue === undefined
+      )
+    ) return;
 
     const selectedTags = new Set(selectedPointTags);
     const selectedPoints = points.filter((point) => selectedTags.has(point.tag));
@@ -1598,8 +1639,9 @@ const IEC104: React.FC = () => {
       if (!selectedTags.has(point.tag)) {
         return point;
       }
-      if (pointTypeBatchValue === POINT_TYPE_SINGLE) {
-        return {
+      let nextPoint = point;
+      if (pointTypeBatchValue === POINT_TYPE_SINGLE && point.point_type !== POINT_TYPE_SINGLE) {
+        nextPoint = {
           ...point,
           point_type: POINT_TYPE_SINGLE,
           scale: DEFAULT_POINT_FORM_VALUES.scale,
@@ -1607,17 +1649,34 @@ const IEC104: React.FC = () => {
           deadband: DEFAULT_POINT_FORM_VALUES.deadband,
         };
       }
-      return {
-        ...point,
-        point_type: POINT_TYPE_FLOAT,
-        scale: point.point_type === POINT_TYPE_FLOAT ? point.scale : DEFAULT_POINT_FORM_VALUES.scale,
-        offset: point.point_type === POINT_TYPE_FLOAT ? point.offset : DEFAULT_POINT_FORM_VALUES.offset,
-        deadband: point.point_type === POINT_TYPE_FLOAT ? point.deadband : DEFAULT_POINT_FORM_VALUES.deadband,
-      };
+      if (pointTypeBatchValue === POINT_TYPE_FLOAT && point.point_type !== POINT_TYPE_FLOAT) {
+        nextPoint = {
+          ...nextPoint,
+          point_type: POINT_TYPE_FLOAT,
+          scale: DEFAULT_POINT_FORM_VALUES.scale,
+          offset: DEFAULT_POINT_FORM_VALUES.offset,
+          deadband: DEFAULT_POINT_FORM_VALUES.deadband,
+        };
+      }
+      if (isRemoteControlBusinessType(point.business_type)) {
+        if (
+          pointRemoteControlTypeBatchValue !== undefined
+          && point.remote_control_type !== pointRemoteControlTypeBatchValue
+        ) {
+          nextPoint = { ...nextPoint, remote_control_type: pointRemoteControlTypeBatchValue };
+        }
+        if (
+          pointCommandExecutionModeBatchValue !== undefined
+          && point.command_execution_mode !== pointCommandExecutionModeBatchValue
+        ) {
+          nextPoint = { ...nextPoint, command_execution_mode: pointCommandExecutionModeBatchValue };
+        }
+      }
+      return nextPoint;
     });
-    const changedCount = selectedPoints.filter((point) => point.point_type !== pointTypeBatchValue).length;
+    const changedCount = newPoints.filter((point, index) => point !== points[index]).length;
     if (changedCount === 0) {
-      messageApi.info('所选点位已经是目标类型');
+      messageApi.info('所选点位已经符合目标配置');
       setPointTypeBatchModalOpen(false);
       return;
     }
@@ -1629,12 +1688,14 @@ const IEC104: React.FC = () => {
       setSimulationSnapshot(null);
       setPointTypeBatchModalOpen(false);
       setSelectedPointTags([]);
-      console.info('IEC104 已批量更新点位类型', {
+      console.info('IEC104 已批量更新点位配置', {
         connName: selectedConn,
         pointCount: changedCount,
         pointType: pointTypeBatchValue,
+        remoteControlType: pointRemoteControlTypeBatchValue,
+        commandExecutionMode: pointCommandExecutionModeBatchValue,
       });
-      messageApi.success(`已将 ${changedCount} 个点位统一设置为 ${POINT_TYPE_LABELS[pointTypeBatchValue]}`);
+      messageApi.success(`已更新 ${changedCount} 个点位的批量配置`);
       messageApi.info('点表已更新，当前模拟值已清除');
       if (restartResult.restartError) {
         messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
@@ -1642,11 +1703,11 @@ const IEC104: React.FC = () => {
         messageApi.success('点表已保存并重新启动链路');
       }
     } catch (error) {
-      messageApi.error(`批量编辑点位类型失败: ${formatErrorText(error)}`);
+      messageApi.error(`批量编辑点位失败: ${formatErrorText(error)}`);
     } finally {
       setPointSubmitting(false);
     }
-  }, [messageApi, pointSubmitting, pointTypeBatchValue, points, runSelectedLinkStopped, selectedConn, selectedPointTags]);
+  }, [messageApi, pointCommandExecutionModeBatchValue, pointRemoteControlTypeBatchValue, pointSubmitting, pointTypeBatchValue, points, runSelectedLinkStopped, selectedConn, selectedPointTags]);
 
   const reorderIoaAdjustDrafts = useCallback((fromKey: string, toKey: string) => {
     if (fromKey === toKey) return;
@@ -1795,15 +1856,17 @@ const IEC104: React.FC = () => {
     setPointSubmitting(true);
     try {
       const values = await pointForm.validateFields();
-      const newPoint: Iec104Point = {
+      const newPoint: Iec104Point = normalizeRemoteControlFields({
         tag: values.tag.trim(),
         ioa: values.ioa,
         point_type: values.point_type,
         business_type: values.business_type ?? 0,
+        remote_control_type: values.remote_control_type,
+        command_execution_mode: values.command_execution_mode,
         scale: values.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.scale : values.scale ?? 1,
         offset: values.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.offset : values.offset ?? 0,
         deadband: values.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.deadband : values.deadband ?? 0,
-      };
+      });
       const duplicateTag = points.some((point, index) => index !== editingPointIndex && point.tag.trim() === newPoint.tag);
       const duplicateIoa = points.some((point, index) => index !== editingPointIndex && point.ioa === newPoint.ioa);
       if (duplicateTag) {
@@ -1862,6 +1925,8 @@ const IEC104: React.FC = () => {
       ioa_category: getIoaCategoryByIoa(ioa),
       point_type: source.point_type,
       business_type: source.business_type,
+      remote_control_type: source.remote_control_type || DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
+      command_execution_mode: source.command_execution_mode || DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
       scale: source.scale,
       offset: source.offset,
       deadband: source.deadband,
@@ -2023,6 +2088,8 @@ const IEC104: React.FC = () => {
     setImportPointDrafts([]);
     setImportBatchType(undefined);
     setImportBatchCategory(undefined);
+    setImportBatchRemoteControlType(undefined);
+    setImportBatchCommandExecutionMode(undefined);
   }, []);
 
   const handleSelectImportEndpoints = useCallback(
@@ -2067,6 +2134,7 @@ const IEC104: React.FC = () => {
             ioa_category: 'custom',
             point_type: getDefaultImportedPointType(points),
             business_type: getPointBusinessTypeByIoa(nextIoa),
+            ...DEFAULT_REMOTE_CONTROL_FIELDS,
             scale: DEFAULT_POINT_FORM_VALUES.scale,
             offset: DEFAULT_POINT_FORM_VALUES.offset,
             deadband: DEFAULT_POINT_FORM_VALUES.deadband,
@@ -2120,6 +2188,22 @@ const IEC104: React.FC = () => {
       });
     });
   }, [points]);
+
+  const applyImportBatchRemoteControlType = useCallback((nextType: number | undefined) => {
+    setImportBatchRemoteControlType(nextType);
+    if (nextType === undefined) return;
+    setImportPointDrafts((prev) => prev.map((item) => isRemoteControlBusinessType(item.business_type)
+      ? { ...item, remote_control_type: nextType }
+      : item));
+  }, []);
+
+  const applyImportBatchCommandExecutionMode = useCallback((nextMode: number | undefined) => {
+    setImportBatchCommandExecutionMode(nextMode);
+    if (nextMode === undefined) return;
+    setImportPointDrafts((prev) => prev.map((item) => isRemoteControlBusinessType(item.business_type)
+      ? { ...item, command_execution_mode: nextMode }
+      : item));
+  }, []);
 
   const handleImportPointIoaCategoryChange = useCallback(
     (key: string, nextCategory: IoaCategoryKey) => {
@@ -2231,6 +2315,8 @@ const IEC104: React.FC = () => {
         ioa: draft.ioa,
         point_type: draft.point_type,
         business_type: draft.business_type,
+        remote_control_type: draft.remote_control_type || DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
+        command_execution_mode: draft.command_execution_mode || DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
         scale: draft.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.scale : draft.scale ?? DEFAULT_POINT_FORM_VALUES.scale,
         offset: draft.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.offset : draft.offset ?? DEFAULT_POINT_FORM_VALUES.offset,
         deadband: draft.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.deadband : draft.deadband ?? DEFAULT_POINT_FORM_VALUES.deadband,
@@ -2385,6 +2471,14 @@ const IEC104: React.FC = () => {
       render: (value: number) => getPointBusinessTypeLabel(value),
     },
     {
+      title: '遥控配置',
+      key: 'remote_control',
+      width: 250,
+      render: (_value: unknown, record: BatchPointDraft) => isRemoteControlBusinessType(record.business_type)
+        ? `${getRemoteControlTypeLabel(record.remote_control_type)} / ${getCommandExecutionModeLabel(record.command_execution_mode)}`
+        : '-',
+    },
+    {
       title: '状态',
       key: 'status',
       render: (_value: unknown, record: BatchPointDraft) => {
@@ -2435,6 +2529,19 @@ const IEC104: React.FC = () => {
       key: 'business_type',
       width: 110,
       render: (value: number) => getPointBusinessTypeLabel(value),
+    };
+    const remoteControlColumn = {
+      title: '遥控配置',
+      key: 'remote_control',
+      width: 260,
+      render: (_value: unknown, record: Iec104Point) => isRemoteControlBusinessType(record.business_type)
+        ? (
+            <Space size={4} wrap>
+              <Tag color="blue">{getRemoteControlTypeLabel(record.remote_control_type)}</Tag>
+              <Tag color="green">{getCommandExecutionModeLabel(record.command_execution_mode)}</Tag>
+            </Space>
+          )
+        : '-',
     };
     const realtimeValueColumn = {
       title: '实时值',
@@ -2533,7 +2640,7 @@ const IEC104: React.FC = () => {
     };
 
     if (pointTableView === 'runtime') {
-      return [tagColumn, ioaColumn, typeColumn, businessTypeColumn, realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
+      return [tagColumn, ioaColumn, typeColumn, businessTypeColumn, remoteControlColumn, realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
     }
 
     return [
@@ -2541,6 +2648,7 @@ const IEC104: React.FC = () => {
       ioaColumn,
       typeColumn,
       businessTypeColumn,
+      remoteControlColumn,
       { title: 'Scale', dataIndex: 'scale', key: 'scale', width: 100 },
       { title: 'Offset', dataIndex: 'offset', key: 'offset', width: 100 },
       { title: 'Deadband', dataIndex: 'deadband', key: 'deadband', width: 110 },
@@ -2653,6 +2761,38 @@ const IEC104: React.FC = () => {
           onChange={(nextValue) => updateImportPointDraft(record.key, { business_type: nextValue })}
         />
       ),
+    },
+    {
+      title: '遥控类型',
+      dataIndex: 'remote_control_type',
+      key: 'remote_control_type',
+      width: 210,
+      render: (value: number, record) => isRemoteControlBusinessType(record.business_type) ? (
+        <Select
+          size="small"
+          style={{ width: '100%' }}
+          value={value || DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type}
+          disabled={importSubmitting}
+          options={REMOTE_CONTROL_TYPE_OPTIONS}
+          onChange={(nextValue) => updateImportPointDraft(record.key, { remote_control_type: nextValue })}
+        />
+      ) : '-',
+    },
+    {
+      title: '执行方式',
+      dataIndex: 'command_execution_mode',
+      key: 'command_execution_mode',
+      width: 210,
+      render: (value: number, record) => isRemoteControlBusinessType(record.business_type) ? (
+        <Select
+          size="small"
+          style={{ width: '100%' }}
+          value={value || DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode}
+          disabled={importSubmitting}
+          options={COMMAND_EXECUTION_MODE_OPTIONS}
+          onChange={(nextValue) => updateImportPointDraft(record.key, { command_execution_mode: nextValue })}
+        />
+      ) : '-',
     },
     {
       title: 'Scale',
@@ -3422,9 +3562,36 @@ const IEC104: React.FC = () => {
                 <Select
                   options={POINT_BUSINESS_TYPE_OPTIONS}
                   placeholder="选择遥信、遥测、遥调或遥控"
+                  onChange={(nextValue) => {
+                    if (isRemoteControlBusinessType(nextValue)) {
+                      pointForm.setFieldsValue(DEFAULT_REMOTE_CONTROL_FIELDS);
+                    }
+                  }}
                 />
               </Form.Item>
             </Col>
+            {isRemoteControlBusinessType(pointBusinessType) ? (
+              <>
+                <Col xs={24} sm={12} lg={12}>
+                  <Form.Item
+                    name="remote_control_type"
+                    label="遥控命令类型"
+                    rules={[{ required: true, message: '请选择单点或双点遥控' }]}
+                  >
+                    <Select options={REMOTE_CONTROL_TYPE_OPTIONS} />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} sm={12} lg={12}>
+                  <Form.Item
+                    name="command_execution_mode"
+                    label="命令执行方式"
+                    rules={[{ required: true, message: '请选择直接执行或选择后执行' }]}
+                  >
+                    <Select options={COMMAND_EXECUTION_MODE_OPTIONS} />
+                  </Form.Item>
+                </Col>
+              </>
+            ) : null}
             <Col xs={8} sm={4} lg={4}>
               <Form.Item name="scale" label="Scale" extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}>
                 <InputNumber step={0.01} disabled={isSinglePoint} style={{ width: '100%' }} />
@@ -3443,15 +3610,15 @@ const IEC104: React.FC = () => {
           </Row>
           {pointType === 2 ? (
             <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-              SINGLE 使用布尔值；作为遥信接收时按 IEC104 SIQ bit0 解析，作为遥控命令时按单点命令处理。
+              SINGLE 使用布尔值；作为遥信接收时按 IEC104 SIQ bit0 解析。
             </Text>
           ) : null}
         </Form>
       </Modal>
 
-      {/* Point Type Batch Edit Modal */}
+      {/* Point Batch Edit Modal */}
       <Modal
-        title="批量编辑点位类型"
+        title="批量编辑点位"
         open={pointTypeBatchModalOpen}
         onOk={() => void handlePointTypeBatchSubmit()}
         onCancel={() => {
@@ -3459,12 +3626,18 @@ const IEC104: React.FC = () => {
             setPointTypeBatchModalOpen(false);
           }
         }}
-        width={560}
+        width={620}
         className="iec104-config-modal"
         okText="保存批量修改"
         cancelText="取消"
         confirmLoading={pointSubmitting}
-        okButtonProps={{ disabled: pointSubmitting || pointTypeBatchValue === undefined }}
+        okButtonProps={{
+          disabled: pointSubmitting || (
+            pointTypeBatchValue === undefined
+            && pointRemoteControlTypeBatchValue === undefined
+            && pointCommandExecutionModeBatchValue === undefined
+          ),
+        }}
         maskClosable={!pointSubmitting}
         closable={!pointSubmitting}
         keyboard={!pointSubmitting}
@@ -3475,9 +3648,10 @@ const IEC104: React.FC = () => {
             type="warning"
             showIcon
             message={`当前选中 ${selectedPointTags.length} 个点位`}
-            description="批量保存会覆盖所选点位的类型；SINGLE 不使用 Scale、Offset、Deadband，这三个参数会重置为 1、0、0。更新点表后当前模拟值会被清除。"
+            description={`只会应用已选择的配置项；SINGLE 不使用 Scale、Offset、Deadband，这三个参数会重置为 1、0、0。遥控配置仅作用于其中 ${selectedRemoteControlPointCount} 个遥控业务点。`}
           />
           <Select<number>
+            allowClear
             value={pointTypeBatchValue}
             onChange={setPointTypeBatchValue}
             options={[
@@ -3488,6 +3662,28 @@ const IEC104: React.FC = () => {
             style={{ width: '100%' }}
             disabled={pointSubmitting}
           />
+          {selectedRemoteControlPointCount > 0 ? (
+            <>
+              <Select<number>
+                allowClear
+                value={pointRemoteControlTypeBatchValue}
+                onChange={setPointRemoteControlTypeBatchValue}
+                options={REMOTE_CONTROL_TYPE_OPTIONS}
+                placeholder="选择统一遥控类型（可选）"
+                style={{ width: '100%' }}
+                disabled={pointSubmitting}
+              />
+              <Select<number>
+                allowClear
+                value={pointCommandExecutionModeBatchValue}
+                onChange={setPointCommandExecutionModeBatchValue}
+                options={COMMAND_EXECUTION_MODE_OPTIONS}
+                placeholder="选择统一执行方式（可选）"
+                style={{ width: '100%' }}
+                disabled={pointSubmitting}
+              />
+            </>
+          ) : null}
         </Space>
       </Modal>
 
@@ -3597,6 +3793,30 @@ const IEC104: React.FC = () => {
                     }}
                   />
                 </Col>
+                {batchPointCategory === 'remoteControl' ? (
+                  <>
+                    <Col xs={24} sm={12}>
+                      <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>统一遥控类型</Text>
+                      <Select<number>
+                        value={batchRemoteControlType}
+                        options={REMOTE_CONTROL_TYPE_OPTIONS}
+                        disabled={pointSubmitting}
+                        style={{ width: '100%' }}
+                        onChange={setBatchRemoteControlType}
+                      />
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>统一执行方式</Text>
+                      <Select<number>
+                        value={batchCommandExecutionMode}
+                        options={COMMAND_EXECUTION_MODE_OPTIONS}
+                        disabled={pointSubmitting}
+                        style={{ width: '100%' }}
+                        onChange={setBatchCommandExecutionMode}
+                      />
+                    </Col>
+                  </>
+                ) : null}
                 <Col xs={8}>
                   <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>Scale</Text>
                   <InputNumber
@@ -3933,6 +4153,30 @@ const IEC104: React.FC = () => {
               onChange={applyImportBatchCategory}
               style={{ width: 190 }}
             />
+            {hasRemoteControlImportDrafts ? (
+              <>
+                <Select<number>
+                  allowClear
+                  size="small"
+                  value={importBatchRemoteControlType}
+                  placeholder="统一遥控类型"
+                  options={REMOTE_CONTROL_TYPE_OPTIONS}
+                  disabled={importSubmitting}
+                  onChange={applyImportBatchRemoteControlType}
+                  style={{ width: 210 }}
+                />
+                <Select<number>
+                  allowClear
+                  size="small"
+                  value={importBatchCommandExecutionMode}
+                  placeholder="统一执行方式"
+                  options={COMMAND_EXECUTION_MODE_OPTIONS}
+                  disabled={importSubmitting}
+                  onChange={applyImportBatchCommandExecutionMode}
+                  style={{ width: 210 }}
+                />
+              </>
+            ) : null}
             <Checkbox checked={ioaInputHex} onChange={(event) => setIoaInputHex(event.target.checked)}>
               十六进制输入
             </Checkbox>
@@ -4061,7 +4305,7 @@ const IEC104: React.FC = () => {
               dataSource={importPointDrafts}
               pagination={false}
               size="small"
-              scroll={{ x: 1460, y: 360 }}
+              scroll={{ x: 1880, y: 360 }}
               rowClassName={(record) => (importValidation.rowIssues.has(record.key) ? 'iec104-import-row-error' : '')}
               locale={{
                 emptyText: importSourceConnId ? '请选择需要导入的来源点位' : '请先选择来源连接',

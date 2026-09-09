@@ -282,6 +282,8 @@ export interface Iec104Point {
   ioa: number;
   point_type: number;
   business_type: number;
+  remote_control_type: number;
+  command_execution_mode: number;
   scale: number;
   offset: number;
   deadband: number;

@@ -187,6 +187,8 @@ test('IEC104 SINGLE batch points reset engineering parameters', () => {
     ioa_category: 'teleindication',
     point_type: BATCH_POINT_TYPE_SINGLE,
     business_type: 1,
+    remote_control_type: 1,
+    command_execution_mode: 2,
     scale: 1,
     offset: 0,
     deadband: 0,

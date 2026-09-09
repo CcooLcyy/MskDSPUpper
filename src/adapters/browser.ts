@@ -135,11 +135,12 @@ const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('Calc'),
   makeModuleInfo('ControlOrchestrator'),
   makeModuleInfo('MQTTManager'),
-  makeModuleInfo('DigitalInput'),
+  makeModuleInfo('BoardIO'),
 ];
 
-const runningModules = new Set(['ModuleManager', 'DataCenter', 'DigitalInput', 'IEC104', 'IEC61850', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc', 'ControlOrchestrator']);
-const digitalInputConnId = 99;
+const runningModules = new Set(['ModuleManager', 'DataCenter', 'BoardIO', 'IEC104', 'IEC61850', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc', 'ControlOrchestrator']);
+const boardDiConnId = 99;
+const boardDoConnId = 98;
 const iec104Links = new Map<string, Iec104LinkInfo>();
 const iec104Tables = new Map<string, Iec104PointTable>();
 const iec104Simulation = new Map<string, Iec104SimulationSnapshot>();
@@ -170,6 +171,8 @@ const IEC104_BUSINESS_TYPE_TELEMETRY = 2;
 const IEC104_BUSINESS_TYPE_REMOTE_ADJUST = 3;
 const IEC104_BUSINESS_TYPE_REMOTE_CONTROL = 4;
 const IEC104_BUSINESS_TYPE_PARAMETER = 5;
+const IEC104_REMOTE_CONTROL_TYPE_SINGLE = 1;
+const IEC104_COMMAND_EXECUTION_MODE_SELECT_EXECUTE = 2;
 
 const inferIec104BusinessType = (point: Iec104Point): number => {
   if (point.business_type) return point.business_type;
@@ -286,7 +289,8 @@ function connectionInfo(moduleName: string, connName: string, connId: number): D
 
 function listConnections(): DcConnectionInfo[] {
   return [
-    connectionInfo('DigitalInput', 'board-di', digitalInputConnId),
+    connectionInfo('BoardIO', 'board-di', boardDiConnId),
+    connectionInfo('BoardIO', 'board-do', boardDoConnId),
     ...[...iec104Links.values()].map((item) => connectionInfo('IEC104', item.config?.conn_name ?? '', item.conn_id)),
     ...[...iec61850Ieds.values()].map((item) => connectionInfo('IEC61850', item.config?.conn_name ?? '', item.conn_id)),
     ...[...modbusLinks.values()].map((item) => connectionInfo('ModbusRTU', item.config?.conn_name ?? '', item.conn_id)),
@@ -312,8 +316,11 @@ function collectValueSpec(value: { signal: { tag: string } | null; base_tag: str
 }
 
 function tagsForConnection(connId: number): string[] {
-  if (connId === digitalInputConnId) {
+  if (connId === boardDiConnId) {
     return ['DI1', 'DI2', 'DI3', 'DI4'];
+  }
+  if (connId === boardDoConnId) {
+    return ['DO1', 'DO2'];
   }
   const extraTags = dataCenterExtraTags.get(connId);
   if (extraTags) return clone(extraTags);
@@ -400,7 +407,7 @@ function getLatestUpdates(connId: number, tags: string[]): Promise<DcPointUpdate
     src_tag: tag,
     dst_conn_id: connId,
     dst_tag: tag,
-    value: connId === digitalInputConnId
+    value: connId === boardDiConnId || connId === boardDoConnId
       ? { type: 'Bool', value: index % 2 === 0 } satisfies DcPointValue
       : makePointValue(ts / 1000 + index),
     ts_ms: ts,
@@ -414,7 +421,7 @@ function getSourceLatestUpdates(connId: number, tags: string[]): Promise<DcSourc
   return Promise.resolve(activeTags.map((tag, index) => ({
     conn_id: connId,
     tag,
-    value: connId === digitalInputConnId
+    value: connId === boardDiConnId || connId === boardDoConnId
       ? { type: 'Bool', value: index % 2 === 0 } satisfies DcPointValue
       : makePointValue(ts / 1000 + index),
     ts_ms: ts,
@@ -569,10 +576,10 @@ function seedDemoData() {
   iec104Tables.set(iecConfig.conn_name, {
     conn_name: iecConfig.conn_name,
     points: [
-      { tag: '有功功率', ioa: 1001, point_type: 1, business_type: 2, scale: 1, offset: 0, deadband: 0 },
-      { tag: '无功功率', ioa: 1002, point_type: 1, business_type: 2, scale: 1, offset: 0, deadband: 0 },
-      { tag: '有功设定', ioa: 1101, point_type: 1, business_type: 3, scale: 1, offset: 0, deadband: 0 },
-      { tag: '运行状态', ioa: 2001, point_type: 2, business_type: 1, scale: 1, offset: 0, deadband: 0 },
+      { tag: '有功功率', ioa: 1001, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0 },
+      { tag: '无功功率', ioa: 1002, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0 },
+      { tag: '有功设定', ioa: 1101, point_type: 1, business_type: 3, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0 },
+      { tag: '运行状态', ioa: 2001, point_type: 2, business_type: 1, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0 },
     ],
   });
 
@@ -602,10 +609,10 @@ function seedDemoData() {
   iec104Tables.set(iecSecondaryConfig.conn_name, {
     conn_name: iecSecondaryConfig.conn_name,
     points: [
-      { tag: '全站有功', ioa: 3001, point_type: 1, business_type: 2, scale: 1, offset: 0, deadband: 0.1 },
-      { tag: '全站无功', ioa: 3002, point_type: 1, business_type: 2, scale: 1, offset: 0, deadband: 0.1 },
-      { tag: '母线电压', ioa: 3003, point_type: 1, business_type: 2, scale: 0.001, offset: 0, deadband: 0.01 },
-      { tag: '断路器状态', ioa: 4001, point_type: 2, business_type: 1, scale: 1, offset: 0, deadband: 0 },
+      { tag: '全站有功', ioa: 3001, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0.1 },
+      { tag: '全站无功', ioa: 3002, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0.1 },
+      { tag: '母线电压', ioa: 3003, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 0.001, offset: 0, deadband: 0.01 },
+      { tag: '断路器状态', ioa: 4001, point_type: 2, business_type: 1, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0 },
     ],
   });
 
@@ -1193,6 +1200,8 @@ export const browserApi: typeof tauriApi = {
     const normalizePoint = (point: Iec104Point): Iec104Point => ({
       ...point,
       business_type: inferIec104BusinessType(point),
+      remote_control_type: point.remote_control_type || IEC104_REMOTE_CONTROL_TYPE_SINGLE,
+      command_execution_mode: point.command_execution_mode || IEC104_COMMAND_EXECUTION_MODE_SELECT_EXECUTE,
     });
     const nextPoints = replace ? points : mergeByTag(previous, points);
     iec104Tables.set(connName, { conn_name: connName, points: clone(nextPoints.map(normalizePoint)) });

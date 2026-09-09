@@ -7,6 +7,33 @@ use crate::proto::iec104_proto::{
 };
 use crate::state::AppState;
 
+const REMOTE_CONTROL_TYPE_SINGLE: i32 = 1;
+const COMMAND_EXECUTION_MODE_SELECT_EXECUTE: i32 = 2;
+
+fn default_remote_control_type() -> i32 {
+    REMOTE_CONTROL_TYPE_SINGLE
+}
+
+fn default_command_execution_mode() -> i32 {
+    COMMAND_EXECUTION_MODE_SELECT_EXECUTE
+}
+
+fn normalize_remote_control_type(value: i32) -> i32 {
+    if value == 0 {
+        default_remote_control_type()
+    } else {
+        value
+    }
+}
+
+fn normalize_command_execution_mode(value: i32) -> i32 {
+    if value == 0 {
+        default_command_execution_mode()
+    } else {
+        value
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EndpointDto {
     pub ip: String,
@@ -56,6 +83,10 @@ pub struct PointDto {
     pub point_type: i32,
     #[serde(default)]
     pub business_type: i32,
+    #[serde(default = "default_remote_control_type")]
+    pub remote_control_type: i32,
+    #[serde(default = "default_command_execution_mode")]
+    pub command_execution_mode: i32,
     pub scale: f64,
     pub offset: f64,
     pub deadband: f64,
@@ -128,6 +159,8 @@ impl From<Point> for PointDto {
             ioa: point.ioa,
             point_type: point.r#type,
             business_type: point.business_type,
+            remote_control_type: normalize_remote_control_type(point.remote_control_type),
+            command_execution_mode: normalize_command_execution_mode(point.command_execution_mode),
             scale: point.scale,
             offset: point.offset,
             deadband: point.deadband,
@@ -194,6 +227,8 @@ impl PointDto {
             ioa: self.ioa,
             r#type: self.point_type,
             business_type: self.business_type,
+            remote_control_type: normalize_remote_control_type(self.remote_control_type),
+            command_execution_mode: normalize_command_execution_mode(self.command_execution_mode),
             scale: self.scale,
             offset: self.offset,
             deadband: self.deadband,

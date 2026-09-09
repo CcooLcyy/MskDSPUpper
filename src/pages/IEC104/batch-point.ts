@@ -5,6 +5,10 @@ import {
   getPointBusinessTypeByCategory,
   type IoaCategoryKey,
 } from './ioa-category.ts';
+import {
+  DEFAULT_REMOTE_CONTROL_FIELDS,
+  normalizeRemoteControlFields,
+} from './remote-control.ts';
 
 export const BATCH_POINT_TYPE_FLOAT = 1;
 export const BATCH_POINT_TYPE_SINGLE = 2;
@@ -30,6 +34,8 @@ export type GenerateBatchPointsOptions = {
   scale: number;
   offset: number;
   deadband: number;
+  remoteControlType?: number;
+  commandExecutionMode?: number;
   occupiedTags?: ReadonlySet<string>;
   occupiedIoas?: ReadonlySet<number>;
 };
@@ -59,6 +65,8 @@ export const generateBatchPoints = ({
   scale,
   offset,
   deadband,
+  remoteControlType = DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
+  commandExecutionMode = DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
   occupiedTags = new Set<string>(),
   occupiedIoas = new Set<number>(),
 }: GenerateBatchPointsOptions): GenerateBatchPointsResult => {
@@ -145,7 +153,7 @@ export const generateBatchPoints = ({
       }
     }
 
-    return {
+    return normalizeRemoteControlFields({
       key,
       sourceLine: line,
       tag,
@@ -153,10 +161,12 @@ export const generateBatchPoints = ({
       ioa_category: ioaCategory,
       point_type: pointType,
       business_type: normalizedBusinessType,
+      remote_control_type: remoteControlType,
+      command_execution_mode: commandExecutionMode,
       scale: normalizedScale,
       offset: normalizedOffset,
       deadband: normalizedDeadband,
-    };
+    });
   });
 
   return { drafts, issues };
