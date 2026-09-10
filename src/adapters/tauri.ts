@@ -213,14 +213,18 @@ export const api = {
     manifest: LowerUpdateManifest,
     onProgress?: (progress: LowerUpdateDownloadProgress) => void,
   ): Promise<LowerUpdateDownloadResult> => {
+    const taskId = crypto.randomUUID();
     const unlisten = onProgress
       ? await listen<LowerUpdateDownloadProgress>(LOWER_UPDATE_DOWNLOAD_PROGRESS_EVENT, (event) => {
+          if (event.payload.task_id !== taskId || event.payload.channel !== manifest.channel) {
+            return;
+          }
           onProgress(event.payload);
         })
       : null;
 
     try {
-      return await invoke<LowerUpdateDownloadResult>('download_lower_update', { manifest });
+      return await invoke<LowerUpdateDownloadResult>('download_lower_update', { manifest, taskId });
     } finally {
       unlisten?.();
     }

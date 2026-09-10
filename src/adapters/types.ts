@@ -109,6 +109,8 @@ export interface LowerUpdateManifest {
 export type LowerUpdateDownloadStage = 'started' | 'downloading' | 'verifying' | 'finished';
 
 export interface LowerUpdateDownloadProgress {
+  task_id: string;
+  channel: LowerUpdateChannel;
   package_name: string;
   downloaded_bytes: number;
   total_bytes: number;

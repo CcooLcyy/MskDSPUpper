@@ -1058,7 +1058,10 @@ export const browserApi: typeof tauriApi = {
     manifest: LowerUpdateManifest,
     onProgress?: (progress: LowerUpdateDownloadProgress) => void,
   ): Promise<LowerUpdateDownloadResult> => {
+    const taskId = crypto.randomUUID();
     onProgress?.({
+      task_id: taskId,
+      channel: manifest.channel,
       package_name: manifest.asset.name,
       downloaded_bytes: 0,
       total_bytes: manifest.asset.size,
@@ -1076,6 +1079,8 @@ export const browserApi: typeof tauriApi = {
     }
 
     onProgress?.({
+      task_id: taskId,
+      channel: manifest.channel,
       package_name: manifest.asset.name,
       downloaded_bytes: bytes.byteLength,
       total_bytes: manifest.asset.size,
@@ -1098,6 +1103,8 @@ export const browserApi: typeof tauriApi = {
     });
 
     onProgress?.({
+      task_id: taskId,
+      channel: manifest.channel,
       package_name: manifest.asset.name,
       downloaded_bytes: bytes.byteLength,
       total_bytes: manifest.asset.size,

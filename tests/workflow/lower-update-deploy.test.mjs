@@ -16,6 +16,10 @@ const tauriAdapterSource = readFileSync(
   new URL('../../src/adapters/tauri.ts', import.meta.url),
   'utf8',
 );
+const adapterTypesSource = readFileSync(
+  new URL('../../src/adapters/types.ts', import.meta.url),
+  'utf8',
+);
 
 // 验证同一个 Docker 构建的镜像 ID 比较不区分大小写。
 test('lower update treats image ids with different hex casing as the same build', () => {
@@ -150,4 +154,44 @@ test('lower update can deploy a cached package without check or download', () =>
   assert.ok(handler, '应提供独立的缓存包下发处理函数');
   assert.match(handler[1], /runDeployFlow/);
   assert.doesNotMatch(handler[1], /handleCheckUpdate|handleDownload|checkLowerUpdate|downloadLowerUpdate/);
+});
+
+// 验证并行或排队的下载请求只消费属于自身任务和通道的进度事件。
+test('lower update download progress is correlated by task and channel', () => {
+  const progressType = adapterTypesSource.match(
+    /export interface LowerUpdateDownloadProgress \{([\s\S]*?)\n\}/,
+  );
+  assert.ok(progressType, '应声明下位机下载进度类型');
+  assert.match(progressType[1], /task_id: string/);
+  assert.match(progressType[1], /channel: LowerUpdateChannel/);
+
+  const adapterDownload = tauriAdapterSource.match(
+    /downloadLowerUpdate: async \(([\s\S]*?)\n  \},\n  uploadLowerUpdatePackage:/,
+  );
+  assert.ok(adapterDownload, '应声明 Tauri 下位机下载适配器');
+  assert.match(adapterDownload[1], /crypto\.randomUUID\(\)/);
+  assert.match(adapterDownload[1], /event\.payload\.task_id !== taskId/);
+  assert.match(adapterDownload[1], /event\.payload\.channel !== manifest\.channel/);
+  assert.match(adapterDownload[1], /'download_lower_update', \{ manifest, taskId \}/);
+
+  assert.match(backendSource, /pub task_id: String/);
+  assert.match(backendSource, /pub channel: String/);
+  assert.match(backendSource, /task_id = %task_id,[\s\S]*?收到下位机更新包下载请求/);
+  assert.match(
+    backendSource,
+    /pub async fn download_lower_update\([\s\S]*?task_id: String,[\s\S]*?emit_download_progress\([\s\S]*?&task_id/,
+  );
+});
+
+// 验证只有缓存未命中并准备发起 HTTP 请求时才记录“开始下载”。
+test('lower update logs network download only after cache miss', () => {
+  const requestLogIndex = backendSource.indexOf('"收到下位机更新包下载请求"');
+  const cacheCheckIndex = backendSource.indexOf('if output_path.is_file()');
+  const networkLogIndex = backendSource.indexOf('"开始下载下位机更新包"');
+  const requestSendIndex = backendSource.indexOf('.get(&manifest.asset.url)', networkLogIndex);
+
+  assert.ok(requestLogIndex >= 0, '下载命令入口应记录收到请求');
+  assert.ok(cacheCheckIndex > requestLogIndex, '收到请求日志应在缓存检查前');
+  assert.ok(networkLogIndex > cacheCheckIndex, '开始下载日志应在缓存检查后');
+  assert.ok(requestSendIndex > networkLogIndex, '开始下载日志应紧邻实际 HTTP 请求之前');
 });

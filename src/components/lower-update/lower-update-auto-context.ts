@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react';
 import type {
   LowerUpdateCachedPackage,
+  LowerUpdateDownloadResult,
   LowerUpdateDownloadProgress,
   LowerUpdateManifest,
   LowerUpdateChannel,
@@ -20,12 +21,17 @@ export interface LowerUpdateAutoChannelStatus {
   message: string;
   manifest: LowerUpdateManifest | null;
   cachedPackage: LowerUpdateCachedPackage | null;
+  downloadResult: LowerUpdateDownloadResult | null;
   progress: LowerUpdateDownloadProgress | null;
   lastCheckedAt: number | null;
 }
 
 export interface LowerUpdateAutoStatus {
   channels: Record<LowerUpdateChannel, LowerUpdateAutoChannelStatus>;
+}
+
+export interface LowerUpdateAutoContextValue extends LowerUpdateAutoStatus {
+  ensureDownloaded(manifest: LowerUpdateManifest): Promise<LowerUpdateDownloadResult>;
 }
 
 function createInitialChannelStatus(channel: LowerUpdateChannel): LowerUpdateAutoChannelStatus {
@@ -35,6 +41,7 @@ function createInitialChannelStatus(channel: LowerUpdateChannel): LowerUpdateAut
     message: '尚未检查下位机更新',
     manifest: null,
     cachedPackage: null,
+    downloadResult: null,
     progress: null,
     lastCheckedAt: null,
   };
@@ -49,10 +56,15 @@ export const initialLowerUpdateAutoStatus: LowerUpdateAutoStatus = {
   },
 };
 
-export const LowerUpdateAutoContext = createContext<LowerUpdateAutoStatus>(
-  initialLowerUpdateAutoStatus,
-);
+const unavailableEnsureDownloaded = async (): Promise<LowerUpdateDownloadResult> => {
+  throw new Error('下位机更新下载服务尚未初始化');
+};
 
-export function useLowerUpdateAuto(): LowerUpdateAutoStatus {
+export const LowerUpdateAutoContext = createContext<LowerUpdateAutoContextValue>({
+  ...initialLowerUpdateAutoStatus,
+  ensureDownloaded: unavailableEnsureDownloaded,
+});
+
+export function useLowerUpdateAuto(): LowerUpdateAutoContextValue {
   return useContext(LowerUpdateAutoContext);
 }

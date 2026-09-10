@@ -44,3 +44,47 @@ test('lower updater auto coordinator downloads every channel without deployment'
   assert.doesNotMatch(coordinator, /uploadLowerUpdatePackage/);
   assert.doesNotMatch(coordinator, /installLowerUpdatePackage/);
 });
+
+// 验证页面手动下载和自动下载共用路由外的全局任务。
+test('lower updater keeps one resumable download task across route changes', () => {
+  const coordinator = source('src/components/lower-update/LowerUpdateAutoProvider.tsx');
+  const context = source('src/components/lower-update/lower-update-auto-context.ts');
+  const page = source('src/pages/AdvancedConfig/index.tsx');
+
+  assert.match(context, /ensureDownloaded/);
+  assert.match(context, /downloadResult: LowerUpdateDownloadResult \| null/);
+  assert.match(coordinator, /downloadTasksRef/);
+  assert.match(coordinator, /cacheKey\(manifest\)/);
+  assert.match(coordinator, /ensureDownloaded/);
+  assert.match(page, /useLowerUpdateAuto\(\)/);
+  assert.match(page, /ensureDownloaded\(downloadingManifest\)/);
+
+  const manualDownloadHandler = page.match(
+    /const handleDownload = async \(\): Promise<void> => \{([\s\S]*?)\n  \};/,
+  );
+  assert.ok(manualDownloadHandler, '应保留手动下载处理函数');
+  assert.doesNotMatch(manualDownloadHandler[1], /api\.downloadLowerUpdate/);
+});
+
+// 验证缓存读取和后台下载期间不会误报“无可用缓存”。
+test('lower update page distinguishes loading and background download from empty cache', () => {
+  const page = source('src/pages/AdvancedConfig/index.tsx');
+
+  assert.match(page, /正在读取缓存/);
+  assert.match(page, /后台下载中/);
+  assert.match(page, /isLoadingCachedPackages[\s\S]*?isDownloadingLowerUpdate[\s\S]*?无可用缓存/);
+});
+
+// 验证 Tauri 下载进度使用任务和通道标识过滤，避免多通道串线。
+test('lower update progress is correlated to one task and channel', () => {
+  const adapterTypes = source('src/adapters/types.ts');
+  const adapter = source('src/adapters/tauri.ts');
+  const backend = source('src-tauri/src/commands/lower_update.rs');
+
+  assert.match(adapterTypes, /task_id: string/);
+  assert.match(adapterTypes, /channel: LowerUpdateChannel/);
+  assert.match(adapter, /payload\.task_id !== taskId/);
+  assert.match(adapter, /payload\.channel !== manifest\.channel/);
+  assert.match(backend, /pub task_id: String/);
+  assert.match(backend, /pub channel: String/);
+});

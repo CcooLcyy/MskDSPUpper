@@ -37,6 +37,7 @@ import {
   type LowerUpdateUploadResult,
 } from '../../adapters';
 import { useAppUpdate } from '../../components/app-update/app-update-context';
+import { useLowerUpdateAuto } from '../../components/lower-update/lower-update-auto-context';
 import {
   normalizeSoftwareUpdateView,
   SOFTWARE_UPDATE_VIEW_QUERY_KEY,
@@ -607,6 +608,13 @@ const AdvancedConfigPage: React.FC = () => {
   const [uploadResult, setUploadResult] = useState<LowerUpdateUploadResult | null>(null);
   const [installResult, setInstallResult] = useState<LowerUpdateInstallResult | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
+  const { channels: lowerUpdateAutoChannels, ensureDownloaded } = useLowerUpdateAuto();
+  const lowerUpdateAutoChannelStatus = lowerUpdateAutoChannels[channel];
+  const isDownloadTaskActive = isDownloadingLowerUpdate || lowerUpdateAutoChannelStatus.kind === 'downloading';
+  const autoDownloadProgress = lowerUpdateAutoChannelStatus.progress;
+  const effectiveDownloadedBytes = autoDownloadProgress?.downloaded_bytes ?? downloadedBytes;
+  const effectiveDownloadTotalBytes = autoDownloadProgress?.total_bytes || downloadTotalBytes;
+  const effectiveDownloadResult = lowerUpdateAutoChannelStatus.downloadResult ?? downloadResult;
   const [isLoadingSavedSshPassword, setIsLoadingSavedSshPassword] = useState(false);
   const {
     appVersion,
@@ -637,7 +645,7 @@ const AdvancedConfigPage: React.FC = () => {
   const hasDeployTargetValidationError = hasRuntimeQueryValidationError || !targetInstallDirValidation.ok;
   const hasCheckedPackage = activeManifest !== null;
   const hasVerifiableManifest = Boolean(activeManifest?.image_id?.trim());
-  const hasDownloadedPackage = downloadResult !== null;
+  const hasDownloadedPackage = effectiveDownloadResult !== null;
   const isDeployingLowerUpdate = isUploadingLowerUpdate || isInstallingLowerUpdate || isVerifyingLowerUpdate;
   const deployTaskProgress = getDeployTaskProgress(deployTaskStep, uploadModalProgress);
   const isDeployTaskFailed =
@@ -645,7 +653,7 @@ const AdvancedConfigPage: React.FC = () => {
     || deployTaskStep === 'install_failed'
     || deployTaskStep === 'verify_failed'
     || deployTaskStep === 'image_mismatch';
-  const canReinstall = Boolean(downloadResult && uploadResult);
+  const canReinstall = Boolean(effectiveDownloadResult && uploadResult);
   const canReverifyImage = installResult?.success === true;
   const appDownloadPercent =
     appTotalBytes && appTotalBytes > 0 ? Math.min(100, Math.round((appDownloadedBytes / appTotalBytes) * 100)) : 0;
@@ -668,8 +676,52 @@ const AdvancedConfigPage: React.FC = () => {
   }, [refreshCachedLowerUpdates]);
 
   React.useEffect(() => {
+    const autoManifest = lowerUpdateAutoChannelStatus.manifest;
+    if (!autoManifest) {
+      return;
+    }
+    if (activeManifest
+      && activeManifest.asset.sha256.toLowerCase() !== autoManifest.asset.sha256.toLowerCase()) {
+      return;
+    }
+    applyLowerUpdateManifest(autoManifest);
+    setActiveManifest(autoManifest);
+    const autoProgress = lowerUpdateAutoChannelStatus.progress;
+    if (autoProgress) {
+      setDownloadStage(autoProgress.stage);
+      setDownloadModalProgress(autoProgress.percent);
+      setDownloadedBytes(autoProgress.downloaded_bytes);
+      setDownloadTotalBytes(autoProgress.total_bytes || autoManifest.asset.size);
+      setDeliveryStatus(autoProgress.stage === 'verifying' ? '校验中' : '下载中');
+    }
+    const restoredResult = lowerUpdateAutoChannelStatus.downloadResult;
+    const restoredPackage = lowerUpdateAutoChannelStatus.cachedPackage;
+    if (restoredPackage) {
+      setCachedPackages((previous) => previous.some((item) => item.package_path === restoredPackage.package_path)
+        ? previous
+        : [...previous, restoredPackage]);
+    }
+    if (restoredResult && restoredResult.package_path !== downloadedPackagePath) {
+      setDownloadResult(restoredResult);
+      setDownloadedPackagePath(restoredResult.package_path);
+      setDownloadedPackageSha256(restoredResult.sha256);
+      setDownloadedBytes(restoredResult.downloaded_bytes);
+      setDownloadTotalBytes(autoManifest.asset.size);
+      setDownloadModalProgress(100);
+      setDownloadStage('finished');
+      setDeliveryStatus('已缓存');
+    }
+  }, [activeManifest, downloadedPackagePath, lowerUpdateAutoChannelStatus]);
+
+  React.useEffect(() => {
     setCacheFreshness(summarizeCachedPackageFreshness(onlineLowerUpdateManifest, cachedPackages));
   }, [cachedPackages, onlineLowerUpdateManifest]);
+
+  React.useEffect(() => {
+    if (lowerUpdateAutoChannelStatus.downloadResult) {
+      void refreshCachedLowerUpdates();
+    }
+  }, [lowerUpdateAutoChannelStatus.downloadResult, refreshCachedLowerUpdates]);
 
   React.useEffect(() => {
     if (lowerUpdateAuthMethod !== 'password' || !targetUploadAccount.trim()) {
@@ -870,6 +922,21 @@ const AdvancedConfigPage: React.FC = () => {
       if (matchingCachedPackage) {
         applyCachedPackage(matchingCachedPackage);
         messageApi.info('已找到相同的本地缓存包，可直接下发');
+      } else if (lowerUpdateAutoChannelStatus.manifest
+        && lowerUpdateAutoChannelStatus.manifest.asset.sha256.toLowerCase() === manifest.asset.sha256.toLowerCase()
+        && lowerUpdateAutoChannelStatus.downloadResult) {
+        setDownloadResult(lowerUpdateAutoChannelStatus.downloadResult);
+        setDownloadedPackagePath(lowerUpdateAutoChannelStatus.downloadResult.package_path);
+        setDownloadedPackageSha256(lowerUpdateAutoChannelStatus.downloadResult.sha256);
+        setDownloadedBytes(lowerUpdateAutoChannelStatus.downloadResult.downloaded_bytes);
+        setDownloadTotalBytes(manifest.asset.size);
+        setDownloadModalProgress(100);
+        setDownloadStage('finished');
+        setDeliveryStatus('已缓存');
+      } else if (lowerUpdateAutoChannelStatus.manifest
+        && lowerUpdateAutoChannelStatus.manifest.asset.sha256.toLowerCase() === manifest.asset.sha256.toLowerCase()
+        && lowerUpdateAutoChannelStatus.kind === 'downloading') {
+        setDownloadTotalBytes(manifest.asset.size);
       } else {
         setDownloadResult(null);
         setDownloadedPackagePath('-');
@@ -955,13 +1022,7 @@ const AdvancedConfigPage: React.FC = () => {
     setDeliveryStatus('下载中');
 
     try {
-      const result = await api.downloadLowerUpdate(activeManifest, (progress) => {
-        setDownloadStage(progress.stage);
-        setDownloadModalProgress(progress.percent);
-        setDownloadedBytes(progress.downloaded_bytes);
-        setDownloadTotalBytes(progress.total_bytes || activeManifest.asset.size);
-        setDeliveryStatus(progress.stage === 'verifying' ? '校验中' : '下载中');
-      });
+      const result = await ensureDownloaded(downloadingManifest);
       setDownloadResult(result);
       setDownloadedPackagePath(result.package_path);
       setDownloadedPackageSha256(result.sha256);
@@ -988,7 +1049,7 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const closeDownloadModal = (): void => {
-    if (isDownloadingLowerUpdate) {
+    if (isDownloadTaskActive) {
       console.info('下位机更新下载已切换到后台运行');
     }
     setIsDownloadModalOpen(false);
@@ -1222,7 +1283,7 @@ const AdvancedConfigPage: React.FC = () => {
           downloaded_bytes: cachedPackage.package_size,
           sha256: cachedPackage.sha256,
         }
-      : downloadResult;
+      : effectiveDownloadResult;
 
     if (!selectedDownloadResult) {
       messageApi.warning('请先下载到上位机');
@@ -1530,7 +1591,7 @@ const AdvancedConfigPage: React.FC = () => {
                   <Select<LowerUpdateChannel>
                     value={channel}
                     options={UPDATE_CHANNEL_OPTIONS}
-                    disabled={isCheckingLowerUpdate || isDownloadingLowerUpdate || isDeployingLowerUpdate}
+                    disabled={isCheckingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
                     onChange={(value) => {
                       setChannel(value);
                       setCachedPackages([]);
@@ -1549,7 +1610,13 @@ const AdvancedConfigPage: React.FC = () => {
                       {isLoadingCachedPackages ? ' (读取中)' : ''}
                     </Text>
                     <Tag color={cachedPackages.length > 0 ? 'blue' : 'default'}>
-                      {cachedPackages.length > 0 ? `可用 ${cachedPackages.length} 个` : '无可用缓存'}
+                      {isLoadingCachedPackages
+                        ? '正在读取缓存'
+                        : isDownloadTaskActive
+                          ? '后台下载中'
+                          : cachedPackages.length > 0
+                            ? `可用 ${cachedPackages.length} 个`
+                            : '无可用缓存'}
                     </Tag>
                     {cachedPackages.length > 0 ? (
                       <Tag color={cacheFreshnessTag.color}>{cacheFreshnessTag.label}</Tag>
@@ -1581,7 +1648,7 @@ const AdvancedConfigPage: React.FC = () => {
                             disabled={
                               hasDeployTargetValidationError
                               || isCheckingLowerUpdate
-                              || isDownloadingLowerUpdate
+                              || isDownloadTaskActive
                               || isDeployingLowerUpdate
                             }
                           >
@@ -1604,7 +1671,7 @@ const AdvancedConfigPage: React.FC = () => {
                 <Button
                   icon={<FileSearchOutlined />}
                   onClick={() => void handleCheckUpdate()}
-                  disabled={hasRuntimeQueryValidationError || isDownloadingLowerUpdate}
+                  disabled={hasRuntimeQueryValidationError || isDownloadTaskActive}
                   loading={isCheckingLowerUpdate}
                 >
                   检查更新
@@ -1615,10 +1682,10 @@ const AdvancedConfigPage: React.FC = () => {
                   disabled={
                     !hasCheckedPackage
                     || isCheckingLowerUpdate
-                    || isDownloadingLowerUpdate
+                    || isDownloadTaskActive
                     || isDeployingLowerUpdate
                   }
-                  loading={isDownloadingLowerUpdate}
+                  loading={isDownloadTaskActive}
                 >
                   下载到上位机
                 </Button>
@@ -1631,7 +1698,7 @@ const AdvancedConfigPage: React.FC = () => {
                     || !hasDownloadedPackage
                     || !hasVerifiableManifest
                     || isCheckingLowerUpdate
-                    || isDownloadingLowerUpdate
+                    || isDownloadTaskActive
                     || isDeployingLowerUpdate
                   }
                   loading={isDeployingLowerUpdate}
@@ -1639,12 +1706,12 @@ const AdvancedConfigPage: React.FC = () => {
                   下发并安装
                 </Button>
               </Space>
-              {isDownloadingLowerUpdate ? (
+              {isDownloadTaskActive ? (
                 <div className="advanced-config-background-download">
                   <Space wrap size={8}>
                     <Tag color="processing">后台下载中</Tag>
                     <Text type="secondary">
-                      {formatPackageSize(downloadedBytes)} / {formatPackageSize(downloadTotalBytes || activeManifest?.asset.size || 0)}
+                      {formatPackageSize(effectiveDownloadedBytes)} / {formatPackageSize(effectiveDownloadTotalBytes || activeManifest?.asset.size || 0)}
                     </Text>
                     <Button
                       size="small"
@@ -1654,7 +1721,7 @@ const AdvancedConfigPage: React.FC = () => {
                       查看进度
                     </Button>
                   </Space>
-                  <Progress percent={downloadModalProgress} size="small" />
+                  <Progress percent={autoDownloadProgress?.percent ?? downloadModalProgress} size="small" />
                 </div>
               ) : null}
             </div>
@@ -1693,7 +1760,7 @@ const AdvancedConfigPage: React.FC = () => {
         <Modal
           open={isDownloadModalOpen}
           title="下载到上位机"
-          okText={isDownloadingLowerUpdate ? '后台运行' : '完成'}
+          okText={isDownloadTaskActive ? '后台运行' : '完成'}
           okButtonProps={{ disabled: false }}
           cancelButtonProps={{ style: { display: 'none' } }}
           maskClosable
@@ -1705,18 +1772,18 @@ const AdvancedConfigPage: React.FC = () => {
               <Descriptions.Item label="安装包">{packageName}</Descriptions.Item>
               <Descriptions.Item label="包大小">{packageSize}</Descriptions.Item>
               <Descriptions.Item label="已下载">
-                {formatPackageSize(downloadedBytes)} / {formatPackageSize(downloadTotalBytes || activeManifest?.asset.size || 0)}
+                {formatPackageSize(effectiveDownloadedBytes)} / {formatPackageSize(effectiveDownloadTotalBytes || activeManifest?.asset.size || 0)}
               </Descriptions.Item>
               <Descriptions.Item label="本地路径">{downloadedPackagePath}</Descriptions.Item>
               <Descriptions.Item label="校验文件">{activeManifest?.checksum.name ?? 'SHA256SUMS'}</Descriptions.Item>
               <Descriptions.Item label="校验状态">
-                <Tag color={getDownloadStageTagColor(downloadStage)}>{getDownloadStageLabel(downloadStage)}</Tag>
+                <Tag color={getDownloadStageTagColor(autoDownloadProgress?.stage ?? downloadStage)}>{getDownloadStageLabel(autoDownloadProgress?.stage ?? downloadStage)}</Tag>
               </Descriptions.Item>
               <Descriptions.Item label="实际 SHA256">{downloadedPackageSha256}</Descriptions.Item>
             </Descriptions>
             <Progress
-              percent={downloadModalProgress}
-              status={downloadStage === 'failed' ? 'exception' : downloadStage === 'finished' ? 'success' : 'active'}
+              percent={autoDownloadProgress?.percent ?? downloadModalProgress}
+              status={(autoDownloadProgress?.stage ?? downloadStage) === 'failed' ? 'exception' : (autoDownloadProgress?.stage ?? downloadStage) === 'finished' ? 'success' : 'active'}
             />
             <Text type="secondary">下载完成后会自动校验 SHA256，通过后可继续下发安装。</Text>
           </Space>

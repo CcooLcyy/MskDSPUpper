@@ -101,6 +101,8 @@ pub struct LowerUpdateManifestDto {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct LowerUpdateDownloadProgressDto {
+    pub task_id: String,
+    pub channel: String,
     pub package_name: String,
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
@@ -1756,11 +1758,14 @@ fn progress_percent(downloaded_bytes: u64, total_bytes: u64) -> u8 {
 fn emit_download_progress(
     app_handle: &AppHandle,
     manifest: &LowerUpdateManifestDto,
+    task_id: &str,
     downloaded_bytes: u64,
     total_bytes: u64,
     stage: &str,
 ) {
     let payload = LowerUpdateDownloadProgressDto {
+        task_id: task_id.to_string(),
+        channel: manifest.channel.clone(),
         package_name: manifest.asset.name.clone(),
         downloaded_bytes,
         total_bytes,
@@ -1923,14 +1928,16 @@ pub async fn download_lower_update(
     app_handle: AppHandle,
     state: State<'_, AppState>,
     manifest: LowerUpdateManifestDto,
+    task_id: String,
 ) -> Result<LowerUpdateDownloadResultDto, String> {
     let started_at = Instant::now();
     let package_name = manifest.asset.name.clone();
     tracing::info!(
         operation = "download",
         package = %package_name,
+        task_id = %task_id,
         url = %log_url(&manifest.asset.url),
-        "开始下载下位机更新包"
+        "收到下位机更新包下载请求"
     );
     let result = async {
         let channel = normalize_channel(&manifest.channel)?;
@@ -1961,6 +1968,7 @@ pub async fn download_lower_update(
                 tracing::info!(
                     operation = "download",
                     package = %manifest.asset.name,
+                    task_id = %task_id,
                     cache_path = %output_path.display(),
                     "下位机更新包缓存命中"
                 );
@@ -1976,6 +1984,7 @@ pub async fn download_lower_update(
                 emit_download_progress(
                     &app_handle,
                     &manifest,
+                    &task_id,
                     manifest.asset.size,
                     manifest.asset.size,
                     "finished",
@@ -2002,6 +2011,13 @@ pub async fn download_lower_update(
             .timeout(Duration::from_secs(30 * 60))
             .build()
             .map_err(|e| format!("创建下位机更新下载客户端失败: {e}"))?;
+        tracing::info!(
+            operation = "download",
+            package = %manifest.asset.name,
+            task_id = %task_id,
+            url = %log_url(&manifest.asset.url),
+            "开始下载下位机更新包"
+        );
         let mut response = client
             .get(&manifest.asset.url)
             .send()
@@ -2013,7 +2029,7 @@ pub async fn download_lower_update(
         }
 
         let total_bytes = response.content_length().unwrap_or(manifest.asset.size);
-        emit_download_progress(&app_handle, &manifest, 0, total_bytes, "started");
+        emit_download_progress(&app_handle, &manifest, &task_id, 0, total_bytes, "started");
 
         let mut file = fs::File::create(&partial_path)
             .await
@@ -2032,6 +2048,7 @@ pub async fn download_lower_update(
             emit_download_progress(
                 &app_handle,
                 &manifest,
+                &task_id,
                 downloaded_bytes,
                 total_bytes,
                 "downloading",
@@ -2054,6 +2071,7 @@ pub async fn download_lower_update(
         emit_download_progress(
             &app_handle,
             &manifest,
+            &task_id,
             downloaded_bytes,
             total_bytes,
             "verifying",
@@ -2087,6 +2105,7 @@ pub async fn download_lower_update(
         emit_download_progress(
             &app_handle,
             &manifest,
+            &task_id,
             downloaded_bytes,
             total_bytes,
             "finished",
@@ -2105,6 +2124,7 @@ pub async fn download_lower_update(
             tracing::info!(
                 operation = "download",
                 package = %package_name,
+                task_id = %task_id,
                 path = %result.package_path,
                 sha256 = %result.sha256,
                 elapsed_ms = started_at.elapsed().as_millis() as u64,
@@ -2117,6 +2137,7 @@ pub async fn download_lower_update(
             tracing::warn!(
                 operation = "download",
                 package = %package_name,
+                task_id = %task_id,
                 elapsed_ms = started_at.elapsed().as_millis() as u64,
                 error = %detail,
                 "下位机更新包下载流程失败"
