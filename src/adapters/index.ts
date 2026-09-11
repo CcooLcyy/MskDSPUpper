@@ -73,6 +73,9 @@ export type {
   ModbusReadPlan,
   ModbusSerialConfig,
   ModbusUpdateConfigResponse,
+  ModbusTcpConfig,
+  ModbusTcpLinkConfig,
+  ModbusTcpLinkInfo,
 } from './types';
 export type {
   Dlt645Block,
@@ -141,6 +144,7 @@ export type {
   FullConfigExportSnapshot,
   Iec104ExportTask,
   ModbusRtuExportTask,
+  ModbusTcpExportTask,
   StableDataBusEndpoint,
   StableDataBusConnection,
   StableDataBusConnTags,

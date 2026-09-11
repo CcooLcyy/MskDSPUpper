@@ -44,6 +44,10 @@ function formatImportSummary(result: FullConfigImportResult): string {
     parts.push(`ModbusRTU ${result.summary.modbusRtuLinks}`);
   }
 
+  if (result.sections.includes('modbus_tcp')) {
+    parts.push(`ModbusTCP ${result.summary.modbusTcpLinks}`);
+  }
+
   if (result.sections.includes('dlt645')) {
     parts.push(`DLT645 ${result.summary.dlt645Links}`);
   }

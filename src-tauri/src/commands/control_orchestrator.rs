@@ -77,6 +77,7 @@ fn point_value_to_proto(value: Option<PointValueDto>) -> Option<PointValue> {
             PointValueDto::Bool(v) => point_value::Kind::BoolValue(v),
             PointValueDto::Int(v) => point_value::Kind::IntValue(v),
             PointValueDto::Double(v) => point_value::Kind::DoubleValue(v),
+            PointValueDto::Decimal(v) => point_value::Kind::DecimalValue(v),
             PointValueDto::String(v) => point_value::Kind::StringValue(v),
             PointValueDto::Bytes(v) => point_value::Kind::BytesValue(v),
         }),
@@ -89,6 +90,7 @@ fn point_value_from_proto(value: Option<PointValue>) -> Option<PointValueDto> {
             point_value::Kind::BoolValue(v) => PointValueDto::Bool(v),
             point_value::Kind::IntValue(v) => PointValueDto::Int(v),
             point_value::Kind::DoubleValue(v) => PointValueDto::Double(v),
+            point_value::Kind::DecimalValue(v) => PointValueDto::Decimal(v),
             point_value::Kind::StringValue(v) => PointValueDto::String(v),
             point_value::Kind::BytesValue(v) => PointValueDto::Bytes(v),
         })

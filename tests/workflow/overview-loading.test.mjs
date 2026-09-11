@@ -22,6 +22,7 @@ test('dashboard waits for running module addresses before loading module configu
     getRunningModuleInfo: () => runningModules.promise,
     listIec104Links: async () => calls.push('IEC104'),
     listModbusLinks: async () => calls.push('ModbusRTU'),
+    listModbusTcpLinks: async () => calls.push('ModbusTCP'),
     listDlt645Links: async () => calls.push('DLT645'),
     listAgcGroups: async () => calls.push('AGC'),
     listRoutes: async () => calls.push('DataCenter'),
@@ -33,7 +34,7 @@ test('dashboard waits for running module addresses before loading module configu
   runningModules.resolve([]);
   const result = await loadPromise;
 
-  assert.deepEqual(calls.sort(), ['AGC', 'DLT645', 'DataCenter', 'IEC104', 'ModbusRTU'].sort());
+  assert.deepEqual(calls.sort(), ['AGC', 'DLT645', 'DataCenter', 'IEC104', 'ModbusRTU', 'ModbusTCP'].sort());
   assert.equal(result.runningModules.status, 'fulfilled');
 });
 
@@ -48,6 +49,7 @@ test('dashboard skips module configuration when running module refresh fails', a
     },
     listIec104Links: async () => calls.push('IEC104'),
     listModbusLinks: async () => calls.push('ModbusRTU'),
+    listModbusTcpLinks: async () => calls.push('ModbusTCP'),
     listDlt645Links: async () => calls.push('DLT645'),
     listAgcGroups: async () => calls.push('AGC'),
     listRoutes: async () => calls.push('DataCenter'),
@@ -57,6 +59,7 @@ test('dashboard skips module configuration when running module refresh fails', a
   assert.equal(result.runningModules.status, 'rejected');
   assert.equal(result.iec104Links.status, 'rejected');
   assert.equal(result.modbusLinks.status, 'rejected');
+  assert.equal(result.modbusTcpLinks.status, 'rejected');
 });
 
 // 验证地址刷新完成后各配置分区仍并发加载，单个失败不会阻断其余结果。
@@ -68,6 +71,7 @@ test('dashboard keeps partial configuration results after address refresh', asyn
       throw new Error('IEC104 不可用');
     },
     listModbusLinks: async () => [{ conn_name: 'meter-1' }],
+    listModbusTcpLinks: async () => [{ conn_name: 'pcs-1' }],
     listDlt645Links: async () => [],
     listAgcGroups: async () => [],
     listRoutes: async () => [{ src: {}, dst: {} }],

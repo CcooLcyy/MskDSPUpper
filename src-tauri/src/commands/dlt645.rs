@@ -59,6 +59,12 @@ pub struct Dlt645PointDto {
     pub scale: f64,
     pub offset: f64,
     pub deadband: f64,
+    #[serde(default)]
+    pub scale_decimal: String,
+    #[serde(default)]
+    pub offset_decimal: String,
+    #[serde(default)]
+    pub deadband_decimal: String,
     pub byte_index: Option<u32>,
     pub bit_index: Option<u32>,
 }
@@ -72,6 +78,12 @@ pub struct Dlt645BlockItemDto {
     pub scale: f64,
     pub offset: f64,
     pub deadband: f64,
+    #[serde(default)]
+    pub scale_decimal: String,
+    #[serde(default)]
+    pub offset_decimal: String,
+    #[serde(default)]
+    pub deadband_decimal: String,
     pub trim_right_space: Option<bool>,
     pub byte_index: Option<u32>,
     pub bit_index: Option<u32>,
@@ -175,6 +187,9 @@ impl From<Point> for Dlt645PointDto {
             scale: point.scale,
             offset: point.offset,
             deadband: point.deadband,
+            scale_decimal: point.scale_decimal,
+            offset_decimal: point.offset_decimal,
+            deadband_decimal: point.deadband_decimal,
             byte_index: point.byte_index,
             bit_index: point.bit_index,
         }
@@ -191,6 +206,9 @@ impl From<BlockItem> for Dlt645BlockItemDto {
             scale: item.scale,
             offset: item.offset,
             deadband: item.deadband,
+            scale_decimal: item.scale_decimal,
+            offset_decimal: item.offset_decimal,
+            deadband_decimal: item.deadband_decimal,
             trim_right_space: item.trim_right_space,
             byte_index: item.byte_index,
             bit_index: item.bit_index,
@@ -277,6 +295,9 @@ impl Dlt645PointDto {
             scale: self.scale,
             offset: self.offset,
             deadband: self.deadband,
+            scale_decimal: self.scale_decimal.clone(),
+            offset_decimal: self.offset_decimal.clone(),
+            deadband_decimal: self.deadband_decimal.clone(),
             byte_index: self.byte_index,
             bit_index: self.bit_index,
         }
@@ -293,6 +314,9 @@ impl Dlt645BlockItemDto {
             scale: self.scale,
             offset: self.offset,
             deadband: self.deadband,
+            scale_decimal: self.scale_decimal.clone(),
+            offset_decimal: self.offset_decimal.clone(),
+            deadband_decimal: self.deadband_decimal.clone(),
             trim_right_space: self.trim_right_space,
             byte_index: self.byte_index,
             bit_index: self.bit_index,

@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import {
+  parseEditablePointValue,
+  resolveEditablePointValueType,
+} from '../../src/utils/control-point-value.ts';
+
 const root = path.resolve(import.meta.dirname, '..', '..');
 
 test('control orchestrator exposes a linear workflow CRUD and execute page', () => {
@@ -47,4 +52,34 @@ test('control orchestrator keeps an independent layout context', () => {
 
   assert.match(layout, /const isControlPage = location\.pathname === '\/control' \|\| location\.pathname\.startsWith\('\/control\/'\);/);
   assert.doesNotMatch(layout, /const isControlPage = location\.pathname\.startsWith\('\/control'\);/);
+});
+
+// 验证控制编排的十进制命令值保留输入原文，并拒绝非法文本而不是静默转换为零。
+test('control orchestrator preserves Decimal command text', () => {
+  assert.deepEqual(
+    parseEditablePointValue('Decimal', '0.12345678901234567890'),
+    { type: 'Decimal', value: '0.12345678901234567890' },
+  );
+  assert.deepEqual(
+    parseEditablePointValue('Decimal', '-1e-20'),
+    { type: 'Decimal', value: '-1e-20' },
+  );
+  assert.throws(
+    () => parseEditablePointValue('Decimal', '1.2.3'),
+    /十进制命令值 必须是完整十进制数/,
+  );
+  assert.equal(
+    resolveEditablePointValueType({ type: 'Decimal', value: '0.1' }),
+    'Decimal',
+  );
+});
+
+// 验证控制编排页面同时保留协议所需的 Double，并提供 Decimal 工程量命令类型。
+test('control orchestrator exposes Decimal without removing Double', () => {
+  const page = fs.readFileSync(path.join(root, 'src/pages/ControlOrchestrator/index.tsx'), 'utf8');
+  const helper = fs.readFileSync(path.join(root, 'src/utils/control-point-value.ts'), 'utf8');
+
+  assert.match(helper, /'Bool', 'Int', 'Double', 'Decimal', 'String'/);
+  assert.match(page, /EDITABLE_POINT_VALUE_TYPES/);
+  assert.match(page, /parseEditablePointValue/);
 });

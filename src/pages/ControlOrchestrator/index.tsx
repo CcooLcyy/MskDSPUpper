@@ -27,6 +27,12 @@ import type {
   DcEndpoint,
   DcPointValue,
 } from '../../adapters';
+import {
+  EDITABLE_POINT_VALUE_TYPES,
+  parseEditablePointValue,
+  resolveEditablePointValueType,
+} from '../../utils/control-point-value';
+import type { EditablePointValueType } from '../../utils/control-point-value';
 import './index.css';
 
 const { Text } = Typography;
@@ -36,7 +42,7 @@ type StepDraft = {
   module_name: string;
   conn_name: string;
   tag: string;
-  value_type: 'Bool' | 'Int' | 'Double' | 'String';
+  value_type: EditablePointValueType;
   value: string;
   use_trigger_value: boolean;
   timeout_ms: number;
@@ -62,7 +68,7 @@ type WorkflowDraft = {
 };
 
 const emptyStep = (): StepDraft => ({
-  step_name: '', module_name: '', conn_name: '', tag: '', value_type: 'Double', value: '0',
+  step_name: '', module_name: '', conn_name: '', tag: '', value_type: 'Decimal', value: '0',
   use_trigger_value: false, timeout_ms: 3000, delay_after_ms: 0,
   verification_enabled: false, status_module_name: '', status_conn_name: '', status_tag: '',
   expected_state: true, wait_timeout_ms: 3000, poll_interval_ms: 200, failure_action: 'STOP',
@@ -75,10 +81,7 @@ const emptyDraft = (): WorkflowDraft => ({
 
 function parseValue(step: StepDraft): DcPointValue | null {
   if (step.use_trigger_value) return null;
-  if (step.value_type === 'Bool') return { type: 'Bool', value: step.value === 'true' || step.value === '1' };
-  if (step.value_type === 'Int') return { type: 'Int', value: Number.parseInt(step.value, 10) || 0 };
-  if (step.value_type === 'Double') return { type: 'Double', value: Number.parseFloat(step.value) || 0 };
-  return { type: 'String', value: step.value };
+  return parseEditablePointValue(step.value_type, step.value);
 }
 
 function draftFromConfig(config: ControlOrchestratorWorkflowConfig): WorkflowDraft {
@@ -86,8 +89,7 @@ function draftFromConfig(config: ControlOrchestratorWorkflowConfig): WorkflowDra
     sequence_name: config.sequence_name,
     steps: config.steps.map((step) => {
       const value = step.value;
-      const type = value?.type === 'Bool' || value?.type === 'Int' || value?.type === 'Double' || value?.type === 'String'
-        ? value.type : 'Double';
+      const type = resolveEditablePointValueType(value);
       const raw = value ? String(value.value) : '0';
       return {
         step_name: step.step_name,
@@ -245,7 +247,7 @@ const ControlOrchestratorPage: React.FC = () => {
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [executeModalOpen, setExecuteModalOpen] = useState(false);
-  const [executeValueType, setExecuteValueType] = useState<'Bool' | 'Int' | 'Double' | 'String'>('Double');
+  const [executeValueType, setExecuteValueType] = useState<EditablePointValueType>('Decimal');
   const [executeValue, setExecuteValue] = useState('0');
   const [messageApi, contextHolder] = message.useMessage();
   const [connections, setConnections] = useState<DcConnectionInfo[]>([]);
@@ -337,7 +339,13 @@ const ControlOrchestratorPage: React.FC = () => {
   const openEdit = () => { if (selected) { setEditing(true); setDraft(draftFromConfig(selected)); setModalOpen(true); } };
 
   const save = async () => {
-    const config = configFromDraft(draft);
+    let config: ControlOrchestratorWorkflowConfig;
+    try {
+      config = configFromDraft(draft);
+    } catch (error) {
+      messageApi.warning(String(error));
+      return;
+    }
     const triggerParts = [draft.trigger_module_name, draft.trigger_conn_name, draft.trigger_tag]
       .map((value) => value.trim());
     const hasTriggerPart = triggerParts.some(Boolean);
@@ -435,10 +443,12 @@ const ControlOrchestratorPage: React.FC = () => {
 
   const confirmExecute = () => {
     let value: DcPointValue;
-    if (executeValueType === 'Bool') value = { type: 'Bool', value: executeValue === 'true' || executeValue === '1' };
-    else if (executeValueType === 'Int') value = { type: 'Int', value: Number.parseInt(executeValue, 10) || 0 };
-    else if (executeValueType === 'Double') value = { type: 'Double', value: Number.parseFloat(executeValue) || 0 };
-    else value = { type: 'String', value: executeValue };
+    try {
+      value = parseEditablePointValue(executeValueType, executeValue);
+    } catch (error) {
+      messageApi.warning(String(error));
+      return;
+    }
     setExecuteModalOpen(false);
     void executeNow(value);
   };
@@ -515,7 +525,7 @@ const ControlOrchestratorPage: React.FC = () => {
                 options={tagOptions(step.module_name, step.conn_name, step.tag)} placeholder="选择点名"
                 notFoundContent="暂无已注册点名" onChange={(value) => updateStep(index, { tag: value ?? '' })} />
             </Form.Item>
-            <Form.Item label="固定值类型"><Select value={step.value_type} options={['Bool', 'Int', 'Double', 'String'].map((value) => ({ value, label: value }))} onChange={(value) => { const steps = [...draft.steps]; steps[index] = { ...step, value_type: value }; setDraft({ ...draft, steps }); }} /></Form.Item>
+            <Form.Item label="固定值类型"><Select value={step.value_type} options={EDITABLE_POINT_VALUE_TYPES.map((value) => ({ value, label: value }))} onChange={(value) => { const steps = [...draft.steps]; steps[index] = { ...step, value_type: value }; setDraft({ ...draft, steps }); }} /></Form.Item>
             <Form.Item label="值"><Input disabled={step.use_trigger_value} value={step.value} onChange={(event) => { const steps = [...draft.steps]; steps[index] = { ...step, value: event.target.value }; setDraft({ ...draft, steps }); }} /></Form.Item>
             <Form.Item label="超时(ms)"><InputNumber min={1} value={step.timeout_ms} onChange={(value) => { const steps = [...draft.steps]; steps[index] = { ...step, timeout_ms: value ?? 1 }; setDraft({ ...draft, steps }); }} /></Form.Item>
             <Form.Item label="步骤间延时(ms)"><InputNumber min={0} value={step.delay_after_ms} onChange={(value) => { const steps = [...draft.steps]; steps[index] = { ...step, delay_after_ms: value ?? 0 }; setDraft({ ...draft, steps }); }} /></Form.Item>
@@ -556,7 +566,7 @@ const ControlOrchestratorPage: React.FC = () => {
     <Modal title="输入执行触发值" open={executeModalOpen} onCancel={() => setExecuteModalOpen(false)} onOk={confirmExecute} okText="执行">
       <Form layout="vertical">
         <Form.Item label="触发值类型" required>
-          <Select value={executeValueType} options={['Bool', 'Int', 'Double', 'String'].map((value) => ({ value, label: value }))} onChange={(value) => setExecuteValueType(value as typeof executeValueType)} />
+          <Select value={executeValueType} options={EDITABLE_POINT_VALUE_TYPES.map((value) => ({ value, label: value }))} onChange={(value) => setExecuteValueType(value as EditablePointValueType)} />
         </Form.Item>
         <Form.Item label="触发值" required>
           <Input value={executeValue} onChange={(event) => setExecuteValue(event.target.value)} placeholder="供使用执行触发值的步骤复用" />

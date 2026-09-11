@@ -41,6 +41,7 @@ import {
   getMinimumAddress,
   isExplicitReadFunction,
 } from '../modbus-form-rules';
+import { resolveModbusPointDecimalText } from '../modbus-decimal';
 
 const { Text } = Typography;
 
@@ -89,6 +90,7 @@ interface Props {
   addressBase: number;
   readPlanSaving: boolean;
   runtimeRunning: boolean;
+  showReadPlan?: boolean;
   onReadPlanSave: (readPlan: ModbusReadPlan) => Promise<boolean>;
   onReadPlanDirtyChange?: (dirty: boolean) => void;
   onAdd: () => void;
@@ -110,6 +112,7 @@ const PointTable: React.FC<Props> = ({
   addressBase,
   readPlanSaving,
   runtimeRunning,
+  showReadPlan = true,
   onReadPlanSave,
   onReadPlanDirtyChange,
   onAdd,
@@ -224,9 +227,9 @@ const PointTable: React.FC<Props> = ({
     || readPlanInvalid;
 
   useEffect(() => {
-    onReadPlanDirtyChange?.(readPlanDirty);
+    onReadPlanDirtyChange?.(showReadPlan && readPlanDirty);
     return () => onReadPlanDirtyChange?.(false);
-  }, [onReadPlanDirtyChange, readPlanDirty]);
+  }, [onReadPlanDirtyChange, readPlanDirty, showReadPlan]);
 
   const setReadPlanBlocks = (
     next: ModbusReadPlan['blocks'] | ((current: ModbusReadPlan['blocks']) => ModbusReadPlan['blocks']),
@@ -437,6 +440,27 @@ const PointTable: React.FC<Props> = ({
       width: 80,
       render: (value: number) => BYTE_ORDER_LABELS[value] ?? '默认 (AB)',
     };
+    const scaleColumn = {
+      title: '缩放系数',
+      dataIndex: 'scale_decimal',
+      key: 'scale',
+      width: 120,
+      render: (_value: string, record: ModbusPoint) => resolveModbusPointDecimalText(record, 'scale'),
+    };
+    const offsetColumn = {
+      title: '偏移量',
+      dataIndex: 'offset_decimal',
+      key: 'offset',
+      width: 120,
+      render: (_value: string, record: ModbusPoint) => resolveModbusPointDecimalText(record, 'offset'),
+    };
+    const deadbandColumn = {
+      title: '死区',
+      dataIndex: 'deadband_decimal',
+      key: 'deadband',
+      width: 120,
+      render: (_value: string, record: ModbusPoint) => resolveModbusPointDecimalText(record, 'deadband'),
+    };
     const actionColumn = {
       title: '操作',
       key: 'action',
@@ -505,7 +529,9 @@ const PointTable: React.FC<Props> = ({
       registerCountColumn,
       bitIndexColumn,
       dataTypeColumn,
-      ...(showAdvancedConfig ? [wordOrderColumn, byteOrderColumn] : []),
+      ...(showAdvancedConfig
+        ? [scaleColumn, offsetColumn, deadbandColumn, wordOrderColumn, byteOrderColumn]
+        : []),
       actionColumn,
     ];
   }, [
@@ -542,7 +568,7 @@ const PointTable: React.FC<Props> = ({
     <Text type="secondary">请先选择连接</Text>
   );
 
-  const readPlanScrollX = tableView === 'runtime' ? 1080 : (showAdvancedConfig ? 1030 : 870);
+  const readPlanScrollX = tableView === 'runtime' ? 1080 : (showAdvancedConfig ? 1390 : 870);
   const getReadPlanMaxStart = (quantity: number): number => Math.max(
     getMinimumAddress(addressBase),
     MODBUS_MAX_ADDRESS - Math.max(quantity, 1) + 1,
@@ -587,7 +613,7 @@ const PointTable: React.FC<Props> = ({
               icon={showAdvancedConfig ? <EyeInvisibleOutlined /> : <EyeOutlined />}
               onClick={() => setShowAdvancedConfig((visible) => !visible)}
             >
-              {showAdvancedConfig ? '隐藏字序/字节序' : '显示字序/字节序'}
+              {showAdvancedConfig ? '隐藏工程量/字节序' : '显示工程量/字节序'}
             </Button>
           </span>
           <Button
@@ -670,7 +696,7 @@ const PointTable: React.FC<Props> = ({
           </Button>
         </div>
       ) : null}
-      <div className="protocol-read-plan-toolbar">
+      {showReadPlan ? <div className="protocol-read-plan-toolbar">
         <div className="protocol-read-plan-heading">
           <Text strong>读取策略</Text>
           {readPlanMode === 1 ? (
@@ -873,7 +899,7 @@ const PointTable: React.FC<Props> = ({
             </div>
           </div>
         ) : null}
-      </div>
+      </div> : null}
       <div className="protocol-table-scroll">
         <Table<ModbusPoint>
           columns={columns}

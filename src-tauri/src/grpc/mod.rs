@@ -8,4 +8,5 @@ pub mod dlt645;
 pub mod iec104;
 pub mod iec61850;
 pub mod modbus_rtu;
+pub mod modbus_tcp;
 pub mod module_manager;

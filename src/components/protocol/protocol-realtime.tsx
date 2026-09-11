@@ -301,6 +301,8 @@ export function formatProtocolRealtimeValue(value: DcPointValue | null): string 
       return String(value.value);
     case 'Double':
       return formatAutoRealtimeNumber(value.value);
+    case 'Decimal':
+      return value.value;
     case 'String':
       return value.value;
     case 'Bytes':

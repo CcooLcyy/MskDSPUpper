@@ -5,6 +5,7 @@ export type DashboardLoadOperations<
   RunningModuleInfo,
   Iec104Link,
   ModbusLink,
+  ModbusTcpLink,
   Dlt645Link,
   AgcGroup,
   Route,
@@ -13,6 +14,7 @@ export type DashboardLoadOperations<
   getRunningModuleInfo: () => Promise<RunningModuleInfo[]>;
   listIec104Links: () => Promise<Iec104Link[]>;
   listModbusLinks: () => Promise<ModbusLink[]>;
+  listModbusTcpLinks: () => Promise<ModbusTcpLink[]>;
   listDlt645Links: () => Promise<Dlt645Link[]>;
   listAgcGroups: () => Promise<AgcGroup[]>;
   listRoutes: () => Promise<Route[]>;
@@ -23,6 +25,7 @@ export type DashboardLoadResults<
   RunningModuleInfo,
   Iec104Link,
   ModbusLink,
+  ModbusTcpLink,
   Dlt645Link,
   AgcGroup,
   Route,
@@ -31,6 +34,7 @@ export type DashboardLoadResults<
   runningModules: SettledResult<RunningModuleInfo[]>;
   iec104Links: SettledResult<Iec104Link[]>;
   modbusLinks: SettledResult<ModbusLink[]>;
+  modbusTcpLinks: SettledResult<ModbusTcpLink[]>;
   dlt645Links: SettledResult<Dlt645Link[]>;
   agcGroups: SettledResult<AgcGroup[]>;
   routes: SettledResult<Route[]>;
@@ -46,6 +50,7 @@ export async function loadDashboardAfterRunningModules<
   RunningModuleInfo,
   Iec104Link,
   ModbusLink,
+  ModbusTcpLink,
   Dlt645Link,
   AgcGroup,
   Route,
@@ -55,11 +60,12 @@ export async function loadDashboardAfterRunningModules<
     RunningModuleInfo,
     Iec104Link,
     ModbusLink,
+    ModbusTcpLink,
     Dlt645Link,
     AgcGroup,
     Route
   >,
-): Promise<DashboardLoadResults<ModuleInfo, RunningModuleInfo, Iec104Link, ModbusLink, Dlt645Link, AgcGroup, Route>> {
+): Promise<DashboardLoadResults<ModuleInfo, RunningModuleInfo, Iec104Link, ModbusLink, ModbusTcpLink, Dlt645Link, AgcGroup, Route>> {
   const [runningModules] = await Promise.allSettled([
     operations.getRunningModuleInfo(),
   ]);
@@ -71,16 +77,18 @@ export async function loadDashboardAfterRunningModules<
       runningModules,
       iec104Links: skippedResult(runningModules.reason),
       modbusLinks: skippedResult(runningModules.reason),
+      modbusTcpLinks: skippedResult(runningModules.reason),
       dlt645Links: skippedResult(runningModules.reason),
       agcGroups: skippedResult(runningModules.reason),
       routes: skippedResult(runningModules.reason),
     };
   }
 
-  const [modules, iec104Links, modbusLinks, dlt645Links, agcGroups, routes] = await Promise.allSettled([
+  const [modules, iec104Links, modbusLinks, modbusTcpLinks, dlt645Links, agcGroups, routes] = await Promise.allSettled([
     operations.getModuleInfo(),
     operations.listIec104Links(),
     operations.listModbusLinks(),
+    operations.listModbusTcpLinks(),
     operations.listDlt645Links(),
     operations.listAgcGroups(),
     operations.listRoutes(),
@@ -91,6 +99,7 @@ export async function loadDashboardAfterRunningModules<
     runningModules,
     iec104Links,
     modbusLinks,
+    modbusTcpLinks,
     dlt645Links,
     agcGroups,
     routes,

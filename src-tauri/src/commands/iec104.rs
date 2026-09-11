@@ -90,6 +90,12 @@ pub struct PointDto {
     pub scale: f64,
     pub offset: f64,
     pub deadband: f64,
+    #[serde(default)]
+    pub scale_decimal: String,
+    #[serde(default)]
+    pub offset_decimal: String,
+    #[serde(default)]
+    pub deadband_decimal: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -164,6 +170,9 @@ impl From<Point> for PointDto {
             scale: point.scale,
             offset: point.offset,
             deadband: point.deadband,
+            scale_decimal: point.scale_decimal,
+            offset_decimal: point.offset_decimal,
+            deadband_decimal: point.deadband_decimal,
         }
     }
 }
@@ -232,6 +241,9 @@ impl PointDto {
             scale: self.scale,
             offset: self.offset,
             deadband: self.deadband,
+            scale_decimal: self.scale_decimal.clone(),
+            offset_decimal: self.offset_decimal.clone(),
+            deadband_decimal: self.deadband_decimal.clone(),
         }
     }
 }

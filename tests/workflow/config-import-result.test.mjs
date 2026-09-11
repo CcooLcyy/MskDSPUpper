@@ -19,6 +19,7 @@ test('config import keeps runtime items stopped after successful restore', () =>
   assert.doesNotMatch(runtimeSource, /restoreRuntimeItems\(moduleLabel, stoppedItems, start, warnings\);/);
   assert.match(exportSource, /syncIec104\([\s\S]*?await withStoppedRuntimeItems\(/);
   assert.match(exportSource, /syncModbusRtu\([\s\S]*?await withStoppedRuntimeItems\(/);
+  assert.match(exportSource, /syncModbusTcp\([\s\S]*?await withStoppedRuntimeItems\(/);
   assert.match(exportSource, /syncDlt645\([\s\S]*?await withStoppedRuntimeItems\(/);
   assert.match(exportSource, /syncAgc\([\s\S]*?await withStoppedRuntimeItems\(/);
   assert.match(exportSource, /syncAvc\([\s\S]*?await withStoppedRuntimeItems\(/);

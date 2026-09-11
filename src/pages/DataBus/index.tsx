@@ -127,6 +127,7 @@ const formatPointValue = (value: DcPointUpdate['value']): string => {
     case 'Bool': return value.value ? '是' : '否';
     case 'Int': return String(value.value);
     case 'Double': return formatAutoRealtimeNumber(value.value);
+    case 'Decimal': return value.value;
     case 'String': return value.value;
     case 'Bytes': return `[${value.value.length} 字节]`;
     default: return '-';

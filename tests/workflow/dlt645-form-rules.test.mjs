@@ -3,6 +3,12 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { findDlt645PointConflict } from '../../src/pages/DLT645/dlt645-form-rules.ts';
+import {
+  createDlt645EngineeringFields,
+  normalizeDlt645Block,
+  normalizeDlt645PointEngineeringFields,
+  resolveDlt645EngineeringDecimalText,
+} from '../../src/pages/DLT645/dlt645-decimal.ts';
 
 const dlt645Source = readFileSync(new URL('../../src/pages/DLT645/index.tsx', import.meta.url), 'utf8');
 
@@ -58,4 +64,72 @@ test('DLT645 页面接入点位重复校验', () => {
   assert.match(dlt645Source, /useEffect\(\(\) => \{[\s\S]*pointForm\.setFields\(\[\{ name: 'tag', errors: \['标签已存在'\] \}\]\)/);
   assert.match(dlt645Source, /标签已存在/);
   assert.match(dlt645Source, /DI.*已存在|DI.*冲突/);
+});
+
+// 验证 DLT645 单点工程量构造保留 20 位小数原文，并同步派生旧 number 字段。
+test('DLT645 单点工程量保留精确十进制原文', () => {
+  const fields = createDlt645EngineeringFields({
+    scale: '0.12345678901234567890',
+    offset: '-2.00000000000000000001',
+    deadband: '1e-20',
+  });
+
+  assert.equal(fields.scale_decimal, '0.12345678901234567890');
+  assert.equal(fields.offset_decimal, '-2.00000000000000000001');
+  assert.equal(fields.deadband_decimal, '1e-20');
+  assert.equal(fields.scale, Number('0.12345678901234567890'));
+});
+
+// 验证旧 DLT645 点位回退 number，新点位优先读取精确文本。
+test('DLT645 单点兼容旧点表并优先读取十进制文本', () => {
+  const point = {
+    tag: 'voltage',
+    di: '02010100',
+    data_len: 2,
+    data_type: 4,
+    access: 1,
+    scale: 0.1,
+    offset: 0,
+    deadband: 0.01,
+    scale_decimal: '',
+    offset_decimal: '',
+    deadband_decimal: '',
+    byte_index: null,
+    bit_index: null,
+  };
+
+  assert.equal(resolveDlt645EngineeringDecimalText(point, 'scale'), '0.1');
+  const normalized = normalizeDlt645PointEngineeringFields({
+    ...point,
+    scale_decimal: '0.10000000000000000001',
+  });
+  assert.equal(normalized.scale_decimal, '0.10000000000000000001');
+  assert.equal(normalized.offset_decimal, '0');
+  assert.equal(normalized.deadband_decimal, '0.01');
+});
+
+// 验证数据块归一化覆盖全部子项，供连接复制和配置导入导出保持十进制原文。
+test('DLT645 数据块复制保留所有子项的十进制文本', () => {
+  const block = normalizeDlt645Block({
+    block_di: '00010000',
+    block_data_len: 4,
+    items: [{
+      tag: 'active_power',
+      data_len: 4,
+      data_type: 4,
+      access: 1,
+      scale: Number('0.00000000000000000001'),
+      offset: 0,
+      deadband: 0,
+      scale_decimal: '0.00000000000000000001',
+      offset_decimal: '0.00000000000000000000',
+      deadband_decimal: '0',
+      trim_right_space: null,
+      byte_index: null,
+      bit_index: null,
+    }],
+  });
+
+  assert.equal(block.items[0].scale_decimal, '0.00000000000000000001');
+  assert.equal(block.items[0].offset_decimal, '0.00000000000000000000');
 });

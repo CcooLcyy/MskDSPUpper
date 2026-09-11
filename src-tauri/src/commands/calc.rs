@@ -10,8 +10,7 @@ use crate::proto::calc_proto::{
 };
 use crate::state::AppState;
 
-// Keep the oneof representation explicit at the Tauri boundary. This makes
-// constants easy to edit in JSON while preserving the generated protobuf oneof.
+// 在 Tauri 边界显式保留 oneof，避免 JSON 编辑时丢失常量类型和十进制文本。
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct TypedConstantDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -20,6 +19,8 @@ pub struct TypedConstantDto {
     pub int_value: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub double_value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decimal_value: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -47,6 +48,12 @@ pub struct CalcItemConfigDto {
 pub struct CalcGroupConfigDto {
     pub group_name: String,
     pub items: Vec<CalcItemConfigDto>,
+    /// 0: 未指定（兼容旧配置），1: 变化触发，2: 周期定时。
+    #[serde(default)]
+    pub trigger_mode: i32,
+    /// 周期定时执行周期，单位毫秒；变化触发时忽略。
+    #[serde(default)]
+    pub period_ms: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -94,6 +101,10 @@ impl From<TypedConstant> for TypedConstantDto {
                 double_value: Some(value),
                 ..Self::default()
             },
+            Some(typed_constant::Kind::DecimalValue(value)) => Self {
+                decimal_value: Some(value),
+                ..Self::default()
+            },
             None => Self::default(),
         }
     }
@@ -105,13 +116,14 @@ impl TypedConstantDto {
             self.bool_value.is_some(),
             self.int_value.is_some(),
             self.double_value.is_some(),
+            self.decimal_value.is_some(),
         ]
         .into_iter()
         .filter(|present| *present)
         .count();
         if values != 1 {
             return Err(
-                "constant 必须且只能设置 bool_value、int_value、double_value 其中一个".to_string(),
+                "constant 必须且只能设置 bool_value、int_value、double_value、decimal_value 其中一个".to_string(),
             );
         }
 
@@ -119,6 +131,8 @@ impl TypedConstantDto {
             typed_constant::Kind::BoolValue(value)
         } else if let Some(value) = self.int_value {
             typed_constant::Kind::IntValue(value)
+        } else if let Some(value) = &self.decimal_value {
+            typed_constant::Kind::DecimalValue(value.clone())
         } else {
             typed_constant::Kind::DoubleValue(self.double_value.expect("checked above"))
         };
@@ -127,7 +141,11 @@ impl TypedConstantDto {
 
     fn kind_matches_operator(&self, operator_kind: i32) -> bool {
         match operator_kind {
-            1..=4 | 9..=10 => self.int_value.is_some() || self.double_value.is_some(),
+            1..=4 | 9..=10 => {
+                self.int_value.is_some()
+                    || self.double_value.is_some()
+                    || self.decimal_value.is_some()
+            }
             5..=8 => self.bool_value.is_some(),
             _ => false,
         }
@@ -202,6 +220,8 @@ impl From<CalcGroupConfig> for CalcGroupConfigDto {
         Self {
             group_name: value.group_name,
             items: value.items.into_iter().map(Into::into).collect(),
+            trigger_mode: value.trigger_mode,
+            period_ms: value.period_ms,
         }
     }
 }
@@ -215,6 +235,8 @@ impl CalcGroupConfigDto {
                 .iter()
                 .map(CalcItemConfigDto::to_proto)
                 .collect::<Result<Vec<_>, _>>()?,
+            trigger_mode: self.trigger_mode,
+            period_ms: self.period_ms,
         })
     }
 }
@@ -300,6 +322,15 @@ fn validate_group_config(config: &CalcGroupConfigDto) -> Result<(), String> {
     if config.items.is_empty() {
         return Err("items 不能为空".to_string());
     }
+    if !matches!(config.trigger_mode, 0..=2) {
+        return Err(
+            "trigger_mode 非法，只能为 0（未指定）、1（变化触发）或 2（周期定时）"
+                .to_string(),
+        );
+    }
+    if config.trigger_mode == 2 && config.period_ms == 0 {
+        return Err("周期定时模式下 period_ms 必须大于 0".to_string());
+    }
 
     let mut item_names = HashSet::with_capacity(config.items.len());
     for item in &config.items {
@@ -332,8 +363,8 @@ fn validate_group_config(config: &CalcGroupConfigDto) -> Result<(), String> {
                 ));
             }
             if let Some(decimal_places) = item.decimal_places {
-                if decimal_places > 15 {
-                    return Err(format!("items[{item_name}].decimal_places 不能大于 15"));
+                if decimal_places > 20 {
+                    return Err(format!("items[{item_name}].decimal_places 不能大于 20"));
                 }
             }
             for (index, operand) in item.operands.iter().enumerate() {
@@ -403,7 +434,14 @@ pub async fn calc_upsert_group(
 ) -> Result<CalcGroupInfoDto, String> {
     validate_group_config(&config)?;
     let group_name = config.group_name.trim().to_string();
-    tracing::info!(module = "Calc", group_name = %group_name, create_only, "开始保存数值计算分组配置");
+    tracing::info!(
+        module = "Calc",
+        group_name = %group_name,
+        trigger_mode = config.trigger_mode,
+        period_ms = config.period_ms,
+        create_only,
+        "开始保存数值计算分组配置"
+    );
     let client = CalcClient::new(&state.conn_manager);
     let group = client
         .upsert_group(config.to_proto()?, create_only)
@@ -519,4 +557,38 @@ pub async fn calc_stop_group(state: State<'_, AppState>, group_name: String) -> 
             tracing::error!(module = "Calc", group_name = %group_name, error = %error, "停止数值计算分组失败");
             error.to_string()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 验证：精确十进制常量通过 Tauri DTO 后仍以原始字符串进入 protobuf oneof。
+    #[test]
+    fn decimal_constant_keeps_text_at_proto_boundary() {
+        let dto = TypedConstantDto {
+            decimal_value: Some("0.12345678901234567890".to_string()),
+            ..TypedConstantDto::default()
+        };
+
+        let value = dto.to_proto().expect("精确十进制常量应可转换");
+        assert!(matches!(
+            value.kind,
+            Some(typed_constant::Kind::DecimalValue(ref text))
+                if text == "0.12345678901234567890"
+        ));
+    }
+
+    // 验证：精确十进制与旧 double 同时设置时拒绝转换，避免 oneof 优先级不明确。
+    #[test]
+    fn decimal_constant_rejects_multiple_kinds() {
+        let dto = TypedConstantDto {
+            double_value: Some(0.1),
+            decimal_value: Some("0.1".to_string()),
+            ..TypedConstantDto::default()
+        };
+
+        let error = dto.to_proto().expect_err("同时设置两个常量分支必须失败");
+        assert!(error.contains("只能设置"));
+    }
 }

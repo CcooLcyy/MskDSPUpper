@@ -7,6 +7,10 @@ import ProtocolConnectionList from '../../components/protocol/ProtocolConnection
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
+import {
+  getDecimalTextError,
+  toDecimalInputText,
+} from '../../utils/decimal-input';
 import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import ConnectionConfig from './components/ConnectionConfig';
 import PointTable from './components/PointTable';
@@ -24,6 +28,11 @@ import {
   getMinimumAddress,
 } from './modbus-form-rules';
 import type { ModbusPointFormValues } from './modbus-form-rules';
+import {
+  createModbusEngineeringFields,
+  normalizeModbusPointEngineeringFields,
+  resolveModbusPointDecimalText,
+} from './modbus-decimal';
 
 const { Text } = Typography;
 
@@ -77,6 +86,14 @@ const LINK_STATE_LABELS: Record<number, string> = {
   1: '已停止',
   2: '运行中',
   3: '待删除',
+};
+
+const validateEngineeringDecimal = (
+  label: string,
+) => async (_rule: unknown, value: unknown): Promise<void> => {
+  const text = toDecimalInputText(value);
+  const error = getDecimalTextError(text, label);
+  if (error) throw new Error(error);
 };
 
 
@@ -213,7 +230,7 @@ const ModbusRTU: React.FC = () => {
       if (requestId !== pointLoadRequestRef.current) {
         return;
       }
-      setPoints(table.points);
+      setPoints(table.points.map(normalizeModbusPointEngineeringFields));
     } catch (error) {
       if (requestId !== pointLoadRequestRef.current) {
         return;
@@ -541,7 +558,7 @@ const ModbusRTU: React.FC = () => {
         if (pointTable.points.length > 0) {
           await api.modbusRtuUpsertPointTable(
             nextConnName,
-            pointTable.points.map((point) => ({ ...point })),
+            pointTable.points.map(normalizeModbusPointEngineeringFields),
             true,
           );
         }
@@ -630,9 +647,9 @@ const ModbusRTU: React.FC = () => {
       address: point.address,
       reg_count: point.reg_count,
       data_type: point.data_type as ModbusPointFormValues['data_type'],
-      scale: point.scale,
-      offset: point.offset,
-      deadband: point.deadband,
+      scale: resolveModbusPointDecimalText(point, 'scale'),
+      offset: resolveModbusPointDecimalText(point, 'offset'),
+      deadband: resolveModbusPointDecimalText(point, 'deadband'),
       word_order: point.word_order,
       byte_order: point.byte_order,
       bit_index: point.bit_index ?? null,
@@ -655,9 +672,9 @@ const ModbusRTU: React.FC = () => {
       address: getNextDuplicatePointAddress(point, points),
       reg_count: point.reg_count,
       data_type: point.data_type as ModbusPointFormValues['data_type'],
-      scale: point.scale,
-      offset: point.offset,
-      deadband: point.deadband,
+      scale: resolveModbusPointDecimalText(point, 'scale'),
+      offset: resolveModbusPointDecimalText(point, 'offset'),
+      deadband: resolveModbusPointDecimalText(point, 'deadband'),
       word_order: point.word_order,
       byte_order: point.byte_order,
       bit_index: point.bit_index ?? null,
@@ -709,9 +726,11 @@ const ModbusRTU: React.FC = () => {
         function: values.function,
         address: values.address,
         data_type: values.data_type,
-        scale: values.scale ?? 1,
-        offset: values.offset ?? 0,
-        deadband: values.deadband ?? 0,
+        ...createModbusEngineeringFields({
+          scale: toDecimalInputText(values.scale) || '1',
+          offset: toDecimalInputText(values.offset) || '0',
+          deadband: toDecimalInputText(values.deadband) || '0',
+        }),
         reg_count: values.reg_count ?? getDefaultRegCount(values.data_type) ?? 1,
         word_order: values.word_order ?? 0,
         byte_order: values.byte_order ?? 0,
@@ -1103,20 +1122,32 @@ const ModbusRTU: React.FC = () => {
             <Text className="modbus-form-section-title">工程量换算</Text>
             <Row gutter={16}>
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="缩放系数" name="scale">
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
+                <Form.Item
+                  label="缩放系数"
+                  name="scale"
+                  rules={[{ validator: validateEngineeringDecimal('缩放系数') }]}
+                >
+                  <InputNumber<string> stringMode step={0.01} style={{ width: '100%' }} />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="偏移量" name="offset">
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
+                <Form.Item
+                  label="偏移量"
+                  name="offset"
+                  rules={[{ validator: validateEngineeringDecimal('偏移量') }]}
+                >
+                  <InputNumber<string> stringMode step={0.01} style={{ width: '100%' }} />
                 </Form.Item>
               </Col>
               {pointFunction !== MODBUS_FUNCTION.WRITE_SINGLE_REGISTER
                 && pointFunction !== MODBUS_FUNCTION.WRITE_MULTIPLE_REGISTERS ? (
                   <Col xs={24} sm={12} lg={8}>
-                    <Form.Item label="死区" name="deadband">
-                      <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
+                    <Form.Item
+                      label="死区"
+                      name="deadband"
+                      rules={[{ validator: validateEngineeringDecimal('死区') }]}
+                    >
+                      <InputNumber<string> stringMode step={0.01} style={{ width: '100%' }} />
                     </Form.Item>
                   </Col>
                 ) : null}

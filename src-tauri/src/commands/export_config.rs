@@ -18,12 +18,14 @@ use crate::{
         dlt645::{Dlt645BlockDto, Dlt645LinkConfigDto, Dlt645MqttConfigDto, Dlt645PointDto},
         iec104::{LinkConfigDto as Iec104LinkConfigDto, PointDto as Iec104PointDto},
         modbus_rtu::{ModbusLinkConfigDto, ModbusMqttConfigDto, ModbusPointDto},
+        modbus_tcp::ModbusTcpLinkConfigDto,
     },
     proto::{
         config_pusher_proto::{
             AgcConfig, AgcGroupTask, AvcConfig, AvcGroupTask, CalcConfig, CalcGroupTask, Config,
             DataCenterEndpoint, DataCenterRoute, DataCenterRoutes, Dlt645Config, Dlt645LinkTask,
-            Iec104Config, Iec104LinkTask, ModbusRtuConfig, ModbusRtuLinkTask,
+            Iec104Config, Iec104LinkTask, ModbusRtuConfig, ModbusRtuLinkTask, ModbusTcpConfig,
+            ModbusTcpLinkTask,
         },
         export_config_proto::{
             DataBusConfig as ExportDataBusConfig, DataBusConnTags, DataBusConnection,
@@ -73,6 +75,8 @@ pub struct ExportMetadataDto {
 pub struct FullConfigExportConfigDto {
     pub iec104: Iec104ExportConfigDto,
     pub modbus_rtu: ModbusRtuExportConfigDto,
+    #[serde(default)]
+    pub modbus_tcp: ModbusTcpExportConfigDto,
     pub dlt645: Dlt645ExportConfigDto,
     pub agc: AgcExportConfigDto,
     #[serde(default)]
@@ -124,6 +128,29 @@ pub struct ModbusRtuLinkRequestDto {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModbusRtuPointTableRequestDto {
+    pub conn_name: String,
+    pub points: Vec<ModbusPointDto>,
+    pub replace: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ModbusTcpExportConfigDto {
+    pub links: Vec<ModbusTcpExportTaskDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ModbusTcpExportTaskDto {
+    pub link: ModbusTcpLinkRequestDto,
+    pub point_table: ModbusTcpPointTableRequestDto,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ModbusTcpLinkRequestDto {
+    pub config: ModbusTcpLinkConfigDto,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ModbusTcpPointTableRequestDto {
     pub conn_name: String,
     pub points: Vec<ModbusPointDto>,
     pub replace: bool,
@@ -385,6 +412,7 @@ impl FullConfigExportConfigDto {
         Ok(Config {
             iec104: Some(self.iec104.to_proto()),
             modbus_rtu: Some(self.modbus_rtu.to_proto()),
+            modbus_tcp: Some(self.modbus_tcp.to_proto()),
             dlt645: Some(self.dlt645.to_proto()),
             agc: Some(self.agc.to_proto()),
             avc: Some(self.avc.to_proto()),
@@ -401,6 +429,7 @@ impl FullConfigExportConfigDto {
         let config = config.unwrap_or(Config {
             iec104: None,
             modbus_rtu: None,
+            modbus_tcp: None,
             dlt645: None,
             agc: None,
             avc: None,
@@ -412,6 +441,7 @@ impl FullConfigExportConfigDto {
         Ok(Self {
             iec104: Iec104ExportConfigDto::from_proto(config.iec104)?,
             modbus_rtu: ModbusRtuExportConfigDto::from_proto(config.modbus_rtu)?,
+            modbus_tcp: ModbusTcpExportConfigDto::from_proto(config.modbus_tcp)?,
             dlt645: Dlt645ExportConfigDto::from_proto(config.dlt645)?,
             agc: AgcExportConfigDto::from_proto(config.agc)?,
             avc: AvcExportConfigDto::from_proto(config.avc)?,
@@ -577,6 +607,88 @@ impl ModbusRtuExportTaskDto {
 
         Ok(Self {
             link: ModbusRtuLinkRequestDto {
+                config: config.into(),
+            },
+            point_table,
+        })
+    }
+}
+
+impl ModbusTcpExportConfigDto {
+    fn to_proto(&self) -> ModbusTcpConfig {
+        ModbusTcpConfig {
+            links: self
+                .links
+                .iter()
+                .map(ModbusTcpExportTaskDto::to_proto)
+                .collect(),
+        }
+    }
+
+    fn from_proto(config: Option<ModbusTcpConfig>) -> Result<Self, String> {
+        let Some(config) = config else {
+            return Ok(Self::default());
+        };
+
+        Ok(Self {
+            links: config
+                .links
+                .into_iter()
+                .enumerate()
+                .map(|(index, task)| ModbusTcpExportTaskDto::from_proto(index, task))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl ModbusTcpExportTaskDto {
+    fn to_proto(&self) -> ModbusTcpLinkTask {
+        ModbusTcpLinkTask {
+            link: Some(crate::proto::modbus_tcp_proto::UpsertLinkRequest {
+                config: Some(self.link.config.to_proto()),
+                create_only: false,
+            }),
+            point_table: Some(crate::proto::modbus_tcp_proto::UpsertPointTableRequest {
+                conn_name: self.point_table.conn_name.clone(),
+                points: self
+                    .point_table
+                    .points
+                    .iter()
+                    .map(ModbusPointDto::to_proto)
+                    .collect(),
+                replace: self.point_table.replace,
+            }),
+            start: false,
+        }
+    }
+
+    fn from_proto(index: usize, task: ModbusTcpLinkTask) -> Result<Self, String> {
+        let link = task
+            .link
+            .ok_or_else(|| format!("ModbusTCP 导出任务第 {} 项缺少 link", index + 1))?;
+        let config = link
+            .config
+            .ok_or_else(|| format!("ModbusTCP 导出任务第 {} 项缺少 link.config", index + 1))?;
+        let fallback_conn_name = config.conn_name.clone();
+        let point_table = match task.point_table {
+            Some(point_table) => ModbusTcpPointTableRequestDto {
+                conn_name: if point_table.conn_name.is_empty() {
+                    fallback_conn_name
+                } else {
+                    point_table.conn_name
+                },
+                points: point_table.points.into_iter().map(Into::into).collect(),
+                replace: point_table.replace,
+            },
+            None => ModbusTcpPointTableRequestDto {
+                conn_name: fallback_conn_name,
+                points: Vec::new(),
+                replace: false,
+            },
+        };
+
+        Ok(Self {
+            link: ModbusTcpLinkRequestDto {
                 config: config.into(),
             },
             point_table,
@@ -1110,7 +1222,7 @@ mod tests {
         AgcExportConfigDto, AvcExportConfigDto, CalcExportConfigDto, DataBusExportConfigDto,
         DataBusRoutesDto, Dlt645ExportConfigDto, ExportMetadataDto, ExportSourceDto,
         FullConfigExportConfigDto, FullConfigExportSnapshotDto, Iec104ExportConfigDto,
-        ModbusRtuExportConfigDto, ModuleStartupDto,
+        ModbusRtuExportConfigDto, ModbusTcpExportConfigDto, ModuleStartupDto,
     };
 
     #[test]
@@ -1147,6 +1259,7 @@ mod tests {
                     mqtt: None,
                     links: Vec::new(),
                 },
+                modbus_tcp: ModbusTcpExportConfigDto::default(),
                 dlt645: Dlt645ExportConfigDto {
                     mqtt: None,
                     links: Vec::new(),
@@ -1279,6 +1392,7 @@ mod tests {
                     mqtt: None,
                     links: Vec::new(),
                 },
+                modbus_tcp: ModbusTcpExportConfigDto::default(),
                 dlt645: Dlt645ExportConfigDto {
                     mqtt: None,
                     links: Vec::new(),
@@ -1301,6 +1415,7 @@ mod tests {
                 included_sections: vec![
                     "iec104".to_string(),
                     "modbus_rtu".to_string(),
+                    "modbus_tcp".to_string(),
                     "dlt645".to_string(),
                     "agc".to_string(),
                     "data_bus".to_string(),

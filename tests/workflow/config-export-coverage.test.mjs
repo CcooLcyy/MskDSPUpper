@@ -23,6 +23,14 @@ test('配置导出覆盖 Calc、AGC 固定参数和 DataCenter 注册表', () =>
   assert.match(protoSource, /repeated AGCProto\.GroupControlProfile agc_control_profiles = 8/);
 });
 
+// 验证独立 ModbusTCP 配置段覆盖链路、点表和旧快照兼容入口。
+test('配置导出覆盖 ModbusTCP 链路和点表', () => {
+  assert.match(exportSource, /key: 'modbus_tcp'/);
+  assert.match(exportSource, /api\.modbusTcpListLinks\(\)/);
+  assert.match(exportSource, /api\.modbusTcpGetPointTable\(/);
+  assert.match(typesSource, /modbus_tcp:\s*\{[\s\S]*?links: ModbusTcpExportTask\[\]/);
+});
+
 test('导出前会拒绝未启动的所选模块，避免静默导出空配置', () => {
   assert.match(exportSource, /导出.*模块未启动/);
   assert.match(exportSource, /assertExportModulesRunning/);

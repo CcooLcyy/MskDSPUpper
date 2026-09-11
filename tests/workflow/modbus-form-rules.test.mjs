@@ -20,6 +20,15 @@ import {
   isValidExplicitQuantity,
   isValidRegCount,
 } from '../../src/pages/ModbusRTU/modbus-form-rules.ts';
+import {
+  createModbusEngineeringFields,
+  normalizeModbusPointEngineeringFields,
+  resolveModbusPointDecimalText,
+} from '../../src/pages/ModbusRTU/modbus-decimal.ts';
+import {
+  getDecimalTextError,
+  isDecimalTextZero,
+} from '../../src/utils/decimal-input.ts';
 
 test('Modbus 功能码只返回后端支持的数据类型', () => {
   const {
@@ -124,9 +133,9 @@ test('新增点位默认使用 0x03、UINT16 和地址基准对应的最小地�
     address: 0,
     reg_count: 1,
     data_type: MODBUS_DATA_TYPE.UINT16,
-    scale: 1,
-    offset: 0,
-    deadband: 0,
+    scale: '1',
+    offset: '0',
+    deadband: '0',
     word_order: 0,
     byte_order: 0,
     bit_index: null,
@@ -135,6 +144,62 @@ test('新增点位默认使用 0x03、UINT16 和地址基准对应的最小地�
 
   zeroBasedPoint.tag = '已修改';
   assert.equal(createDefaultModbusPoint(MODBUS_ADDRESS_BASE.ZERO).tag, '');
+});
+
+// 验证公共十进制输入规则支持 20 位小数和科学计数法，并拒绝不完整或越界文本。
+test('Modbus 工程量使用严格十进制文本规则', () => {
+  assert.equal(getDecimalTextError('0.12345678901234567890', '缩放系数'), undefined);
+  assert.equal(getDecimalTextError('-1e-100000', '偏移量'), undefined);
+  assert.match(getDecimalTextError(' 1', '缩放系数'), /不能包含空白/);
+  assert.match(getDecimalTextError('0x10', '偏移量'), /完整十进制数/);
+  assert.match(getDecimalTextError('1e100001', '偏移量'), /指数绝对值不能超过 100000/);
+  assert.equal(getDecimalTextError('-0.000e10', '死区'), undefined);
+  assert.equal(getDecimalTextError('-0.00000000000000000001', '死区'), undefined);
+  assert.equal(isDecimalTextZero('-0.000e10'), true);
+  assert.equal(isDecimalTextZero('1e-20'), false);
+});
+
+// 验证 Modbus 点位构造保留精确十进制原文，同时仅为旧字段派生兼容 number。
+test('Modbus 点位工程量保留 20 位小数原文', () => {
+  const fields = createModbusEngineeringFields({
+    scale: '0.12345678901234567890',
+    offset: '-2.00000000000000000001',
+    deadband: '1e-20',
+  });
+
+  assert.equal(fields.scale_decimal, '0.12345678901234567890');
+  assert.equal(fields.offset_decimal, '-2.00000000000000000001');
+  assert.equal(fields.deadband_decimal, '1e-20');
+  assert.equal(fields.scale, Number('0.12345678901234567890'));
+});
+
+// 验证旧点表读取时回退兼容字段，新点表复制时继续携带精确十进制字段。
+test('Modbus 点位工程量兼容旧点表并规范化复制链路', () => {
+  const legacyPoint = {
+    tag: 'legacy',
+    function: MODBUS_FUNCTION.READ_HOLDING_REGISTERS,
+    address: 10,
+    data_type: MODBUS_DATA_TYPE.UINT16,
+    scale: 0.1,
+    offset: -2,
+    deadband: 0.01,
+    scale_decimal: '',
+    offset_decimal: '',
+    deadband_decimal: '',
+    reg_count: 1,
+    word_order: 0,
+    byte_order: 0,
+    bit_index: null,
+  };
+
+  assert.equal(resolveModbusPointDecimalText(legacyPoint, 'scale'), '0.1');
+  const normalized = normalizeModbusPointEngineeringFields({
+    ...legacyPoint,
+    scale_decimal: '0.10000000000000000001',
+  });
+  assert.equal(normalized.scale_decimal, '0.10000000000000000001');
+  assert.equal(normalized.offset_decimal, '-2');
+  assert.equal(normalized.deadband_decimal, '0.01');
 });
 
 // 验证复制点位保留原 Tag，并按寄存器占用数递增地址。

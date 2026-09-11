@@ -15,6 +15,7 @@ import type {
   Iec104LinkConfig,
   ModbusLinkConfig,
   ModbusMqttConfig,
+  ModbusTcpLinkConfig,
   ModuleInfo,
   StableDataBusConnection,
   StableDataBusConnTags,
@@ -29,6 +30,7 @@ const DLT645_MQTT_STORAGE_KEY = 'protocol.dlt645.mqtt';
 
 const MODULE_IEC104 = 'IEC104';
 const MODULE_MODBUS_RTU = 'ModbusRTU';
+const MODULE_MODBUS_TCP = 'ModbusTCP';
 const MODULE_DLT645 = 'DLT645';
 const MODULE_AGC = 'AGC';
 const MODULE_AVC = 'AVC';
@@ -74,6 +76,14 @@ const CONFIG_SECTION_DEFINITIONS = [
       snapshot
         ? `${snapshot.config.modbus_rtu.links.length} 条链路${snapshot.config.modbus_rtu.mqtt ? '，含 MQTT 全局配置' : ''}`
         : '链路、点表与 MQTT 全局配置',
+  },
+  {
+    key: 'modbus_tcp',
+    label: 'ModbusTCP',
+    groupLabel: '协议接入',
+    moduleName: MODULE_MODBUS_TCP,
+    describe: (snapshot?: FullConfigExportSnapshot) =>
+      snapshot ? `${snapshot.config.modbus_tcp.links.length} 条链路` : 'TCP 链路与点表配置',
   },
   {
     key: 'dlt645',
@@ -156,6 +166,7 @@ export interface FullConfigImportResult {
   summary: {
     iec104Links: number;
     modbusRtuLinks: number;
+    modbusTcpLinks: number;
     dlt645Links: number;
     agcGroups: number;
     avcGroups: number;
@@ -253,12 +264,15 @@ async function preprocessMergeImportSnapshot(
   const adjustedSnapshot = cloneConfigSnapshot(snapshot);
   const warnings: string[] = [];
   const renamedConnections = new Map<string, string>();
-  const [iec104CurrentLinks, modbusCurrentLinks, dlt645CurrentLinks] = await Promise.all([
+  const [iec104CurrentLinks, modbusCurrentLinks, modbusTcpCurrentLinks, dlt645CurrentLinks] = await Promise.all([
     runningModules.has(MODULE_IEC104) && adjustedSnapshot.config.iec104.links.length > 0
       ? api.iec104ListLinks()
       : Promise.resolve([]),
     runningModules.has(MODULE_MODBUS_RTU) && adjustedSnapshot.config.modbus_rtu.links.length > 0
       ? api.modbusRtuListLinks()
+      : Promise.resolve([]),
+    runningModules.has(MODULE_MODBUS_TCP) && adjustedSnapshot.config.modbus_tcp.links.length > 0
+      ? api.modbusTcpListLinks()
       : Promise.resolve([]),
     runningModules.has(MODULE_DLT645) && adjustedSnapshot.config.dlt645.links.length > 0
       ? api.dlt645ListLinks()
@@ -278,6 +292,15 @@ async function preprocessMergeImportSnapshot(
     MODULE_MODBUS_RTU,
     adjustedSnapshot.config.modbus_rtu.links,
     modbusCurrentLinks
+      .map((link) => link.config?.conn_name)
+      .filter((connName): connName is string => Boolean(connName)),
+    renamedConnections,
+    warnings,
+  );
+  resolveProtocolMergeConflicts(
+    MODULE_MODBUS_TCP,
+    adjustedSnapshot.config.modbus_tcp.links,
+    modbusTcpCurrentLinks
       .map((link) => link.config?.conn_name)
       .filter((connName): connName is string => Boolean(connName)),
     renamedConnections,
@@ -373,6 +396,9 @@ function scopeConfigSnapshot(
       modbus_rtu: includedSectionSet.has('modbus_rtu')
         ? snapshot.config.modbus_rtu
         : { mqtt: null, links: [] },
+      modbus_tcp: includedSectionSet.has('modbus_tcp')
+        ? snapshot.config.modbus_tcp
+        : { links: [] },
       dlt645: includedSectionSet.has('dlt645') ? snapshot.config.dlt645 : { mqtt: null, links: [] },
       agc: includedSectionSet.has('agc') ? snapshot.config.agc : { groups: [] },
       avc: includedSectionSet.has('avc') ? snapshot.config.avc ?? { groups: [] } : { groups: [] },
@@ -495,6 +521,32 @@ async function loadModbusRtuConfig(
   );
 
   return { mqtt, links: tasks };
+}
+
+async function loadModbusTcpConfig(
+  runningModules: Set<string>,
+): Promise<FullConfigExportSnapshot['config']['modbus_tcp']> {
+  if (!runningModules.has(MODULE_MODBUS_TCP)) {
+    return { links: [] };
+  }
+
+  const links = await api.modbusTcpListLinks();
+  const tasks = await Promise.all(
+    links.map(async (linkInfo, index) => {
+      const config = assertModuleConfig<ModbusTcpLinkConfig>(MODULE_MODBUS_TCP, index, linkInfo.config);
+      const pointTable = await api.modbusTcpGetPointTable(config.conn_name);
+      return {
+        link: { config },
+        point_table: {
+          conn_name: pointTable.conn_name,
+          points: pointTable.points,
+          replace: true as const,
+        },
+      };
+    }),
+  );
+
+  return { links: tasks };
 }
 
 async function loadDlt645Config(runningModules: Set<string>): Promise<FullConfigExportSnapshot['config']['dlt645']> {
@@ -817,6 +869,10 @@ function collectDesiredModules(snapshot: FullConfigExportSnapshot): Set<string> 
 
   if (snapshot.config.modbus_rtu.links.length > 0 || snapshot.config.modbus_rtu.mqtt) {
     modules.add(MODULE_MODBUS_RTU);
+  }
+
+  if (snapshot.config.modbus_tcp.links.length > 0) {
+    modules.add(MODULE_MODBUS_TCP);
   }
 
   if (snapshot.config.dlt645.links.length > 0 || snapshot.config.dlt645.mqtt) {
@@ -1143,6 +1199,51 @@ async function syncModbusRtu(
   );
 }
 
+async function syncModbusTcp(
+  snapshot: FullConfigExportSnapshot,
+  mode: ConfigImportMode,
+  warnings: string[],
+): Promise<void> {
+  const replace = mode === 'replace';
+  const targetNames = new Set(snapshot.config.modbus_tcp.links.map((task) => task.link.config.conn_name));
+  const currentLinks = await api.modbusTcpListLinks();
+  const restartPlan = buildRuntimeRestartPlan(
+    currentLinks
+      .map((link) => ({ name: link.config?.conn_name ?? '', state: link.state }))
+      .filter((item) => item.name),
+    targetNames,
+    replace,
+  );
+
+  await withStoppedRuntimeItems(
+    MODULE_MODBUS_TCP,
+    restartPlan,
+    api.modbusTcpStopLink,
+    api.modbusTcpStartLink,
+    warnings,
+    async () => {
+      if (replace) {
+        for (const currentLink of currentLinks) {
+          const connName = currentLink.config?.conn_name;
+          if (connName && !targetNames.has(connName)) {
+            await api.modbusTcpDeleteLink(connName);
+          }
+        }
+      }
+
+      for (const task of snapshot.config.modbus_tcp.links) {
+        await api.modbusTcpUpsertLink(task.link.config, false);
+        await api.modbusTcpUpsertPointTable(
+          task.point_table.conn_name,
+          task.point_table.points,
+          replace,
+        );
+        await api.modbusTcpStopLink(task.link.config.conn_name);
+      }
+    },
+  );
+}
+
 async function syncDlt645(
   snapshot: FullConfigExportSnapshot,
   mode: ConfigImportMode,
@@ -1441,9 +1542,10 @@ export async function buildConfigExportSnapshot(
   const normalizedSections = dedupeConfigSections(sections);
   assertExportModulesRunning(runningModules, normalizedSections);
   const exportedAt = new Date().toISOString();
-  const [iec104, modbusRtu, dlt645, agc, avc, calc, dataBus, agcControlProfiles] = await Promise.all([
+  const [iec104, modbusRtu, modbusTcp, dlt645, agc, avc, calc, dataBus, agcControlProfiles] = await Promise.all([
     loadIec104Config(runningModules),
     loadModbusRtuConfig(runningModules),
+    loadModbusTcpConfig(runningModules),
     loadDlt645Config(runningModules),
     loadAgcConfig(runningModules),
     loadAvcConfig(runningModules),
@@ -1467,6 +1569,7 @@ export async function buildConfigExportSnapshot(
     config: {
       iec104,
       modbus_rtu: modbusRtu,
+      modbus_tcp: modbusTcp,
       dlt645,
       agc,
       avc,
@@ -1579,6 +1682,12 @@ export async function applyConfigImport(
     warnings.push('ModbusRTU 未运行，已跳过其链路导入');
   }
 
+  if (desiredModules.has(MODULE_MODBUS_TCP) && runningModules.has(MODULE_MODBUS_TCP)) {
+    syncTasks.push(syncModbusTcp(snapshot, mode, warnings));
+  } else if (desiredModules.has(MODULE_MODBUS_TCP)) {
+    warnings.push('ModbusTCP 未运行，已跳过其链路导入');
+  }
+
   if (desiredModules.has(MODULE_DLT645) && runningModules.has(MODULE_DLT645)) {
     syncTasks.push(syncDlt645(snapshot, mode, warnings));
   } else if (desiredModules.has(MODULE_DLT645)) {
@@ -1620,6 +1729,7 @@ export async function applyConfigImport(
     summary: {
       iec104Links: snapshot.config.iec104.links.length,
       modbusRtuLinks: snapshot.config.modbus_rtu.links.length,
+      modbusTcpLinks: snapshot.config.modbus_tcp.links.length,
       dlt645Links: snapshot.config.dlt645.links.length,
       agcGroups: snapshot.config.agc.groups.length,
       avcGroups: snapshot.config.avc.groups.length,

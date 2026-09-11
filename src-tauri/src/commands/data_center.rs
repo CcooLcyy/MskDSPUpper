@@ -86,6 +86,7 @@ pub enum PointValueDto {
     Bool(bool),
     Int(i64),
     Double(f64),
+    Decimal(String),
     String(String),
     Bytes(Vec<u8>),
 }
@@ -156,6 +157,7 @@ fn point_value_from_proto(
             point_value::Kind::BoolValue(b) => PointValueDto::Bool(b),
             point_value::Kind::IntValue(i) => PointValueDto::Int(i),
             point_value::Kind::DoubleValue(d) => PointValueDto::Double(d),
+            point_value::Kind::DecimalValue(d) => PointValueDto::Decimal(d),
             point_value::Kind::StringValue(s) => PointValueDto::String(s),
             point_value::Kind::BytesValue(b) => PointValueDto::Bytes(b),
         })

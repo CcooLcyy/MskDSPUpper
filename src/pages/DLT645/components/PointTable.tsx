@@ -23,6 +23,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { DcSourcePointUpdate, Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../../adapters';
+import { resolveDlt645EngineeringDecimalText } from '../dlt645-decimal';
 import {
   type ProtocolRealtimeCellRevision,
   renderProtocolRealtimeQualityCell,
@@ -190,6 +191,27 @@ const PointTable: React.FC<Props> = ({
       width: 80,
       render: (value: number) => ACCESS_MODE_LABELS[value] ?? '未指定',
     };
+    const scaleColumn = {
+      title: '缩放系数',
+      dataIndex: 'scale_decimal',
+      key: 'scale',
+      width: 120,
+      render: (_value: string, record: Dlt645Point) => resolveDlt645EngineeringDecimalText(record, 'scale'),
+    };
+    const offsetColumn = {
+      title: '偏移量',
+      dataIndex: 'offset_decimal',
+      key: 'offset',
+      width: 120,
+      render: (_value: string, record: Dlt645Point) => resolveDlt645EngineeringDecimalText(record, 'offset'),
+    };
+    const deadbandColumn = {
+      title: '死区',
+      dataIndex: 'deadband_decimal',
+      key: 'deadband',
+      width: 120,
+      render: (_value: string, record: Dlt645Point) => resolveDlt645EngineeringDecimalText(record, 'deadband'),
+    };
     const realtimeValueColumn = {
       title: '实时值',
       key: 'realtime_value',
@@ -264,7 +286,18 @@ const PointTable: React.FC<Props> = ({
     if (tableView === 'runtime') {
       return [tagColumn, diColumn, dataTypeColumn, realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
     }
-    return [tagColumn, diColumn, dataLengthColumn, bitPositionColumn, dataTypeColumn, accessColumn, actionColumn];
+    return [
+      tagColumn,
+      diColumn,
+      dataLengthColumn,
+      bitPositionColumn,
+      dataTypeColumn,
+      accessColumn,
+      scaleColumn,
+      offsetColumn,
+      deadbandColumn,
+      actionColumn,
+    ];
   })();
 
   const blockItemColumns: ColumnsType<Dlt645BlockItem> = (() => {
@@ -297,6 +330,27 @@ const PointTable: React.FC<Props> = ({
       width: 80,
       render: (value: number) => ACCESS_MODE_LABELS[value] ?? '未指定',
     };
+    const scaleColumn = {
+      title: '缩放系数',
+      dataIndex: 'scale_decimal',
+      key: 'scale',
+      width: 120,
+      render: (_value: string, record: Dlt645BlockItem) => resolveDlt645EngineeringDecimalText(record, 'scale'),
+    };
+    const offsetColumn = {
+      title: '偏移量',
+      dataIndex: 'offset_decimal',
+      key: 'offset',
+      width: 120,
+      render: (_value: string, record: Dlt645BlockItem) => resolveDlt645EngineeringDecimalText(record, 'offset'),
+    };
+    const deadbandColumn = {
+      title: '死区',
+      dataIndex: 'deadband_decimal',
+      key: 'deadband',
+      width: 120,
+      render: (_value: string, record: Dlt645BlockItem) => resolveDlt645EngineeringDecimalText(record, 'deadband'),
+    };
     const realtimeValueColumn = {
       title: '实时值',
       key: 'realtime_value',
@@ -318,7 +372,16 @@ const PointTable: React.FC<Props> = ({
     if (tableView === 'runtime') {
       return [tagColumn, dataTypeColumn, realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
     }
-    return [tagColumn, dataLengthColumn, bitPositionColumn, dataTypeColumn, accessColumn];
+    return [
+      tagColumn,
+      dataLengthColumn,
+      bitPositionColumn,
+      dataTypeColumn,
+      accessColumn,
+      scaleColumn,
+      offsetColumn,
+      deadbandColumn,
+    ];
   })();
 
   const blockColumns: ColumnsType<Dlt645Block> = (() => {
@@ -391,7 +454,7 @@ const PointTable: React.FC<Props> = ({
       dataSource={visibleBlockItems(record)}
       pagination={false}
       size="small"
-      scroll={{ x: tableView === 'runtime' ? 650 : 490 }}
+      scroll={{ x: tableView === 'runtime' ? 650 : 850 }}
       locale={{ emptyText: hasFilters ? '没有符合当前筛选条件的子项' : '暂无子项' }}
     />
   );
@@ -429,7 +492,7 @@ const PointTable: React.FC<Props> = ({
   ) : <Text type="secondary">请先选择连接</Text>;
 
   const loading = pointsLoading || (tableView === 'runtime' && realtimeLoading);
-  const pointScrollX = tableView === 'runtime' ? 820 : 850;
+  const pointScrollX = tableView === 'runtime' ? 820 : 1210;
   const blockScrollX = tableView === 'runtime' ? 440 : 500;
   const dataTypeOptions = Object.entries(DATA_TYPE_LABELS).map(([value, label]) => ({ value: Number(value), label }));
   const accessOptions = Object.entries(ACCESS_MODE_LABELS).map(([value, label]) => ({ value: Number(value), label }));

@@ -17,6 +17,10 @@ pub struct SignalSpecDto {
     pub unit: String,
     pub scale: f64,
     pub offset: f64,
+    #[serde(default)]
+    pub scale_decimal: String,
+    #[serde(default)]
+    pub offset_decimal: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -40,6 +44,14 @@ pub struct MemberConfigDto {
     pub weight: f64,
     pub min_kw: f64,
     pub max_kw: f64,
+    #[serde(default)]
+    pub capacity_kw_decimal: String,
+    #[serde(default)]
+    pub weight_decimal: String,
+    #[serde(default)]
+    pub min_kw_decimal: String,
+    #[serde(default)]
+    pub max_kw_decimal: String,
     pub p_meas: Option<SignalSpecDto>,
     pub p_set: Option<ValueSpecDto>,
 }
@@ -55,6 +67,15 @@ pub struct DerivedOutputsDto {
 pub struct GroupConfigDto {
     pub group_name: String,
     pub p_cmd: Option<ValueSpecDto>,
+    /// 控制模式：0 未指定/兼容事件模式，1 PI_EVENT，2 DIRECT_CYCLIC。
+    #[serde(default)]
+    pub control_mode: i32,
+    /// 周期直分配模式的计算执行周期，单位秒。
+    #[serde(default)]
+    pub calculation_execution_period_seconds: f64,
+    /// 周期直分配模式的命令控制最小间隔，单位秒。
+    #[serde(default)]
+    pub command_control_period_seconds: f64,
     pub strategy: Option<StrategyConfigDto>,
     pub members: Vec<MemberConfigDto>,
     pub outputs: Option<DerivedOutputsDto>,
@@ -91,6 +112,24 @@ pub struct MemberControlProfileDto {
     pub integral_limit_kw: f64,
     pub max_step_kw: f64,
     pub max_ramp_kw_per_s: f64,
+    #[serde(default)]
+    pub up_p_gain_decimal: String,
+    #[serde(default)]
+    pub up_i_gain_decimal: String,
+    #[serde(default)]
+    pub down_p_gain_decimal: String,
+    #[serde(default)]
+    pub down_i_gain_decimal: String,
+    #[serde(default)]
+    pub up_bias_kw_decimal: String,
+    #[serde(default)]
+    pub down_bias_kw_decimal: String,
+    #[serde(default)]
+    pub integral_limit_kw_decimal: String,
+    #[serde(default)]
+    pub max_step_kw_decimal: String,
+    #[serde(default)]
+    pub max_ramp_kw_per_s_decimal: String,
     pub version: u64,
     pub confirmed_at_ms: u64,
 }
@@ -114,6 +153,12 @@ pub struct TuningConfigDto {
     pub min_up_tests: u32,
     pub min_down_tests: u32,
     pub total_tolerance_kw: f64,
+    #[serde(default)]
+    pub target_lower_kw_decimal: String,
+    #[serde(default)]
+    pub target_upper_kw_decimal: String,
+    #[serde(default)]
+    pub total_tolerance_kw_decimal: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -127,6 +172,8 @@ pub struct TuningStatusDto {
     pub elapsed_ms: u64,
     pub current_target_kw: f64,
     pub current_total_meas_kw: f64,
+    pub current_target_kw_decimal: String,
+    pub current_total_meas_kw_decimal: String,
     pub target_entry_elapsed_seconds: f64,
     pub stable_elapsed_seconds: f64,
     pub last_error: String,
@@ -140,6 +187,8 @@ impl From<SignalSpec> for SignalSpecDto {
             unit: signal.unit,
             scale: signal.scale,
             offset: signal.offset,
+            scale_decimal: signal.scale_decimal,
+            offset_decimal: signal.offset_decimal,
         }
     }
 }
@@ -175,6 +224,10 @@ impl From<MemberConfig> for MemberConfigDto {
             weight: member.weight,
             min_kw: member.min_kw,
             max_kw: member.max_kw,
+            capacity_kw_decimal: member.capacity_kw_decimal,
+            weight_decimal: member.weight_decimal,
+            min_kw_decimal: member.min_kw_decimal,
+            max_kw_decimal: member.max_kw_decimal,
             p_meas: member.p_meas.map(|signal| signal.into()),
             p_set: member.p_set.map(|value| value.into()),
         }
@@ -196,6 +249,9 @@ impl From<GroupConfig> for GroupConfigDto {
         Self {
             group_name: config.group_name,
             p_cmd: config.p_cmd.map(|value| value.into()),
+            control_mode: config.control_mode,
+            calculation_execution_period_seconds: config.calculation_execution_period_seconds,
+            command_control_period_seconds: config.command_control_period_seconds,
             strategy: config.strategy.map(|strategy| strategy.into()),
             members: config
                 .members
@@ -245,6 +301,15 @@ impl From<MemberControlProfile> for MemberControlProfileDto {
             integral_limit_kw: member.integral_limit_kw,
             max_step_kw: member.max_step_kw,
             max_ramp_kw_per_s: member.max_ramp_kw_per_s,
+            up_p_gain_decimal: member.up_p_gain_decimal,
+            up_i_gain_decimal: member.up_i_gain_decimal,
+            down_p_gain_decimal: member.down_p_gain_decimal,
+            down_i_gain_decimal: member.down_i_gain_decimal,
+            up_bias_kw_decimal: member.up_bias_kw_decimal,
+            down_bias_kw_decimal: member.down_bias_kw_decimal,
+            integral_limit_kw_decimal: member.integral_limit_kw_decimal,
+            max_step_kw_decimal: member.max_step_kw_decimal,
+            max_ramp_kw_per_s_decimal: member.max_ramp_kw_per_s_decimal,
             version: member.version,
             confirmed_at_ms: member.confirmed_at_ms,
         }
@@ -274,6 +339,8 @@ impl From<TuningStatus> for TuningStatusDto {
             elapsed_ms: status.elapsed_ms,
             current_target_kw: status.current_target_kw,
             current_total_meas_kw: status.current_total_meas_kw,
+            current_target_kw_decimal: status.current_target_kw_decimal,
+            current_total_meas_kw_decimal: status.current_total_meas_kw_decimal,
             target_entry_elapsed_seconds: status.target_entry_elapsed_seconds,
             stable_elapsed_seconds: status.stable_elapsed_seconds,
             last_error: status.last_error,
@@ -295,6 +362,15 @@ impl MemberControlProfileDto {
             integral_limit_kw: self.integral_limit_kw,
             max_step_kw: self.max_step_kw,
             max_ramp_kw_per_s: self.max_ramp_kw_per_s,
+            up_p_gain_decimal: self.up_p_gain_decimal.clone(),
+            up_i_gain_decimal: self.up_i_gain_decimal.clone(),
+            down_p_gain_decimal: self.down_p_gain_decimal.clone(),
+            down_i_gain_decimal: self.down_i_gain_decimal.clone(),
+            up_bias_kw_decimal: self.up_bias_kw_decimal.clone(),
+            down_bias_kw_decimal: self.down_bias_kw_decimal.clone(),
+            integral_limit_kw_decimal: self.integral_limit_kw_decimal.clone(),
+            max_step_kw_decimal: self.max_step_kw_decimal.clone(),
+            max_ramp_kw_per_s_decimal: self.max_ramp_kw_per_s_decimal.clone(),
             version: self.version,
             confirmed_at_ms: self.confirmed_at_ms,
         }
@@ -324,6 +400,9 @@ impl TuningConfigDto {
             min_up_tests: self.min_up_tests,
             min_down_tests: self.min_down_tests,
             total_tolerance_kw: self.total_tolerance_kw,
+            target_lower_kw_decimal: self.target_lower_kw_decimal.clone(),
+            target_upper_kw_decimal: self.target_upper_kw_decimal.clone(),
+            total_tolerance_kw_decimal: self.total_tolerance_kw_decimal.clone(),
         }
     }
 }
@@ -335,6 +414,8 @@ impl SignalSpecDto {
             unit: self.unit.clone(),
             scale: self.scale,
             offset: self.offset,
+            scale_decimal: self.scale_decimal.clone(),
+            offset_decimal: self.offset_decimal.clone(),
         }
     }
 }
@@ -372,6 +453,10 @@ impl MemberConfigDto {
             weight: self.weight,
             min_kw: self.min_kw,
             max_kw: self.max_kw,
+            capacity_kw_decimal: self.capacity_kw_decimal.clone(),
+            weight_decimal: self.weight_decimal.clone(),
+            min_kw_decimal: self.min_kw_decimal.clone(),
+            max_kw_decimal: self.max_kw_decimal.clone(),
             p_meas: self.p_meas.as_ref().map(|signal| signal.to_proto()),
             p_set: self.p_set.as_ref().map(|value| value.to_proto()),
         }
@@ -393,6 +478,9 @@ impl GroupConfigDto {
         GroupConfig {
             group_name: self.group_name.clone(),
             p_cmd: self.p_cmd.as_ref().map(|value| value.to_proto()),
+            control_mode: self.control_mode,
+            calculation_execution_period_seconds: self.calculation_execution_period_seconds,
+            command_control_period_seconds: self.command_control_period_seconds,
             strategy: self.strategy.as_ref().map(|strategy| strategy.to_proto()),
             members: self
                 .members
@@ -496,15 +584,56 @@ fn validate_group_tag_uniqueness(config: &GroupConfigDto) -> Result<(), String> 
     }
 }
 
+fn validate_control_timing(config: &GroupConfigDto) -> Result<(), String> {
+    if !matches!(config.control_mode, 0 | 1 | 2) {
+        return Err("AGC 控制模式无效，必须选择 PI 事件触发或周期直分配".into());
+    }
+    if config.calculation_execution_period_seconds != 0.0
+        && (!config.calculation_execution_period_seconds.is_finite()
+            || !(1.0..=15.0).contains(&config.calculation_execution_period_seconds))
+    {
+        return Err("AGC 计算执行周期必须在 1～15 秒范围内".into());
+    }
+    if config.command_control_period_seconds != 0.0
+        && (!config.command_control_period_seconds.is_finite()
+            || !(4.0..=30.0).contains(&config.command_control_period_seconds))
+    {
+        return Err("AGC 命令控制周期必须在 4～30 秒范围内".into());
+    }
+    if config.control_mode != 2 {
+        return Ok(());
+    }
+    if !config.calculation_execution_period_seconds.is_finite()
+        || !(1.0..=15.0).contains(&config.calculation_execution_period_seconds)
+    {
+        return Err("AGC 周期直分配模式的计算执行周期必须在 1～15 秒范围内".into());
+    }
+    if !config.command_control_period_seconds.is_finite()
+        || !(4.0..=30.0).contains(&config.command_control_period_seconds)
+    {
+        return Err("AGC 周期直分配模式的命令控制周期必须在 4～30 秒范围内".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn agc_upsert_group(
     state: State<'_, AppState>,
     config: GroupConfigDto,
     create_only: bool,
 ) -> Result<GroupInfoDto, String> {
+    validate_control_timing(&config)?;
     validate_group_tag_uniqueness(&config)?;
     let group_name = config.group_name.clone();
-    tracing::info!(control = "AGC", group_name = %group_name, create_only, "开始保存控制组配置");
+    tracing::info!(
+        control = "AGC",
+        group_name = %group_name,
+        create_only,
+        control_mode = config.control_mode,
+        calculation_execution_period_seconds = config.calculation_execution_period_seconds,
+        command_control_period_seconds = config.command_control_period_seconds,
+        "开始保存控制组配置"
+    );
     let client = AgcClient::new(&state.conn_manager);
     let group = client
         .upsert_group(config.to_proto(), create_only)

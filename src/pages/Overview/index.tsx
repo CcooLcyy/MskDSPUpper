@@ -93,10 +93,16 @@ const emptyDeviceRuntimeState = (): DeviceRuntimeState => ({
 });
 
 function pointValueToNumber(value: DcPointValue | null): number | null {
-  if (!value || value.type !== 'Double' || !Number.isFinite(value.value)) {
+  if (!value) {
     return null;
   }
-  return Math.max(0, Math.min(100, value.value));
+  const numericValue = value.type === 'Double'
+    ? value.value
+    : value.type === 'Decimal'
+      ? Number(value.value)
+      : Number.NaN;
+  if (!Number.isFinite(numericValue)) return null;
+  return Math.max(0, Math.min(100, numericValue));
 }
 
 function deviceRuntimeMetric(updates: DcSourcePointUpdate[], tag: string): DeviceRuntimeMetric {
@@ -245,6 +251,7 @@ const Overview: React.FC = () => {
         runningModules: runningModulesResult,
         iec104Links: iec104LinksResult,
         modbusLinks: modbusLinksResult,
+        modbusTcpLinks: modbusTcpLinksResult,
         dlt645Links: dlt645LinksResult,
         agcGroups: agcGroupsResult,
         routes: routesResult,
@@ -253,6 +260,7 @@ const Overview: React.FC = () => {
         getRunningModuleInfo: api.getRunningModuleInfo,
         listIec104Links: api.iec104ListLinks,
         listModbusLinks: api.modbusRtuListLinks,
+        listModbusTcpLinks: api.modbusTcpListLinks,
         listDlt645Links: api.dlt645ListLinks,
         listAgcGroups: api.agcListGroups,
         listRoutes: () => api.dcListRoutes(0, '', 0, ''),
@@ -263,6 +271,7 @@ const Overview: React.FC = () => {
       const protocolLinkCount =
         (iec104LinksResult.status === 'fulfilled' ? iec104LinksResult.value.length : 0) +
         (modbusLinksResult.status === 'fulfilled' ? modbusLinksResult.value.length : 0) +
+        (modbusTcpLinksResult.status === 'fulfilled' ? modbusTcpLinksResult.value.length : 0) +
         (dlt645LinksResult.status === 'fulfilled' ? dlt645LinksResult.value.length : 0);
       const agcGroupCount = agcGroupsResult.status === 'fulfilled' ? agcGroupsResult.value.length : 0;
       const routeCount = routesResult.status === 'fulfilled' ? routesResult.value.length : 0;
@@ -280,6 +289,7 @@ const Overview: React.FC = () => {
         runningModulesResult.status === 'rejected' ? '运行状态' : null,
         iec104LinksResult.status === 'rejected' ? 'IEC104 链路' : null,
         modbusLinksResult.status === 'rejected' ? 'ModbusRTU 链路' : null,
+        modbusTcpLinksResult.status === 'rejected' ? 'ModbusTCP 链路' : null,
         dlt645LinksResult.status === 'rejected' ? 'DLT645 链路' : null,
         agcGroupsResult.status === 'rejected' ? 'AGC 控制组' : null,
         routesResult.status === 'rejected' ? '数据路由' : null,

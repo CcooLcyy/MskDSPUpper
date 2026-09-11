@@ -8,6 +8,9 @@ import {
   generateBatchPoints,
   parseBatchPointNames,
 } from '../../src/pages/IEC104/batch-point.ts';
+import {
+  getIec104DecimalTextError,
+} from '../../src/pages/IEC104/decimal-input.ts';
 
 const pageSource = readFileSync(new URL('../../src/pages/IEC104/index.tsx', import.meta.url), 'utf8');
 
@@ -155,14 +158,14 @@ test('IEC104 batch points report global configuration errors', () => {
     pointType: BATCH_POINT_TYPE_FLOAT,
     scale: Number.NaN,
     offset: Number.POSITIVE_INFINITY,
-    deadband: -1,
+    deadband: 'invalid',
   });
 
   assert.ok(emptyResult.issues.some((issue) => issue.message === '请至少输入一个点名'));
   assert.ok(invalidResult.issues.some((issue) => issue.message.includes('起始 IOA')));
   assert.ok(invalidResult.issues.some((issue) => issue.message === 'Scale 必须是有效数字'));
   assert.ok(invalidResult.issues.some((issue) => issue.message === 'Offset 必须是有效数字'));
-  assert.ok(invalidResult.issues.some((issue) => issue.message === 'Deadband 必须大于等于 0'));
+  assert.ok(invalidResult.issues.some((issue) => issue.message === 'Deadband 必须是有效数字'));
 });
 
 // 验证 SINGLE 点会忽略工程量换算参数。
@@ -192,7 +195,58 @@ test('IEC104 SINGLE batch points reset engineering parameters', () => {
     scale: 1,
     offset: 0,
     deadband: 0,
+    scale_decimal: '1',
+    offset_decimal: '0',
+    deadband_decimal: '0',
   });
+});
+
+// 验证 IEC104 十进制输入严格校验格式、范围和负数语义。
+test('IEC104 engineering decimal input uses strict text validation', () => {
+  assert.equal(getIec104DecimalTextError('0.12345678901234567890', 'Scale'), undefined);
+  assert.equal(getIec104DecimalTextError('1e-100000', 'Offset'), undefined);
+  assert.match(getIec104DecimalTextError(' 1', 'Scale'), /不能包含空白/);
+  assert.match(getIec104DecimalTextError('9'.repeat(101), 'Scale'), /整数部分最多 100 位/);
+  assert.match(getIec104DecimalTextError('1e100001', 'Scale'), /指数绝对值不能超过 100000/);
+  assert.equal(getIec104DecimalTextError('-0', 'Deadband'), undefined);
+  assert.equal(getIec104DecimalTextError('-1e-100000', 'Deadband'), undefined);
+});
+
+// 验证批量点位链路保留 20 位小数原文，并仅在兼容字段边界转换为 number。
+test('IEC104 batch points preserve exact engineering decimal text', () => {
+  const result = generateBatchPoints({
+    text: 'precise_voltage',
+    startIoa: 0x4001,
+    step: 1,
+    ioaCategory: 'telemetry',
+    pointType: BATCH_POINT_TYPE_FLOAT,
+    scale: '0.12345678901234567890',
+    offset: '-2.00000000000000000001',
+    deadband: '1e-20',
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.drafts[0].scale_decimal, '0.12345678901234567890');
+  assert.equal(result.drafts[0].offset_decimal, '-2.00000000000000000001');
+  assert.equal(result.drafts[0].deadband_decimal, '1e-20');
+  assert.equal(result.drafts[0].scale, Number('0.12345678901234567890'));
+});
+
+// 验证负 deadband 合法且按 <=0 不过滤语义保留原文。
+test('IEC104 batch points allow negative deadband', () => {
+  const result = generateBatchPoints({
+    text: 'unfiltered_voltage',
+    startIoa: 0x4002,
+    step: 1,
+    ioaCategory: 'telemetry',
+    pointType: BATCH_POINT_TYPE_FLOAT,
+    scale: '1',
+    offset: '0',
+    deadband: '-0.00000000000000000001',
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.drafts[0].deadband_decimal, '-0.00000000000000000001');
 });
 
 // 验证 IEC104 页面接入批量点位入口和生成逻辑。

@@ -142,9 +142,9 @@ export interface ModbusPointFormValues {
   address: number;
   reg_count: number;
   data_type: ModbusDataType;
-  scale: number;
-  offset: number;
-  deadband: number;
+  scale: string;
+  offset: string;
+  deadband: string;
   word_order: number;
   byte_order: number;
   bit_index: number | null;
@@ -157,9 +157,9 @@ export function createDefaultModbusPoint(addressBase?: number): ModbusPointFormV
     address: getMinimumAddress(addressBase),
     reg_count: getDefaultRegCount(MODBUS_DATA_TYPE.UINT16) ?? 1,
     data_type: MODBUS_DATA_TYPE.UINT16,
-    scale: 1,
-    offset: 0,
-    deadband: 0,
+    scale: '1',
+    offset: '0',
+    deadband: '0',
     word_order: 0,
     byte_order: 0,
     bit_index: null,

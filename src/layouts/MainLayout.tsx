@@ -44,6 +44,7 @@ const menuItems = [
       { key: '/protocol/iec104', label: 'IEC104' },
       { key: '/protocol/iec61850', label: 'IEC61850' },
       { key: '/protocol/modbus-rtu', label: 'Modbus RTU' },
+      { key: '/protocol/modbus-tcp', label: 'Modbus TCP' },
       { key: '/protocol/dlt645', label: 'DLT645' },
     ],
   },

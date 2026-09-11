@@ -28,6 +28,7 @@ import type {
   DataBusThroughputSample,
   DataBusThroughputSnapshot,
   Dlt645Block,
+  Dlt645BlockItem,
   Dlt645LinkConfig,
   Dlt645LinkInfo,
   Dlt645MqttConfig,
@@ -70,11 +71,21 @@ import type {
   ModbusPoint,
   ModbusPointTable,
   ModbusUpdateConfigResponse,
+  ModbusTcpLinkConfig,
+  ModbusTcpLinkInfo,
   ModuleInfo,
   ModuleRunningInfo,
   RuntimePaths,
 } from './types';
 import { buildLowerUpdateLatestUrl } from './lower-update-source';
+import {
+  normalizeAgcControlProfileDecimalFields,
+  normalizeAgcGroupConfigDecimalFields,
+  normalizeAgcTuningConfigDecimalFields,
+  normalizeAgcTuningStatusDecimalFields,
+  resolveAgcDecimalText,
+} from '../utils/agc-decimal';
+import { normalizeIec61850PointEngineeringFields } from '../utils/iec61850-decimal';
 
 const DEFAULT_MANAGER_ADDR = '127.0.0.1:17000';
 const BROWSER_SETTINGS_KEY = 'mskdsp_browser_app_settings_v1';
@@ -94,6 +105,75 @@ const browserThroughputSamples: DataBusThroughputSample[] = [];
 const browserThroughputProcessStartTime = Date.now();
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+type LegacyCompatibleModbusPoint = Omit<
+  ModbusPoint,
+  'scale_decimal' | 'offset_decimal' | 'deadband_decimal'
+> & Partial<Pick<ModbusPoint, 'scale_decimal' | 'offset_decimal' | 'deadband_decimal'>>;
+
+const normalizeBrowserModbusPoint = (point: LegacyCompatibleModbusPoint): ModbusPoint => {
+  const scaleDecimal = point.scale_decimal || String(point.scale);
+  const offsetDecimal = point.offset_decimal || String(point.offset);
+  const deadbandDecimal = point.deadband_decimal || String(point.deadband);
+  return {
+    ...point,
+    scale: Number(scaleDecimal),
+    offset: Number(offsetDecimal),
+    deadband: Number(deadbandDecimal),
+    scale_decimal: scaleDecimal,
+    offset_decimal: offsetDecimal,
+    deadband_decimal: deadbandDecimal,
+  };
+};
+
+type LegacyCompatibleDlt645Point = Omit<
+  Dlt645Point,
+  'scale_decimal' | 'offset_decimal' | 'deadband_decimal'
+> & Partial<Pick<Dlt645Point, 'scale_decimal' | 'offset_decimal' | 'deadband_decimal'>>;
+
+type LegacyCompatibleDlt645BlockItem = Omit<
+  Dlt645BlockItem,
+  'scale_decimal' | 'offset_decimal' | 'deadband_decimal'
+> & Partial<Pick<Dlt645BlockItem, 'scale_decimal' | 'offset_decimal' | 'deadband_decimal'>>;
+
+const normalizeBrowserDlt645Point = (point: LegacyCompatibleDlt645Point): Dlt645Point => {
+  const scaleDecimal = point.scale_decimal || String(point.scale);
+  const offsetDecimal = point.offset_decimal || String(point.offset);
+  const deadbandDecimal = point.deadband_decimal || String(point.deadband);
+  return {
+    ...point,
+    scale: Number(scaleDecimal),
+    offset: Number(offsetDecimal),
+    deadband: Number(deadbandDecimal),
+    scale_decimal: scaleDecimal,
+    offset_decimal: offsetDecimal,
+    deadband_decimal: deadbandDecimal,
+  };
+};
+
+const normalizeBrowserDlt645BlockItem = (
+  item: LegacyCompatibleDlt645BlockItem,
+): Dlt645BlockItem => {
+  const scaleDecimal = item.scale_decimal || String(item.scale);
+  const offsetDecimal = item.offset_decimal || String(item.offset);
+  const deadbandDecimal = item.deadband_decimal || String(item.deadband);
+  return {
+    ...item,
+    scale: Number(scaleDecimal),
+    offset: Number(offsetDecimal),
+    deadband: Number(deadbandDecimal),
+    scale_decimal: scaleDecimal,
+    offset_decimal: offsetDecimal,
+    deadband_decimal: deadbandDecimal,
+  };
+};
+
+const normalizeBrowserDlt645Block = (
+  block: Omit<Dlt645Block, 'items'> & { items: LegacyCompatibleDlt645BlockItem[] },
+): Dlt645Block => ({
+  ...block,
+  items: block.items.map(normalizeBrowserDlt645BlockItem),
+});
 
 function loadBrowserSettings(): AppSettingsMap {
   try {
@@ -130,6 +210,7 @@ const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('IEC104'),
   makeModuleInfo('IEC61850'),
   makeModuleInfo('ModbusRTU'),
+  makeModuleInfo('ModbusTCP'),
   makeModuleInfo('DLT645'),
   makeModuleInfo('AGC'),
   makeModuleInfo('AVC'),
@@ -139,7 +220,7 @@ const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('BoardIO'),
 ];
 
-const runningModules = new Set(['ModuleManager', 'DataCenter', 'DeviceInfo', 'BoardIO', 'IEC104', 'IEC61850', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc', 'ControlOrchestrator']);
+const runningModules = new Set(['ModuleManager', 'DataCenter', 'DeviceInfo', 'BoardIO', 'IEC104', 'IEC61850', 'ModbusRTU', 'ModbusTCP', 'DLT645', 'AGC', 'AVC', 'Calc', 'ControlOrchestrator']);
 const deviceRuntimeConnId = 97;
 const boardDiConnId = 99;
 const boardDoConnId = 98;
@@ -148,6 +229,8 @@ const iec104Tables = new Map<string, Iec104PointTable>();
 const iec104Simulation = new Map<string, Iec104SimulationSnapshot>();
 const modbusLinks = new Map<string, ModbusLinkInfo>();
 const modbusTables = new Map<string, ModbusPointTable>();
+const modbusTcpLinks = new Map<string, ModbusTcpLinkInfo>();
+const modbusTcpTables = new Map<string, ModbusPointTable>();
 const dlt645Links = new Map<string, Dlt645LinkInfo>();
 const dlt645Tables = new Map<string, Dlt645PointTable>();
 const iec61850Models = new Map<string, Iec61850ModelSummary>();
@@ -297,6 +380,7 @@ function listConnections(): DcConnectionInfo[] {
     ...[...iec104Links.values()].map((item) => connectionInfo('IEC104', item.config?.conn_name ?? '', item.conn_id)),
     ...[...iec61850Ieds.values()].map((item) => connectionInfo('IEC61850', item.config?.conn_name ?? '', item.conn_id)),
     ...[...modbusLinks.values()].map((item) => connectionInfo('ModbusRTU', item.config?.conn_name ?? '', item.conn_id)),
+    ...[...modbusTcpLinks.values()].map((item) => connectionInfo('ModbusTCP', item.config?.conn_name ?? '', item.conn_id)),
     ...[...dlt645Links.values()].map((item) => connectionInfo('DLT645', item.config?.conn_name ?? '', item.conn_id)),
     ...[...agcGroups.values()].map((item) => connectionInfo('AGC', item.config?.group_name ?? '', item.conn_id)),
     ...[...avcGroups.values()].map((item) => connectionInfo('AVC', item.config?.group_name ?? '', item.conn_id)),
@@ -339,6 +423,11 @@ function tagsForConnection(connId: number): string[] {
   const modbus = [...modbusLinks.values()].find((item) => item.conn_id === connId);
   if (modbus?.config) {
     return (modbusTables.get(modbus.config.conn_name)?.points ?? []).map((item) => item.tag);
+  }
+
+  const modbusTcp = [...modbusTcpLinks.values()].find((item) => item.conn_id === connId);
+  if (modbusTcp?.config) {
+    return (modbusTcpTables.get(modbusTcp.config.conn_name)?.points ?? []).map((item) => item.tag);
   }
 
   const iec61850 = [...iec61850Ieds.values()].find((item) => item.conn_id === connId);
@@ -586,10 +675,10 @@ function seedDemoData() {
   iec104Tables.set(iecConfig.conn_name, {
     conn_name: iecConfig.conn_name,
     points: [
-      { tag: '有功功率', ioa: 1001, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0 },
-      { tag: '无功功率', ioa: 1002, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0 },
-      { tag: '有功设定', ioa: 1101, point_type: 1, business_type: 3, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0 },
-      { tag: '运行状态', ioa: 2001, point_type: 2, business_type: 1, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0 },
+      { tag: '有功功率', ioa: 1001, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0, scale_decimal: '1', offset_decimal: '0', deadband_decimal: '0' },
+      { tag: '无功功率', ioa: 1002, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0, scale_decimal: '1', offset_decimal: '0', deadband_decimal: '0' },
+      { tag: '有功设定', ioa: 1101, point_type: 1, business_type: 3, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0, scale_decimal: '1', offset_decimal: '0', deadband_decimal: '0' },
+      { tag: '运行状态', ioa: 2001, point_type: 2, business_type: 1, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0, scale_decimal: '1', offset_decimal: '0', deadband_decimal: '0' },
     ],
   });
 
@@ -619,10 +708,10 @@ function seedDemoData() {
   iec104Tables.set(iecSecondaryConfig.conn_name, {
     conn_name: iecSecondaryConfig.conn_name,
     points: [
-      { tag: '全站有功', ioa: 3001, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0.1 },
-      { tag: '全站无功', ioa: 3002, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0.1 },
-      { tag: '母线电压', ioa: 3003, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 0.001, offset: 0, deadband: 0.01 },
-      { tag: '断路器状态', ioa: 4001, point_type: 2, business_type: 1, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0 },
+      { tag: '全站有功', ioa: 3001, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0.1, scale_decimal: '1', offset_decimal: '0', deadband_decimal: '0.1' },
+      { tag: '全站无功', ioa: 3002, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0.1, scale_decimal: '1', offset_decimal: '0', deadband_decimal: '0.1' },
+      { tag: '母线电压', ioa: 3003, point_type: 1, business_type: 2, remote_control_type: 1, command_execution_mode: 2, scale: 0.001, offset: 0, deadband: 0.01, scale_decimal: '0.001', offset_decimal: '0', deadband_decimal: '0.01' },
+      { tag: '断路器状态', ioa: 4001, point_type: 2, business_type: 1, remote_control_type: 1, command_execution_mode: 2, scale: 1, offset: 0, deadband: 0, scale_decimal: '1', offset_decimal: '0', deadband_decimal: '0' },
     ],
   });
 
@@ -665,7 +754,7 @@ function seedDemoData() {
       { tag: '储能荷电率', function: 3, address: 30001, data_type: 4, scale: 0.1, offset: 0, deadband: 0.1, reg_count: 1, word_order: 0, byte_order: 0, bit_index: null },
       { tag: '储能可用', function: 1, address: 1, data_type: 1, scale: 1, offset: 0, deadband: 0, reg_count: 1, word_order: 0, byte_order: 0, bit_index: null },
       { tag: '储能告警码', function: 3, address: 30002, data_type: 2, scale: 1, offset: 0, deadband: 0, reg_count: 1, word_order: 0, byte_order: 0, bit_index: null },
-    ],
+    ].map(normalizeBrowserModbusPoint),
   });
 
   const modbusSerialConfig: ModbusLinkConfig = {
@@ -695,7 +784,7 @@ function seedDemoData() {
       { tag: '电表电压', function: 3, address: 1, data_type: 4, scale: 0.1, offset: 0, deadband: 0.1, reg_count: 1, word_order: 0, byte_order: 0, bit_index: null },
       { tag: '电表电流', function: 3, address: 2, data_type: 4, scale: 0.01, offset: 0, deadband: 0.02, reg_count: 1, word_order: 0, byte_order: 0, bit_index: null },
       { tag: '电表电量', function: 3, address: 10, data_type: 3, scale: 0.01, offset: 0, deadband: 0.1, reg_count: 2, word_order: 1, byte_order: 1, bit_index: null },
-    ],
+    ].map(normalizeBrowserModbusPoint),
   });
 
   dlt645Mqtt = {
@@ -740,7 +829,7 @@ function seedDemoData() {
       { tag: '总有功电量', di: '00000000', data_len: 4, data_type: 4, access: 1, scale: 0.01, offset: 0, deadband: 0, byte_index: null, bit_index: null },
       { tag: '表计电压', di: '02010100', data_len: 2, data_type: 4, access: 1, scale: 0.1, offset: 0, deadband: 0.1, byte_index: null, bit_index: null },
       { tag: '表计电流', di: '02020100', data_len: 3, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.01, byte_index: null, bit_index: null },
-    ],
+    ].map(normalizeBrowserDlt645Point),
     blocks: [{
       block_di: '00010000',
       block_data_len: 12,
@@ -749,7 +838,7 @@ function seedDemoData() {
         { tag: 'B相功率', data_len: 4, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.01, trim_right_space: null, byte_index: null, bit_index: null },
         { tag: 'C相功率', data_len: 4, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.01, trim_right_space: null, byte_index: null, bit_index: null },
       ],
-    }],
+    }].map(normalizeBrowserDlt645Block),
   });
 
   const dltSerialConfig: Dlt645LinkConfig = {
@@ -783,12 +872,15 @@ function seedDemoData() {
     points: [
       { tag: '二号表有功', di: '02030000', data_len: 3, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.01, byte_index: null, bit_index: null },
       { tag: '二号表功率因数', di: '02060000', data_len: 2, data_type: 4, access: 1, scale: 0.001, offset: 0, deadband: 0.005, byte_index: null, bit_index: null },
-    ],
+    ].map(normalizeBrowserDlt645Point),
     blocks: [],
   });
 
-  const agcConfig: AgcGroupConfig = {
+  const agcConfig = normalizeAgcGroupConfigDecimalFields({
     group_name: '储能有功控制',
+    control_mode: 1,
+    calculation_execution_period_seconds: 1,
+    command_control_period_seconds: 4,
     p_cmd: { signal: { tag: '有功调度指令', unit: 'kW', scale: 1, offset: 0 }, mode: 0, delta_base: 0, base_tag: '' },
     strategy: { strategy_type: 'weighted' },
     members: [
@@ -808,7 +900,7 @@ function seedDemoData() {
       p_total_target: { tag: '总有功目标', unit: 'kW', scale: 1, offset: 0 },
       p_total_error: { tag: '总有功偏差', unit: 'kW', scale: 1, offset: 0 },
     },
-  };
+  } as AgcGroupConfig);
   agcGroups.set(agcConfig.group_name, {
     config: agcConfig,
     conn_id: nextId(),
@@ -819,8 +911,11 @@ function seedDemoData() {
     remote_enabled: true,
   });
 
-  const agcSecondaryConfig: AgcGroupConfig = {
+  const agcSecondaryConfig = normalizeAgcGroupConfigDecimalFields({
     group_name: '风场有功控制',
+    control_mode: 2,
+    calculation_execution_period_seconds: 5,
+    command_control_period_seconds: 10,
     p_cmd: { signal: { tag: '风场有功指令', unit: 'kW', scale: 1, offset: 0 }, mode: 2, delta_base: 3, base_tag: '风场有功基准' },
     strategy: { strategy_type: 'weighted' },
     members: [
@@ -840,7 +935,7 @@ function seedDemoData() {
       p_total_target: { tag: '风场有功目标', unit: 'kW', scale: 1, offset: 0 },
       p_total_error: { tag: '风场有功偏差', unit: 'kW', scale: 1, offset: 0 },
     },
-  };
+  } as AgcGroupConfig);
   agcGroups.set(agcSecondaryConfig.group_name, {
     config: agcSecondaryConfig,
     conn_id: nextId(),
@@ -853,8 +948,11 @@ function seedDemoData() {
 
   const avcConfig: AvcGroupConfig = {
     group_name: '变电站电压控制',
+    control_mode: 2,
+    calculation_execution_period_seconds: 2,
+    command_control_period_seconds: 6,
     voltage_meas: { tag: '母线电压实测', unit: 'kV', scale: 1, offset: 0 },
-    voltage_cmd: { tag: '母线电压目标', unit: 'kV', scale: 1, offset: 0 },
+    voltage_cmd: null,
     q_total_cmd: { signal: { tag: '总无功指令', unit: 'kVar', scale: 1, offset: 0 }, mode: 1, delta_base: 0, base_tag: '' },
     voltage_control: { kp: 80, deadband: 0.02 },
     strategy: { strategy_type: 'weighted' },
@@ -883,6 +981,9 @@ function seedDemoData() {
 
   const avcSecondaryConfig: AvcGroupConfig = {
     group_name: '园区电压控制',
+    control_mode: 1,
+    calculation_execution_period_seconds: 1,
+    command_control_period_seconds: 4,
     voltage_meas: { tag: '园区母线电压', unit: 'kV', scale: 1, offset: 0 },
     voltage_cmd: null,
     q_total_cmd: { signal: { tag: '园区总无功指令', unit: 'kVar', scale: 1, offset: 0 }, mode: 1, delta_base: 0, base_tag: '' },
@@ -906,6 +1007,8 @@ function seedDemoData() {
 
   const calcConfig: CalcGroupConfig = {
     group_name: '计算示例',
+    trigger_mode: 1,
+    period_ms: 1000,
     items: [
       {
         item_name: '有功加常量',
@@ -926,6 +1029,8 @@ function seedDemoData() {
 
   const calcSecondaryConfig: CalcGroupConfig = {
     group_name: '遥测汇总',
+    trigger_mode: 1,
+    period_ms: 1000,
     items: [
       {
         item_name: '总有功',
@@ -1219,6 +1324,12 @@ export const browserApi: typeof tauriApi = {
       business_type: inferIec104BusinessType(point),
       remote_control_type: point.remote_control_type || IEC104_REMOTE_CONTROL_TYPE_SINGLE,
       command_execution_mode: point.command_execution_mode || IEC104_COMMAND_EXECUTION_MODE_SELECT_EXECUTE,
+      scale: Number(point.scale_decimal || point.scale),
+      offset: Number(point.offset_decimal || point.offset),
+      deadband: Number(point.deadband_decimal || point.deadband),
+      scale_decimal: point.scale_decimal || String(point.scale),
+      offset_decimal: point.offset_decimal || String(point.offset),
+      deadband_decimal: point.deadband_decimal || String(point.deadband),
     });
     const nextPoints = replace ? points : mergeByTag(previous, points);
     iec104Tables.set(connName, { conn_name: connName, points: clone(nextPoints.map(normalizePoint)) });
@@ -1336,7 +1447,8 @@ export const browserApi: typeof tauriApi = {
   iec61850UpsertPointMappings: async (connName: string, points: Iec61850PointMapping[], replace: boolean) => {
     if (!iec61850Ieds.has(connName)) throw new Error(`浏览器开发模式 mock 未找到 IED: ${connName}`);
     const previous = iec61850Mappings.get(connName)?.points ?? [];
-    iec61850Mappings.set(connName, { conn_name: connName, points: clone(replace ? points : mergeByTag(previous, points)) });
+    const normalized = points.map(normalizeIec61850PointEngineeringFields);
+    iec61850Mappings.set(connName, { conn_name: connName, points: clone(replace ? normalized : mergeByTag(previous, normalized)) });
   },
   iec61850GetPointMappings: async (connName: string) => clone(iec61850Mappings.get(connName) ?? { conn_name: connName, points: [] }),
   iec61850GetRuntimeStatistics: async (connName: string): Promise<Iec61850RuntimeStatistics> => {
@@ -1373,10 +1485,60 @@ export const browserApi: typeof tauriApi = {
   modbusRtuStopLink: async (connName: string) => setLinkState(modbusLinks, connName, 1),
   modbusRtuUpsertPointTable: async (connName: string, points: ModbusPoint[], replace: boolean) => {
     const previous = modbusTables.get(connName)?.points ?? [];
-    modbusTables.set(connName, { conn_name: connName, points: replace ? clone(points) : mergeByTag(previous, points) });
+    const nextPoints = replace ? points : mergeByTag(previous, points);
+    modbusTables.set(connName, {
+      conn_name: connName,
+      points: clone(nextPoints.map(normalizeBrowserModbusPoint)),
+    });
   },
   modbusRtuGetPointTable: async (connName: string) =>
     clone(modbusTables.get(connName) ?? { conn_name: connName, points: [] }),
+
+  modbusTcpUpsertLink: async (config: ModbusTcpLinkConfig, createOnly: boolean) =>
+    upsertByName(modbusTcpLinks, config.conn_name, createOnly, (connId, previous) => ({
+      config: clone(config),
+      conn_id: connId,
+      state: previous?.state ?? 1,
+      last_error: '',
+    })),
+  modbusTcpRenameLink: async (oldConnName: string, newConnName: string) => {
+    const renamed = renameByName(modbusTcpLinks, oldConnName, newConnName);
+    const table = modbusTcpTables.get(oldConnName);
+    if (table) {
+      modbusTcpTables.delete(oldConnName);
+      modbusTcpTables.set(newConnName, { ...clone(table), conn_name: newConnName });
+    }
+    return renamed;
+  },
+  modbusTcpGetLink: async (connName: string) => {
+    const value = modbusTcpLinks.get(connName);
+    if (!value) throw new Error(`浏览器开发模式 mock 未找到: ${connName}`);
+    return clone(value);
+  },
+  modbusTcpListLinks: async () => clone([...modbusTcpLinks.values()]),
+  modbusTcpDeleteLink: async (connName: string) => {
+    modbusTcpTables.delete(connName);
+    return deleteByName(modbusTcpLinks, connName);
+  },
+  modbusTcpStartLink: async (connName: string) => setLinkState(modbusTcpLinks, connName, 2),
+  modbusTcpStopLink: async (connName: string) => setLinkState(modbusTcpLinks, connName, 1),
+  modbusTcpUpsertPointTable: async (connName: string, points: ModbusPoint[], replace: boolean) => {
+    const link = modbusTcpLinks.get(connName);
+    if (!link) {
+      throw new Error(`浏览器开发模式 mock 未找到: ${connName}`);
+    }
+    if (link.state === 2) {
+      throw new Error('FAILED_PRECONDITION: 运行中的链路不能更新点表');
+    }
+    const previous = modbusTcpTables.get(connName)?.points ?? [];
+    const nextPoints = (replace ? points : mergeByTag(previous, points)).map(normalizeBrowserModbusPoint);
+    modbusTcpTables.set(connName, { conn_name: connName, points: nextPoints });
+    if (nextPoints.length > 0) {
+      setLinkState(modbusTcpLinks, connName, 2);
+    }
+  },
+  modbusTcpGetPointTable: async (connName: string) =>
+    clone(modbusTcpTables.get(connName) ?? { conn_name: connName, points: [] }),
 
   dlt645UpdateConfig: async (mqtt: Dlt645MqttConfig): Promise<Dlt645UpdateConfigResponse> => {
     dlt645Mqtt = clone(mqtt);
@@ -1407,10 +1569,12 @@ export const browserApi: typeof tauriApi = {
   dlt645StopLink: async (connName: string) => setLinkState(dlt645Links, connName, 0),
   dlt645UpsertPointTable: async (connName: string, points: Dlt645Point[], blocks: Dlt645Block[], replace: boolean) => {
     const previous = dlt645Tables.get(connName) ?? { conn_name: connName, points: [], blocks: [] };
+    const nextPoints = replace ? points : mergeByTag(previous.points, points);
+    const nextBlocks = replace ? blocks : [...previous.blocks, ...blocks];
     dlt645Tables.set(connName, {
       conn_name: connName,
-      points: replace ? clone(points) : mergeByTag(previous.points, points),
-      blocks: replace ? clone(blocks) : clone([...previous.blocks, ...blocks]),
+      points: clone(nextPoints.map(normalizeBrowserDlt645Point)),
+      blocks: clone(nextBlocks.map(normalizeBrowserDlt645Block)),
     });
   },
   dlt645GetPointTable: async (connName: string) =>
@@ -1468,12 +1632,17 @@ export const browserApi: typeof tauriApi = {
   calcUpsertGroup: async (config: CalcGroupConfig, createOnly: boolean) => {
     const previous = calcGroups.get(config.group_name);
     ensureUnique(createOnly, Boolean(previous), config.group_name);
+    const normalizedConfig: CalcGroupConfig = {
+      ...config,
+      trigger_mode: config.trigger_mode ?? 0,
+      period_ms: config.period_ms ?? 0,
+    };
     const value: CalcGroupInfo = {
-      config: clone(config),
+      config: clone(normalizedConfig),
       conn_id: previous?.conn_id ?? nextId(),
       state: previous?.state ?? 1,
       last_error: '',
-      items: makeCalcItems(config),
+      items: makeCalcItems(normalizedConfig),
     };
     calcGroups.set(config.group_name, value);
     return clone(value);
@@ -1533,10 +1702,16 @@ export const browserApi: typeof tauriApi = {
   },
 
   agcUpsertGroup: async (config: AgcGroupConfig, createOnly: boolean) => {
-    const previous = agcGroups.get(config.group_name);
-    ensureUnique(createOnly, Boolean(previous), config.group_name);
+    const normalizedConfig = normalizeAgcGroupConfigDecimalFields({
+      ...config,
+      control_mode: config.control_mode ?? 1,
+      calculation_execution_period_seconds: config.calculation_execution_period_seconds ?? 1,
+      command_control_period_seconds: config.command_control_period_seconds ?? 4,
+    });
+    const previous = agcGroups.get(normalizedConfig.group_name);
+    ensureUnique(createOnly, Boolean(previous), normalizedConfig.group_name);
     const value: AgcGroupInfo = {
-      config: clone(config),
+      config: clone(normalizedConfig),
       conn_id: previous?.conn_id ?? nextId(),
       state: previous?.state ?? 0,
       last_error: '',
@@ -1544,19 +1719,31 @@ export const browserApi: typeof tauriApi = {
       function_enabled: previous?.function_enabled ?? true,
       remote_enabled: previous?.remote_enabled ?? true,
     };
-    agcGroups.set(config.group_name, value);
+    agcGroups.set(normalizedConfig.group_name, value);
     return clone(value);
   },
   agcGetGroup: async (groupName: string) => {
     const value = agcGroups.get(groupName);
     if (!value) throw new Error(`浏览器开发模式 mock 未找到: ${groupName}`);
-    return clone(value);
+    return clone({
+      ...value,
+      config: value.config ? normalizeAgcGroupConfigDecimalFields(value.config) : null,
+    });
   },
-  agcListGroups: async () => clone([...agcGroups.values()]),
+  agcListGroups: async () => clone([...agcGroups.values()].map((group) => ({
+    ...group,
+    config: group.config ? normalizeAgcGroupConfigDecimalFields(group.config) : null,
+  }))),
   agcDeleteGroup: async (groupName: string) => deleteByName(agcGroups, groupName),
   agcStartGroup: async (groupName: string) => setLinkState(agcGroups, groupName, 2),
   agcStopGroup: async (groupName: string) => setLinkState(agcGroups, groupName, 1),
   agcStartTuning: async (groupName: string, config: AgcTuningConfig): Promise<AgcTuningStatus> => {
+    const normalizedConfig = normalizeAgcTuningConfigDecimalFields(config);
+    const target = resolveAgcDecimalText(
+      normalizedConfig,
+      'target_lower_kw',
+      'target_lower_kw_decimal',
+    );
     const status: AgcTuningStatus = {
       group_name: groupName,
       state: 2,
@@ -1565,51 +1752,63 @@ export const browserApi: typeof tauriApi = {
       completed_down_tests: 0,
       started_at_ms: Date.now(),
       elapsed_ms: 0,
-      current_target_kw: config.target_lower_kw,
+      current_target_kw: Number(target),
+      current_target_kw_decimal: target,
       current_total_meas_kw: 0,
+      current_total_meas_kw_decimal: '0',
       target_entry_elapsed_seconds: 0,
       stable_elapsed_seconds: 0,
       last_error: '',
       candidate_profile: null,
     };
     agcTuningStatuses.set(groupName, status);
-    return clone(status);
+    return clone(normalizeAgcTuningStatusDecimalFields(status));
   },
   agcStopTuning: async (groupName: string): Promise<AgcTuningStatus> => {
     const status = agcTuningStatuses.get(groupName) ?? {
       group_name: groupName, state: 1, direction: 0, completed_up_tests: 0, completed_down_tests: 0,
       started_at_ms: 0, elapsed_ms: 0, current_target_kw: 0, current_total_meas_kw: 0,
+      current_target_kw_decimal: '0', current_total_meas_kw_decimal: '0',
       target_entry_elapsed_seconds: 0, stable_elapsed_seconds: 0, last_error: '', candidate_profile: null,
     };
     status.state = 4;
     status.last_error = '浏览器开发模式未执行真实调试';
     agcTuningStatuses.set(groupName, status);
-    return clone(status);
+    return clone(normalizeAgcTuningStatusDecimalFields(status));
   },
   agcGetTuningStatus: async (groupName: string): Promise<AgcTuningStatus> => {
     const status = agcTuningStatuses.get(groupName) ?? {
       group_name: groupName, state: 1, direction: 0, completed_up_tests: 0, completed_down_tests: 0,
       started_at_ms: 0, elapsed_ms: 0, current_target_kw: 0, current_total_meas_kw: 0,
+      current_target_kw_decimal: '0', current_total_meas_kw_decimal: '0',
       target_entry_elapsed_seconds: 0, stable_elapsed_seconds: 0, last_error: '', candidate_profile: null,
     };
     if (status.state === 2 && status.started_at_ms > 0) {
       status.elapsed_ms = Math.max(0, Date.now() - status.started_at_ms);
     }
-    return clone(status);
+    return clone(normalizeAgcTuningStatusDecimalFields(status));
   },
-  agcGetControlProfile: async (groupName: string): Promise<AgcControlProfile> => ({
+  agcGetControlProfile: async (groupName: string): Promise<AgcControlProfile> => normalizeAgcControlProfileDecimalFields({
     group_name: groupName,
     members: [],
     version: 0,
     confirmed_at_ms: 0,
   }),
-  agcConfirmControlProfile: async (profile: AgcControlProfile): Promise<AgcControlProfile> => clone(profile),
+  agcConfirmControlProfile: async (profile: AgcControlProfile): Promise<AgcControlProfile> => (
+    clone(normalizeAgcControlProfileDecimalFields(profile))
+  ),
 
   avcUpsertGroup: async (config: AvcGroupConfig, createOnly: boolean) => {
-    const previous = avcGroups.get(config.group_name);
-    ensureUnique(createOnly, Boolean(previous), config.group_name);
+    const normalizedConfig: AvcGroupConfig = {
+      ...config,
+      control_mode: config.control_mode ?? 1,
+      calculation_execution_period_seconds: config.calculation_execution_period_seconds ?? 1,
+      command_control_period_seconds: config.command_control_period_seconds ?? 4,
+    };
+    const previous = avcGroups.get(normalizedConfig.group_name);
+    ensureUnique(createOnly, Boolean(previous), normalizedConfig.group_name);
     const value: AvcGroupInfo = {
-      config: clone(config),
+      config: clone(normalizedConfig),
       conn_id: previous?.conn_id ?? nextId(),
       state: previous?.state ?? 0,
       last_error: '',
@@ -1617,7 +1816,7 @@ export const browserApi: typeof tauriApi = {
       function_enabled: previous?.function_enabled ?? true,
       remote_enabled: previous?.remote_enabled ?? true,
     };
-    avcGroups.set(config.group_name, value);
+    avcGroups.set(normalizedConfig.group_name, value);
     return clone(value);
   },
   avcRenameGroup: async (oldGroupName: string, newGroupName: string) => {

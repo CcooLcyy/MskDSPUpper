@@ -9,6 +9,12 @@ import {
   DEFAULT_REMOTE_CONTROL_FIELDS,
   normalizeRemoteControlFields,
 } from './remote-control.ts';
+import {
+  DEFAULT_IEC104_ENGINEERING_DECIMALS,
+  createIec104EngineeringFields,
+  getIec104DecimalTextError,
+  toDecimalInputText,
+} from './decimal-input.ts';
 
 export const BATCH_POINT_TYPE_FLOAT = 1;
 export const BATCH_POINT_TYPE_SINGLE = 2;
@@ -31,9 +37,9 @@ export type GenerateBatchPointsOptions = {
   step: number;
   ioaCategory?: IoaCategoryKey;
   pointType: number;
-  scale: number;
-  offset: number;
-  deadband: number;
+  scale: string;
+  offset: string;
+  deadband: string;
   remoteControlType?: number;
   commandExecutionMode?: number;
   occupiedTags?: ReadonlySet<string>;
@@ -44,8 +50,6 @@ export type GenerateBatchPointsResult = {
   drafts: BatchPointDraft[];
   issues: BatchPointIssue[];
 };
-
-const isFiniteNumber = (value: number): boolean => Number.isFinite(value);
 
 const getBatchPointCategoryLabel = (category: IoaCategoryKey): string =>
   category === 'custom' ? '自定义' : getIoaCategoryLabel(category);
@@ -76,6 +80,9 @@ export const generateBatchPoints = ({
   const hasValidStep = Number.isInteger(step) && step >= 1;
   const hasValidType = pointType === BATCH_POINT_TYPE_FLOAT || pointType === BATCH_POINT_TYPE_SINGLE;
   const ioaCategoryRange = getIoaCategoryRange(ioaCategory);
+  const scaleDecimal = toDecimalInputText(scale);
+  const offsetDecimal = toDecimalInputText(offset);
+  const deadbandDecimal = toDecimalInputText(deadband);
 
   if (names.length === 0) {
     issues.push({ line: 0, message: '请至少输入一个点名' });
@@ -96,22 +103,24 @@ export const generateBatchPoints = ({
     issues.push({ line: 0, message: '请选择有效的点位类型' });
   }
   if (pointType === BATCH_POINT_TYPE_FLOAT) {
-    if (!isFiniteNumber(scale)) {
+    if (getIec104DecimalTextError(scaleDecimal, 'Scale')) {
       issues.push({ line: 0, message: 'Scale 必须是有效数字' });
     }
-    if (!isFiniteNumber(offset)) {
+    if (getIec104DecimalTextError(offsetDecimal, 'Offset')) {
       issues.push({ line: 0, message: 'Offset 必须是有效数字' });
     }
-    if (!isFiniteNumber(deadband) || deadband < 0) {
-      issues.push({ line: 0, message: 'Deadband 必须大于等于 0' });
+    if (getIec104DecimalTextError(deadbandDecimal, 'Deadband')) {
+      issues.push({ line: 0, message: 'Deadband 必须是有效数字' });
     }
   }
 
   const safeStart = Number.isFinite(startIoa) ? Math.trunc(startIoa) : 0;
   const safeStep = Number.isFinite(step) ? Math.trunc(step) : 1;
-  const normalizedScale = pointType === BATCH_POINT_TYPE_SINGLE ? 1 : scale;
-  const normalizedOffset = pointType === BATCH_POINT_TYPE_SINGLE ? 0 : offset;
-  const normalizedDeadband = pointType === BATCH_POINT_TYPE_SINGLE ? 0 : deadband;
+  const normalizedEngineeringFields = createIec104EngineeringFields(
+    pointType === BATCH_POINT_TYPE_SINGLE
+      ? DEFAULT_IEC104_ENGINEERING_DECIMALS
+      : { scale: scaleDecimal, offset: offsetDecimal, deadband: deadbandDecimal },
+  );
   const normalizedBusinessType = getPointBusinessTypeByCategory(ioaCategory);
   const batchTagCounts = new Map<string, number>();
   const batchIoaCounts = new Map<number, number>();
@@ -163,9 +172,7 @@ export const generateBatchPoints = ({
       business_type: normalizedBusinessType,
       remote_control_type: remoteControlType,
       command_execution_mode: commandExecutionMode,
-      scale: normalizedScale,
-      offset: normalizedOffset,
-      deadband: normalizedDeadband,
+      ...normalizedEngineeringFields,
     });
   });
 

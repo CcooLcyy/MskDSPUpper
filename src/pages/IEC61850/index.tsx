@@ -11,6 +11,15 @@ import type {
   Iec61850SclAccessPointSummary, Iec61850SclIedSummary,
   Iec61850NetworkChannelConfig, Iec61850PointMapping, Iec61850RuntimeStatistics,
 } from '../../adapters';
+import {
+  createIec61850EngineeringField,
+  createIec61850EngineeringFields,
+  DEFAULT_IEC61850_ENGINEERING_DECIMALS,
+  getIec61850PointEngineeringError,
+  normalizeIec61850PointEngineeringFields,
+  type Iec61850EngineeringField,
+} from '../../utils/iec61850-decimal';
+import { getDecimalTextError } from '../../utils/decimal-input';
 import './index.css';
 
 const { Text, Title } = Typography;
@@ -168,7 +177,7 @@ const IEC61850Page: React.FC = () => {
     try {
       const [ied, table, runtime] = await Promise.all([api.iec61850GetIed(connName), api.iec61850GetPointMappings(connName), api.iec61850GetRuntimeStatistics(connName)]);
       if (ied.config) setConfig(ied.config);
-      setMappings(table.points);
+      setMappings(table.points.map(normalizeIec61850PointEngineeringFields));
       setStats(runtime);
     } catch (error) { messageApi.error(`加载 IED 详情失败: ${String(error)}`); }
   }, [messageApi]);
@@ -353,7 +362,18 @@ const IEC61850Page: React.FC = () => {
 
   const saveMappings = async () => {
     if (!selectedConn) return;
-    try { await api.iec61850UpsertPointMappings(selectedConn, mappings, true); messageApi.success('点映射已保存'); }
+    const invalidIndex = mappings.findIndex((point) => getIec61850PointEngineeringError(point));
+    if (invalidIndex >= 0) {
+      const point = mappings[invalidIndex];
+      messageApi.error(`点映射 ${point.tag || invalidIndex + 1}：${getIec61850PointEngineeringError(point)}`);
+      return;
+    }
+    const normalized = mappings.map(normalizeIec61850PointEngineeringFields);
+    try {
+      await api.iec61850UpsertPointMappings(selectedConn, normalized, true);
+      setMappings(normalized);
+      messageApi.success('点映射已保存');
+    }
     catch (error) { messageApi.error(`保存点映射失败: ${String(error)}`); }
   };
 
@@ -366,11 +386,34 @@ const IEC61850Page: React.FC = () => {
     setMappings((items) => items.map((item) => item === record ? { ...item, ...patch } : item));
   };
 
+  const renderEngineeringInput = (
+    field: Iec61850EngineeringField,
+    label: string,
+  ) => (_value: unknown, record: Iec61850PointMapping) => {
+    const value = field === 'scale'
+      ? record.scale_decimal
+      : field === 'offset'
+        ? record.offset_decimal
+        : record.deadband_decimal;
+    return <InputNumber<string>
+      aria-label={label}
+      stringMode
+      step={0.01}
+      value={value}
+      status={getDecimalTextError(value, label) ? 'error' : undefined}
+      style={{ width: '100%' }}
+      onChange={(next) => updateMapping(record, createIec61850EngineeringField(field, next ?? ''))}
+    />;
+  };
+
   const mappingColumns: ColumnsType<Iec61850PointMapping> = [
     { title: '上位机标签', dataIndex: 'tag', render: (value, record) => <Input value={value} onChange={(event) => updateMapping(record, { tag: event.target.value })} /> },
     { title: '数据引用', dataIndex: 'data_ref', render: (value, record) => <Input value={value} onChange={(event) => updateMapping(record, { data_ref: event.target.value })} /> },
     { title: '功能约束', dataIndex: 'fc', width: 140, render: (value, record) => <Select value={value} options={fcOptions} style={{ width: '100%' }} onChange={(next) => updateMapping(record, { fc: next })} /> },
     { title: '值类型', dataIndex: 'value_type', width: 120, render: (value, record) => <Select value={value} options={valueTypeOptions} style={{ width: '100%' }} onChange={(next) => updateMapping(record, { value_type: next })} /> },
+    { title: '倍率', dataIndex: 'scale_decimal', width: 170, render: renderEngineeringInput('scale', '倍率') },
+    { title: '偏移', dataIndex: 'offset_decimal', width: 170, render: renderEngineeringInput('offset', '偏移') },
+    { title: '死区', dataIndex: 'deadband_decimal', width: 170, render: renderEngineeringInput('deadband', '死区') },
     { title: '操作', width: 70, render: (_, record) => <Button type="text" danger icon={<DeleteOutlined />} onClick={() => setMappings((items) => items.filter((item) => item !== record))} /> },
   ];
 
@@ -396,7 +439,7 @@ const IEC61850Page: React.FC = () => {
           }, {
             key: 'models', label: 'SCL 模型', children: <Card size="small" title="模型导入" extra={<Button icon={<ImportOutlined />} onClick={() => setModelModalOpen(true)}>导入 SCL</Button>}><Table rowKey="model_name" size="small" pagination={false} dataSource={models} columns={[{ title: '模型', dataIndex: 'model_name' }, { title: '来源', dataIndex: 'source_name' }, { title: '类型', dataIndex: 'document_kind', render: (value) => documentKindMap[value] ?? '未知' }, { title: 'IED', dataIndex: 'ied_count' }, { title: '逻辑节点', dataIndex: 'logical_node_count' }, { title: '数据属性', dataIndex: 'data_attribute_count' }, { title: '校验摘要', dataIndex: 'source_checksum', ellipsis: true }, { title: '操作', width: 70, render: (_, model) => <Button type="text" danger icon={<DeleteOutlined />} onClick={() => void deleteModel(model.model_name)} /> }]} /></Card>,
           }, {
-            key: 'mappings', label: `点映射 (${mappings.length})`, children: <Card size="small" title="DataCenter 标签映射" extra={<Space><Button icon={<PlusOutlined />} onClick={() => setMappings((items) => [...items, { tag: `点${items.length + 1}`, data_ref: '', fc: 2, source: 1, value_type: 3, scale: 1, offset: 0, deadband: 0 }])}>新增点</Button><Button type="primary" icon={<SaveOutlined />} onClick={() => void saveMappings()}>保存映射</Button></Space>}><Table rowKey={(record) => `${record.tag}-${record.data_ref}`} size="small" pagination={false} dataSource={mappings} columns={mappingColumns} /></Card>,
+            key: 'mappings', label: `点映射 (${mappings.length})`, children: <Card size="small" title="DataCenter 标签映射" extra={<Space><Button icon={<PlusOutlined />} onClick={() => setMappings((items) => [...items, { tag: `点${items.length + 1}`, data_ref: '', fc: 2, source: 1, value_type: 3, ...createIec61850EngineeringFields(DEFAULT_IEC61850_ENGINEERING_DECIMALS) }])}>新增点</Button><Button type="primary" icon={<SaveOutlined />} onClick={() => void saveMappings()}>保存映射</Button></Space>}><Table rowKey={(record) => `${record.tag}-${record.data_ref}`} size="small" pagination={false} scroll={{ x: 1250 }} dataSource={mappings} columns={mappingColumns} /></Card>,
           }, {
             key: 'runtime', label: '运行状态', children: <><Card size="small" title="通信状态"><Descriptions column={3} size="small"><Descriptions.Item label="IED 状态"><Tag color={stateMap[selectedIed.state]?.color}>{stateMap[selectedIed.state]?.label}</Tag></Descriptions.Item><Descriptions.Item label="活动通道">{selectedIed.active_channel === 1 ? 'A' : selectedIed.active_channel === 2 ? 'B' : '无'}</Descriptions.Item><Descriptions.Item label="DataCenter">{selectedIed.data_center_available ? <Tag color="success">可用</Tag> : <Tag color="warning">降级</Tag>}</Descriptions.Item>{selectedIed.channels.map((channel) => <Descriptions.Item key={channel.config?.channel} label={`${channel.config?.channel === 1 ? 'A' : 'B'} 通道`}>{channelStateMap[channel.state] ?? '未知'}{channel.last_error ? `：${channel.last_error}` : ''}</Descriptions.Item>)}</Descriptions></Card><Card size="small" title="运行统计" style={{ marginTop: 12 }} extra={<Button icon={<ReloadOutlined />} onClick={() => selectedConn && void loadSelected(selectedConn)}>刷新统计</Button>}>{stats ? <div className="iec61850-stat-grid">{[['MMS 报告', stats.mms_reports_received], ['丢弃事件', stats.mms_events_dropped], ['GOOSE 接收', stats.goose_frames_received], ['GOOSE 超时', stats.goose_timeouts], ['SV 接收', stats.sv_frames_received], ['重连次数', stats.reconnect_count], ['发布批次', stats.data_center_batches_published], ['未映射值', stats.mms_values_unmapped]].map(([label, value]) => <div key={label as string}><Text type="secondary">{label}</Text><strong>{formatNumber(value as number)}</strong></div>)}</div> : <Text type="secondary">暂无统计数据</Text>}</Card></>,
           }]} />

@@ -52,6 +52,15 @@ pub struct MemberConfigDto {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GroupConfigDto {
     pub group_name: String,
+    /// 控制模式：0 未指定/兼容事件模式，1 PI_EVENT，2 DIRECT_CYCLIC。
+    #[serde(default)]
+    pub control_mode: i32,
+    /// 周期直分配模式的计算执行周期，单位秒。
+    #[serde(default)]
+    pub calculation_execution_period_seconds: f64,
+    /// 周期直分配模式的命令控制最小间隔，单位秒。
+    #[serde(default)]
+    pub command_control_period_seconds: f64,
     pub voltage_meas: Option<SignalSpecDto>,
     pub voltage_cmd: Option<SignalSpecDto>,
     pub q_total_cmd: Option<ValueSpecDto>,
@@ -145,6 +154,9 @@ impl From<GroupConfig> for GroupConfigDto {
 
         Self {
             group_name: config.group_name,
+            control_mode: config.control_mode,
+            calculation_execution_period_seconds: config.calculation_execution_period_seconds,
+            command_control_period_seconds: config.command_control_period_seconds,
             voltage_meas: config.voltage_meas.map(Into::into),
             voltage_cmd,
             q_total_cmd,
@@ -248,6 +260,9 @@ impl GroupConfigDto {
 
         GroupConfig {
             group_name: self.group_name.trim().to_string(),
+            control_mode: self.control_mode,
+            calculation_execution_period_seconds: self.calculation_execution_period_seconds,
+            command_control_period_seconds: self.command_control_period_seconds,
             voltage_meas: self.voltage_meas.as_ref().map(SignalSpecDto::to_proto),
             command,
             voltage_control: self
@@ -391,6 +406,38 @@ fn validate_group_tag_uniqueness(config: &GroupConfigDto) -> Result<(), String> 
 fn validate_group_config(config: &GroupConfigDto) -> Result<(), String> {
     validate_non_empty_name(&config.group_name, "组名")?;
 
+    if !matches!(config.control_mode, 0 | 1 | 2) {
+        return Err("AVC 控制模式无效，必须选择 PI 事件触发或周期直分配".into());
+    }
+    if config.calculation_execution_period_seconds != 0.0
+        && (!config.calculation_execution_period_seconds.is_finite()
+            || !(1.0..=15.0).contains(&config.calculation_execution_period_seconds))
+    {
+        return Err("AVC 计算执行周期必须在 1～15 秒范围内".into());
+    }
+    if config.command_control_period_seconds != 0.0
+        && (!config.command_control_period_seconds.is_finite()
+            || !(4.0..=30.0).contains(&config.command_control_period_seconds))
+    {
+        return Err("AVC 命令控制周期必须在 4～30 秒范围内".into());
+    }
+
+    if config.control_mode == 2 {
+        if !config.calculation_execution_period_seconds.is_finite()
+            || !(1.0..=15.0).contains(&config.calculation_execution_period_seconds)
+        {
+            return Err("AVC 周期直分配模式的计算执行周期必须在 1～15 秒范围内".into());
+        }
+        if !config.command_control_period_seconds.is_finite()
+            || !(4.0..=30.0).contains(&config.command_control_period_seconds)
+        {
+            return Err("AVC 周期直分配模式的命令控制周期必须在 4～30 秒范围内".into());
+        }
+        if config.q_total_cmd.is_none() {
+            return Err("AVC 周期直分配模式必须使用总无功命令，目标电压模式仍使用 PI 事件触发".into());
+        }
+    }
+
     match (&config.voltage_cmd, &config.q_total_cmd) {
         (Some(signal), None) => validate_signal_spec(signal, "voltage_cmd")?,
         (None, Some(value)) => validate_value_spec(value, "q_total_cmd")?,
@@ -508,7 +555,15 @@ pub async fn avc_upsert_group(
 ) -> Result<GroupInfoDto, String> {
     validate_group_config(&config)?;
     let group_name = config.group_name.clone();
-    tracing::info!(control = "AVC", group_name = %group_name, create_only, "开始保存控制组配置");
+    tracing::info!(
+        control = "AVC",
+        group_name = %group_name,
+        create_only,
+        control_mode = config.control_mode,
+        calculation_execution_period_seconds = config.calculation_execution_period_seconds,
+        command_control_period_seconds = config.command_control_period_seconds,
+        "开始保存控制组配置"
+    );
     let client = AvcClient::new(&state.conn_manager);
     let group = client
         .upsert_group(config.to_proto(), create_only)

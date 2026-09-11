@@ -114,6 +114,15 @@ import {
   isRemoteControlBusinessType,
   normalizeRemoteControlFields,
 } from './remote-control';
+import {
+  DEFAULT_IEC104_ENGINEERING_DECIMALS,
+  createIec104EngineeringFieldPatch,
+  createIec104EngineeringFields,
+  getIec104DecimalTextError,
+  normalizeIec104PointEngineeringFields,
+  resolveIec104PointDecimalText,
+  toDecimalInputText,
+} from './decimal-input';
 
 const { Text } = Typography;
 
@@ -162,10 +171,15 @@ const POINT_TYPE_LABELS: Record<number, string> = {
 const POINT_TYPE_FLOAT = 1;
 const POINT_TYPE_SINGLE = 2;
 
-const DEFAULT_POINT_FORM_VALUES = {
-  scale: 1,
-  offset: 0,
-  deadband: 0,
+const DEFAULT_POINT_FORM_VALUES = DEFAULT_IEC104_ENGINEERING_DECIMALS;
+const DEFAULT_POINT_ENGINEERING_FIELDS = createIec104EngineeringFields(DEFAULT_POINT_FORM_VALUES);
+
+const validateEngineeringDecimal = (
+  label: string,
+) => async (_rule: unknown, value: unknown): Promise<void> => {
+  const text = toDecimalInputText(value);
+  const error = getIec104DecimalTextError(text, label);
+  if (error) throw new Error(error);
 };
 
 const normalizeIpInput = (value: unknown): unknown =>
@@ -479,6 +493,11 @@ const IoaInput: React.FC<IoaInputProps> = ({
 const formatEndpoint = (ep: { ip: string; port: number } | null): string =>
   ep ? `${ep.ip}:${ep.port}` : '-';
 
+const formatAllowedClientIp = (ep: { ip: string; port: number } | null): string => {
+  const ip = ep?.ip.trim();
+  return !ip || ip === '0.0.0.0' || ip === '::' ? '任意来源' : ip;
+};
+
 const formatApci = (apci: { k: number; w: number; t0: number; t1: number; t2: number; t3: number } | null): string =>
   apci ? `k:${apci.k}, w:${apci.w}, t0:${apci.t0}, t1:${apci.t1}, t2:${apci.t2}, t3:${apci.t3}` : '-';
 
@@ -594,10 +613,11 @@ const IEC104: React.FC = () => {
   ) ?? null;
   const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY));
   const showLocalEndpointFields = linkRole !== ROLE_CLIENT;
-  const showRemoteEndpointFields = linkRole !== ROLE_SERVER;
-  const singleEndpointMode = linkRole === ROLE_SERVER || linkRole === ROLE_CLIENT;
-  const endpointIpSpan = singleEndpointMode ? 18 : 9;
-  const endpointPortSpan = singleEndpointMode ? 6 : 3;
+  const showRemotePortField = linkRole !== ROLE_SERVER;
+  const localEndpointIpSpan = 9;
+  const localEndpointPortSpan = linkRole === ROLE_SERVER ? 6 : 3;
+  const remoteEndpointIpSpan = linkRole === ROLE_CLIENT ? 18 : 9;
+  const remoteEndpointPortSpan = linkRole === ROLE_CLIENT ? 6 : 3;
   const realtimeTags = useMemo(
     () => points.map((point) => point.tag),
     [points],
@@ -750,9 +770,12 @@ const IEC104: React.FC = () => {
         draftIoas.set(draft.ioa, [...(draftIoas.get(draft.ioa) ?? []), draft.key]);
       }
       if (!POINT_TYPE_LABELS[draft.point_type]) addIssue(draft.key, 'point_type', '请选择有效的点位类型');
-      if (!Number.isFinite(draft.scale)) addIssue(draft.key, 'scale', 'Scale 必须是有效数字');
-      if (!Number.isFinite(draft.offset)) addIssue(draft.key, 'offset', 'Offset 必须是有效数字');
-      if (!Number.isFinite(draft.deadband) || draft.deadband < 0) addIssue(draft.key, 'deadband', 'Deadband 必须大于等于 0');
+      const scaleError = getIec104DecimalTextError(draft.scale_decimal, 'Scale');
+      const offsetError = getIec104DecimalTextError(draft.offset_decimal, 'Offset');
+      const deadbandError = getIec104DecimalTextError(draft.deadband_decimal, 'Deadband');
+      if (scaleError) addIssue(draft.key, 'scale', scaleError);
+      if (offsetError) addIssue(draft.key, 'offset', offsetError);
+      if (deadbandError) addIssue(draft.key, 'deadband', deadbandError);
     });
 
     draftTags.forEach((keys) => {
@@ -839,7 +862,9 @@ const IEC104: React.FC = () => {
           if (requestId !== pointLoadRequestRef.current) {
             return;
           }
-          setPoints(pt.points.map(normalizeRemoteControlFields));
+          setPoints(pt.points.map((point) => normalizeIec104PointEngineeringFields(
+            normalizeRemoteControlFields(point),
+          )));
         } catch (error) {
           if (requestId !== pointLoadRequestRef.current) {
             return;
@@ -1059,6 +1084,8 @@ const IEC104: React.FC = () => {
       oa: 0,
       local_ip: DEFAULT_SERVER_LOCAL_IP,
       local_port: DEFAULT_IEC104_PORT,
+      remote_ip: '',
+      remote_port: undefined,
       k: 12,
       w: 8,
       t0: 30,
@@ -1088,7 +1115,7 @@ const IEC104: React.FC = () => {
       local_ip: c.local?.ip ?? '',
       local_port: c.local?.port,
       remote_ip: c.remote?.ip ?? '',
-      remote_port: c.remote?.port ?? 2404,
+      remote_port: c.role === ROLE_SERVER ? undefined : c.remote?.port ?? DEFAULT_IEC104_PORT,
       k: c.apci?.k ?? 12,
       w: c.apci?.w ?? 8,
       t0: c.apci?.t0 ?? 30,
@@ -1113,14 +1140,12 @@ const IEC104: React.FC = () => {
       const role = typeof changedValues.role === 'number' ? changedValues.role : undefined;
       const localIp = typeof allValues.local_ip === 'string' ? allValues.local_ip : undefined;
       const localPort = typeof allValues.local_port === 'number' ? allValues.local_port : undefined;
-      const remoteIp = typeof allValues.remote_ip === 'string' ? allValues.remote_ip : undefined;
       const remotePort = typeof allValues.remote_port === 'number' ? allValues.remote_port : undefined;
 
       if (role === ROLE_SERVER) {
         const nextValues: {
           local_ip?: string;
           local_port?: number;
-          remote_ip?: string;
           remote_port?: number;
         } = {};
 
@@ -1129,9 +1154,6 @@ const IEC104: React.FC = () => {
         }
         if (localPort == null) {
           nextValues.local_port = DEFAULT_IEC104_PORT;
-        }
-        if (remoteIp) {
-          nextValues.remote_ip = '';
         }
         if (remotePort != null) {
           nextValues.remote_port = undefined;
@@ -1153,7 +1175,7 @@ const IEC104: React.FC = () => {
           local_port: undefined,
         };
 
-        if (remotePort == null) {
+        if (remotePort == null || remotePort === 0) {
           nextValues.remote_port = DEFAULT_IEC104_PORT;
         }
 
@@ -1188,7 +1210,7 @@ const IEC104: React.FC = () => {
             ? { ip: localIp, port: values.local_port ?? DEFAULT_IEC104_PORT }
             : null,
         remote: isServerRole
-          ? null
+          ? { ip: remoteIp, port: 0 }
           : remoteIp
             ? { ip: remoteIp, port: values.remote_port ?? DEFAULT_IEC104_PORT }
             : null,
@@ -1324,7 +1346,7 @@ const IEC104: React.FC = () => {
           if (pointTable.points.length > 0) {
             await api.iec104UpsertPointTable(
               nextConnName,
-              pointTable.points.map((point) => ({ ...point })),
+              pointTable.points.map(normalizeIec104PointEngineeringFields),
               true,
             );
           }
@@ -1457,6 +1479,9 @@ const IEC104: React.FC = () => {
       scale: draft.scale,
       offset: draft.offset,
       deadband: draft.deadband,
+      scale_decimal: draft.scale_decimal,
+      offset_decimal: draft.offset_decimal,
+      deadband_decimal: draft.deadband_decimal,
     }));
     const newPoints = [...points, ...normalizedPoints];
 
@@ -1519,9 +1544,9 @@ const IEC104: React.FC = () => {
         business_type: p.business_type,
         remote_control_type: p.remote_control_type || DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
         command_execution_mode: p.command_execution_mode || DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
-        scale: p.scale,
-        offset: p.offset,
-        deadband: p.deadband,
+        scale: resolveIec104PointDecimalText(p, 'scale'),
+        offset: resolveIec104PointDecimalText(p, 'offset'),
+        deadband: resolveIec104PointDecimalText(p, 'deadband'),
       });
       setPointModalOpen(true);
     },
@@ -1644,18 +1669,14 @@ const IEC104: React.FC = () => {
         nextPoint = {
           ...point,
           point_type: POINT_TYPE_SINGLE,
-          scale: DEFAULT_POINT_FORM_VALUES.scale,
-          offset: DEFAULT_POINT_FORM_VALUES.offset,
-          deadband: DEFAULT_POINT_FORM_VALUES.deadband,
+          ...DEFAULT_POINT_ENGINEERING_FIELDS,
         };
       }
       if (pointTypeBatchValue === POINT_TYPE_FLOAT && point.point_type !== POINT_TYPE_FLOAT) {
         nextPoint = {
           ...nextPoint,
           point_type: POINT_TYPE_FLOAT,
-          scale: DEFAULT_POINT_FORM_VALUES.scale,
-          offset: DEFAULT_POINT_FORM_VALUES.offset,
-          deadband: DEFAULT_POINT_FORM_VALUES.deadband,
+          ...DEFAULT_POINT_ENGINEERING_FIELDS,
         };
       }
       if (isRemoteControlBusinessType(point.business_type)) {
@@ -1856,6 +1877,15 @@ const IEC104: React.FC = () => {
     setPointSubmitting(true);
     try {
       const values = await pointForm.validateFields();
+      const engineeringFields = createIec104EngineeringFields(
+        values.point_type === POINT_TYPE_SINGLE
+          ? DEFAULT_POINT_FORM_VALUES
+          : {
+            scale: toDecimalInputText(values.scale),
+            offset: toDecimalInputText(values.offset),
+            deadband: toDecimalInputText(values.deadband),
+          },
+      );
       const newPoint: Iec104Point = normalizeRemoteControlFields({
         tag: values.tag.trim(),
         ioa: values.ioa,
@@ -1863,9 +1893,7 @@ const IEC104: React.FC = () => {
         business_type: values.business_type ?? 0,
         remote_control_type: values.remote_control_type,
         command_execution_mode: values.command_execution_mode,
-        scale: values.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.scale : values.scale ?? 1,
-        offset: values.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.offset : values.offset ?? 0,
-        deadband: values.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.deadband : values.deadband ?? 0,
+        ...engineeringFields,
       });
       const duplicateTag = points.some((point, index) => index !== editingPointIndex && point.tag.trim() === newPoint.tag);
       const duplicateIoa = points.some((point, index) => index !== editingPointIndex && point.ioa === newPoint.ioa);
@@ -1927,9 +1955,9 @@ const IEC104: React.FC = () => {
       business_type: source.business_type,
       remote_control_type: source.remote_control_type || DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
       command_execution_mode: source.command_execution_mode || DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
-      scale: source.scale,
-      offset: source.offset,
-      deadband: source.deadband,
+      scale: resolveIec104PointDecimalText(source, 'scale'),
+      offset: resolveIec104PointDecimalText(source, 'offset'),
+      deadband: resolveIec104PointDecimalText(source, 'deadband'),
     });
     setPointModalOpen(true);
   }, [messageApi, pointForm, pointSubmitting, points, selectedConn]);
@@ -2135,9 +2163,7 @@ const IEC104: React.FC = () => {
             point_type: getDefaultImportedPointType(points),
             business_type: getPointBusinessTypeByIoa(nextIoa),
             ...DEFAULT_REMOTE_CONTROL_FIELDS,
-            scale: DEFAULT_POINT_FORM_VALUES.scale,
-            offset: DEFAULT_POINT_FORM_VALUES.offset,
-            deadband: DEFAULT_POINT_FORM_VALUES.deadband,
+            ...DEFAULT_POINT_ENGINEERING_FIELDS,
           });
         }
 
@@ -2161,7 +2187,7 @@ const IEC104: React.FC = () => {
     setImportPointDrafts((prev) => prev.map((item) => ({
       ...item,
       point_type: nextType,
-      ...(nextType === 2 ? DEFAULT_POINT_FORM_VALUES : {}),
+      ...(nextType === POINT_TYPE_SINGLE ? DEFAULT_POINT_ENGINEERING_FIELDS : {}),
     })));
   }, []);
 
@@ -2310,6 +2336,15 @@ const IEC104: React.FC = () => {
         return;
       }
 
+      const engineeringFields = createIec104EngineeringFields(
+        draft.point_type === POINT_TYPE_SINGLE
+          ? DEFAULT_POINT_FORM_VALUES
+          : {
+            scale: resolveIec104PointDecimalText(draft, 'scale'),
+            offset: resolveIec104PointDecimalText(draft, 'offset'),
+            deadband: resolveIec104PointDecimalText(draft, 'deadband'),
+          },
+      );
       normalizedPoints.push({
         tag,
         ioa: draft.ioa,
@@ -2317,9 +2352,7 @@ const IEC104: React.FC = () => {
         business_type: draft.business_type,
         remote_control_type: draft.remote_control_type || DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
         command_execution_mode: draft.command_execution_mode || DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
-        scale: draft.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.scale : draft.scale ?? DEFAULT_POINT_FORM_VALUES.scale,
-        offset: draft.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.offset : draft.offset ?? DEFAULT_POINT_FORM_VALUES.offset,
-        deadband: draft.point_type === 2 ? DEFAULT_POINT_FORM_VALUES.deadband : draft.deadband ?? DEFAULT_POINT_FORM_VALUES.deadband,
+        ...engineeringFields,
       });
       draftTags.add(tag);
       draftIoas.add(draft.ioa);
@@ -2649,9 +2682,27 @@ const IEC104: React.FC = () => {
       typeColumn,
       businessTypeColumn,
       remoteControlColumn,
-      { title: 'Scale', dataIndex: 'scale', key: 'scale', width: 100 },
-      { title: 'Offset', dataIndex: 'offset', key: 'offset', width: 100 },
-      { title: 'Deadband', dataIndex: 'deadband', key: 'deadband', width: 110 },
+      {
+        title: 'Scale',
+        dataIndex: 'scale_decimal',
+        key: 'scale',
+        width: 100,
+        render: (_value: string, record: Iec104Point) => resolveIec104PointDecimalText(record, 'scale'),
+      },
+      {
+        title: 'Offset',
+        dataIndex: 'offset_decimal',
+        key: 'offset',
+        width: 100,
+        render: (_value: string, record: Iec104Point) => resolveIec104PointDecimalText(record, 'offset'),
+      },
+      {
+        title: 'Deadband',
+        dataIndex: 'deadband_decimal',
+        key: 'deadband',
+        width: 110,
+        render: (_value: string, record: Iec104Point) => resolveIec104PointDecimalText(record, 'deadband'),
+      },
       actionColumn,
     ];
   }, [
@@ -2742,7 +2793,10 @@ const IEC104: React.FC = () => {
             value: Number(pointType),
             label,
           }))}
-          onChange={(nextValue) => updateImportPointDraft(record.key, { point_type: nextValue })}
+          onChange={(nextValue) => updateImportPointDraft(record.key, {
+            point_type: nextValue,
+            ...(nextValue === POINT_TYPE_SINGLE ? DEFAULT_POINT_ENGINEERING_FIELDS : {}),
+          })}
         />
       ),
     },
@@ -2796,11 +2850,12 @@ const IEC104: React.FC = () => {
     },
     {
       title: 'Scale',
-      dataIndex: 'scale',
+      dataIndex: 'scale_decimal',
       key: 'scale',
       width: 110,
-      render: (value: number, record) => (
-        <InputNumber
+      render: (value: string, record) => (
+        <InputNumber<string>
+          stringMode
           size="small"
           step={0.01}
           style={{ width: '100%' }}
@@ -2809,7 +2864,7 @@ const IEC104: React.FC = () => {
           disabled={importSubmitting || record.point_type === 2}
           onChange={(nextValue) =>
             updateImportPointDraft(record.key, {
-              scale: typeof nextValue === 'number' ? nextValue : DEFAULT_POINT_FORM_VALUES.scale,
+              ...createIec104EngineeringFieldPatch('scale', nextValue ?? ''),
             })
           }
         />
@@ -2817,11 +2872,12 @@ const IEC104: React.FC = () => {
     },
     {
       title: 'Offset',
-      dataIndex: 'offset',
+      dataIndex: 'offset_decimal',
       key: 'offset',
       width: 110,
-      render: (value: number, record) => (
-        <InputNumber
+      render: (value: string, record) => (
+        <InputNumber<string>
+          stringMode
           size="small"
           step={0.01}
           style={{ width: '100%' }}
@@ -2830,7 +2886,7 @@ const IEC104: React.FC = () => {
           disabled={importSubmitting || record.point_type === 2}
           onChange={(nextValue) =>
             updateImportPointDraft(record.key, {
-              offset: typeof nextValue === 'number' ? nextValue : DEFAULT_POINT_FORM_VALUES.offset,
+              ...createIec104EngineeringFieldPatch('offset', nextValue ?? ''),
             })
           }
         />
@@ -2838,21 +2894,21 @@ const IEC104: React.FC = () => {
     },
     {
       title: 'Deadband',
-      dataIndex: 'deadband',
+      dataIndex: 'deadband_decimal',
       key: 'deadband',
       width: 120,
-      render: (value: number, record) => (
-        <InputNumber
+      render: (value: string, record) => (
+        <InputNumber<string>
+          stringMode
           size="small"
           step={0.01}
-          min={0}
           style={{ width: '100%' }}
           value={value}
           status={importValidation.cellIssues.has(`${record.key}:deadband`) ? 'error' : undefined}
           disabled={importSubmitting || record.point_type === 2}
           onChange={(nextValue) =>
             updateImportPointDraft(record.key, {
-              deadband: typeof nextValue === 'number' ? nextValue : DEFAULT_POINT_FORM_VALUES.deadband,
+              ...createIec104EngineeringFieldPatch('deadband', nextValue ?? ''),
             })
           }
         />
@@ -2998,6 +3054,7 @@ const IEC104: React.FC = () => {
                       <Descriptions.Item label="公共地址 (CA)">{selectedLink.config.ca}</Descriptions.Item>
                       <Descriptions.Item label="源地址 (OA)">{selectedLink.config.oa}</Descriptions.Item>
                       {selectedLink.config.role !== ROLE_CLIENT ? <Descriptions.Item label="本地端点">{formatEndpoint(selectedLink.config.local)}</Descriptions.Item> : null}
+                      {selectedLink.config.role === ROLE_SERVER ? <Descriptions.Item label="允许的主站 IP">{formatAllowedClientIp(selectedLink.config.remote)}</Descriptions.Item> : null}
                       {selectedLink.config.role !== ROLE_SERVER ? <Descriptions.Item label="远程端点">{formatEndpoint(selectedLink.config.remote)}</Descriptions.Item> : null}
                       <Descriptions.Item label="APCI 参数">{formatApci(selectedLink.config.apci)}</Descriptions.Item>
                       <Descriptions.Item label="对时标签">{selectedLink.config.time_sync_tag || '-'}</Descriptions.Item>
@@ -3343,7 +3400,7 @@ const IEC104: React.FC = () => {
 
           <Text type="secondary" style={{ display: 'block', margin: '8px 0 4px' }}>端点配置</Text>
           <Row gutter={16}>
-            <Col span={endpointIpSpan} style={{ display: showLocalEndpointFields ? undefined : 'none' }}>
+            <Col span={localEndpointIpSpan} style={{ display: showLocalEndpointFields ? undefined : 'none' }}>
               <Form.Item
                 name="local_ip"
                 label="本地 IP"
@@ -3353,23 +3410,32 @@ const IEC104: React.FC = () => {
                 <Input placeholder="0.0.0.0" />
               </Form.Item>
             </Col>
-            <Col span={endpointPortSpan} style={{ display: showLocalEndpointFields ? undefined : 'none' }}>
+            <Col span={localEndpointPortSpan} style={{ display: showLocalEndpointFields ? undefined : 'none' }}>
               <Form.Item name="local_port" label="端口">
                 <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="2404" />
               </Form.Item>
             </Col>
-            <Col span={endpointIpSpan} style={{ display: showRemoteEndpointFields ? undefined : 'none' }}>
+            <Col span={remoteEndpointIpSpan}>
               <Form.Item
                 name="remote_ip"
-                label="远程 IP"
+                label={linkRole === ROLE_SERVER ? '允许的主站 IP' : '远程 IP'}
                 normalize={normalizeIpInput}
-                rules={[{ validator: validateOptionalIpv4 }]}
+                rules={[
+                  ...(linkRole === ROLE_CLIENT
+                    ? [{ required: true, message: '请输入远程 IP' }]
+                    : []),
+                  { validator: validateOptionalIpv4 },
+                ]}
               >
                 <Input placeholder="192.168.1.100" />
               </Form.Item>
             </Col>
-            <Col span={endpointPortSpan} style={{ display: showRemoteEndpointFields ? undefined : 'none' }}>
-              <Form.Item name="remote_port" label="端口">
+            <Col span={remoteEndpointPortSpan} style={{ display: showRemotePortField ? undefined : 'none' }}>
+              <Form.Item
+                name="remote_port"
+                label="端口"
+                rules={linkRole === ROLE_CLIENT ? [{ required: true, message: '请输入远程端口' }] : []}
+              >
                 <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="2404" />
               </Form.Item>
             </Col>
@@ -3593,18 +3659,33 @@ const IEC104: React.FC = () => {
               </>
             ) : null}
             <Col xs={8} sm={4} lg={4}>
-              <Form.Item name="scale" label="Scale" extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}>
-                <InputNumber step={0.01} disabled={isSinglePoint} style={{ width: '100%' }} />
+              <Form.Item
+                name="scale"
+                label="Scale"
+                extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}
+                rules={[{ validator: validateEngineeringDecimal('Scale') }]}
+              >
+                <InputNumber<string> stringMode step={0.01} disabled={isSinglePoint} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={8} sm={4} lg={4}>
-              <Form.Item name="offset" label="Offset" extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}>
-                <InputNumber step={0.01} disabled={isSinglePoint} style={{ width: '100%' }} />
+              <Form.Item
+                name="offset"
+                label="Offset"
+                extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}
+                rules={[{ validator: validateEngineeringDecimal('Offset') }]}
+              >
+                <InputNumber<string> stringMode step={0.01} disabled={isSinglePoint} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={8} sm={4} lg={4}>
-              <Form.Item name="deadband" label="Deadband" extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}>
-                <InputNumber step={0.01} min={0} disabled={isSinglePoint} style={{ width: '100%' }} />
+              <Form.Item
+                name="deadband"
+                label="Deadband"
+                extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}
+                rules={[{ validator: validateEngineeringDecimal('Deadband') }]}
+              >
+                <InputNumber<string> stringMode step={0.01} disabled={isSinglePoint} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
@@ -3819,33 +3900,35 @@ const IEC104: React.FC = () => {
                 ) : null}
                 <Col xs={8}>
                   <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>Scale</Text>
-                  <InputNumber
+                  <InputNumber<string>
+                    stringMode
                     step={0.01}
                     value={batchPointScale}
                     disabled={pointSubmitting || batchPointType === POINT_TYPE_SINGLE}
                     style={{ width: '100%' }}
-                    onChange={(value) => setBatchPointScale(typeof value === 'number' ? value : DEFAULT_POINT_FORM_VALUES.scale)}
+                    onChange={(value) => setBatchPointScale(value ?? '')}
                   />
                 </Col>
                 <Col xs={8}>
                   <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>Offset</Text>
-                  <InputNumber
+                  <InputNumber<string>
+                    stringMode
                     step={0.01}
                     value={batchPointOffset}
                     disabled={pointSubmitting || batchPointType === POINT_TYPE_SINGLE}
                     style={{ width: '100%' }}
-                    onChange={(value) => setBatchPointOffset(typeof value === 'number' ? value : DEFAULT_POINT_FORM_VALUES.offset)}
+                    onChange={(value) => setBatchPointOffset(value ?? '')}
                   />
                 </Col>
                 <Col xs={8}>
                   <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>Deadband</Text>
-                  <InputNumber
+                  <InputNumber<string>
+                    stringMode
                     step={0.01}
-                    min={0}
                     value={batchPointDeadband}
                     disabled={pointSubmitting || batchPointType === POINT_TYPE_SINGLE}
                     style={{ width: '100%' }}
-                    onChange={(value) => setBatchPointDeadband(typeof value === 'number' ? value : DEFAULT_POINT_FORM_VALUES.deadband)}
+                    onChange={(value) => setBatchPointDeadband(value ?? '')}
                   />
                 </Col>
               </Row>

@@ -24,6 +24,7 @@ fn main() {
         proto_dir.join("DataCenter.proto"),
         proto_dir.join("IEC104.proto"),
         proto_dir.join("ModbusRTU.proto"),
+        proto_dir.join("ModbusTCP.proto"),
         proto_dir.join("DLT645.proto"),
         proto_dir.join("AGC.proto"),
         proto_dir.join("AVC.proto"),

@@ -10,6 +10,7 @@ import {
   IEC104Page,
   IEC61850Page,
   ModbusRTUPage,
+  ModbusTCPPage,
   ModuleOpsPage,
   OverviewPage,
   RouteSuspense,
@@ -70,6 +71,14 @@ export const router = createBrowserRouter([
         element: (
           <RouteSuspense>
             <ModbusRTUPage />
+          </RouteSuspense>
+        ),
+      },
+      {
+        path: 'protocol/modbus-tcp',
+        element: (
+          <RouteSuspense>
+            <ModbusTCPPage />
           </RouteSuspense>
         ),
       },

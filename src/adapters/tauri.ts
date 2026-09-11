@@ -65,6 +65,8 @@ import type {
   ModbusPoint,
   ModbusPointTable,
   ModbusUpdateConfigResponse,
+  ModbusTcpLinkConfig,
+  ModbusTcpLinkInfo,
   ModuleInfo,
   ModuleRunningInfo,
   RuntimeDirectoryKind,
@@ -340,6 +342,24 @@ export const api = {
     invoke<void>('modbus_rtu_upsert_point_table', { connName, points, replace }),
   modbusRtuGetPointTable: (connName: string) =>
     invoke<ModbusPointTable>('modbus_rtu_get_point_table', { connName }),
+
+  modbusTcpUpsertLink: (config: ModbusTcpLinkConfig, createOnly: boolean) =>
+    invoke<ModbusTcpLinkInfo>('modbus_tcp_upsert_link', { config, createOnly }),
+  modbusTcpRenameLink: (oldConnName: string, newConnName: string) =>
+    invoke<ModbusTcpLinkInfo>('modbus_tcp_rename_link', { oldConnName, newConnName }),
+  modbusTcpGetLink: (connName: string) =>
+    invoke<ModbusTcpLinkInfo>('modbus_tcp_get_link', { connName }),
+  modbusTcpListLinks: () => invoke<ModbusTcpLinkInfo[]>('modbus_tcp_list_links'),
+  modbusTcpDeleteLink: (connName: string) =>
+    invoke<void>('modbus_tcp_delete_link', { connName }),
+  modbusTcpStartLink: (connName: string) =>
+    invoke<void>('modbus_tcp_start_link', { connName }),
+  modbusTcpStopLink: (connName: string) =>
+    invoke<void>('modbus_tcp_stop_link', { connName }),
+  modbusTcpUpsertPointTable: (connName: string, points: ModbusPoint[], replace: boolean) =>
+    invoke<void>('modbus_tcp_upsert_point_table', { connName, points, replace }),
+  modbusTcpGetPointTable: (connName: string) =>
+    invoke<ModbusPointTable>('modbus_tcp_get_point_table', { connName }),
 
   dlt645UpdateConfig: (mqtt: Dlt645MqttConfig) =>
     invoke<Dlt645UpdateConfigResponse>('dlt645_update_config', { mqtt }),

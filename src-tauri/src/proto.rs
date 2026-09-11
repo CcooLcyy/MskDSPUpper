@@ -17,6 +17,10 @@ pub mod modbus_rtu_proto {
     include!("proto_gen/modbus_rtu_proto.rs");
 }
 
+pub mod modbus_tcp_proto {
+    include!("proto_gen/modbus_tcp_proto.rs");
+}
+
 pub mod dlt645_proto {
     include!("proto_gen/dlt645_proto.rs");
 }

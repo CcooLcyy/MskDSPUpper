@@ -8,6 +8,7 @@ import ProtocolConnectionList from '../../components/protocol/ProtocolConnection
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
+import { getDecimalTextError, toDecimalInputText } from '../../utils/decimal-input';
 import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import ConnectionConfig from './components/ConnectionConfig';
 import PointTable from './components/PointTable';
@@ -16,6 +17,12 @@ import { useProtocolRealtime } from '../../components/protocol/protocol-realtime
 import {
   findDlt645PointConflict,
 } from './dlt645-form-rules';
+import {
+  createDlt645EngineeringFields,
+  normalizeDlt645Block,
+  normalizeDlt645PointEngineeringFields,
+  resolveDlt645EngineeringDecimalText,
+} from './dlt645-decimal';
 
 const PROTOCOL_VARIANT_OPTIONS = [
   { value: 1, label: 'DLT645 标准版' },
@@ -65,6 +72,23 @@ const LINK_STATE_LABELS: Record<number, string> = {
   1: '已停止',
   2: '运行中',
   3: '待删除',
+};
+
+type Dlt645BlockItemFormValue = Omit<
+  Dlt645BlockItem,
+  'scale' | 'offset' | 'deadband' | 'scale_decimal' | 'offset_decimal' | 'deadband_decimal'
+> & {
+  scale: string;
+  offset: string;
+  deadband: string;
+};
+
+const validateEngineeringDecimal = (
+  label: string,
+) => async (_rule: unknown, value: unknown): Promise<void> => {
+  const text = toDecimalInputText(value);
+  const error = getDecimalTextError(text, label);
+  if (error) throw new Error(error);
 };
 
 const DLT645: React.FC = () => {
@@ -169,8 +193,8 @@ const DLT645: React.FC = () => {
       if (requestId !== pointLoadRequestRef.current) {
         return;
       }
-      setPoints(table.points);
-      setBlocks(table.blocks);
+      setPoints(table.points.map(normalizeDlt645PointEngineeringFields));
+      setBlocks(table.blocks.map(normalizeDlt645Block));
     } catch (error) {
       if (requestId !== pointLoadRequestRef.current) {
         return;
@@ -444,11 +468,8 @@ const DLT645: React.FC = () => {
         if (pointTable.points.length > 0 || pointTable.blocks.length > 0) {
           await api.dlt645UpsertPointTable(
             nextConnName,
-            pointTable.points.map((point) => ({ ...point })),
-            pointTable.blocks.map((block) => ({
-              ...block,
-              items: block.items.map((item: Dlt645BlockItem) => ({ ...item })),
-            })),
+            pointTable.points.map(normalizeDlt645PointEngineeringFields),
+            pointTable.blocks.map(normalizeDlt645Block),
             true,
           );
         }
@@ -529,9 +550,9 @@ const DLT645: React.FC = () => {
       data_len: 4,
       data_type: 6,
       access: 1,
-      scale: 1,
-      offset: 0,
-      deadband: 0,
+      scale: '1',
+      offset: '0',
+      deadband: '0',
       byte_index: null,
       bit_index: null,
     });
@@ -547,9 +568,9 @@ const DLT645: React.FC = () => {
       data_len: point.data_len,
       data_type: point.data_type,
       access: point.access,
-      scale: point.scale,
-      offset: point.offset,
-      deadband: point.deadband,
+      scale: resolveDlt645EngineeringDecimalText(point, 'scale'),
+      offset: resolveDlt645EngineeringDecimalText(point, 'offset'),
+      deadband: resolveDlt645EngineeringDecimalText(point, 'deadband'),
       byte_index: point.byte_index ?? null,
       bit_index: point.bit_index ?? null,
     });
@@ -570,9 +591,9 @@ const DLT645: React.FC = () => {
       data_len: point.data_len,
       data_type: point.data_type,
       access: point.access,
-      scale: point.scale,
-      offset: point.offset,
-      deadband: point.deadband,
+      scale: resolveDlt645EngineeringDecimalText(point, 'scale'),
+      offset: resolveDlt645EngineeringDecimalText(point, 'offset'),
+      deadband: resolveDlt645EngineeringDecimalText(point, 'deadband'),
       byte_index: point.byte_index ?? null,
       bit_index: point.bit_index ?? null,
     });
@@ -608,9 +629,11 @@ const DLT645: React.FC = () => {
         data_len: values.data_len ?? 4,
         data_type: values.data_type ?? 6,
         access: isPointBool && values.bit_index != null ? 1 : (values.access ?? 1),
-        scale: values.scale ?? 1,
-        offset: values.offset ?? 0,
-        deadband: values.deadband ?? 0,
+        ...createDlt645EngineeringFields({
+          scale: toDecimalInputText(values.scale) || '1',
+          offset: toDecimalInputText(values.offset) || '0',
+          deadband: toDecimalInputText(values.deadband) || '0',
+        }),
         byte_index: isPointBool ? (values.byte_index ?? null) : null,
         bit_index: isPointBool ? (values.bit_index ?? null) : null,
       };
@@ -717,9 +740,9 @@ const DLT645: React.FC = () => {
         data_len: item.data_len,
         data_type: item.data_type,
         access: item.access,
-        scale: item.scale,
-        offset: item.offset,
-        deadband: item.deadband,
+        scale: resolveDlt645EngineeringDecimalText(item, 'scale'),
+        offset: resolveDlt645EngineeringDecimalText(item, 'offset'),
+        deadband: resolveDlt645EngineeringDecimalText(item, 'deadband'),
         trim_right_space: item.trim_right_space ?? true,
         byte_index: item.byte_index ?? null,
         bit_index: item.bit_index ?? null,
@@ -744,14 +767,16 @@ const DLT645: React.FC = () => {
       const newBlock: Dlt645Block = {
         block_di: values.block_di,
         block_data_len: values.block_data_len ?? 0,
-        items: (values.items || []).map((item: Dlt645BlockItem) => ({
+        items: (values.items || []).map((item: Dlt645BlockItemFormValue) => ({
           tag: item.tag,
           data_len: item.data_len ?? 0,
           data_type: item.data_type ?? 6,
           access: item.data_type === 1 && item.bit_index != null ? 1 : (item.access ?? 1),
-          scale: item.scale ?? 1,
-          offset: item.offset ?? 0,
-          deadband: item.deadband ?? 0,
+          ...createDlt645EngineeringFields({
+            scale: toDecimalInputText(item.scale) || '1',
+            offset: toDecimalInputText(item.offset) || '0',
+            deadband: toDecimalInputText(item.deadband) || '0',
+          }),
           trim_right_space: item.trim_right_space ?? null,
           byte_index: item.byte_index ?? null,
           bit_index: item.bit_index ?? null,
@@ -1053,18 +1078,30 @@ const DLT645: React.FC = () => {
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Form.Item label="缩放系数" name="scale">
-              <InputNumber step={0.01} style={{ width: '100%' }} />
+            <Form.Item
+              label="缩放系数"
+              name="scale"
+              rules={[{ validator: validateEngineeringDecimal('缩放系数') }]}
+            >
+              <InputNumber<string> stringMode step={0.01} style={{ width: '100%' }} />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Form.Item label="偏移量" name="offset">
-              <InputNumber step={0.01} style={{ width: '100%' }} />
+            <Form.Item
+              label="偏移量"
+              name="offset"
+              rules={[{ validator: validateEngineeringDecimal('偏移量') }]}
+            >
+              <InputNumber<string> stringMode step={0.01} style={{ width: '100%' }} />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Form.Item label="死区" name="deadband">
-              <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
+            <Form.Item
+              label="死区"
+              name="deadband"
+              rules={[{ validator: validateEngineeringDecimal('死区') }]}
+            >
+              <InputNumber<string> stringMode step={0.01} style={{ width: '100%' }} />
             </Form.Item>
           </Col>
           </Row>
@@ -1204,7 +1241,7 @@ const DLT645: React.FC = () => {
                       >
                         {({ getFieldValue }) => {
                           const showBitFields = getFieldValue(['items', field.name, 'data_type']) === 1;
-                          const advancedColumnSpan = showBitFields ? 5 : 8;
+                          const advancedColumnSpan = showBitFields ? 4 : 6;
                           return (
                             <Row gutter={[12, 0]} className="dlt645-block-item-advanced">
                               {showBitFields ? (
@@ -1222,13 +1259,30 @@ const DLT645: React.FC = () => {
                                 </>
                               ) : null}
                               <Col xs={24} sm={6} lg={advancedColumnSpan}>
-                                <Form.Item label="Scale" name={[field.name, 'scale']}>
-                                  <InputNumber step={0.01} style={{ width: '100%' }} placeholder="1" />
+                                <Form.Item
+                                  label="Scale"
+                                  name={[field.name, 'scale']}
+                                  rules={[{ validator: validateEngineeringDecimal('Scale') }]}
+                                >
+                                  <InputNumber<string> stringMode step={0.01} style={{ width: '100%' }} placeholder="1" />
                                 </Form.Item>
                               </Col>
                               <Col xs={24} sm={6} lg={advancedColumnSpan}>
-                                <Form.Item label="Offset" name={[field.name, 'offset']}>
-                                  <InputNumber step={0.01} style={{ width: '100%' }} placeholder="0" />
+                                <Form.Item
+                                  label="Offset"
+                                  name={[field.name, 'offset']}
+                                  rules={[{ validator: validateEngineeringDecimal('Offset') }]}
+                                >
+                                  <InputNumber<string> stringMode step={0.01} style={{ width: '100%' }} placeholder="0" />
+                                </Form.Item>
+                              </Col>
+                              <Col xs={24} sm={6} lg={advancedColumnSpan}>
+                                <Form.Item
+                                  label="Deadband"
+                                  name={[field.name, 'deadband']}
+                                  rules={[{ validator: validateEngineeringDecimal('Deadband') }]}
+                                >
+                                  <InputNumber<string> stringMode step={0.01} style={{ width: '100%' }} placeholder="0" />
                                 </Form.Item>
                               </Col>
                               <Col xs={24} sm={12} lg={advancedColumnSpan}>
@@ -1253,9 +1307,9 @@ const DLT645: React.FC = () => {
                     onClick={() => add({
                       data_type: 6,
                       access: 1,
-                      scale: 1,
-                      offset: 0,
-                      deadband: 0,
+                      scale: '1',
+                      offset: '0',
+                      deadband: '0',
                       trim_right_space: true,
                       byte_index: null,
                       bit_index: null,

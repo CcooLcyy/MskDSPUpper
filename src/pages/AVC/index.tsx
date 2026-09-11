@@ -68,9 +68,25 @@ const AVC_MODULE_NAME = 'AVC';
 
 type AvcCommandMode = 'voltage' | 'q_total';
 type AllocationMode = ControlAllocationMode;
+type AvcControlMode = 1 | 2;
+
+const CONTROL_MODE_PI_EVENT = 1;
+const CONTROL_MODE_DIRECT_CYCLIC = 2;
+const CONTROL_MODE_LABELS: Record<number, string> = {
+  0: 'PI 事件触发（兼容）',
+  [CONTROL_MODE_PI_EVENT]: 'PI 事件触发',
+  [CONTROL_MODE_DIRECT_CYCLIC]: '周期直分配',
+};
+
+const effectiveControlMode = (mode: number | null | undefined): AvcControlMode => (
+  mode === CONTROL_MODE_DIRECT_CYCLIC ? CONTROL_MODE_DIRECT_CYCLIC : CONTROL_MODE_PI_EVENT
+);
 
 type AvcGroupFormValues = {
   group_name: string;
+  control_mode: AvcControlMode;
+  calculation_execution_period_seconds: number;
+  command_control_period_seconds: number;
   command_mode: AvcCommandMode;
   voltage_meas: AvcSignalSpec;
   voltage_cmd: AvcSignalSpec;
@@ -243,6 +259,9 @@ const AvcCreateGroupNotice: React.FC = () => (
 
 const buildEmptyGroupForm = (): AvcGroupFormValues => ({
   group_name: '控制组1',
+  control_mode: CONTROL_MODE_PI_EVENT,
+  calculation_execution_period_seconds: 1,
+  command_control_period_seconds: 4,
   command_mode: 'voltage',
   voltage_meas: { ...DEFAULT_VOLTAGE_SIGNAL, tag: '母线电压测量' },
   voltage_cmd: { ...DEFAULT_VOLTAGE_SIGNAL, tag: 'AVC目标电压命令' },
@@ -296,6 +315,9 @@ const determineCommandMode = (config: AvcGroupConfig | null | undefined): AvcCom
 
 const buildGroupFormValues = (config: AvcGroupConfig): AvcGroupFormValues => ({
   group_name: config.group_name,
+  control_mode: effectiveControlMode(config.control_mode),
+  calculation_execution_period_seconds: config.calculation_execution_period_seconds || 1,
+  command_control_period_seconds: config.command_control_period_seconds || 4,
   command_mode: determineCommandMode(config),
   voltage_meas: cloneSignal(config.voltage_meas),
   voltage_cmd: cloneSignal(config.voltage_cmd),
@@ -512,6 +534,22 @@ const validateGroupConfig = (config: AvcGroupConfig) => {
     throw new Error('请输入控制组名称');
   }
 
+  if (effectiveControlMode(config.control_mode) === CONTROL_MODE_DIRECT_CYCLIC) {
+    if (!Number.isFinite(config.calculation_execution_period_seconds)
+      || config.calculation_execution_period_seconds < 1
+      || config.calculation_execution_period_seconds > 15) {
+      throw new Error('计算执行周期必须在 1～15 秒范围内');
+    }
+    if (!Number.isFinite(config.command_control_period_seconds)
+      || config.command_control_period_seconds < 4
+      || config.command_control_period_seconds > 30) {
+      throw new Error('命令控制周期必须在 4～30 秒范围内');
+    }
+    if (!config.q_total_cmd?.signal?.tag) {
+      throw new Error('周期直分配模式必须使用总无功命令，目标电压模式仍使用 PI 事件触发');
+    }
+  }
+
   if (!config.voltage_meas?.tag) {
     throw new Error('请配置电压量测点 voltage_meas');
   }
@@ -650,6 +688,7 @@ const AVC: React.FC = () => {
   const [searchParams] = useSearchParams();
 
   const commandMode = Form.useWatch('command_mode', groupForm) ?? 'voltage';
+  const controlMode = effectiveControlMode(Form.useWatch('control_mode', groupForm));
   const qTotalMode = Form.useWatch(['q_total_cmd', 'mode'], groupForm) ?? 1;
   const qTotalDeltaBase = Form.useWatch(['q_total_cmd', 'delta_base'], groupForm) ?? 0;
   const memberControllable = Form.useWatch('controllable', memberForm) ?? true;
@@ -1196,6 +1235,9 @@ const AVC: React.FC = () => {
       const values = await groupForm.validateFields();
       const config: AvcGroupConfig = {
         group_name: values.group_name.trim(),
+        control_mode: effectiveControlMode(values.control_mode),
+        calculation_execution_period_seconds: values.calculation_execution_period_seconds ?? 1,
+        command_control_period_seconds: values.command_control_period_seconds ?? 4,
         voltage_meas: normalizeSignal(values.voltage_meas),
         voltage_cmd: values.command_mode === 'voltage' ? normalizeSignal(values.voltage_cmd) : null,
         q_total_cmd: values.command_mode === 'q_total' ? normalizeValueSpec(values.q_total_cmd) : null,
@@ -1869,12 +1911,20 @@ const AVC: React.FC = () => {
                       <Descriptions.Item label="分配方式">
                         {allocationModeLabel(selectedConfig.members)}
                       </Descriptions.Item>
+                      <Descriptions.Item label="控制方式">
+                        {CONTROL_MODE_LABELS[selectedConfig.control_mode ?? 0] ?? 'PI 事件触发（兼容）'}
+                      </Descriptions.Item>
                       <Descriptions.Item label="命令模式">
                         {selectedConfig.voltage_cmd ? '目标电压模式' : '总无功模式'}
                       </Descriptions.Item>
                       <Descriptions.Item label="成员数量">
                         {selectedConfig.members.length}
                       </Descriptions.Item>
+                      {effectiveControlMode(selectedConfig.control_mode) === CONTROL_MODE_DIRECT_CYCLIC ? (
+                        <Descriptions.Item label="控制周期" span={2}>
+                          计算 {selectedConfig.calculation_execution_period_seconds} 秒 / 命令 {selectedConfig.command_control_period_seconds} 秒
+                        </Descriptions.Item>
+                      ) : null}
                       <Descriptions.Item label="电压量测点" span={2}>
                         <Text className="control-summary-value" title={formatSignal(selectedConfig.voltage_meas)}>
                           {selectedConfig.voltage_meas?.tag || '-'}
@@ -2072,9 +2122,24 @@ const AVC: React.FC = () => {
             <div style={{ width: 220 }}>
               <Form.Item name="command_mode" label="命令模式">
                 <Select
+                  onChange={(value: AvcCommandMode) => {
+                    if (value === 'voltage' && controlMode === CONTROL_MODE_DIRECT_CYCLIC) {
+                      groupForm.setFieldValue('control_mode', CONTROL_MODE_PI_EVENT);
+                    }
+                  }}
                   options={[
                     { value: 'voltage', label: '目标电压模式' },
                     { value: 'q_total', label: '总无功模式' },
+                  ]}
+                />
+              </Form.Item>
+            </div>
+            <div style={{ width: 220 }}>
+              <Form.Item name="control_mode" label="控制方式">
+                <Select<AvcControlMode>
+                  options={[
+                    { value: CONTROL_MODE_PI_EVENT, label: 'PI 事件触发' },
+                    { value: CONTROL_MODE_DIRECT_CYCLIC, label: '周期直分配', disabled: commandMode !== 'q_total' },
                   ]}
                 />
               </Form.Item>
@@ -2096,6 +2161,28 @@ const AVC: React.FC = () => {
               </Form.Item>
             </div>
             </div>
+            {controlMode === CONTROL_MODE_DIRECT_CYCLIC ? (
+              <div className="control-config-grid control-config-grid--overview">
+                <div style={{ width: 220 }}>
+                  <Form.Item
+                    name="calculation_execution_period_seconds"
+                    label="计算执行周期（秒）"
+                    rules={[{ required: true, type: 'number', min: 1, max: 15, message: '请输入 1～15 秒' }]}
+                  >
+                    <InputNumber min={1} max={15} step={1} style={{ width: '100%' }} />
+                  </Form.Item>
+                </div>
+                <div style={{ width: 220 }}>
+                  <Form.Item
+                    name="command_control_period_seconds"
+                    label="命令控制周期（秒）"
+                    rules={[{ required: true, type: 'number', min: 4, max: 30, message: '请输入 4～30 秒' }]}
+                  >
+                    <InputNumber min={4} max={30} step={1} style={{ width: '100%' }} />
+                  </Form.Item>
+                </div>
+              </div>
+            ) : null}
             <Text type="secondary" className="control-allocation-note">
               理论占比按可控成员权重归一化；达到无功上下限后，剩余指令会重新分配。
             </Text>

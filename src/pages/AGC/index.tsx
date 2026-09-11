@@ -60,10 +60,25 @@ import {
 } from '../../utils/control-runtime-values';
 import {
   calculateControlAllocationShares,
-  inferControlAllocationMode,
-  resolveControlAllocationWeight,
 } from '../../utils/control-allocation';
 import type { ControlAllocationMode } from '../../utils/control-allocation';
+import { getDecimalTextError } from '../../utils/decimal-input';
+import {
+  absAgcDecimalText,
+  addAgcDecimalTexts,
+  compareAgcDecimalTexts,
+  createAgcDecimalFields,
+  inferAgcAllocationMode,
+  minAgcDecimalText,
+  multiplyAgcDecimalTexts,
+  normalizeAgcGroupConfigDecimalFields,
+  normalizeAgcMemberDecimalFields,
+  normalizeAgcSignalDecimalFields,
+  normalizeAgcTuningConfigDecimalFields,
+  normalizeAgcTuningStatusDecimalFields,
+  resolveAgcDecimalText,
+  subtractAgcDecimalTexts,
+} from '../../utils/agc-decimal';
 import '../../components/control/control-modal.css';
 
 const { Text } = Typography;
@@ -71,6 +86,19 @@ const { Text } = Typography;
 const AGC_MODULE_NAME = 'AGC';
 
 type AllocationMode = ControlAllocationMode;
+type AgcControlMode = 1 | 2;
+
+const CONTROL_MODE_PI_EVENT = 1;
+const CONTROL_MODE_DIRECT_CYCLIC = 2;
+const CONTROL_MODE_LABELS: Record<number, string> = {
+  0: 'PI 事件触发（兼容）',
+  [CONTROL_MODE_PI_EVENT]: 'PI 事件触发',
+  [CONTROL_MODE_DIRECT_CYCLIC]: '周期直分配',
+};
+
+const effectiveControlMode = (mode: number | null | undefined): AgcControlMode => (
+  mode === CONTROL_MODE_DIRECT_CYCLIC ? CONTROL_MODE_DIRECT_CYCLIC : CONTROL_MODE_PI_EVENT
+);
 
 const STATE_MAP: Record<number, { label: string; color: string }> = {
   0: { label: '未指定', color: 'default' },
@@ -116,11 +144,7 @@ const DELTA_BASE_LABELS: Record<number, string> = {
 };
 
 const inferAllocationMode = (members: AgcMemberConfig[]): AllocationMode => {
-  return inferControlAllocationMode(members.map((member) => ({
-    controllable: member.controllable,
-    weight: member.weight,
-    basis: member.capacity_kw,
-  })));
+  return inferAgcAllocationMode(members);
 };
 
 const allocationModeLabel = (members: AgcMemberConfig[]): string => (
@@ -147,6 +171,8 @@ const DEFAULT_SIGNAL: AgcSignalSpec = {
   unit: 'kW',
   scale: 1,
   offset: 0,
+  scale_decimal: '1',
+  offset_decimal: '0',
 };
 
 const DEFAULT_MEMBER: AgcMemberConfig = {
@@ -156,6 +182,10 @@ const DEFAULT_MEMBER: AgcMemberConfig = {
   weight: 1,
   min_kw: 0,
   max_kw: 0,
+  capacity_kw_decimal: '0',
+  weight_decimal: '1',
+  min_kw_decimal: '0',
+  max_kw_decimal: '0',
   p_meas: { ...DEFAULT_SIGNAL },
   p_set: {
     signal: { ...DEFAULT_SIGNAL },
@@ -173,6 +203,9 @@ const buildEmptyConfig = (): AgcGroupConfig => ({
     delta_base: 0,
     base_tag: '',
   },
+  control_mode: CONTROL_MODE_PI_EVENT,
+  calculation_execution_period_seconds: 1,
+  command_control_period_seconds: 4,
   strategy: { strategy_type: 'weighted' },
   members: [],
   outputs: {
@@ -183,10 +216,14 @@ const buildEmptyConfig = (): AgcGroupConfig => ({
 });
 
 const cloneSignal = (signal: AgcSignalSpec | null | undefined): AgcSignalSpec => ({
-  tag: signal?.tag ?? '',
-  unit: signal?.unit ?? '',
-  scale: signal?.scale ?? 1,
-  offset: signal?.offset ?? 0,
+  ...normalizeAgcSignalDecimalFields({
+    ...DEFAULT_SIGNAL,
+    ...signal,
+    tag: signal?.tag ?? '',
+    unit: signal?.unit ?? '',
+    scale_decimal: signal?.scale_decimal ?? '',
+    offset_decimal: signal?.offset_decimal ?? '',
+  }),
 });
 
 const cloneValueSpec = (spec: AgcValueSpec | null | undefined): AgcValueSpec => ({
@@ -196,16 +233,20 @@ const cloneValueSpec = (spec: AgcValueSpec | null | undefined): AgcValueSpec => 
   base_tag: spec?.base_tag ?? '',
 });
 
-const cloneMember = (member: AgcMemberConfig | null | undefined): AgcMemberConfig => ({
-  member_name: member?.member_name ?? '',
-  controllable: member?.controllable ?? true,
-  capacity_kw: member?.capacity_kw ?? 0,
-  weight: member?.weight ?? 1,
-  min_kw: member?.min_kw ?? 0,
-  max_kw: member?.max_kw ?? 0,
-  p_meas: cloneSignal(member?.p_meas),
-  p_set: cloneValueSpec(member?.p_set),
-});
+const cloneMember = (member: AgcMemberConfig | null | undefined): AgcMemberConfig => (
+  normalizeAgcMemberDecimalFields({
+    ...DEFAULT_MEMBER,
+    ...member,
+    member_name: member?.member_name ?? '',
+    controllable: member?.controllable ?? true,
+    capacity_kw_decimal: member?.capacity_kw_decimal ?? '',
+    weight_decimal: member?.weight_decimal ?? '',
+    min_kw_decimal: member?.min_kw_decimal ?? '',
+    max_kw_decimal: member?.max_kw_decimal ?? '',
+    p_meas: cloneSignal(member?.p_meas),
+    p_set: cloneValueSpec(member?.p_set),
+  })
+);
 
 const cloneOutputs = (outputs: AgcDerivedOutputs | null | undefined): AgcDerivedOutputs => ({
   p_total_meas: cloneSignal(outputs?.p_total_meas),
@@ -216,7 +257,9 @@ const cloneOutputs = (outputs: AgcDerivedOutputs | null | undefined): AgcDerived
 const formatSignal = (signal: AgcSignalSpec | null | undefined): string => {
   if (!signal?.tag) return '-';
   const unitPart = signal.unit ? ` (${signal.unit})` : '';
-  return `${signal.tag}${unitPart} | scale=${signal.scale}, offset=${signal.offset}`;
+  const scale = resolveAgcDecimalText(signal, 'scale', 'scale_decimal', '1');
+  const offset = resolveAgcDecimalText(signal, 'offset', 'offset_decimal');
+  return `${signal.tag}${unitPart} | scale=${scale}, offset=${offset}`;
 };
 
 const formatValueSpec = (spec: AgcValueSpec | null | undefined): string => {
@@ -230,12 +273,14 @@ const formatValueSpec = (spec: AgcValueSpec | null | undefined): string => {
 const normalizeSignal = (signal: AgcSignalSpec | null | undefined): AgcSignalSpec | null => {
   if (!signal) return null;
   if (!signal.tag.trim()) return null;
-  return {
+  return normalizeAgcSignalDecimalFields({
     tag: signal.tag.trim(),
     unit: signal.unit.trim(),
     scale: signal.scale ?? 1,
     offset: signal.offset ?? 0,
-  };
+    scale_decimal: signal.scale_decimal,
+    offset_decimal: signal.offset_decimal,
+  });
 };
 
 const normalizeValueSpec = (spec: AgcValueSpec | null | undefined): AgcValueSpec | null => {
@@ -259,9 +304,21 @@ const normalizeOutputs = (outputs: AgcDerivedOutputs | null | undefined): AgcDer
   };
 };
 
-const isFiniteNumber = (value: unknown): value is number => (
-  typeof value === 'number' && Number.isFinite(value)
-);
+const validateAgcDecimal = (
+  value: unknown,
+  label: string,
+  range: 'any' | 'nonnegative' | 'positive' = 'any',
+): void => {
+  const error = getDecimalTextError(value, label);
+  if (error) throw new Error(error);
+  const text = String(value);
+  if (range === 'nonnegative' && compareAgcDecimalTexts(text, '0') < 0) {
+    throw new Error(`${label}必须是非负十进制数`);
+  }
+  if (range === 'positive' && compareAgcDecimalTexts(text, '0') <= 0) {
+    throw new Error(`${label}必须是大于 0 的十进制数`);
+  }
+};
 
 const buildDefaultMemberTag = (memberName: string, kind: 'p_meas' | 'p_set'): string => {
   const normalizedMemberName = memberName
@@ -370,6 +427,8 @@ const formatPointValue = (update: DcPointUpdate | null | undefined): string => {
       return String(update.value.value);
     case 'Double':
       return formatAutoRealtimeNumber(update.value.value);
+    case 'Decimal':
+      return update.value.value;
     case 'String':
       return update.value.value;
     case 'Bytes':
@@ -447,6 +506,7 @@ const AGC: React.FC = () => {
   const [searchParams] = useSearchParams();
 
   const memberControllable = Form.useWatch('controllable', memberForm) ?? true;
+  const controlMode = effectiveControlMode(Form.useWatch('control_mode', groupForm));
   const currentView = normalizeControlView(searchParams.get(CONTROL_VIEW_QUERY_KEY));
 
   const selectedGroup = useMemo(
@@ -465,18 +525,25 @@ const AGC: React.FC = () => {
   const handleAllocationModeChange = useCallback((mode: AllocationMode) => {
     setAllocationMode(mode);
     if (mode !== 'custom') {
-      setMembersDraft((prev) => prev.map((member) => (
-        member.controllable
-          ? { ...member, weight: resolveControlAllocationWeight(mode, member.capacity_kw, member.weight) }
-          : member
-      )));
+      setMembersDraft((prev) => prev.map((member) => {
+        if (!member.controllable) return member;
+        const weight = mode === 'equal'
+          ? '1'
+          : resolveAgcDecimalText(member, 'capacity_kw', 'capacity_kw_decimal');
+        return {
+          ...member,
+          ...createAgcDecimalFields(weight, 'weight', 'weight_decimal'),
+        };
+      }));
     }
   }, []);
 
-  const handleMemberWeightChange = useCallback((index: number, value: number | null) => {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return;
+  const handleMemberWeightChange = useCallback((index: number, value: string | null) => {
+    if (value === null || getDecimalTextError(value, '调节权重')) return;
     setMembersDraft((prev) => prev.map((member, memberIndex) => (
-      memberIndex === index ? { ...member, weight: value } : member
+      memberIndex === index
+        ? { ...member, ...createAgcDecimalFields(value, 'weight', 'weight_decimal') }
+        : member
     )));
   }, []);
 
@@ -715,13 +782,18 @@ const AGC: React.FC = () => {
 
   const openEditGroup = useCallback(() => {
     if (!selectedGroup?.config) return;
-    const config: AgcGroupConfig = {
+    const config = normalizeAgcGroupConfigDecimalFields({
       group_name: selectedGroup.config.group_name,
       p_cmd: cloneValueSpec(selectedGroup.config.p_cmd),
+      control_mode: effectiveControlMode(selectedGroup.config.control_mode),
+      calculation_execution_period_seconds:
+        selectedGroup.config.calculation_execution_period_seconds || 1,
+      command_control_period_seconds:
+        selectedGroup.config.command_control_period_seconds || 4,
       strategy: { strategy_type: selectedGroup.config.strategy?.strategy_type ?? 'weighted' },
       members: selectedGroup.config.members.map((member) => cloneMember(member)),
       outputs: cloneOutputs(selectedGroup.config.outputs),
-    };
+    });
     setEditingGroup(config);
     setAllocationMode(inferAllocationMode(config.members));
     setMembersDraft(config.members);
@@ -730,6 +802,9 @@ const AGC: React.FC = () => {
     groupForm.setFieldsValue({
       group_name: config.group_name,
       p_cmd: config.p_cmd,
+      control_mode: config.control_mode,
+      calculation_execution_period_seconds: config.calculation_execution_period_seconds,
+      command_control_period_seconds: config.command_control_period_seconds,
       strategy: config.strategy,
       members: config.members,
       outputs: config.outputs,
@@ -795,18 +870,25 @@ const AGC: React.FC = () => {
 
   const openTuning = useCallback(async () => {
     if (!selectedGroupName || selectedGroup?.state === 3) return;
-    const installed = selectedGroup?.config?.members.reduce((sum, member) => sum + (member.capacity_kw || 0), 0) ?? 0;
-    const defaults: AgcTuningConfig = {
+    const installed = selectedGroup?.config?.members.reduce((sum, member) => addAgcDecimalTexts(
+      sum,
+      resolveAgcDecimalText(member, 'capacity_kw', 'capacity_kw_decimal'),
+    ), '0') ?? '0';
+    const tolerance = minAgcDecimalText('300', multiplyAgcDecimalTexts(installed, '0.003'));
+    const defaults = normalizeAgcTuningConfigDecimalFields({
       target_lower_kw: 0,
-      target_upper_kw: installed,
+      target_lower_kw_decimal: '0',
+      target_upper_kw: Number(installed),
+      target_upper_kw_decimal: installed,
       total_time_minutes: 120,
       attempt_max_time_minutes: 1,
       target_entry_time_seconds: 10,
       stable_hold_time_seconds: 20,
       min_up_tests: 3,
       min_down_tests: 3,
-      total_tolerance_kw: Math.min(300, installed * 0.003),
-    };
+      total_tolerance_kw: Number(tolerance),
+      total_tolerance_kw_decimal: tolerance,
+    });
     const storedConfig = tuningConfigGroupName === selectedGroupName ? tuningConfig : null;
     tuningForm.resetFields();
     tuningForm.setFieldsValue(storedConfig ?? defaults);
@@ -814,7 +896,9 @@ const AGC: React.FC = () => {
     setTuningConfigGroupName(selectedGroupName);
     setTuningModalOpen(true);
     try {
-      const status = await api.agcGetTuningStatus(selectedGroupName);
+      const status = normalizeAgcTuningStatusDecimalFields(
+        await api.agcGetTuningStatus(selectedGroupName),
+      );
       if (status.state !== 1 || status.started_at_ms > 0) {
         setTuningStatus(status);
       } else {
@@ -829,11 +913,15 @@ const AGC: React.FC = () => {
     if (!selectedGroupName || tuningAction) return;
     setTuningAction('start');
     try {
-      const config = await tuningForm.validateFields();
+      const values = await tuningForm.validateFields();
+      const config = normalizeAgcTuningConfigDecimalFields(values);
+      if (compareAgcDecimalTexts(config.target_lower_kw_decimal, config.target_upper_kw_decimal) > 0) {
+        throw new Error('目标下限不能大于目标上限');
+      }
       const status = await api.agcStartTuning(selectedGroupName, config);
       setTuningConfig(config);
       setTuningConfigGroupName(selectedGroupName);
-      setTuningStatus(status);
+      setTuningStatus(normalizeAgcTuningStatusDecimalFields(status));
       messageApi.success('自动调试已启动');
     } catch (e) {
       messageApi.error(`启动自动调试失败: ${e}`);
@@ -847,7 +935,7 @@ const AGC: React.FC = () => {
     setTuningAction('stop');
     try {
       const status = await api.agcStopTuning(selectedGroupName);
-      setTuningStatus(status);
+      setTuningStatus(normalizeAgcTuningStatusDecimalFields(status));
       messageApi.success('自动调试已停止');
       await refreshGroups();
     } catch (e) {
@@ -870,15 +958,27 @@ const AGC: React.FC = () => {
     const timePercent = totalSeconds > 0
       ? Math.min(100, Math.round((elapsedSeconds / totalSeconds) * 100))
       : 0;
-    const tolerance = config?.total_tolerance_kw ?? 0;
-    const errorKw = tuningStatus.current_target_kw - tuningStatus.current_total_meas_kw;
+    const tolerance = config
+      ? resolveAgcDecimalText(config, 'total_tolerance_kw', 'total_tolerance_kw_decimal')
+      : '0';
+    const currentTarget = resolveAgcDecimalText(
+      tuningStatus,
+      'current_target_kw',
+      'current_target_kw_decimal',
+    );
+    const currentMeasured = resolveAgcDecimalText(
+      tuningStatus,
+      'current_total_meas_kw',
+      'current_total_meas_kw_decimal',
+    );
+    const errorKw = subtractAgcDecimalTexts(currentTarget, currentMeasured);
     const stableTargetSeconds = config?.stable_hold_time_seconds ?? 0;
     const stablePercent = stableTargetSeconds > 0
       ? Math.min(100, Math.round((tuningStatus.stable_elapsed_seconds / stableTargetSeconds) * 100))
       : 0;
     const phaseLabel = tuningStatus.state !== 2
       ? '调试已结束'
-      : Math.abs(errorKw) <= tolerance
+      : compareAgcDecimalTexts(absAgcDecimalText(errorKw), tolerance) <= 0
         ? '已进入目标精度，正在确认稳定性'
         : '正在调节并等待进入目标精度';
     return {
@@ -912,7 +1012,7 @@ const AGC: React.FC = () => {
     if (!tuningModalOpen || !selectedGroupName || tuningStatus?.state !== 2) return undefined;
     const timer = window.setInterval(() => {
       void api.agcGetTuningStatus(selectedGroupName).then((status) => {
-        setTuningStatus(status);
+        setTuningStatus(normalizeAgcTuningStatusDecimalFields(status));
         if (status.state !== 2) void refreshGroups();
       }).catch((error) => {
         messageApi.error(`刷新自动调试状态失败: ${error}`);
@@ -926,7 +1026,7 @@ const AGC: React.FC = () => {
     let cancelled = false;
     void api.agcGetTuningStatus(selectedGroupName).then((status) => {
       if (cancelled) return;
-      setTuningStatus(status.state === 2 ? status : null);
+      setTuningStatus(status.state === 2 ? normalizeAgcTuningStatusDecimalFields(status) : null);
       if (status.state !== 2) void refreshGroups();
     }).catch(() => {
       // 正式控制运行时，调试状态查询失败不影响控制组运行。
@@ -942,34 +1042,35 @@ const AGC: React.FC = () => {
     let submittedConfig: AgcGroupConfig | null = null;
     try {
       const values = await groupForm.validateFields();
-      const config: AgcGroupConfig = {
+      const config = normalizeAgcGroupConfigDecimalFields({
         group_name: values.group_name.trim(),
         p_cmd: normalizeValueSpec(values.p_cmd),
+        control_mode: effectiveControlMode(values.control_mode),
+        calculation_execution_period_seconds: values.calculation_execution_period_seconds ?? 1,
+        command_control_period_seconds: values.command_control_period_seconds ?? 4,
         strategy: { strategy_type: values.strategy?.strategy_type ?? 'weighted' },
-        members: membersDraft.map((member) => ({
-          member_name: member.member_name.trim(),
-          controllable: member.controllable,
-          capacity_kw: member.capacity_kw,
-          weight: member.controllable
+        members: membersDraft.map((member) => {
+          const weight = member.controllable && allocationMode !== 'custom'
             ? allocationMode === 'equal'
-              ? 1
-              : allocationMode === 'proportional'
-                ? member.capacity_kw
-                : member.weight
-            : member.weight,
-          min_kw: member.min_kw,
-          max_kw: member.max_kw,
-          p_meas: normalizeSignal(member.p_meas),
-          p_set: member.controllable ? normalizeValueSpec(member.p_set) : null,
-        })),
+              ? '1'
+              : resolveAgcDecimalText(member, 'capacity_kw', 'capacity_kw_decimal')
+            : resolveAgcDecimalText(member, 'weight', 'weight_decimal', '1');
+          return normalizeAgcMemberDecimalFields({
+            ...member,
+            ...createAgcDecimalFields(weight, 'weight', 'weight_decimal'),
+            member_name: member.member_name.trim(),
+            p_meas: normalizeSignal(member.p_meas),
+            p_set: member.controllable ? normalizeValueSpec(member.p_set) : null,
+          });
+        }),
         outputs: normalizeOutputs(values.outputs),
-      };
+      });
       submittedConfig = config;
       const invalidCapacityMember = config.members.find(
-        (member) => !Number.isFinite(member.capacity_kw) || member.capacity_kw <= 0,
+        (member) => compareAgcDecimalTexts(member.capacity_kw_decimal, '0') <= 0,
       );
       if (invalidCapacityMember) {
-        throw new Error(`${invalidCapacityMember.member_name || '成员'} 的额定容量必须是大于 0 的有限数值`);
+        throw new Error(`${invalidCapacityMember.member_name || '成员'} 的额定容量必须是大于 0 的十进制数`);
       }
       const duplicateTags = findDuplicateGroupEndpointTags(config);
       if (duplicateTags.length > 0) {
@@ -1157,20 +1258,20 @@ const AGC: React.FC = () => {
     setMemberSubmitting(true);
     try {
       const values = await memberForm.validateFields();
-      const nextMember: AgcMemberConfig = {
+      const capacity = resolveAgcDecimalText(values, 'capacity_kw', 'capacity_kw_decimal');
+      const weight = allocationMode === 'equal'
+        ? '1'
+        : allocationMode === 'proportional'
+          ? capacity
+          : resolveAgcDecimalText(values, 'weight', 'weight_decimal', '1');
+      const nextMember = normalizeAgcMemberDecimalFields({
+        ...values,
         member_name: values.member_name.trim(),
         controllable: values.controllable ?? true,
-        capacity_kw: values.capacity_kw ?? 0,
-        weight: allocationMode === 'equal'
-          ? 1
-          : allocationMode === 'proportional'
-            ? (values.capacity_kw ?? 0)
-            : (values.weight ?? 1),
-        min_kw: values.min_kw ?? 0,
-        max_kw: values.max_kw ?? 0,
+        ...createAgcDecimalFields(weight, 'weight', 'weight_decimal'),
         p_meas: cloneSignal(values.p_meas),
         p_set: values.controllable ? cloneValueSpec(values.p_set) : null,
-      };
+      });
       const nextRouteDraft: MemberRouteDraft = {
         createRoutes: createMemberRoutes,
         endpoints: { ...memberRouteEndpoints },
@@ -1220,21 +1321,22 @@ const AGC: React.FC = () => {
     },
     {
       title: '权重',
-      dataIndex: 'weight',
+      dataIndex: 'weight_decimal',
       key: 'weight',
       width: 90,
+      render: (_, record) => resolveAgcDecimalText(record, 'weight', 'weight_decimal', '1'),
     },
     {
       title: '有功下限 (kW)',
-      dataIndex: 'min_kw',
       key: 'min_kw',
       width: 110,
+      render: (_, record) => resolveAgcDecimalText(record, 'min_kw', 'min_kw_decimal'),
     },
     {
       title: '有功上限 (kW)',
-      dataIndex: 'max_kw',
       key: 'max_kw',
       width: 110,
+      render: (_, record) => resolveAgcDecimalText(record, 'max_kw', 'max_kw_decimal'),
     },
     {
       title: '测量点',
@@ -1285,15 +1387,17 @@ const AGC: React.FC = () => {
     },
     {
       title: '额定容量 (kW)',
-      dataIndex: 'capacity_kw',
       key: 'capacity_kw',
       width: 125,
+      render: (_, record) => resolveAgcDecimalText(record, 'capacity_kw', 'capacity_kw_decimal'),
     },
     {
       title: '调节范围 (kW)',
       key: 'range',
       width: 150,
-      render: (_, record) => `${record.min_kw} ~ ${record.max_kw}`,
+      render: (_, record) => (
+        `${resolveAgcDecimalText(record, 'min_kw', 'min_kw_decimal')} ~ ${resolveAgcDecimalText(record, 'max_kw', 'max_kw_decimal')}`
+      ),
     },
     {
       title: '测量值',
@@ -1311,19 +1415,20 @@ const AGC: React.FC = () => {
     },
     {
       title: '权重',
-      dataIndex: 'weight',
+      dataIndex: 'weight_decimal',
       key: 'weight',
       width: 120,
-      render: (value: number, record, index) => {
+      render: (_: string, record, index) => {
         if (!record.controllable) return <Text type="secondary">—</Text>;
+        const value = resolveAgcDecimalText(record, 'weight', 'weight_decimal', '1');
         if (allocationMode !== 'custom') return value;
         return (
-          <InputNumber
+          <InputNumber<string>
             aria-label={`${record.member_name} 调节权重`}
             value={value}
-            min={0}
-            step={0.1}
-            status={value > 0 ? undefined : 'error'}
+            stringMode
+            step="0.1"
+            status={compareAgcDecimalTexts(value, '0') > 0 ? undefined : 'error'}
             style={{ width: 96 }}
             onChange={(nextValue) => handleMemberWeightChange(index, nextValue)}
           />
@@ -1586,12 +1691,20 @@ const AGC: React.FC = () => {
                       <Descriptions.Item label="分配方式">
                         {allocationModeLabel(selectedConfig.members)}
                       </Descriptions.Item>
+                      <Descriptions.Item label="控制方式">
+                        {CONTROL_MODE_LABELS[selectedConfig.control_mode ?? 0] ?? 'PI 事件触发（兼容）'}
+                      </Descriptions.Item>
                       <Descriptions.Item label="命令模式">
                         {VALUE_MODE_LABELS[selectedConfig.p_cmd?.mode ?? 0] ?? '未指定'}
                       </Descriptions.Item>
                       <Descriptions.Item label="成员数量">
                         {selectedConfig.members.length}
                       </Descriptions.Item>
+                      {effectiveControlMode(selectedConfig.control_mode) === CONTROL_MODE_DIRECT_CYCLIC ? (
+                        <Descriptions.Item label="控制周期" span={2}>
+                          计算 {selectedConfig.calculation_execution_period_seconds} 秒 / 命令 {selectedConfig.command_control_period_seconds} 秒
+                        </Descriptions.Item>
+                      ) : null}
                       <Descriptions.Item label="命令点" span={2}>
                         <Text className="control-summary-value" title={formatValueSpec(selectedConfig.p_cmd)}>
                           {selectedConfig.p_cmd?.signal?.tag || '-'}
@@ -1758,14 +1871,26 @@ const AGC: React.FC = () => {
       >
         <Form form={tuningForm} layout="vertical" size="small" onFinish={() => void handleStartTuning()}>
           <Space wrap align="start" style={{ width: '100%' }}>
-            <Form.Item name="target_lower_kw" label="目标下限(kW)" rules={[{ required: true, type: 'number' }]}>
-              <InputNumber min={0} style={{ width: 130 }} />
+            <Form.Item
+              name="target_lower_kw_decimal"
+              label="目标下限(kW)"
+              rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '目标下限', 'nonnegative') }]}
+            >
+              <InputNumber<string> stringMode step="0.1" style={{ width: 130 }} />
             </Form.Item>
-            <Form.Item name="target_upper_kw" label="目标上限(kW)" rules={[{ required: true, type: 'number' }]}>
-              <InputNumber min={0} style={{ width: 130 }} />
+            <Form.Item
+              name="target_upper_kw_decimal"
+              label="目标上限(kW)"
+              rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '目标上限', 'nonnegative') }]}
+            >
+              <InputNumber<string> stringMode step="0.1" style={{ width: 130 }} />
             </Form.Item>
-            <Form.Item name="total_tolerance_kw" label="总量精度(kW)" rules={[{ required: true, type: 'number', min: 0.000001 }]}>
-              <InputNumber min={0.000001} style={{ width: 130 }} />
+            <Form.Item
+              name="total_tolerance_kw_decimal"
+              label="总量精度(kW)"
+              rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '总量精度', 'positive') }]}
+            >
+              <InputNumber<string> stringMode step="0.000001" style={{ width: 130 }} />
             </Form.Item>
           </Space>
           <Space wrap align="start" style={{ width: '100%' }}>
@@ -1837,16 +1962,56 @@ const AGC: React.FC = () => {
                 <Descriptions.Item label="方向">{tuningStatus.direction === 1 ? '上调' : tuningStatus.direction === 2 ? '下调' : '-'}</Descriptions.Item>
                 <Descriptions.Item label="上调完成">{tuningStatus.completed_up_tests}</Descriptions.Item>
                 <Descriptions.Item label="下调完成">{tuningStatus.completed_down_tests}</Descriptions.Item>
-                <Descriptions.Item label="当前目标(kW)">{tuningStatus.current_target_kw.toFixed(3)}</Descriptions.Item>
-                <Descriptions.Item label="当前总量(kW)">{tuningStatus.current_total_meas_kw.toFixed(3)}</Descriptions.Item>
+                <Descriptions.Item label="当前目标(kW)">
+                  {resolveAgcDecimalText(tuningStatus, 'current_target_kw', 'current_target_kw_decimal')}
+                </Descriptions.Item>
+                <Descriptions.Item label="当前总量(kW)">
+                  {resolveAgcDecimalText(tuningStatus, 'current_total_meas_kw', 'current_total_meas_kw_decimal')}
+                </Descriptions.Item>
                 {tuningProgress ? (
                   <Descriptions.Item label="当前误差(kW)">
-                    {tuningProgress.errorKw.toFixed(3)}（精度 ±{tuningProgress.tolerance.toFixed(3)}）
+                    {tuningProgress.errorKw}（精度 ±{tuningProgress.tolerance}）
                   </Descriptions.Item>
                 ) : null}
                 <Descriptions.Item label="首次进入目标(s)">{tuningStatus.target_entry_elapsed_seconds.toFixed(1)}</Descriptions.Item>
                 <Descriptions.Item label="错误" span={2}>{tuningStatus.last_error || '无'}</Descriptions.Item>
               </Descriptions>
+              {tuningStatus.candidate_profile?.members.length ? (
+                <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 16 }}>
+                  <Text strong>候选控制参数</Text>
+                  {tuningStatus.candidate_profile.members.map((member) => (
+                    <Descriptions key={member.member_name} title={member.member_name} size="small" column={3} bordered>
+                      <Descriptions.Item label="上调 P">
+                        {resolveAgcDecimalText(member, 'up_p_gain', 'up_p_gain_decimal')}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="上调 I">
+                        {resolveAgcDecimalText(member, 'up_i_gain', 'up_i_gain_decimal')}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="上调补偿(kW)">
+                        {resolveAgcDecimalText(member, 'up_bias_kw', 'up_bias_kw_decimal')}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="下调 P">
+                        {resolveAgcDecimalText(member, 'down_p_gain', 'down_p_gain_decimal')}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="下调 I">
+                        {resolveAgcDecimalText(member, 'down_i_gain', 'down_i_gain_decimal')}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="下调补偿(kW)">
+                        {resolveAgcDecimalText(member, 'down_bias_kw', 'down_bias_kw_decimal')}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="积分限值(kW)">
+                        {resolveAgcDecimalText(member, 'integral_limit_kw', 'integral_limit_kw_decimal')}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="单次步长(kW)">
+                        {resolveAgcDecimalText(member, 'max_step_kw', 'max_step_kw_decimal')}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="最大斜率(kW/s)">
+                        {resolveAgcDecimalText(member, 'max_ramp_kw_per_s', 'max_ramp_kw_per_s_decimal')}
+                      </Descriptions.Item>
+                    </Descriptions>
+                  ))}
+                </Space>
+              ) : null}
             </div>
           ) : null}
         </Form>
@@ -1888,6 +2053,16 @@ const AGC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ width: 220 }}>
+              <Form.Item name="control_mode" label="控制方式">
+                <Select<AgcControlMode>
+                  options={[
+                    { value: CONTROL_MODE_PI_EVENT, label: 'PI 事件触发' },
+                    { value: CONTROL_MODE_DIRECT_CYCLIC, label: '周期直分配' },
+                  ]}
+                />
+              </Form.Item>
+            </div>
+            <div style={{ width: 220 }}>
               <Form.Item label="分配方式">
                 <Select<AllocationMode>
                   value={allocationMode}
@@ -1904,6 +2079,34 @@ const AGC: React.FC = () => {
               </Form.Item>
             </div>
             </div>
+            {controlMode === CONTROL_MODE_DIRECT_CYCLIC ? (
+              <div className="control-config-grid control-config-grid--overview">
+                <div style={{ width: 220 }}>
+                  <Form.Item
+                    name="calculation_execution_period_seconds"
+                    label="计算执行周期（秒）"
+                    rules={[
+                      { required: true, message: '请输入计算执行周期' },
+                      { type: 'number', min: 1, max: 15, message: '计算执行周期必须在 1～15 秒范围内' },
+                    ]}
+                  >
+                    <InputNumber min={1} max={15} step={1} style={{ width: '100%' }} />
+                  </Form.Item>
+                </div>
+                <div style={{ width: 220 }}>
+                  <Form.Item
+                    name="command_control_period_seconds"
+                    label="命令控制周期（秒）"
+                    rules={[
+                      { required: true, message: '请输入命令控制周期' },
+                      { type: 'number', min: 4, max: 30, message: '命令控制周期必须在 4～30 秒范围内' },
+                    ]}
+                  >
+                    <InputNumber min={4} max={30} step={1} style={{ width: '100%' }} />
+                  </Form.Item>
+                </div>
+              </div>
+            ) : null}
             <Text type="secondary" className="control-allocation-note">
               理论占比按可控成员权重归一化；达到有功上下限后，剩余指令会重新分配。
             </Text>
@@ -1926,13 +2129,21 @@ const AGC: React.FC = () => {
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['p_cmd', 'signal', 'scale']} label="缩放系数">
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
+                <Form.Item
+                  name={['p_cmd', 'signal', 'scale_decimal']}
+                  label="缩放系数"
+                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '控制目标缩放系数') }]}
+                >
+                  <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['p_cmd', 'signal', 'offset']} label="偏移量">
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
+                <Form.Item
+                  name={['p_cmd', 'signal', 'offset_decimal']}
+                  label="偏移量"
+                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '控制目标偏移量') }]}
+                >
+                  <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
                 </Form.Item>
               </div>
             </div>
@@ -2010,13 +2221,21 @@ const AGC: React.FC = () => {
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['outputs', item.key, 'scale']} label="缩放系数">
-                    <InputNumber step={0.01} style={{ width: '100%' }} />
+                  <Form.Item
+                    name={['outputs', item.key, 'scale_decimal']}
+                    label="缩放系数"
+                    rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, `${item.label}缩放系数`) }]}
+                  >
+                    <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['outputs', item.key, 'offset']} label="偏移量">
-                    <InputNumber step={0.01} style={{ width: '100%' }} />
+                  <Form.Item
+                    name={['outputs', item.key, 'offset_decimal']}
+                    label="偏移量"
+                    rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, `${item.label}偏移量`) }]}
+                  >
+                    <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
                   </Form.Item>
                 </div>
               </div>
@@ -2116,91 +2335,92 @@ const AGC: React.FC = () => {
           <div style={{ display: 'flex', gap: 16 }}>
             <div style={{ flex: 1 }}>
               <Form.Item
-                name="capacity_kw"
+                name="capacity_kw_decimal"
                 label="额定容量（kW）"
                 rules={[
                   {
                     validator: async (_rule, value) => {
-                      if (!isFiniteNumber(value) || value <= 0) {
-                        throw new Error('额定容量必须是大于 0 的有限数值');
-                      }
+                      validateAgcDecimal(value, '额定容量', 'positive');
                     },
                   },
                 ]}
               >
-                <InputNumber style={{ width: '100%' }} step={0.1} min={0} />
+                <InputNumber<string> stringMode style={{ width: '100%' }} step="0.1" />
               </Form.Item>
             </div>
             <div style={{ flex: 1 }}>
               <Form.Item
-                name="weight"
+                name="weight_decimal"
                 label="调节权重"
                 dependencies={['controllable']}
                 rules={[
                   {
                     validator: async (_rule, value) => {
                       if (allocationMode !== 'custom') return;
-                      if (value == null || !isFiniteNumber(value) || value < 0) {
-                        throw new Error('权重必须是非负有效数字');
-                      }
-                      if (memberForm.getFieldValue('controllable') && value <= 0) {
+                      validateAgcDecimal(value, '权重', 'nonnegative');
+                      if (
+                        memberForm.getFieldValue('controllable')
+                        && compareAgcDecimalTexts(String(value), '0') <= 0
+                      ) {
                         throw new Error('可控成员的权重必须大于 0');
                       }
                     },
                   },
                 ]}
               >
-                <InputNumber
+                <InputNumber<string>
                   disabled={allocationMode !== 'custom'}
+                  stringMode
                   style={{ width: '100%' }}
-                  step={0.1}
-                  min={0}
+                  step="0.1"
                 />
               </Form.Item>
             </div>
             <div style={{ flex: 1 }}>
               <Form.Item
-                name="min_kw"
+                name="min_kw_decimal"
                 label="有功下限（kW）"
                 rules={[
                   {
                     validator: async (_rule, value) => {
-                      if (value == null || (isFiniteNumber(value) && value >= 0)) return;
-                      throw new Error('最小可调有功必须是非负有效数字');
+                      validateAgcDecimal(value, '最小可调有功', 'nonnegative');
                     },
                   },
                 ]}
               >
-                <InputNumber style={{ width: '100%' }} step={0.1} />
+                <InputNumber<string> stringMode style={{ width: '100%' }} step="0.1" />
               </Form.Item>
             </div>
             <div style={{ flex: 1 }}>
               <Form.Item
-                name="max_kw"
+                name="max_kw_decimal"
                 label="有功上限（kW）"
-                dependencies={['capacity_kw', 'min_kw']}
+                dependencies={['capacity_kw_decimal', 'min_kw_decimal']}
                 rules={[
                   {
                     validator: async (_rule, value) => {
-                      if (value == null) return;
-                      if (!isFiniteNumber(value) || value < 0) {
-                        throw new Error('最大可调有功必须是非负有效数字');
-                      }
+                      validateAgcDecimal(value, '最大可调有功', 'nonnegative');
 
-                      const capacityKw = memberForm.getFieldValue('capacity_kw');
-                      if (isFiniteNumber(capacityKw) && value > capacityKw) {
+                      const capacityKw = memberForm.getFieldValue('capacity_kw_decimal');
+                      if (
+                        !getDecimalTextError(capacityKw, '额定容量')
+                        && compareAgcDecimalTexts(String(value), String(capacityKw)) > 0
+                      ) {
                         throw new Error('最大可调有功不能大于额定容量');
                       }
 
-                      const minKw = memberForm.getFieldValue('min_kw');
-                      if (isFiniteNumber(minKw) && value < minKw) {
+                      const minKw = memberForm.getFieldValue('min_kw_decimal');
+                      if (
+                        !getDecimalTextError(minKw, '最小可调有功')
+                        && compareAgcDecimalTexts(String(value), String(minKw)) < 0
+                      ) {
                         throw new Error('最大可调有功不能小于最小可调有功');
                       }
                     },
                   },
                 ]}
               >
-                <InputNumber style={{ width: '100%' }} step={0.1} />
+                <InputNumber<string> stringMode style={{ width: '100%' }} step="0.1" />
               </Form.Item>
             </div>
           </div>
@@ -2237,13 +2457,21 @@ const AGC: React.FC = () => {
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['p_meas', 'scale']} label="缩放系数">
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
+                <Form.Item
+                  name={['p_meas', 'scale_decimal']}
+                  label="缩放系数"
+                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '成员测量点缩放系数') }]}
+                >
+                  <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['p_meas', 'offset']} label="偏移量">
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
+                <Form.Item
+                  name={['p_meas', 'offset_decimal']}
+                  label="偏移量"
+                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '成员测量点偏移量') }]}
+                >
+                  <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
                 </Form.Item>
               </div>
             </div>
@@ -2282,13 +2510,21 @@ const AGC: React.FC = () => {
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['p_set', 'signal', 'scale']} label="缩放系数">
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
+                <Form.Item
+                  name={['p_set', 'signal', 'scale_decimal']}
+                  label="缩放系数"
+                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '成员设定点缩放系数') }]}
+                >
+                  <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['p_set', 'signal', 'offset']} label="偏移量">
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
+                <Form.Item
+                  name={['p_set', 'signal', 'offset_decimal']}
+                  label="偏移量"
+                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '成员设定点偏移量') }]}
+                >
+                  <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
                 </Form.Item>
               </div>
             </div>

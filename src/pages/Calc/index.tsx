@@ -34,6 +34,7 @@ import type {
   DcRoute,
 } from '../../adapters';
 import ResizableSplit from '../../components/layout/ResizableSplit';
+import { getDecimalTextError, isDecimalTextZero } from '../../utils/decimal-input';
 import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import './index.css';
 
@@ -63,11 +64,16 @@ const NUMERIC_OPERATOR_KINDS = new Set([1, 2, 3, 4, 9, 10]);
 const LOGIC_OPERATOR_KINDS = new Set([5, 6, 7, 8]);
 const AGGREGATE_OPERATOR_KINDS = new Set([9, 10]);
 
-type ConstantType = 'bool' | 'int' | 'double';
+const TRIGGER_MODE_OPTIONS = [
+  { label: '变化触发', value: 1 },
+  { label: '周期定时', value: 2 },
+];
+
+type ConstantType = 'bool' | 'int' | 'decimal';
 type OperandDraft = {
   sourceKind: number;
   constantType: ConstantType;
-  constantValue: boolean | number;
+  constantValue: boolean | number | string;
 };
 
 type ItemDraft = {
@@ -79,10 +85,28 @@ type ItemDraft = {
   decimalPlaces?: number;
 };
 
+type GroupDraftSnapshot = {
+  name: string;
+  triggerMode: number;
+  periodMs: number;
+};
+
+const groupDraftKey = (draft: GroupDraftSnapshot): string => JSON.stringify(draft);
+
+const decimalTextError = (value: string): string | undefined => {
+  return getDecimalTextError(value, '精确十进制常量');
+};
+
+const defaultConstantValue = (type: ConstantType): boolean | number | string => {
+  if (type === 'bool') return false;
+  if (type === 'int') return 0;
+  return '0';
+};
+
 const defaultOperand = (): OperandDraft => ({
   sourceKind: 1,
-  constantType: 'double',
-  constantValue: 0,
+  constantType: 'decimal',
+  constantValue: '0',
 });
 
 const defaultItem = (): ItemDraft => ({
@@ -100,6 +124,7 @@ const sourceLabel = (operand: CalcOperandSpec | null | undefined): string => {
   if (!operand || operand.source_kind === 1) return '数据总线点位';
   if (operand.source_kind !== 2 || !operand.constant) return '常量';
   const constant = operand.constant;
+  if (constant.decimal_value !== undefined) return `常量：${constant.decimal_value}`;
   if (constant.bool_value !== undefined) return `常量：${constant.bool_value ? '真' : '假'}`;
   if (constant.int_value !== undefined) return `常量：${constant.int_value}`;
   if (constant.double_value !== undefined) return `常量：${constant.double_value}`;
@@ -108,6 +133,9 @@ const sourceLabel = (operand: CalcOperandSpec | null | undefined): string => {
 
 const draftFromOperand = (operand: CalcOperandSpec | null | undefined): OperandDraft => {
   const constant = operand?.constant;
+  if (constant?.decimal_value !== undefined) {
+    return { sourceKind: operand?.source_kind ?? 2, constantType: 'decimal', constantValue: constant.decimal_value };
+  }
   if (constant?.bool_value !== undefined) {
     return { sourceKind: operand?.source_kind ?? 2, constantType: 'bool', constantValue: constant.bool_value };
   }
@@ -116,8 +144,8 @@ const draftFromOperand = (operand: CalcOperandSpec | null | undefined): OperandD
   }
   return {
     sourceKind: operand?.source_kind ?? 1,
-    constantType: 'double',
-    constantValue: constant?.double_value ?? 0,
+    constantType: 'decimal',
+    constantValue: constant?.double_value !== undefined ? String(constant.double_value) : '0',
   };
 };
 
@@ -138,7 +166,7 @@ const normalizeConstantValue = (draft: OperandDraft): CalcOperandSpec => {
   if (draft.constantType === 'int') {
     return { source_kind: 2, constant: { int_value: Number(draft.constantValue) || 0 } };
   }
-  return { source_kind: 2, constant: { double_value: Number(draft.constantValue) || 0 } };
+  return { source_kind: 2, constant: { decimal_value: String(draft.constantValue) } };
 };
 
 const itemToConfig = (draft: ItemDraft): CalcItemConfig => ({
@@ -170,9 +198,11 @@ const CalcPage: React.FC = () => {
   const [selectedGroupName, setSelectedGroupName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
-  const [groupModalMode, setGroupModalMode] = useState<'create' | 'rename'>('create');
+  const [groupModalMode, setGroupModalMode] = useState<'create' | 'edit'>('create');
   const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [groupNameDraft, setGroupNameDraft] = useState('');
+  const [groupTriggerModeDraft, setGroupTriggerModeDraft] = useState(1);
+  const [groupPeriodMsDraft, setGroupPeriodMsDraft] = useState(1000);
   const [groupInitialDraft, setGroupInitialDraft] = useState<string | null>(null);
   const [itemModalOpen, setItemModalOpen] = useState(false);
   const [itemSubmitting, setItemSubmitting] = useState(false);
@@ -254,15 +284,21 @@ const CalcPage: React.FC = () => {
     setGroupModalMode('create');
     const draft = `计算组${groups.length + 1}`;
     setGroupNameDraft(draft);
-    setGroupInitialDraft(draft);
+    setGroupTriggerModeDraft(1);
+    setGroupPeriodMsDraft(1000);
+    setGroupInitialDraft(groupDraftKey({ name: draft, triggerMode: 1, periodMs: 1000 }));
     setGroupModalOpen(true);
   };
 
-  const openRenameGroup = () => {
+  const openEditGroup = () => {
     if (!selectedConfig) return;
-    setGroupModalMode('rename');
+    setGroupModalMode('edit');
     setGroupNameDraft(selectedConfig.group_name);
-    setGroupInitialDraft(selectedConfig.group_name);
+    const triggerMode = selectedConfig.trigger_mode === 2 ? 2 : 1;
+    const periodMs = selectedConfig.period_ms > 0 ? selectedConfig.period_ms : 1000;
+    setGroupTriggerModeDraft(triggerMode);
+    setGroupPeriodMsDraft(periodMs);
+    setGroupInitialDraft(groupDraftKey({ name: selectedConfig.group_name, triggerMode, periodMs }));
     setGroupModalOpen(true);
   };
 
@@ -276,15 +312,24 @@ const CalcPage: React.FC = () => {
     return duplicate ? '分组名称已存在' : undefined;
   }, [groupNameDraft, groupModalMode, groups, selectedConfig?.group_name]);
 
+  const groupPeriodError = groupTriggerModeDraft === 2 && (!Number.isInteger(groupPeriodMsDraft) || groupPeriodMsDraft <= 0)
+    ? '周期定时模式下周期必须为大于 0 的整数毫秒'
+    : undefined;
+
   const closeGroupModal = () => {
     if (groupSubmitting) {
       return;
     }
 
-    if (groupInitialDraft !== null && groupNameDraft !== groupInitialDraft) {
+    const currentDraft = groupDraftKey({
+      name: groupNameDraft,
+      triggerMode: groupTriggerModeDraft,
+      periodMs: groupPeriodMsDraft,
+    });
+    if (groupInitialDraft !== null && currentDraft !== groupInitialDraft) {
       Modal.confirm({
         title: '放弃未保存修改？',
-        content: '当前分组名称尚未保存，确定关闭吗？',
+        content: '当前分组配置尚未保存，确定关闭吗？',
         okText: '放弃修改',
         cancelText: '继续编辑',
         onOk: () => {
@@ -310,36 +355,55 @@ const CalcPage: React.FC = () => {
         messageApi.warning(groupNameError);
         return;
       }
+      if (groupPeriodError) {
+        messageApi.warning(groupPeriodError);
+        return;
+      }
 
       if (groupModalMode === 'create') {
         await api.calcUpsertGroup({
           group_name: name,
+          trigger_mode: groupTriggerModeDraft,
+          period_ms: groupPeriodMsDraft,
           items: [{
             item_name: '计算项1',
             operator_kind: 1,
             left_operand: { source_kind: 1, constant: null },
-            right_operand: { source_kind: 2, constant: { double_value: 0 } },
+            right_operand: { source_kind: 2, constant: { decimal_value: '0' } },
             operands: [],
           }],
         }, true);
         messageApi.success('计算分组已创建');
-      } else if (selectedConfig && name !== selectedConfig.group_name) {
+      } else if (selectedConfig) {
         const oldName = selectedConfig.group_name;
+        const nextConfig = {
+          ...selectedConfig,
+          group_name: name,
+          trigger_mode: groupTriggerModeDraft,
+          period_ms: groupPeriodMsDraft,
+        };
         const restartResult = await runSelectedGroupStopped(
-          () => api.calcRenameGroup(oldName, name).then(() => undefined),
+          async () => {
+            await api.calcUpsertGroup({ ...nextConfig, group_name: oldName }, false);
+            if (name !== oldName) {
+              await api.calcRenameGroup(oldName, name);
+            }
+          },
           { originalGroupName: oldName, restartGroupName: name },
         );
-        console.info('Calc 计算分组重命名完成', {
+        console.info('Calc 计算分组配置保存完成', {
           groupName: oldName,
           nextGroupName: name,
+          triggerMode: groupTriggerModeDraft,
+          periodMs: groupPeriodMsDraft,
           restarted: restartResult.restartedAfterRun,
         });
         if (restartResult.restartError) {
-          messageApi.warning(`计算分组已重命名，但重新启动失败：${formatErrorText(restartResult.restartError)}`);
+          messageApi.warning(`计算分组配置已保存，但重新启动失败：${formatErrorText(restartResult.restartError)}`);
         } else if (restartResult.stoppedBeforeRun) {
-          messageApi.success('计算分组已重命名并重新启动');
+          messageApi.success('计算分组配置已保存并重新启动');
         } else {
-          messageApi.success('计算分组已重命名');
+          messageApi.success('计算分组配置已保存');
         }
       }
       setGroupModalOpen(false);
@@ -413,7 +477,8 @@ const CalcPage: React.FC = () => {
   const inputRequirementError = isAggregate || hasExternalInput ? undefined : '至少保留一侧使用数据总线点位';
   const divisorError = itemDraft.operatorKind === 4
     && itemDraft.right.sourceKind === 2
-    && Number(itemDraft.right.constantValue) === 0
+    && ((itemDraft.right.constantType === 'decimal' && isDecimalTextZero(String(itemDraft.right.constantValue)))
+      || (itemDraft.right.constantType === 'int' && itemDraft.right.constantValue === 0))
     ? '除数不能为 0'
     : undefined;
 
@@ -423,8 +488,9 @@ const CalcPage: React.FC = () => {
       return '逻辑运算的常量必须是 bool';
     }
     if (NUMERIC_OPERATOR_KINDS.has(operatorKind) && operand.constantType === 'bool') {
-      return '数值运算的常量必须是 int64 或 double';
+      return '数值运算的常量必须是 int64 或精确十进制';
     }
+    if (operand.constantType === 'decimal') return decimalTextError(String(operand.constantValue));
     return undefined;
   };
 
@@ -464,10 +530,14 @@ const CalcPage: React.FC = () => {
       const operands = isAggregate ? item.operands : [item.left_operand, item.right_operand];
       const valid = operands.every((operand) => {
         if (!operand || operand.source_kind !== 2) return true;
-        return Boolean(operand.constant?.int_value !== undefined || operand.constant?.double_value !== undefined);
+        return Boolean(
+          operand.constant?.int_value !== undefined
+          || operand.constant?.double_value !== undefined
+          || operand.constant?.decimal_value !== undefined,
+        );
       });
       if (!valid) {
-        messageApi.warning('数值运算的常量必须是 int64 或 double');
+        messageApi.warning('数值运算的常量必须是 int64 或精确十进制');
         return;
       }
     }
@@ -485,8 +555,16 @@ const CalcPage: React.FC = () => {
       messageApi.warning('求和/求平均至少需要两个操作数');
       return;
     }
-      if (item.operator_kind === 10 && item.decimal_places !== undefined && (item.decimal_places < 0 || item.decimal_places > 15)) {
-      messageApi.warning('平均值小数位数必须为 0 到 15');
+      const decimalError = draftOperands
+        .filter((operand) => operand.sourceKind === 2 && operand.constantType === 'decimal')
+        .map((operand) => decimalTextError(String(operand.constantValue)))
+        .find((error) => error !== undefined);
+      if (decimalError) {
+      messageApi.warning(decimalError);
+      return;
+    }
+      if (item.operator_kind === 10 && item.decimal_places !== undefined && (item.decimal_places < 0 || item.decimal_places > 20)) {
+      messageApi.warning('平均值小数位数必须为 0 到 20');
       return;
     }
       if (inputRequirementError) {
@@ -575,7 +653,7 @@ const CalcPage: React.FC = () => {
       const normalize = (operand: OperandDraft): OperandDraft => {
         if (operand.sourceKind !== 2) return operand;
         if (nextIsLogic) return { ...operand, constantType: 'bool', constantValue: false };
-        if (operand.constantType === 'bool') return { ...operand, constantType: 'double', constantValue: 0 };
+        if (operand.constantType === 'bool') return { ...operand, constantType: 'decimal', constantValue: '0' };
         return operand;
       };
       const normalizedOperands = current.operands.map(normalize);
@@ -680,7 +758,10 @@ const CalcPage: React.FC = () => {
     const operand = aggregate ? itemDraft.operands[index] : index === 0 ? itemDraft.left : itemDraft.right;
     if (!operand) return null;
     const isLogic = LOGIC_OPERATOR_KINDS.has(itemDraft.operatorKind);
-    const effectiveType: ConstantType = isLogic ? 'bool' : operand.constantType === 'bool' ? 'double' : operand.constantType;
+    const effectiveType: ConstantType = isLogic ? 'bool' : operand.constantType === 'bool' ? 'decimal' : operand.constantType;
+    const constantError = operand.sourceKind === 2 && operand.constantType === 'decimal'
+      ? decimalTextError(String(operand.constantValue))
+      : undefined;
     const side = index === 0 ? 'left' : 'right';
     const endpoint = selectedConfig && itemDraft.itemName.trim()
       ? calcEndpointPath(selectedConfig.group_name, itemDraft.itemName.trim(), aggregate ? `input_${index + 1}` : `${side}_input`)
@@ -702,14 +783,14 @@ const CalcPage: React.FC = () => {
       </Form.Item>
       {operand.sourceKind === 2 ? <>
         <Form.Item
-          validateStatus={typeError ? 'error' : undefined}
-          help={typeError}
+          validateStatus={typeError && !constantError ? 'error' : undefined}
+          help={constantError ? undefined : typeError}
           style={{ marginBottom: 0 }}
         >
-          <Select value={effectiveType} onChange={(value: ConstantType) => updateOperand(index, { constantType: value, constantValue: value === 'bool' ? false : 0 })} options={isLogic ? [{ label: 'bool', value: 'bool' }] : [{ label: 'int64', value: 'int' }, { label: 'double', value: 'double' }]} />
+          <Select value={effectiveType} onChange={(value: ConstantType) => updateOperand(index, { constantType: value, constantValue: defaultConstantValue(value) })} options={isLogic ? [{ label: 'bool', value: 'bool' }] : [{ label: 'int64', value: 'int' }, { label: '精确十进制', value: 'decimal' }]} />
         </Form.Item>
-        {effectiveType === 'bool' ? <Select value={Boolean(operand.constantValue)} onChange={(value) => updateOperand(index, { constantValue: value })} options={[{ label: '真', value: true }, { label: '假', value: false }]} /> : <InputNumber style={{ width: '100%' }} value={Number(operand.constantValue)} precision={effectiveType === 'int' ? 0 : undefined} status={index === 1 && divisorError ? 'error' : undefined} onChange={(value) => updateOperand(index, { constantValue: value ?? 0 })} />}
-        {index === 1 && divisorError ? <Text type="danger">{divisorError}</Text> : null}
+        {effectiveType === 'bool' ? <Select value={Boolean(operand.constantValue)} onChange={(value) => updateOperand(index, { constantValue: value })} options={[{ label: '真', value: true }, { label: '假', value: false }]} /> : effectiveType === 'decimal' ? <InputNumber<string> stringMode style={{ width: '100%' }} value={String(operand.constantValue)} status={constantError || (index === 1 && divisorError) ? 'error' : undefined} onChange={(value) => updateOperand(index, { constantValue: value ?? '' })} /> : <InputNumber style={{ width: '100%' }} value={typeof operand.constantValue === 'number' ? operand.constantValue : 0} precision={0} status={index === 1 && divisorError ? 'error' : undefined} onChange={(value) => updateOperand(index, { constantValue: value ?? 0 })} />}
+        {constantError ? <Text type="danger">{constantError}</Text> : index === 1 && divisorError ? <Text type="danger">{divisorError}</Text> : null}
       </> : <Space direction="vertical" size={4} className="calc-endpoint-info">
         <Space size={6} wrap>
           <Text type="secondary">{endpointRole}</Text>
@@ -728,7 +809,7 @@ const CalcPage: React.FC = () => {
     const boundRoute = selectedConfig && inputTag ? findInputRoute(selectedConfig.group_name, inputTag) : undefined;
     const status = itemInfo?.operand_status?.find((value) => value.index === index);
     const typeError = operandTypeError(operand);
-    const effectiveType: ConstantType = operand.constantType === 'bool' ? 'double' : operand.constantType;
+    const effectiveType: ConstantType = operand.constantType === 'bool' ? 'decimal' : operand.constantType;
     const endpoint = selectedConfig && itemDraft.itemName.trim()
       ? calcEndpointPath(selectedConfig.group_name, itemDraft.itemName.trim(), `input_${index + 1}`)
       : null;
@@ -744,15 +825,21 @@ const CalcPage: React.FC = () => {
         <Select
           className="calc-aggregate-type"
           value={effectiveType}
-          onChange={(value: ConstantType) => updateOperand(index, { constantType: value, constantValue: value === 'bool' ? false : 0 })}
-          options={[{ label: 'int64', value: 'int' }, { label: 'double', value: 'double' }]}
+          onChange={(value: ConstantType) => updateOperand(index, { constantType: value, constantValue: defaultConstantValue(value) })}
+          options={[{ label: 'int64', value: 'int' }, { label: '精确十进制', value: 'decimal' }]}
         />
-        <InputNumber
+        {effectiveType === 'decimal' ? <InputNumber<string>
+          stringMode
           className="calc-aggregate-number"
-          value={Number(operand.constantValue)}
-          precision={effectiveType === 'int' ? 0 : undefined}
+          value={String(operand.constantValue)}
+          status={typeError ? 'error' : undefined}
+          onChange={(value) => updateOperand(index, { constantValue: value ?? '' })}
+        /> : <InputNumber
+          className="calc-aggregate-number"
+          value={typeof operand.constantValue === 'number' ? operand.constantValue : 0}
+          precision={0}
           onChange={(value) => updateOperand(index, { constantValue: value ?? 0 })}
-        />
+        />}
       </Space> : <div className="calc-aggregate-route">
         <Text type="secondary" ellipsis={{ tooltip: endpoint ?? undefined }}>{endpoint ?? '填写计算项名称后生成目标槽位'}</Text>
         {boundRoute ? <Tag color="green">已绑定：{routeEndpointLabel(boundRoute.src)}</Tag> : <Tag color="orange">未绑定</Tag>}
@@ -776,7 +863,7 @@ const CalcPage: React.FC = () => {
       <Space wrap>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreateGroup}>新建分组</Button>
         <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void refresh()}>刷新</Button>
-        {selectedConfig ? <><Button icon={<EditOutlined />} onClick={openRenameGroup}>重命名</Button><Popconfirm title="确认删除该计算分组？" onConfirm={() => void deleteGroup()}><Button danger icon={<DeleteOutlined />}>删除分组</Button></Popconfirm><Button type={selectedGroup?.state === 2 ? 'default' : 'primary'} icon={selectedGroup?.state === 2 ? <PauseCircleOutlined /> : <PlayCircleOutlined />} onClick={() => void toggleGroup()}>{selectedGroup?.state === 2 ? '停止分组' : '启动分组'}</Button></> : null}
+        {selectedConfig ? <><Button icon={<EditOutlined />} onClick={openEditGroup}>编辑分组</Button><Popconfirm title="确认删除该计算分组？" onConfirm={() => void deleteGroup()}><Button danger icon={<DeleteOutlined />}>删除分组</Button></Popconfirm><Button type={selectedGroup?.state === 2 ? 'default' : 'primary'} icon={selectedGroup?.state === 2 ? <PauseCircleOutlined /> : <PlayCircleOutlined />} onClick={() => void toggleGroup()}>{selectedGroup?.state === 2 ? '停止分组' : '启动分组'}</Button></> : null}
       </Space>
     </Card>
     <ResizableSplit
@@ -793,7 +880,7 @@ const CalcPage: React.FC = () => {
         style={{ width: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}
         styles={{ body: { flex: 1, minHeight: 0, padding: 0, overflow: 'auto' } }}
       >
-        <Table<CalcGroupInfo> rowKey={(record) => record.config?.group_name ?? String(record.conn_id)} size="small" loading={loading} pagination={false} dataSource={groups} rowClassName={(record) => record.config?.group_name === selectedGroupName ? 'calc-selected-row' : ''} onRow={(record) => ({ onClick: () => setSelectedGroupName(record.config?.group_name ?? null) })} columns={[{ title: '名称', key: 'name', render: (_, record) => record.config?.group_name ?? '-' }, { title: '状态', key: 'state', width: 90, render: (_, record) => { const state = GROUP_STATE[record.state] ?? GROUP_STATE[0]; return <Tag color={state.color}>{state.label}</Tag>; } }, { title: '项数', key: 'items', width: 60, render: (_, record) => record.config?.items.length ?? 0 }]} />
+        <Table<CalcGroupInfo> rowKey={(record) => record.config?.group_name ?? String(record.conn_id)} size="small" loading={loading} pagination={false} dataSource={groups} rowClassName={(record) => record.config?.group_name === selectedGroupName ? 'calc-selected-row' : ''} onRow={(record) => ({ onClick: () => setSelectedGroupName(record.config?.group_name ?? null) })} columns={[{ title: '名称', key: 'name', render: (_, record) => record.config?.group_name ?? '-' }, { title: '触发方式', key: 'trigger_mode', width: 100, render: (_, record) => record.config?.trigger_mode === 2 ? `周期 ${record.config.period_ms} ms` : '变化触发' }, { title: '状态', key: 'state', width: 90, render: (_, record) => { const state = GROUP_STATE[record.state] ?? GROUP_STATE[0]; return <Tag color={state.color}>{state.label}</Tag>; } }, { title: '项数', key: 'items', width: 60, render: (_, record) => record.config?.items.length ?? 0 }]} />
       </Card>
       <Card
         title={selectedConfig ? `${selectedConfig.group_name} · 计算项` : '请选择计算分组'}
@@ -812,15 +899,23 @@ const CalcPage: React.FC = () => {
         </> : <div className="calc-empty">暂无计算分组，请先新建。</div>}
       </Card>
     </ResizableSplit>
-    <Modal title={groupModalMode === 'create' ? '新建计算分组' : '重命名计算分组'} open={groupModalOpen} onCancel={closeGroupModal} onOk={() => void saveGroup()} okText="保存" cancelText="取消" confirmLoading={groupSubmitting} maskClosable={!groupSubmitting} closable={!groupSubmitting} keyboard={!groupSubmitting}>
-      <Form layout="vertical"><Form.Item label="分组名称" required validateStatus={groupNameError ? 'error' : undefined} help={groupNameError}><Input autoFocus value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} onPressEnter={() => void saveGroup()} /></Form.Item></Form>
+    <Modal title={groupModalMode === 'create' ? '新建计算分组' : '编辑计算分组'} open={groupModalOpen} onCancel={closeGroupModal} onOk={() => void saveGroup()} okText="保存" cancelText="取消" confirmLoading={groupSubmitting} maskClosable={!groupSubmitting} closable={!groupSubmitting} keyboard={!groupSubmitting}>
+      <Form layout="vertical">
+        <Form.Item label="分组名称" required validateStatus={groupNameError ? 'error' : undefined} help={groupNameError}><Input autoFocus value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} onPressEnter={() => void saveGroup()} /></Form.Item>
+        <Form.Item label="运算触发方式" required>
+          <Select value={groupTriggerModeDraft} options={TRIGGER_MODE_OPTIONS} onChange={(value: number) => setGroupTriggerModeDraft(value)} />
+        </Form.Item>
+        <Form.Item label="计算周期（毫秒）" validateStatus={groupPeriodError ? 'error' : undefined} help={groupPeriodError ?? '仅周期定时模式生效'}>
+          <InputNumber min={1} precision={0} disabled={groupTriggerModeDraft !== 2} value={groupPeriodMsDraft} style={{ width: '100%' }} onChange={(value) => setGroupPeriodMsDraft(value ?? 0)} />
+        </Form.Item>
+      </Form>
     </Modal>
     <Modal className="calc-item-modal" centered title={editingItemIndex === null ? '新增计算项' : '编辑计算项'} open={itemModalOpen} width="min(920px, calc(100vw - 32px))" styles={{ body: { maxHeight: 'min(680px, calc(100vh - 220px))', overflowY: 'auto', paddingInline: 24 } }} onCancel={closeItemModal} onOk={() => void saveItem()} okText="保存" cancelText="取消" confirmLoading={itemSubmitting} maskClosable={!itemSubmitting} closable={!itemSubmitting} keyboard={!itemSubmitting}>
       <Form layout="vertical">
         <Row gutter={16}><Col span={12}><Form.Item label="计算项名称" required validateStatus={itemNameError ? 'error' : undefined} help={itemNameError}><Input placeholder="例如：总功率" value={itemDraft.itemName} onChange={(event) => setItemDraft((current) => ({ ...current, itemName: event.target.value }))} /></Form.Item></Col><Col span={12}><Form.Item label="运算符" required><Select value={itemDraft.operatorKind} onChange={updateOperator} options={OPERATOR_OPTIONS.map(({ label, value }) => ({ label, value }))} /></Form.Item></Col></Row>
         {isAggregate ? <>
           <div className="calc-section-heading"><Text strong>输入配置</Text><Text type="secondary">{itemDraft.operands.length} 个操作数</Text></div>
-          {itemDraft.operatorKind === 10 ? <Form.Item className="calc-average-precision" label="平均值小数位数" help="不填写表示不主动舍入，范围 0 到 15"><InputNumber min={0} max={15} precision={0} value={itemDraft.decimalPlaces} placeholder="不舍入" style={{ width: 180 }} onChange={(value) => setItemDraft((current) => ({ ...current, decimalPlaces: value === null ? undefined : value }))} /></Form.Item> : null}
+          {itemDraft.operatorKind === 10 ? <Form.Item className="calc-average-precision" label="平均值小数位数" help="不填写表示不主动舍入，范围 0 到 20"><InputNumber min={0} max={20} precision={0} value={itemDraft.decimalPlaces} placeholder="不舍入" style={{ width: 180 }} onChange={(value) => setItemDraft((current) => ({ ...current, decimalPlaces: value === null ? undefined : value }))} /></Form.Item> : null}
           <div className="calc-aggregate-list">
             <div className="calc-aggregate-list-header"><span>序号</span><span>输入来源</span><span>值 / 目标槽位</span><span>状态</span><span /></div>
             {itemDraft.operands.map((_, index) => <React.Fragment key={`operand-${index}`}>{renderAggregateOperand(index)}</React.Fragment>)}

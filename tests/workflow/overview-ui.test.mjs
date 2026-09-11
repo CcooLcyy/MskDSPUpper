@@ -88,3 +88,9 @@ test('总览样式包含响应式网格断点', () => {
   assert.match(overviewStyle, /@media \(max-width: 900px\)/);
   assert.match(overviewStyle, /@media \(max-width: 600px\)/);
 });
+
+// 验证总览运行指标兼容 DataCenter 的 Decimal 值，不会把十进制发布误判为缺失。
+test('总览运行指标接受 Decimal 点值', () => {
+  assert.match(overviewSource, /value\.type === 'Decimal'/);
+  assert.match(overviewSource, /Number\(value\.value\)/);
+});

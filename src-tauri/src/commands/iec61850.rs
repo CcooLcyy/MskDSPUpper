@@ -146,6 +146,12 @@ pub struct PointMappingDto {
     pub scale: f64,
     pub offset: f64,
     pub deadband: f64,
+    #[serde(default)]
+    pub scale_decimal: String,
+    #[serde(default)]
+    pub offset_decimal: String,
+    #[serde(default)]
+    pub deadband_decimal: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -519,6 +525,9 @@ impl From<PointMapping> for PointMappingDto {
             scale: v.scale,
             offset: v.offset,
             deadband: v.deadband,
+            scale_decimal: v.scale_decimal,
+            offset_decimal: v.offset_decimal,
+            deadband_decimal: v.deadband_decimal,
         }
     }
 }
@@ -533,6 +542,9 @@ impl PointMappingDto {
             scale: self.scale,
             offset: self.offset,
             deadband: self.deadband,
+            scale_decimal: self.scale_decimal.clone(),
+            offset_decimal: self.offset_decimal.clone(),
+            deadband_decimal: self.deadband_decimal.clone(),
         }
     }
 }

@@ -289,6 +289,9 @@ export interface Iec104Point {
   scale: number;
   offset: number;
   deadband: number;
+  scale_decimal: string;
+  offset_decimal: string;
+  deadband_decimal: string;
 }
 
 export interface Iec104PointTable {
@@ -411,6 +414,9 @@ export interface Iec61850PointMapping {
   scale: number;
   offset: number;
   deadband: number;
+  scale_decimal: string;
+  offset_decimal: string;
+  deadband_decimal: string;
 }
 
 export interface Iec61850PointMappings {
@@ -533,6 +539,9 @@ export interface ModbusPoint {
   scale: number;
   offset: number;
   deadband: number;
+  scale_decimal: string;
+  offset_decimal: string;
+  deadband_decimal: string;
   reg_count: number;
   word_order: number;
   byte_order: number;
@@ -547,6 +556,29 @@ export interface ModbusPointTable {
 export interface ModbusUpdateConfigResponse {
   ok: boolean;
   message: string;
+}
+
+export interface ModbusTcpConfig {
+  host: string;
+  port: number;
+  unit_id: number;
+  connect_timeout_ms: number;
+  request_timeout_ms: number;
+}
+
+export interface ModbusTcpLinkConfig {
+  conn_name: string;
+  tcp: ModbusTcpConfig | null;
+  poll_interval_ms: number;
+  address_base: number;
+  read_plan: ModbusReadPlan | null;
+}
+
+export interface ModbusTcpLinkInfo {
+  config: ModbusTcpLinkConfig | null;
+  conn_id: number;
+  state: number;
+  last_error: string;
 }
 
 export interface Dlt645MqttConfig {
@@ -602,6 +634,9 @@ export interface Dlt645Point {
   scale: number;
   offset: number;
   deadband: number;
+  scale_decimal: string;
+  offset_decimal: string;
+  deadband_decimal: string;
   byte_index: number | null;
   bit_index: number | null;
 }
@@ -614,6 +649,9 @@ export interface Dlt645BlockItem {
   scale: number;
   offset: number;
   deadband: number;
+  scale_decimal: string;
+  offset_decimal: string;
+  deadband_decimal: string;
   trim_right_space: boolean | null;
   byte_index: number | null;
   bit_index: number | null;
@@ -708,6 +746,7 @@ export type DcPointValue =
   | { type: 'Bool'; value: boolean }
   | { type: 'Int'; value: number }
   | { type: 'Double'; value: number }
+  | { type: 'Decimal'; value: string }
   | { type: 'String'; value: string }
   | { type: 'Bytes'; value: number[] };
 
@@ -750,6 +789,7 @@ export interface CalcTypedConstant {
   bool_value?: boolean;
   int_value?: number;
   double_value?: number;
+  decimal_value?: string;
 }
 
 export interface CalcOperandSpec {
@@ -788,6 +828,10 @@ export interface CalcItemInfo {
 export interface CalcGroupConfig {
   group_name: string;
   items: CalcItemConfig[];
+  /** 0: 未指定（兼容旧配置），1: 变化触发，2: 周期定时。 */
+  trigger_mode: number;
+  /** 周期定时执行周期，单位毫秒；变化触发时忽略。 */
+  period_ms: number;
 }
 
 export interface CalcGroupInfo {
@@ -803,6 +847,8 @@ export interface AgcSignalSpec {
   unit: string;
   scale: number;
   offset: number;
+  scale_decimal: string;
+  offset_decimal: string;
 }
 
 export interface AgcValueSpec {
@@ -823,6 +869,10 @@ export interface AgcMemberConfig {
   weight: number;
   min_kw: number;
   max_kw: number;
+  capacity_kw_decimal: string;
+  weight_decimal: string;
+  min_kw_decimal: string;
+  max_kw_decimal: string;
   p_meas: AgcSignalSpec | null;
   p_set: AgcValueSpec | null;
 }
@@ -836,6 +886,12 @@ export interface AgcDerivedOutputs {
 export interface AgcGroupConfig {
   group_name: string;
   p_cmd: AgcValueSpec | null;
+  /** 0: 未指定（按 PI_EVENT 兼容），1: PI_EVENT，2: DIRECT_CYCLIC。 */
+  control_mode: number;
+  /** 计算执行周期，单位秒；仅 DIRECT_CYCLIC 生效。 */
+  calculation_execution_period_seconds: number;
+  /** 命令控制最小间隔，单位秒；仅 DIRECT_CYCLIC 生效。 */
+  command_control_period_seconds: number;
   strategy: AgcStrategyConfig | null;
   members: AgcMemberConfig[];
   outputs: AgcDerivedOutputs | null;
@@ -869,6 +925,15 @@ export interface AgcMemberControlProfile {
   integral_limit_kw: number;
   max_step_kw: number;
   max_ramp_kw_per_s: number;
+  up_p_gain_decimal: string;
+  up_i_gain_decimal: string;
+  down_p_gain_decimal: string;
+  down_i_gain_decimal: string;
+  up_bias_kw_decimal: string;
+  down_bias_kw_decimal: string;
+  integral_limit_kw_decimal: string;
+  max_step_kw_decimal: string;
+  max_ramp_kw_per_s_decimal: string;
   version: number;
   confirmed_at_ms: number;
 }
@@ -890,6 +955,9 @@ export interface AgcTuningConfig {
   min_up_tests: number;
   min_down_tests: number;
   total_tolerance_kw: number;
+  target_lower_kw_decimal: string;
+  target_upper_kw_decimal: string;
+  total_tolerance_kw_decimal: string;
 }
 
 export interface AgcTuningStatus {
@@ -902,6 +970,8 @@ export interface AgcTuningStatus {
   elapsed_ms: number;
   current_target_kw: number;
   current_total_meas_kw: number;
+  current_target_kw_decimal: string;
+  current_total_meas_kw_decimal: string;
   target_entry_elapsed_seconds: number;
   stable_elapsed_seconds: number;
   last_error: string;
@@ -943,6 +1013,12 @@ export interface AvcMemberConfig {
 
 export interface AvcGroupConfig {
   group_name: string;
+  /** 0: 未指定（按 PI_EVENT 兼容），1: PI_EVENT，2: DIRECT_CYCLIC。 */
+  control_mode: number;
+  /** 计算执行周期，单位秒；仅 DIRECT_CYCLIC 生效。 */
+  calculation_execution_period_seconds: number;
+  /** 命令控制最小间隔，单位秒；仅 DIRECT_CYCLIC 生效。 */
+  command_control_period_seconds: number;
   voltage_meas: AvcSignalSpec | null;
   voltage_cmd: AvcSignalSpec | null;
   q_total_cmd: AvcValueSpec | null;
@@ -982,6 +1058,17 @@ export interface Iec104ExportTask {
 export interface ModbusRtuExportTask {
   link: {
     config: ModbusLinkConfig;
+  };
+  point_table: {
+    conn_name: string;
+    points: ModbusPoint[];
+    replace: true;
+  };
+}
+
+export interface ModbusTcpExportTask {
+  link: {
+    config: ModbusTcpLinkConfig;
   };
   point_table: {
     conn_name: string;
@@ -1046,6 +1133,7 @@ export interface StableDataBusRoute {
 export type ConfigExportSectionId =
   | 'iec104'
   | 'modbus_rtu'
+  | 'modbus_tcp'
   | 'dlt645'
   | 'agc'
   | 'avc'
@@ -1075,6 +1163,9 @@ export interface FullConfigExportSnapshot {
     modbus_rtu: {
       mqtt: ModbusMqttConfig | null;
       links: ModbusRtuExportTask[];
+    };
+    modbus_tcp: {
+      links: ModbusTcpExportTask[];
     };
     dlt645: {
       mqtt: Dlt645MqttConfig | null;

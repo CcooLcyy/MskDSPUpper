@@ -76,6 +76,12 @@ pub struct ModbusPointDto {
     pub scale: f64,
     pub offset: f64,
     pub deadband: f64,
+    #[serde(default)]
+    pub scale_decimal: String,
+    #[serde(default)]
+    pub offset_decimal: String,
+    #[serde(default)]
+    pub deadband_decimal: String,
     pub reg_count: u32,
     pub word_order: i32,
     pub byte_order: i32,
@@ -188,6 +194,9 @@ impl From<Point> for ModbusPointDto {
             scale: point.scale,
             offset: point.offset,
             deadband: point.deadband,
+            scale_decimal: point.scale_decimal,
+            offset_decimal: point.offset_decimal,
+            deadband_decimal: point.deadband_decimal,
             reg_count: point.reg_count,
             word_order: point.word_order,
             byte_order: point.byte_order,
@@ -300,6 +309,9 @@ impl ModbusPointDto {
             scale: self.scale,
             offset: self.offset,
             deadband: self.deadband,
+            scale_decimal: self.scale_decimal.clone(),
+            offset_decimal: self.offset_decimal.clone(),
+            deadband_decimal: self.deadband_decimal.clone(),
             reg_count: self.reg_count,
             word_order: self.word_order,
             byte_order: self.byte_order,
