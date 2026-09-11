@@ -16,13 +16,15 @@ import {
   ArrowRightOutlined,
   CheckCircleOutlined,
   ControlOutlined,
+  DashboardOutlined,
+  DatabaseOutlined,
   NodeIndexOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../adapters';
-import type { ModuleInfo, ModuleRunningInfo } from '../../adapters';
+import type { DcConnectionInfo, DcPointValue, DcSourcePointUpdate, ModuleInfo, ModuleRunningInfo } from '../../adapters';
 import type { DataBusThroughputSample, DataBusThroughputSnapshot } from '../../adapters';
 import { loadDashboardAfterRunningModules } from '../../utils/dashboard-loading';
 import { getStoredManagerAddress } from '../../utils/app-settings';
@@ -62,6 +64,62 @@ function formatSyncTime(timestamp: number | null) {
     minute: '2-digit',
     second: '2-digit',
   }).format(timestamp)}`;
+}
+
+const DEVICE_RUNTIME_MODULE = 'DeviceInfo';
+const DEVICE_RUNTIME_CONNECTION = 'device-runtime';
+const DEVICE_RUNTIME_TAGS = ['cpu.usage_percent', 'memory.usage_percent'] as const;
+
+type DeviceRuntimeMetric = {
+  value: number | null;
+  tsMs: number;
+  quality: number;
+};
+
+type DeviceRuntimeState = {
+  cpu: DeviceRuntimeMetric;
+  memory: DeviceRuntimeMetric;
+  status: 'idle' | 'loading' | 'ready' | 'unavailable';
+  error: string;
+};
+
+const EMPTY_DEVICE_RUNTIME_METRIC: DeviceRuntimeMetric = { value: null, tsMs: 0, quality: 0 };
+
+const emptyDeviceRuntimeState = (): DeviceRuntimeState => ({
+  cpu: EMPTY_DEVICE_RUNTIME_METRIC,
+  memory: EMPTY_DEVICE_RUNTIME_METRIC,
+  status: 'idle',
+  error: '',
+});
+
+function pointValueToNumber(value: DcPointValue | null): number | null {
+  if (!value || value.type !== 'Double' || !Number.isFinite(value.value)) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, value.value));
+}
+
+function deviceRuntimeMetric(updates: DcSourcePointUpdate[], tag: string): DeviceRuntimeMetric {
+  const update = updates.find((item) => item.tag === tag);
+  return update
+    ? { value: pointValueToNumber(update.value), tsMs: update.ts_ms, quality: update.quality }
+    : EMPTY_DEVICE_RUNTIME_METRIC;
+}
+
+function deviceQuality(quality: number): { label: string; color: string } {
+  if (quality === 1) return { label: '正常', color: 'green' };
+  if (quality === 2) return { label: '异常', color: 'red' };
+  if (quality === 3) return { label: '不确定', color: 'orange' };
+  return { label: '未指定', color: 'default' };
+}
+
+function deviceMetricTime(tsMs: number): string {
+  if (tsMs <= 0) return '暂无数据时间';
+  return `数据时间 ${new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(tsMs)}`;
 }
 
 type ThroughputChartPoint = {
@@ -171,6 +229,7 @@ const Overview: React.FC = () => {
   const [syncState, setSyncState] = useState<SyncState>('idle');
   const [failedSections, setFailedSections] = useState<string[]>([]);
   const [throughput, setThroughput] = useState<DataBusThroughputSnapshot | null>(null);
+  const [deviceRuntime, setDeviceRuntime] = useState<DeviceRuntimeState>(emptyDeviceRuntimeState);
   const [messageApi, contextHolder] = message.useMessage();
 
   const refresh = useCallback(async () => {
@@ -245,6 +304,56 @@ const Overview: React.FC = () => {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const loadDeviceRuntime = async () => {
+      if (!cancelled) {
+        setDeviceRuntime((current) => ({ ...current, status: 'loading', error: '' }));
+      }
+      try {
+        const connections = await api.dcListConnections();
+        const connection = connections.find(
+          (item: DcConnectionInfo) => item.module_name === DEVICE_RUNTIME_MODULE
+            && item.conn_name === DEVICE_RUNTIME_CONNECTION,
+        );
+        if (!connection) {
+          throw new Error('DeviceInfo 运行指标连接未注册');
+        }
+        const connTags = await api.dcGetConnTags(connection.conn_id);
+        const missingTags = DEVICE_RUNTIME_TAGS.filter((tag) => !connTags.tags.includes(tag));
+        if (missingTags.length > 0) {
+          throw new Error(`DeviceInfo 运行指标标签未注册: ${missingTags.join('、')}`);
+        }
+        const updates = await api.dcGetSourceLatest(connection.conn_id, [...DEVICE_RUNTIME_TAGS]);
+        if (!cancelled) {
+          setDeviceRuntime({
+            cpu: deviceRuntimeMetric(updates, DEVICE_RUNTIME_TAGS[0]),
+            memory: deviceRuntimeMetric(updates, DEVICE_RUNTIME_TAGS[1]),
+            status: 'ready',
+            error: '',
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setDeviceRuntime((current) => ({
+            ...current,
+            status: 'unavailable',
+            error: String(error),
+          }));
+        }
+      }
+    };
+
+    void loadDeviceRuntime();
+    timer = window.setInterval(() => void loadDeviceRuntime(), 5000);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -469,6 +578,36 @@ const Overview: React.FC = () => {
               </div>
             </Card>
           ))}
+        </div>
+      </section>
+
+      <section className="overview-section" aria-labelledby="overview-device-runtime-title">
+        <div className="overview-section-heading">
+          <div>
+            <Text id="overview-device-runtime-title" strong>设备运行指标</Text>
+            <Text type="secondary">来自 DeviceInfo / device-runtime</Text>
+          </div>
+          <Tag color={deviceRuntime.status === 'ready' ? 'success' : deviceRuntime.status === 'loading' ? 'processing' : 'default'}>
+            {deviceRuntime.status === 'ready' ? '已连接' : deviceRuntime.status === 'loading' ? '读取中' : '暂不可用'}
+          </Tag>
+        </div>
+        <div className="overview-runtime-grid">
+          {[
+            { key: 'cpu', title: 'CPU 占用率', icon: <DashboardOutlined />, metric: deviceRuntime.cpu, color: '#69b1ff' },
+            { key: 'memory', title: '内存占用率', icon: <DatabaseOutlined />, metric: deviceRuntime.memory, color: '#95de64' },
+          ].map(({ key, title, icon, metric, color }) => {
+            const quality = deviceQuality(metric.quality);
+            return (
+              <Card key={key} size="small" className="overview-runtime-card" bordered>
+                <div className="overview-runtime-card-head">
+                  <Space size={8}><span className="overview-runtime-icon" style={{ color }}>{icon}</span><Text type="secondary">{title}</Text></Space>
+                  <Tag color={quality.color}>{quality.label}</Tag>
+                </div>
+                <Statistic value={metric.value === null ? '-' : metric.value} suffix={metric.value === null ? undefined : '%'} precision={metric.value === null ? undefined : 1} valueStyle={{ color, fontSize: 28 }} />
+                <Text type="secondary" className="overview-runtime-time">{metric.value === null ? (deviceRuntime.error || '暂无可用数据') : deviceMetricTime(metric.tsMs)}</Text>
+              </Card>
+            );
+          })}
         </div>
       </section>
 

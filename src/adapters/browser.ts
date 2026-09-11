@@ -126,6 +126,7 @@ function buildRemotePackagePath(installDir: string, packageName: string): string
 const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('ModuleManager'),
   makeModuleInfo('DataCenter'),
+  makeModuleInfo('DeviceInfo'),
   makeModuleInfo('IEC104'),
   makeModuleInfo('IEC61850'),
   makeModuleInfo('ModbusRTU'),
@@ -138,7 +139,8 @@ const moduleInfos: ModuleInfo[] = [
   makeModuleInfo('BoardIO'),
 ];
 
-const runningModules = new Set(['ModuleManager', 'DataCenter', 'BoardIO', 'IEC104', 'IEC61850', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc', 'ControlOrchestrator']);
+const runningModules = new Set(['ModuleManager', 'DataCenter', 'DeviceInfo', 'BoardIO', 'IEC104', 'IEC61850', 'ModbusRTU', 'DLT645', 'AGC', 'AVC', 'Calc', 'ControlOrchestrator']);
+const deviceRuntimeConnId = 97;
 const boardDiConnId = 99;
 const boardDoConnId = 98;
 const iec104Links = new Map<string, Iec104LinkInfo>();
@@ -289,6 +291,7 @@ function connectionInfo(moduleName: string, connName: string, connId: number): D
 
 function listConnections(): DcConnectionInfo[] {
   return [
+    connectionInfo('DeviceInfo', 'device-runtime', deviceRuntimeConnId),
     connectionInfo('BoardIO', 'board-di', boardDiConnId),
     connectionInfo('BoardIO', 'board-do', boardDoConnId),
     ...[...iec104Links.values()].map((item) => connectionInfo('IEC104', item.config?.conn_name ?? '', item.conn_id)),
@@ -316,6 +319,9 @@ function collectValueSpec(value: { signal: { tag: string } | null; base_tag: str
 }
 
 function tagsForConnection(connId: number): string[] {
+  if (connId === deviceRuntimeConnId) {
+    return ['cpu.usage_percent', 'memory.usage_percent'];
+  }
   if (connId === boardDiConnId) {
     return ['DI1', 'DI2', 'DI3', 'DI4'];
   }
@@ -407,11 +413,13 @@ function getLatestUpdates(connId: number, tags: string[]): Promise<DcPointUpdate
     src_tag: tag,
     dst_conn_id: connId,
     dst_tag: tag,
-    value: connId === boardDiConnId || connId === boardDoConnId
+    value: connId === deviceRuntimeConnId
+      ? { type: 'Double', value: Number((45 + Math.sin(ts / 10000 + index) * 12).toFixed(2)) } satisfies DcPointValue
+      : connId === boardDiConnId || connId === boardDoConnId
       ? { type: 'Bool', value: index % 2 === 0 } satisfies DcPointValue
       : makePointValue(ts / 1000 + index),
     ts_ms: ts,
-    quality: 0,
+    quality: connId === deviceRuntimeConnId ? 1 : 0,
   })));
 }
 
@@ -421,11 +429,13 @@ function getSourceLatestUpdates(connId: number, tags: string[]): Promise<DcSourc
   return Promise.resolve(activeTags.map((tag, index) => ({
     conn_id: connId,
     tag,
-    value: connId === boardDiConnId || connId === boardDoConnId
+    value: connId === deviceRuntimeConnId
+      ? { type: 'Double', value: Number(((index === 0 ? 45 : 58) + Math.sin(ts / 10000 + index) * 12).toFixed(2)) } satisfies DcPointValue
+      : connId === boardDiConnId || connId === boardDoConnId
       ? { type: 'Bool', value: index % 2 === 0 } satisfies DcPointValue
       : makePointValue(ts / 1000 + index),
     ts_ms: ts,
-    quality: 0,
+    quality: connId === deviceRuntimeConnId ? 1 : 0,
     sequence: index + 1,
   })));
 }
