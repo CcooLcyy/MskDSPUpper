@@ -17,6 +17,10 @@ pub struct SignalSpecDto {
     pub unit: String,
     pub scale: f64,
     pub offset: f64,
+    #[serde(default)]
+    pub scale_decimal: String,
+    #[serde(default)]
+    pub offset_decimal: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -31,6 +35,10 @@ pub struct ValueSpecDto {
 pub struct VoltageControlConfigDto {
     pub kp: f64,
     pub deadband: f64,
+    #[serde(default)]
+    pub kp_decimal: String,
+    #[serde(default)]
+    pub deadband_decimal: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -45,6 +53,12 @@ pub struct MemberConfigDto {
     pub weight: f64,
     pub q_min_kvar: f64,
     pub q_max_kvar: f64,
+    #[serde(default)]
+    pub weight_decimal: String,
+    #[serde(default)]
+    pub q_min_kvar_decimal: String,
+    #[serde(default)]
+    pub q_max_kvar_decimal: String,
     pub q_meas: Option<SignalSpecDto>,
     pub q_set: Option<ValueSpecDto>,
 }
@@ -95,6 +109,8 @@ impl From<SignalSpec> for SignalSpecDto {
             unit: signal.unit,
             scale: signal.scale,
             offset: signal.offset,
+            scale_decimal: signal.scale_decimal,
+            offset_decimal: signal.offset_decimal,
         }
     }
 }
@@ -115,6 +131,8 @@ impl From<VoltageControlConfig> for VoltageControlConfigDto {
         Self {
             kp: config.kp,
             deadband: config.deadband,
+            kp_decimal: config.kp_decimal,
+            deadband_decimal: config.deadband_decimal,
         }
     }
 }
@@ -138,6 +156,9 @@ impl From<MemberConfig> for MemberConfigDto {
             weight: member.weight,
             q_min_kvar: member.q_min_kvar,
             q_max_kvar: member.q_max_kvar,
+            weight_decimal: member.weight_decimal,
+            q_min_kvar_decimal: member.q_min_kvar_decimal,
+            q_max_kvar_decimal: member.q_max_kvar_decimal,
             q_meas: member.q_meas.map(Into::into),
             q_set: member.q_set.map(Into::into),
         }
@@ -199,6 +220,8 @@ impl SignalSpecDto {
             unit: self.unit.trim().to_string(),
             scale: self.scale,
             offset: self.offset,
+            scale_decimal: self.scale_decimal.clone(),
+            offset_decimal: self.offset_decimal.clone(),
         }
     }
 }
@@ -219,6 +242,8 @@ impl VoltageControlConfigDto {
         VoltageControlConfig {
             kp: self.kp,
             deadband: self.deadband,
+            kp_decimal: self.kp_decimal.clone(),
+            deadband_decimal: self.deadband_decimal.clone(),
         }
     }
 }
@@ -244,6 +269,9 @@ impl MemberConfigDto {
             weight: self.weight,
             q_min_kvar: self.q_min_kvar,
             q_max_kvar: self.q_max_kvar,
+            weight_decimal: self.weight_decimal.clone(),
+            q_min_kvar_decimal: self.q_min_kvar_decimal.clone(),
+            q_max_kvar_decimal: self.q_max_kvar_decimal.clone(),
             q_meas: self.q_meas.as_ref().map(SignalSpecDto::to_proto),
             q_set: self.q_set.as_ref().map(ValueSpecDto::to_proto),
         }
