@@ -7,18 +7,17 @@ import {
   compareLowerUpdateImages,
 } from '../../src/utils/lower-update-deploy.ts';
 
-const pageSource = readFileSync(new URL('../../src/pages/AdvancedConfig/index.tsx', import.meta.url), 'utf8');
-const backendSource = readFileSync(
+const readSource = (url) => readFileSync(url, 'utf8').replace(/\r\n?/g, '\n');
+
+const pageSource = readSource(new URL('../../src/pages/AdvancedConfig/index.tsx', import.meta.url));
+const backendSource = readSource(
   new URL('../../src-tauri/src/commands/lower_update.rs', import.meta.url),
-  'utf8',
 );
-const tauriAdapterSource = readFileSync(
+const tauriAdapterSource = readSource(
   new URL('../../src/adapters/tauri.ts', import.meta.url),
-  'utf8',
 );
-const adapterTypesSource = readFileSync(
+const adapterTypesSource = readSource(
   new URL('../../src/adapters/types.ts', import.meta.url),
-  'utf8',
 );
 
 // 验证同一个 Docker 构建的镜像 ID 比较不区分大小写。

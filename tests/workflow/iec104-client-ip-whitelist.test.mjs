@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-const pageSource = readFileSync(new URL('../../src/pages/IEC104/index.tsx', import.meta.url), 'utf8');
-const rustCommandSource = readFileSync(
+const readSource = (url) => readFileSync(url, 'utf8').replace(/\r\n?/g, '\n');
+
+const pageSource = readSource(new URL('../../src/pages/IEC104/index.tsx', import.meta.url));
+const rustCommandSource = readSource(
   new URL('../../src-tauri/src/commands/iec104.rs', import.meta.url),
-  'utf8',
 );
 
 const formStart = pageSource.indexOf('<Form\n          form={linkForm}');
