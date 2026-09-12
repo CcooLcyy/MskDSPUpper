@@ -2,7 +2,7 @@ import type { Iec61850PointMapping } from '../adapters/types';
 import {
   getDecimalTextError,
   toLegacyDecimalNumber,
-} from './decimal-input';
+} from './decimal-input.ts';
 
 export type Iec61850EngineeringField = 'scale' | 'offset' | 'deadband';
 

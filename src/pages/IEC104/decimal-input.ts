@@ -3,7 +3,7 @@ import {
   getDecimalTextError,
   toDecimalInputText,
   toLegacyDecimalNumber,
-} from '../../utils/decimal-input';
+} from '../../utils/decimal-input.ts';
 
 export { toDecimalInputText, toLegacyDecimalNumber };
 

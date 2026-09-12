@@ -88,8 +88,11 @@ test('IEC61850 点映射页面使用字符串输入并保留十进制原文', ()
   assert.match(pageSource, /table\.points\.map\(normalizeIec61850PointEngineeringFields\)/);
   assert.match(pageSource, /getIec61850PointEngineeringError\(point\)/);
   assert.match(pageSource, /createIec61850EngineeringFields\(DEFAULT_IEC61850_ENGINEERING_DECIMALS\)/);
-  assert.equal((pageSource.match(/<InputNumber<string>/g) ?? []).length >= 3, true);
-  assert.equal((pageSource.match(/stringMode/g) ?? []).length >= 3, true);
+  assert.equal((pageSource.match(/<InputNumber<string>/g) ?? []).length, 1);
+  assert.equal((pageSource.match(/stringMode/g) ?? []).length >= 1, true);
+  for (const field of ['scale', 'offset', 'deadband']) {
+    assert.match(pageSource, new RegExp(`renderEngineeringInput\\('${field}'`));
+  }
   assert.match(browserSource, /normalizeIec61850PointEngineeringFields/);
   assert.match(browserSource, /points\.map\(normalizeIec61850PointEngineeringFields\)/);
 });

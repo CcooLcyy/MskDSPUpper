@@ -1,5 +1,5 @@
 import type { DcPointValue } from '../adapters';
-import { getDecimalTextError } from './decimal-input';
+import { getDecimalTextError } from './decimal-input.ts';
 
 export type EditablePointValueType = 'Bool' | 'Int' | 'Double' | 'Decimal' | 'String';
 

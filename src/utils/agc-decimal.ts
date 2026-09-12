@@ -12,7 +12,7 @@ import {
   getDecimalTextError,
   toDecimalInputText,
   toLegacyDecimalNumber,
-} from './decimal-input';
+} from './decimal-input.ts';
 import type { ControlAllocationMode } from './control-allocation';
 
 const AGC_DECIMAL_SCALE = 10n ** 20n;

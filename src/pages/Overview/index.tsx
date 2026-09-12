@@ -317,7 +317,6 @@ const Overview: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
-    let timer: number | undefined;
 
     const loadDeviceRuntime = async () => {
       if (!cancelled) {
@@ -358,7 +357,7 @@ const Overview: React.FC = () => {
     };
 
     void loadDeviceRuntime();
-    timer = window.setInterval(() => void loadDeviceRuntime(), 5000);
+    const timer = window.setInterval(() => void loadDeviceRuntime(), 5000);
     return () => {
       cancelled = true;
       if (timer !== undefined) window.clearInterval(timer);

@@ -1,5 +1,5 @@
 import type { Dlt645Block, Dlt645BlockItem, Dlt645Point } from '../../adapters';
-import { toLegacyDecimalNumber } from '../../utils/decimal-input';
+import { toLegacyDecimalNumber } from '../../utils/decimal-input.ts';
 
 export type Dlt645EngineeringField = 'scale' | 'offset' | 'deadband';
 

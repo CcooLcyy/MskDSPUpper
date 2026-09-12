@@ -1,5 +1,5 @@
 import type { ModbusPoint } from '../../adapters';
-import { toLegacyDecimalNumber } from '../../utils/decimal-input';
+import { toLegacyDecimalNumber } from '../../utils/decimal-input.ts';
 
 export type ModbusEngineeringField = 'scale' | 'offset' | 'deadband';
 
