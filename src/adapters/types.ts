@@ -299,6 +299,37 @@ export interface Iec104PointTable {
   points: Iec104Point[];
 }
 
+/** IEC104 SOE 历史事件查询记录。时间戳为 Unix 毫秒，界面按北京时间显示。 */
+export interface Iec104SoeRecord {
+  event_sequence: number;
+  conn_name: string;
+  ioa: number;
+  /** 遥信状态：true 表示合，false 表示分。 */
+  state: boolean;
+  ts_ms: number;
+  quality: number;
+  acknowledged: boolean;
+}
+
+export interface Iec104SoeQuery {
+  conn_name: string;
+  start_ts_ms?: number | null;
+  end_ts_ms?: number | null;
+  ioa?: number | null;
+  acknowledged_filter?: number;
+  page_size?: number;
+  before_event_sequence?: number | null;
+}
+
+export interface Iec104SoePage {
+  events: Iec104SoeRecord[];
+  has_more: boolean;
+  /** 下一页游标；没有更多记录时为空。 */
+  next_event_sequence: number | null;
+  total_count: number;
+  unacknowledged_count: number;
+}
+
 export interface Iec61850ModelSummary {
   model_name: string;
   source_name: string;

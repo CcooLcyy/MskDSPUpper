@@ -127,6 +127,7 @@ const MainLayout: React.FC = () => {
     'MskDSP';
   const isProtocolPage = location.pathname.startsWith('/protocol/');
   const isIec61850Page = location.pathname === '/protocol/iec61850';
+  const isIec104Page = location.pathname === '/protocol/iec104';
   const isControlPage = location.pathname === '/control' || location.pathname.startsWith('/control/');
   const isDataBusPage = location.pathname.startsWith('/data-bus');
   const isSoftwareUpdatePage = location.pathname.startsWith('/software-update');
@@ -193,7 +194,7 @@ const MainLayout: React.FC = () => {
                 {currentLabel}
               </Text>
             ) : null}
-            {isProtocolPage && !isIec61850Page ? <ProtocolHeaderViewSwitcher /> : null}
+            {isProtocolPage && !isIec61850Page ? <ProtocolHeaderViewSwitcher includeSoe={isIec104Page} /> : null}
             {isControlPage ? <ControlHeaderViewSwitcher /> : null}
             {isDataBusPage ? <DataBusHeaderViewSwitcher /> : null}
             {isSoftwareUpdatePage ? <SoftwareUpdateHeaderViewSwitcher /> : null}

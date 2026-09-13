@@ -5,7 +5,7 @@ use crate::proto::iec104_proto::{
     iec104_service_client::Iec104ServiceClient, DeleteLinkRequest, Empty, GetLinkRequest,
     GetPointTableRequest, LinkConfig, LinkInfo, Point, PointTable, RenameLinkRequest,
     SendTimeSyncRequest, SimulationRequest, SimulationSnapshot, StartLinkRequest, StopLinkRequest, UpsertLinkRequest,
-    UpsertPointTableRequest,
+    UpsertPointTableRequest, QuerySoeRequest, QuerySoeResponse,
 };
 
 pub struct Iec104Client<'a> {
@@ -148,5 +148,11 @@ impl<'a> Iec104Client<'a> {
         let mut client = Iec104ServiceClient::new(channel);
         client.clear_simulation_values(SimulationRequest { conn_name, mode: 0, bool_mode: 0 }).await?;
         Ok(())
+    }
+
+    pub async fn query_soe(&self, request: QuerySoeRequest) -> Result<QuerySoeResponse> {
+        let channel = self.conn.module_channel("IEC104").await?;
+        let mut client = Iec104ServiceClient::new(channel);
+        Ok(client.query_soe(request).await?.into_inner())
     }
 }

@@ -8,11 +8,15 @@ import {
   PROTOCOL_VIEW_OPTIONS,
 } from './protocol-view';
 
-const ProtocolHeaderViewSwitcher: React.FC = () => {
+interface ProtocolHeaderViewSwitcherProps {
+  includeSoe?: boolean;
+}
+
+const ProtocolHeaderViewSwitcher: React.FC<ProtocolHeaderViewSwitcherProps> = ({ includeSoe = false }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const value = normalizeProtocolView(new URLSearchParams(location.search).get(PROTOCOL_VIEW_QUERY_KEY));
+  const value = normalizeProtocolView(new URLSearchParams(location.search).get(PROTOCOL_VIEW_QUERY_KEY), includeSoe);
 
   const handleChange = (nextValue: string | number) => {
     const nextView = normalizeProtocolView(String(nextValue));
@@ -31,13 +35,17 @@ const ProtocolHeaderViewSwitcher: React.FC = () => {
     );
   };
 
+  const options = includeSoe
+    ? PROTOCOL_VIEW_OPTIONS
+    : PROTOCOL_VIEW_OPTIONS.filter((option) => option.value !== 'soe');
+
   return (
     <div className="protocol-header-view-switcher" aria-label="协议页面切换">
       <Tabs
         className="app-view-tabs protocol-header-tabs"
         activeKey={value}
         animated={false}
-        items={PROTOCOL_VIEW_OPTIONS.map((option) => ({
+        items={options.map((option) => ({
           key: option.value,
           label: option.label,
           children: null,

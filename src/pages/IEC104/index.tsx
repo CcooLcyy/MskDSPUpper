@@ -125,6 +125,7 @@ import {
   resolveIec104PointDecimalText,
   toDecimalInputText,
 } from './decimal-input';
+import SoeHistoryPanel from './SoeHistoryPanel';
 
 const { Text } = Typography;
 
@@ -613,7 +614,7 @@ const IEC104: React.FC = () => {
   const selectedLink = links.find(
     (l) => l.config?.conn_name === selectedConn,
   ) ?? null;
-  const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY));
+  const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY), true);
   const showLocalEndpointFields = linkRole !== ROLE_CLIENT;
   const showRemotePortField = linkRole !== ROLE_SERVER;
   const localEndpointIpSpan = 9;
@@ -3220,6 +3221,40 @@ const IEC104: React.FC = () => {
               />
             </div>
           </Card>
+        </ResizableSplit>
+      ) : currentView === 'soe' ? (
+        <ResizableSplit
+          className="protocol-config-view protocol-soe-view"
+          orientation="horizontal"
+          defaultSize={260}
+          minSize={220}
+          maxSize={420}
+          storageKey="mskdsp.layout.iec104.soe"
+        >
+          <ProtocolConnectionList
+            title="连接列表"
+            addButtonText="新增连接"
+            width="100%"
+            loading={loading}
+            links={links}
+            selectedConn={selectedConn}
+            actionsDisabled={actionsDisabled}
+            getItemActionsDisabled={(item) => item.state === 3}
+            onSelect={setSelectedConn}
+            onCreate={openCreateLink}
+            onCopy={(connName) => void handleCopyLink(connName)}
+            onDelete={(connName) => void handleDeleteLink(connName)}
+            onRefresh={() => void refreshLinks()}
+            getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
+            getDescription={(item) => {
+              const config = item.config;
+              if (!config) return STATE_MAP[item.state]?.label ?? '未知状态';
+              const endpoint = config.role === ROLE_SERVER ? config.local : config.remote;
+              return `${STATE_MAP[item.state]?.label ?? '未知状态'} · ${ROLE_LABELS[config.role] ?? '未知角色'} · ${formatEndpoint(endpoint)}`;
+            }}
+            getDeleteTitle={(connName) => `确认删除 ${connName}？`}
+          />
+          <SoeHistoryPanel connName={selectedConn} />
         </ResizableSplit>
       ) : (
         <Card title="报文日志" size="small" bordered className="protocol-log-card">

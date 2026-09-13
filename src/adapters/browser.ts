@@ -43,6 +43,9 @@ import type {
   Iec104PointTable,
   Iec104SimulationSnapshot,
   Iec104SimulationGenerateOptions,
+  Iec104SoeQuery,
+  Iec104SoePage,
+  Iec104SoeRecord,
   Iec61850IedConfig,
   Iec61850IedInfo,
   Iec61850ImportResult,
@@ -227,6 +230,7 @@ const boardDoConnId = 98;
 const iec104Links = new Map<string, Iec104LinkInfo>();
 const iec104Tables = new Map<string, Iec104PointTable>();
 const iec104Simulation = new Map<string, Iec104SimulationSnapshot>();
+const iec104SoeEvents = new Map<string, Iec104SoeRecord[]>();
 const modbusLinks = new Map<string, ModbusLinkInfo>();
 const modbusTables = new Map<string, ModbusPointTable>();
 const modbusTcpLinks = new Map<string, ModbusTcpLinkInfo>();
@@ -1399,6 +1403,73 @@ export const browserApi: typeof tauriApi = {
     if (!iec104Simulation.has(connName)) throw new Error('浏览器开发模式 mock 没有模拟值');
   },
   iec104ClearSimulationValues: async (connName: string) => { iec104Simulation.delete(connName); },
+  iec104QuerySoe: async (query: Iec104SoeQuery): Promise<Iec104SoePage> => {
+    const connName = query.conn_name.trim();
+    if (!connName) throw new Error('SOE 查询必须指定连接');
+    if (!iec104Links.has(connName)) throw new Error(`浏览器开发模式 mock 未找到 IEC104 连接: ${connName}`);
+
+    const acknowledgedFilter = query.acknowledged_filter ?? 0;
+    if (![0, 1, 2].includes(acknowledgedFilter)) {
+      throw new Error(`SOE 确认状态筛选值非法: ${acknowledgedFilter}`);
+    }
+    const pageSize = query.page_size == null || query.page_size === 0 ? 100 : query.page_size;
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 8000) {
+      throw new Error('SOE 分页大小必须在 1～8000 之间');
+    }
+    if (query.start_ts_ms != null && query.end_ts_ms != null && query.start_ts_ms > query.end_ts_ms) {
+      throw new Error('SOE 查询起始时标不能晚于结束时标');
+    }
+
+    let events = iec104SoeEvents.get(connName);
+    if (!events) {
+      const boolPoints = (iec104Tables.get(connName)?.points ?? []).filter((point) => point.point_type === 2);
+      const now = Date.now();
+      // 生成超过默认页大小的样例，方便在浏览器开发模式验证翻页和导出全部。
+      events = boolPoints.length === 0
+        ? []
+        : Array.from({ length: 120 }, (_, index) => {
+            const point = boolPoints[index % boolPoints.length];
+            return {
+              event_sequence: index + 1,
+              conn_name: connName,
+              ioa: point.ioa,
+              // 事件序号随时间递增，序号越大表示事件越新。
+              state: index % 2 === 1,
+              ts_ms: now - (119 - index) * 60_000,
+              quality: 0,
+              acknowledged: index % 3 !== 0,
+            } satisfies Iec104SoeRecord;
+          });
+      iec104SoeEvents.set(connName, events);
+    }
+    const start = query.start_ts_ms ?? null;
+    const end = query.end_ts_ms ?? null;
+    const matchesFilters = (event: Iec104SoeRecord) =>
+      (start == null || event.ts_ms >= start)
+      && (end == null || event.ts_ms <= end)
+      && (query.ioa == null || event.ioa === query.ioa)
+      && (acknowledgedFilter === 0
+        || (acknowledgedFilter === 1 ? event.acknowledged : !event.acknowledged));
+    const allMatching = events.filter(matchesFilters);
+    const filtered = allMatching
+      .filter((event) => query.before_event_sequence == null || event.event_sequence < query.before_event_sequence)
+      .sort((a, b) => b.event_sequence - a.event_sequence);
+    const page = filtered.slice(0, pageSize);
+    console.debug('IEC104 浏览器开发模式查询 SOE 历史', {
+      connName,
+      returnedCount: page.length,
+      totalCount: allMatching.length,
+      acknowledgedFilter,
+      beforeEventSequence: query.before_event_sequence ?? null,
+    });
+    return {
+      events: clone(page),
+      has_more: filtered.length > page.length,
+      next_event_sequence: page.length ? page[page.length - 1].event_sequence : null,
+      total_count: allMatching.length,
+      unacknowledged_count: allMatching.filter((event) => !event.acknowledged).length,
+    };
+  },
 
   iec61850ImportScl: async (modelName: string, sourceName: string, content: number[], validateOnly: boolean, replace: boolean): Promise<Iec61850ImportResult> => {
     if (!modelName.trim() || content.length === 0) throw new Error('浏览器开发模式 mock：模型名称和 SCL 文件内容不能为空');

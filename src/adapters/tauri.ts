@@ -35,6 +35,8 @@ import type {
   Iec104PointTable,
   Iec104SimulationSnapshot,
   Iec104SimulationGenerateOptions,
+  Iec104SoeQuery,
+  Iec104SoePage,
   Iec61850IedConfig,
   Iec61850IedInfo,
   Iec61850ImportResult,
@@ -291,6 +293,8 @@ export const api = {
     invoke<void>('iec104_apply_simulation_values', { connName }),
   iec104ClearSimulationValues: (connName: string) =>
     invoke<void>('iec104_clear_simulation_values', { connName }),
+  iec104QuerySoe: (query: Iec104SoeQuery) =>
+    invoke<Iec104SoePage>('iec104_query_soe', { query }),
 
   iec61850ImportScl: (modelName: string, sourceName: string, content: number[], validateOnly: boolean, replace: boolean) =>
     invoke<Iec61850ImportResult>('iec61850_import_scl', {

@@ -1,4 +1,4 @@
-export type ProtocolViewKey = 'config' | 'logs';
+export type ProtocolViewKey = 'config' | 'soe' | 'logs';
 
 export const PROTOCOL_VIEW_QUERY_KEY = 'view';
 export const DEFAULT_PROTOCOL_VIEW: ProtocolViewKey = 'config';
@@ -9,13 +9,19 @@ export const PROTOCOL_VIEW_OPTIONS: Array<{ label: string; value: ProtocolViewKe
     value: 'config',
   },
   {
+    label: '\u0053\u004f\u0045\u5386\u53f2',
+    value: 'soe',
+  },
+  {
     label: '\u62a5\u6587\u65e5\u5fd7',
     value: 'logs',
   },
 ];
 
-export function normalizeProtocolView(value: string | null | undefined): ProtocolViewKey {
-  return value === 'logs' ? 'logs' : DEFAULT_PROTOCOL_VIEW;
+export function normalizeProtocolView(value: string | null | undefined, includeSoe = false): ProtocolViewKey {
+  if (value === 'logs') return 'logs';
+  if (includeSoe && value === 'soe') return 'soe';
+  return DEFAULT_PROTOCOL_VIEW;
 }
 
 export function createProtocolViewSearch(search: string, view: ProtocolViewKey): string {

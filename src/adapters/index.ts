@@ -45,6 +45,9 @@ export type {
   Iec104SimulationGenerateOptions,
   Iec104SimulationMode,
   Iec104SimulationBoolMode,
+  Iec104SoeRecord,
+  Iec104SoeQuery,
+  Iec104SoePage,
 } from './types';
 export type {
   Iec61850ChannelInfo,

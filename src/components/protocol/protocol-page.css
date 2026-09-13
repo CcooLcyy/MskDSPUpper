@@ -30,6 +30,29 @@
   overflow: hidden;
 }
 
+.protocol-soe-view {
+  flex-direction: row;
+}
+
+.protocol-soe-view > .resizable-split-pane--first {
+  min-width: 0;
+}
+
+.protocol-soe-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.protocol-soe-card > .ant-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
 .protocol-top-row {
   display: flex;
   flex-shrink: 0;

@@ -3,7 +3,8 @@ use tauri::State;
 
 use crate::grpc::iec104::Iec104Client;
 use crate::proto::iec104_proto::{
-    ApciParameters, Endpoint, LinkConfig, LinkInfo, Point, PointTable,
+    ApciParameters, Endpoint, LinkConfig, LinkInfo, Point, PointTable, QuerySoeRequest,
+    SoeAcknowledgedFilter,
 };
 use crate::state::AppState;
 
@@ -514,5 +515,80 @@ pub async fn iec104_clear_simulation_values(
     client.clear_simulation_values(conn_name.clone()).await.map_err(|error| {
         tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "清除模拟值失败");
         error.to_string()
+    })
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SoeQueryDto {
+    pub conn_name: String,
+    pub start_ts_ms: Option<i64>,
+    pub end_ts_ms: Option<i64>,
+    pub ioa: Option<u32>,
+    pub acknowledged_filter: Option<i32>,
+    pub page_size: Option<u32>,
+    pub before_event_sequence: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SoeRecordDto {
+    pub event_sequence: u64,
+    pub conn_name: String,
+    pub ioa: u32,
+    pub state: bool,
+    pub ts_ms: i64,
+    pub quality: u32,
+    pub acknowledged: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SoePageDto {
+    pub events: Vec<SoeRecordDto>,
+    pub has_more: bool,
+    pub next_event_sequence: Option<u64>,
+    pub total_count: u32,
+    pub unacknowledged_count: u32,
+}
+
+#[tauri::command]
+pub async fn iec104_query_soe(
+    state: State<'_, AppState>,
+    query: SoeQueryDto,
+) -> Result<SoePageDto, String> {
+    let filter = match query.acknowledged_filter.unwrap_or(0) {
+        0 => SoeAcknowledgedFilter::All as i32,
+        1 => SoeAcknowledgedFilter::Acknowledged as i32,
+        2 => SoeAcknowledgedFilter::Unacknowledged as i32,
+        value => return Err(format!("SOE 确认状态筛选值非法: {value}")),
+    };
+    let conn_name = query.conn_name.clone();
+    tracing::debug!(protocol = "IEC104", conn_name = %conn_name, "查询 SOE 历史");
+    let request = QuerySoeRequest {
+        conn_name,
+        start_ts_ms: query.start_ts_ms,
+        end_ts_ms: query.end_ts_ms,
+        ioa: query.ioa,
+        acknowledged_filter: filter,
+        page_size: query.page_size.unwrap_or(0),
+        before_event_sequence: query.before_event_sequence,
+    };
+    let client = Iec104Client::new(&state.conn_manager);
+    let response = client.query_soe(request).await.map_err(|error| {
+        tracing::error!(protocol = "IEC104", error = %error, "查询 SOE 历史失败");
+        error.to_string()
+    })?;
+    Ok(SoePageDto {
+        events: response.events.into_iter().map(|event| SoeRecordDto {
+            event_sequence: event.event_sequence,
+            conn_name: event.conn_name,
+            ioa: event.ioa,
+            state: event.state,
+            ts_ms: event.ts_ms,
+            quality: event.quality,
+            acknowledged: event.acknowledged,
+        }).collect(),
+        has_more: response.has_more,
+        next_event_sequence: response.next_event_sequence,
+        total_count: response.total_count,
+        unacknowledged_count: response.unacknowledged_count,
     })
 }
