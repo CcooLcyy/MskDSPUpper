@@ -35,11 +35,17 @@ test('IEC61850 IED 列表支持受限高度滚动', () => {
 
 // 验证 AGC 和 AVC 控制组列表不会因 Flex 最小高度而撑出父面板。
 test('AGC 和 AVC 控制组列表支持内部滚动', () => {
-  for (const source of [agcSource, avcSource, controlGroupListSource]) {
-    assert.match(source, /minHeight: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', overflow: 'hidden'/);
-    assert.match(source, /body: \{ flex: '1 1 auto', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden'/);
-    assert.match(source, /minHeight: 0, overflowY: 'auto', scrollbarGutter: 'stable'/);
-  }
+  assert.match(agcSource, /<ControlGroupList[\s\S]*items=\{controlGroupListItems\}/);
+  assert.match(avcSource, /<ControlGroupList[\s\S]*items=\{controlGroupListItems\}/);
+  assert.match(
+    controlGroupListSource,
+    /minHeight: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', overflow: 'hidden'/,
+  );
+  assert.match(
+    controlGroupListSource,
+    /body: \{ flex: '1 1 auto', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden'/,
+  );
+  assert.match(controlGroupListSource, /minHeight: 0, overflowY: 'auto', scrollbarGutter: 'stable'/);
 });
 
 // 验证数据总线连接列表在面板缩小时仍能把超出内容留在内部滚动区。

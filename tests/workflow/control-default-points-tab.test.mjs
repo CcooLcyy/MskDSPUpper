@@ -16,7 +16,8 @@ test('控制导航包含默认点页签且顺序正确', () => {
     controlViewSource,
     /label: '控制策略',[\s\S]*label: '默认点',[\s\S]*label: '控制日志'/,
   );
-  assert.match(controlViewSource, /value === 'default-points' \|\| value === 'logs'/);
+  assert.match(controlViewSource, /if \(value === 'default-points'\) return 'default-points';/);
+  assert.match(controlViewSource, /return value === 'logs' \? 'logs' : DEFAULT_CONTROL_VIEW;/);
   assert.match(switcherSource, /CONTROL_VIEW_OPTIONS\.map/);
 });
 

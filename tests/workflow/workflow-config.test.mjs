@@ -97,7 +97,8 @@ test('ci package publishes updater artifacts to the ci static channel', () => {
 
   assert.match(renderBlock, /\$env:STATIC_UPDATE_BASE_URL\/ci\/latest\.json/);
   assert.match(stageBlock, /\$env:STATIC_UPDATE_BASE_URL\/ci\/\$env:PLATFORM_ID/);
-  assert.match(syncBlock, /Sync-StaticUpdater\.ps1/);
+  assert.match(syncBlock, /Publish-GiteeStaticUpdater\.ps1/);
+  assert.match(syncBlock, /GITEE_TOKEN: \$\{\{ secrets\.GITEE_TOKEN \}\}/);
   assert.match(syncBlock, /-ChannelPath ci/);
   assert.match(syncBlock, /secrets\.UPDATE_STATIC_SSH_KEY/);
 });
