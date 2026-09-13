@@ -24,6 +24,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { DcSourcePointUpdate, Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../../adapters';
 import { resolveDlt645EngineeringDecimalText } from '../dlt645-decimal';
+import { formatDecimalDisplay } from '../../../utils/realtime-value';
 import {
   type ProtocolRealtimeCellRevision,
   renderProtocolRealtimeQualityCell,
@@ -196,21 +197,24 @@ const PointTable: React.FC<Props> = ({
       dataIndex: 'scale_decimal',
       key: 'scale',
       width: 120,
-      render: (_value: string, record: Dlt645Point) => resolveDlt645EngineeringDecimalText(record, 'scale'),
+      render: (_value: string, record: Dlt645Point) =>
+        formatDecimalDisplay(resolveDlt645EngineeringDecimalText(record, 'scale')),
     };
     const offsetColumn = {
       title: '偏移量',
       dataIndex: 'offset_decimal',
       key: 'offset',
       width: 120,
-      render: (_value: string, record: Dlt645Point) => resolveDlt645EngineeringDecimalText(record, 'offset'),
+      render: (_value: string, record: Dlt645Point) =>
+        formatDecimalDisplay(resolveDlt645EngineeringDecimalText(record, 'offset')),
     };
     const deadbandColumn = {
       title: '死区',
       dataIndex: 'deadband_decimal',
       key: 'deadband',
       width: 120,
-      render: (_value: string, record: Dlt645Point) => resolveDlt645EngineeringDecimalText(record, 'deadband'),
+      render: (_value: string, record: Dlt645Point) =>
+        formatDecimalDisplay(resolveDlt645EngineeringDecimalText(record, 'deadband')),
     };
     const realtimeValueColumn = {
       title: '实时值',
@@ -335,21 +339,24 @@ const PointTable: React.FC<Props> = ({
       dataIndex: 'scale_decimal',
       key: 'scale',
       width: 120,
-      render: (_value: string, record: Dlt645BlockItem) => resolveDlt645EngineeringDecimalText(record, 'scale'),
+      render: (_value: string, record: Dlt645BlockItem) =>
+        formatDecimalDisplay(resolveDlt645EngineeringDecimalText(record, 'scale')),
     };
     const offsetColumn = {
       title: '偏移量',
       dataIndex: 'offset_decimal',
       key: 'offset',
       width: 120,
-      render: (_value: string, record: Dlt645BlockItem) => resolveDlt645EngineeringDecimalText(record, 'offset'),
+      render: (_value: string, record: Dlt645BlockItem) =>
+        formatDecimalDisplay(resolveDlt645EngineeringDecimalText(record, 'offset')),
     };
     const deadbandColumn = {
       title: '死区',
       dataIndex: 'deadband_decimal',
       key: 'deadband',
       width: 120,
-      render: (_value: string, record: Dlt645BlockItem) => resolveDlt645EngineeringDecimalText(record, 'deadband'),
+      render: (_value: string, record: Dlt645BlockItem) =>
+        formatDecimalDisplay(resolveDlt645EngineeringDecimalText(record, 'deadband')),
     };
     const realtimeValueColumn = {
       title: '实时值',

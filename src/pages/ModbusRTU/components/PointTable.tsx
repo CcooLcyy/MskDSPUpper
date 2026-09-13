@@ -34,6 +34,7 @@ import {
   renderProtocolRealtimeTimestampCell,
   renderProtocolRealtimeValueCell,
 } from '../../../components/protocol/protocol-realtime';
+import { formatDecimalDisplay } from '../../../utils/realtime-value';
 import {
   MODBUS_FUNCTION,
   buildReadPlanBlocks,
@@ -445,21 +446,24 @@ const PointTable: React.FC<Props> = ({
       dataIndex: 'scale_decimal',
       key: 'scale',
       width: 120,
-      render: (_value: string, record: ModbusPoint) => resolveModbusPointDecimalText(record, 'scale'),
+      render: (_value: string, record: ModbusPoint) =>
+        formatDecimalDisplay(resolveModbusPointDecimalText(record, 'scale')),
     };
     const offsetColumn = {
       title: '偏移量',
       dataIndex: 'offset_decimal',
       key: 'offset',
       width: 120,
-      render: (_value: string, record: ModbusPoint) => resolveModbusPointDecimalText(record, 'offset'),
+      render: (_value: string, record: ModbusPoint) =>
+        formatDecimalDisplay(resolveModbusPointDecimalText(record, 'offset')),
     };
     const deadbandColumn = {
       title: '死区',
       dataIndex: 'deadband_decimal',
       key: 'deadband',
       width: 120,
-      render: (_value: string, record: ModbusPoint) => resolveModbusPointDecimalText(record, 'deadband'),
+      render: (_value: string, record: ModbusPoint) =>
+        formatDecimalDisplay(resolveModbusPointDecimalText(record, 'deadband')),
     };
     const actionColumn = {
       title: '操作',

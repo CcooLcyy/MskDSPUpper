@@ -10,6 +10,8 @@ const agcSource = read('../../src/pages/AGC/index.tsx');
 const avcSource = read('../../src/pages/AVC/index.tsx');
 const protocolRealtimeSource = read('../../src/components/protocol/protocol-realtime.tsx');
 const iec104Source = read('../../src/pages/IEC104/index.tsx');
+const modbusPointTableSource = read('../../src/pages/ModbusRTU/components/PointTable.tsx');
+const dlt645PointTableSource = read('../../src/pages/DLT645/components/PointTable.tsx');
 const calcSource = read('../../src/pages/Calc/index.tsx');
 const controlValueSource = read('../../src/utils/control-point-value.ts');
 
@@ -47,4 +49,17 @@ test('真实业务展示链路使用公共两位小数工具', () => {
   assert.match(calcSource, /formatDecimalDisplay\(constant\.decimal_value\)/);
   assert.doesNotMatch(controlValueSource, /formatDecimalDisplay/);
   assert.match(controlValueSource, /return \{ type: 'Decimal', value: text \}/);
+});
+
+// 验证协议点表的只读工程量列统一按两位小数展示，同时保留编辑控件的原始文本。
+test('协议点表配置列使用公共两位小数工具', () => {
+  for (const source of [iec104Source, modbusPointTableSource, dlt645PointTableSource]) {
+    assert.match(source, /formatDecimalDisplay/);
+    assert.match(source, /formatDecimalDisplay\(resolve[^\n]+DecimalText\(record, 'scale'\)\)/);
+    assert.match(source, /formatDecimalDisplay\(resolve[^\n]+DecimalText\(record, 'offset'\)\)/);
+    assert.match(source, /formatDecimalDisplay\(resolve[^\n]+DecimalText\(record, 'deadband'\)\)/);
+  }
+  assert.match(dlt645PointTableSource, /formatDecimalDisplay\(resolveDlt645EngineeringDecimalText\(record, 'scale'\)\)/);
+  assert.match(dlt645PointTableSource, /formatDecimalDisplay\(resolveDlt645EngineeringDecimalText\(record, 'offset'\)\)/);
+  assert.match(dlt645PointTableSource, /formatDecimalDisplay\(resolveDlt645EngineeringDecimalText\(record, 'deadband'\)\)/);
 });

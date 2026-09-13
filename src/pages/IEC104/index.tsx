@@ -65,7 +65,7 @@ import {
   formatErrorText,
   runWithRuntimeRestart,
 } from '../../utils/runtime-restart';
-import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
+import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
 import type {
   DcConnectionInfo,
   DcEndpoint,
@@ -2688,21 +2688,24 @@ const IEC104: React.FC = () => {
         dataIndex: 'scale_decimal',
         key: 'scale',
         width: 100,
-        render: (_value: string, record: Iec104Point) => resolveIec104PointDecimalText(record, 'scale'),
+        render: (_value: string, record: Iec104Point) =>
+          formatDecimalDisplay(resolveIec104PointDecimalText(record, 'scale')),
       },
       {
         title: 'Offset',
         dataIndex: 'offset_decimal',
         key: 'offset',
         width: 100,
-        render: (_value: string, record: Iec104Point) => resolveIec104PointDecimalText(record, 'offset'),
+        render: (_value: string, record: Iec104Point) =>
+          formatDecimalDisplay(resolveIec104PointDecimalText(record, 'offset')),
       },
       {
         title: 'Deadband',
         dataIndex: 'deadband_decimal',
         key: 'deadband',
         width: 110,
-        render: (_value: string, record: Iec104Point) => resolveIec104PointDecimalText(record, 'deadband'),
+        render: (_value: string, record: Iec104Point) =>
+          formatDecimalDisplay(resolveIec104PointDecimalText(record, 'deadband')),
       },
       actionColumn,
     ];
