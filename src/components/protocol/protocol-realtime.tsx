@@ -2,7 +2,7 @@ import React, { useEffect, useEffectEvent, useMemo, useRef, useState } from 'rea
 import { Tag, Typography } from 'antd';
 import { api } from '../../adapters';
 import type { DcPointUpdate, DcPointValue, DcSourcePointUpdate } from '../../adapters';
-import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
+import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
 
 const { Text } = Typography;
 
@@ -302,7 +302,7 @@ export function formatProtocolRealtimeValue(value: DcPointValue | null): string 
     case 'Double':
       return formatAutoRealtimeNumber(value.value);
     case 'Decimal':
-      return value.value;
+      return formatDecimalDisplay(value.value);
     case 'String':
       return value.value;
     case 'Bytes':

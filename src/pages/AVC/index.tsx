@@ -48,7 +48,7 @@ import {
   saveControlGroupWithOptionalRoutes,
 } from '../../utils/control-auto-routing';
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
-import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
+import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import {
   mergeControlRuntimeUpdates,
@@ -381,7 +381,7 @@ const formatSignal = (signal: AvcSignalSpec | null | undefined): string => {
   }
 
   const unitPart = signal.unit ? ` (${signal.unit})` : '';
-  return `${signal.tag}${unitPart} | scale=${signal.scale}, offset=${signal.offset}`;
+  return `${signal.tag}${unitPart} | scale=${formatAutoRealtimeNumber(signal.scale)}, offset=${formatAutoRealtimeNumber(signal.offset)}`;
 };
 
 const formatValueSpec = (spec: AvcValueSpec | null | undefined): string => {
@@ -408,6 +408,8 @@ const formatPointValue = (update: DcPointUpdate | null | undefined): string => {
       return String(update.value.value);
     case 'Double':
       return formatAutoRealtimeNumber(update.value.value);
+    case 'Decimal':
+      return formatDecimalDisplay(update.value.value);
     case 'String':
       return update.value.value;
     case 'Bytes':
@@ -1597,18 +1599,21 @@ const AVC: React.FC = () => {
       dataIndex: 'weight',
       key: 'weight',
       width: 90,
+      render: (value: number) => formatAutoRealtimeNumber(value),
     },
     {
       title: '无功下限 (kVar)',
       dataIndex: 'q_min_kvar',
       key: 'q_min_kvar',
       width: 120,
+      render: (value: number) => formatAutoRealtimeNumber(value),
     },
     {
       title: '无功上限 (kVar)',
       dataIndex: 'q_max_kvar',
       key: 'q_max_kvar',
       width: 120,
+      render: (value: number) => formatAutoRealtimeNumber(value),
     },
     {
       title: '测量点',
@@ -1660,7 +1665,7 @@ const AVC: React.FC = () => {
       title: '调节范围 (kVar)',
       key: 'range',
       width: 150,
-      render: (_, record) => `${record.q_min_kvar} ~ ${record.q_max_kvar}`,
+      render: (_, record) => `${formatAutoRealtimeNumber(record.q_min_kvar)} ~ ${formatAutoRealtimeNumber(record.q_max_kvar)}`,
     },
     {
       title: '测量值',
@@ -1683,7 +1688,7 @@ const AVC: React.FC = () => {
       width: 120,
       render: (value: number, record, index) => {
         if (!record.controllable) return <Text type="secondary">—</Text>;
-        if (allocationMode !== 'custom') return value;
+        if (allocationMode !== 'custom') return formatAutoRealtimeNumber(value);
         return (
           <InputNumber
             aria-label={`${record.member_name} 调节权重`}

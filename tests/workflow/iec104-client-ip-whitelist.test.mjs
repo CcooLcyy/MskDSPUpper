@@ -8,6 +8,7 @@ const pageSource = readSource(new URL('../../src/pages/IEC104/index.tsx', import
 const rustCommandSource = readSource(
   new URL('../../src-tauri/src/commands/iec104.rs', import.meta.url),
 );
+const protoSource = readSource(new URL('../../proto/IEC104.proto', import.meta.url));
 
 const formStart = pageSource.indexOf('<Form\n          form={linkForm}');
 const formEnd = pageSource.indexOf('</Form>', formStart);
@@ -89,4 +90,12 @@ test('IEC104 按传输角色构造 remote endpoint', () => {
   assert.match(submitSource, /api\.iec104UpsertLink\(config, createOnly\)/);
   assert.match(rustCommandSource, /remote:\s*self\.remote\.as_ref\(\)\.map\(\|endpoint\| endpoint\.to_proto\(\)\)/);
   assert.match(rustCommandSource, /\.upsert_link\(config\.to_proto\(\), create_only\)/);
+});
+
+// 设备从站收到对时命令后始终设时，上位机不再传递历史开关。
+test('IEC104 对时设时开关已从上位机配置中移除', () => {
+  assert.match(protoSource, /reserved 15;/);
+  assert.match(protoSource, /reserved "set_system_time_on_sync";/);
+  assert.doesNotMatch(protoSource, /bool\s+set_system_time_on_sync\s*=\s*15\s*;/);
+  assert.doesNotMatch(rustCommandSource, /\bset_system_time_on_sync\b/);
 });

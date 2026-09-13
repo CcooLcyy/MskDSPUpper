@@ -66,8 +66,6 @@ pub struct LinkConfigDto {
     pub time_sync_tag: String,
     pub station_role: i32,
     pub point_with_time: bool,
-    #[serde(default)]
-    pub set_system_time_on_sync: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -145,7 +143,6 @@ impl From<LinkConfig> for LinkConfigDto {
             time_sync_tag: config.time_sync_tag,
             station_role: config.station_role,
             point_with_time: config.point_with_time,
-            set_system_time_on_sync: config.set_system_time_on_sync,
         }
     }
 }
@@ -228,7 +225,6 @@ impl LinkConfigDto {
             time_sync_tag: self.time_sync_tag.clone(),
             station_role: self.station_role,
             point_with_time: self.point_with_time,
-            set_system_time_on_sync: self.set_system_time_on_sync,
         }
     }
 }

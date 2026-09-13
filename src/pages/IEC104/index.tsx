@@ -65,6 +65,7 @@ import {
   formatErrorText,
   runWithRuntimeRestart,
 } from '../../utils/runtime-restart';
+import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
 import type {
   DcConnectionInfo,
   DcEndpoint,
@@ -3314,7 +3315,7 @@ const IEC104: React.FC = () => {
           columns={[
             { title: 'Tag', dataIndex: 'tag', key: 'tag' },
             { title: '类型', dataIndex: 'point_type', key: 'point_type', render: (value: number) => POINT_TYPE_LABELS[value] ?? value },
-            { title: '模拟值', key: 'value', render: (_: unknown, record: Iec104SimulationSnapshot['points'][number]) => record.point_type === 2 ? (record.bool_value ? 'true' : 'false') : record.double_value?.toFixed(3) ?? '-' },
+            { title: '模拟值', key: 'value', render: (_: unknown, record: Iec104SimulationSnapshot['points'][number]) => record.point_type === 2 ? (record.bool_value ? 'true' : 'false') : record.double_value == null ? '-' : formatAutoRealtimeNumber(record.double_value) },
             { title: '品质', dataIndex: 'quality', key: 'quality', render: (value: number) => value === 0 ? '良好' : `0x${value.toString(16).toUpperCase()}` },
           ]}
           locale={{ emptyText: '尚未生成模拟值' }}

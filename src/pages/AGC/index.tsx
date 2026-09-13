@@ -53,7 +53,7 @@ import {
 } from '../../utils/control-auto-routing';
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
-import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
+import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
 import {
   mergeControlRuntimeUpdates,
   readControlRuntimeBool,
@@ -259,7 +259,7 @@ const formatSignal = (signal: AgcSignalSpec | null | undefined): string => {
   const unitPart = signal.unit ? ` (${signal.unit})` : '';
   const scale = resolveAgcDecimalText(signal, 'scale', 'scale_decimal', '1');
   const offset = resolveAgcDecimalText(signal, 'offset', 'offset_decimal');
-  return `${signal.tag}${unitPart} | scale=${scale}, offset=${offset}`;
+  return `${signal.tag}${unitPart} | scale=${formatDecimalDisplay(scale)}, offset=${formatDecimalDisplay(offset)}`;
 };
 
 const formatValueSpec = (spec: AgcValueSpec | null | undefined): string => {
@@ -428,7 +428,7 @@ const formatPointValue = (update: DcPointUpdate | null | undefined): string => {
     case 'Double':
       return formatAutoRealtimeNumber(update.value.value);
     case 'Decimal':
-      return update.value.value;
+      return formatDecimalDisplay(update.value.value);
     case 'String':
       return update.value.value;
     case 'Bytes':
@@ -1324,19 +1324,19 @@ const AGC: React.FC = () => {
       dataIndex: 'weight_decimal',
       key: 'weight',
       width: 90,
-      render: (_, record) => resolveAgcDecimalText(record, 'weight', 'weight_decimal', '1'),
+      render: (_, record) => formatDecimalDisplay(resolveAgcDecimalText(record, 'weight', 'weight_decimal', '1')),
     },
     {
       title: '有功下限 (kW)',
       key: 'min_kw',
       width: 110,
-      render: (_, record) => resolveAgcDecimalText(record, 'min_kw', 'min_kw_decimal'),
+      render: (_, record) => formatDecimalDisplay(resolveAgcDecimalText(record, 'min_kw', 'min_kw_decimal')),
     },
     {
       title: '有功上限 (kW)',
       key: 'max_kw',
       width: 110,
-      render: (_, record) => resolveAgcDecimalText(record, 'max_kw', 'max_kw_decimal'),
+      render: (_, record) => formatDecimalDisplay(resolveAgcDecimalText(record, 'max_kw', 'max_kw_decimal')),
     },
     {
       title: '测量点',
@@ -1389,14 +1389,14 @@ const AGC: React.FC = () => {
       title: '额定容量 (kW)',
       key: 'capacity_kw',
       width: 125,
-      render: (_, record) => resolveAgcDecimalText(record, 'capacity_kw', 'capacity_kw_decimal'),
+      render: (_, record) => formatDecimalDisplay(resolveAgcDecimalText(record, 'capacity_kw', 'capacity_kw_decimal')),
     },
     {
       title: '调节范围 (kW)',
       key: 'range',
       width: 150,
       render: (_, record) => (
-        `${resolveAgcDecimalText(record, 'min_kw', 'min_kw_decimal')} ~ ${resolveAgcDecimalText(record, 'max_kw', 'max_kw_decimal')}`
+        `${formatDecimalDisplay(resolveAgcDecimalText(record, 'min_kw', 'min_kw_decimal'))} ~ ${formatDecimalDisplay(resolveAgcDecimalText(record, 'max_kw', 'max_kw_decimal'))}`
       ),
     },
     {
@@ -1421,7 +1421,7 @@ const AGC: React.FC = () => {
       render: (_: string, record, index) => {
         if (!record.controllable) return <Text type="secondary">—</Text>;
         const value = resolveAgcDecimalText(record, 'weight', 'weight_decimal', '1');
-        if (allocationMode !== 'custom') return value;
+        if (allocationMode !== 'custom') return formatDecimalDisplay(value);
         return (
           <InputNumber<string>
             aria-label={`${record.member_name} 调节权重`}
@@ -1963,14 +1963,14 @@ const AGC: React.FC = () => {
                 <Descriptions.Item label="上调完成">{tuningStatus.completed_up_tests}</Descriptions.Item>
                 <Descriptions.Item label="下调完成">{tuningStatus.completed_down_tests}</Descriptions.Item>
                 <Descriptions.Item label="当前目标(kW)">
-                  {resolveAgcDecimalText(tuningStatus, 'current_target_kw', 'current_target_kw_decimal')}
+                  {formatDecimalDisplay(resolveAgcDecimalText(tuningStatus, 'current_target_kw', 'current_target_kw_decimal'))}
                 </Descriptions.Item>
                 <Descriptions.Item label="当前总量(kW)">
-                  {resolveAgcDecimalText(tuningStatus, 'current_total_meas_kw', 'current_total_meas_kw_decimal')}
+                  {formatDecimalDisplay(resolveAgcDecimalText(tuningStatus, 'current_total_meas_kw', 'current_total_meas_kw_decimal'))}
                 </Descriptions.Item>
                 {tuningProgress ? (
                   <Descriptions.Item label="当前误差(kW)">
-                    {tuningProgress.errorKw}（精度 ±{tuningProgress.tolerance}）
+                    {formatDecimalDisplay(tuningProgress.errorKw)}（精度 ±{formatDecimalDisplay(tuningProgress.tolerance)}）
                   </Descriptions.Item>
                 ) : null}
                 <Descriptions.Item label="首次进入目标(s)">{tuningStatus.target_entry_elapsed_seconds.toFixed(1)}</Descriptions.Item>
@@ -1982,31 +1982,31 @@ const AGC: React.FC = () => {
                   {tuningStatus.candidate_profile.members.map((member) => (
                     <Descriptions key={member.member_name} title={member.member_name} size="small" column={3} bordered>
                       <Descriptions.Item label="上调 P">
-                        {resolveAgcDecimalText(member, 'up_p_gain', 'up_p_gain_decimal')}
+                        {formatDecimalDisplay(resolveAgcDecimalText(member, 'up_p_gain', 'up_p_gain_decimal'))}
                       </Descriptions.Item>
                       <Descriptions.Item label="上调 I">
-                        {resolveAgcDecimalText(member, 'up_i_gain', 'up_i_gain_decimal')}
+                        {formatDecimalDisplay(resolveAgcDecimalText(member, 'up_i_gain', 'up_i_gain_decimal'))}
                       </Descriptions.Item>
                       <Descriptions.Item label="上调补偿(kW)">
-                        {resolveAgcDecimalText(member, 'up_bias_kw', 'up_bias_kw_decimal')}
+                        {formatDecimalDisplay(resolveAgcDecimalText(member, 'up_bias_kw', 'up_bias_kw_decimal'))}
                       </Descriptions.Item>
                       <Descriptions.Item label="下调 P">
-                        {resolveAgcDecimalText(member, 'down_p_gain', 'down_p_gain_decimal')}
+                        {formatDecimalDisplay(resolveAgcDecimalText(member, 'down_p_gain', 'down_p_gain_decimal'))}
                       </Descriptions.Item>
                       <Descriptions.Item label="下调 I">
-                        {resolveAgcDecimalText(member, 'down_i_gain', 'down_i_gain_decimal')}
+                        {formatDecimalDisplay(resolveAgcDecimalText(member, 'down_i_gain', 'down_i_gain_decimal'))}
                       </Descriptions.Item>
                       <Descriptions.Item label="下调补偿(kW)">
-                        {resolveAgcDecimalText(member, 'down_bias_kw', 'down_bias_kw_decimal')}
+                        {formatDecimalDisplay(resolveAgcDecimalText(member, 'down_bias_kw', 'down_bias_kw_decimal'))}
                       </Descriptions.Item>
                       <Descriptions.Item label="积分限值(kW)">
-                        {resolveAgcDecimalText(member, 'integral_limit_kw', 'integral_limit_kw_decimal')}
+                        {formatDecimalDisplay(resolveAgcDecimalText(member, 'integral_limit_kw', 'integral_limit_kw_decimal'))}
                       </Descriptions.Item>
                       <Descriptions.Item label="单次步长(kW)">
-                        {resolveAgcDecimalText(member, 'max_step_kw', 'max_step_kw_decimal')}
+                        {formatDecimalDisplay(resolveAgcDecimalText(member, 'max_step_kw', 'max_step_kw_decimal'))}
                       </Descriptions.Item>
                       <Descriptions.Item label="最大斜率(kW/s)">
-                        {resolveAgcDecimalText(member, 'max_ramp_kw_per_s', 'max_ramp_kw_per_s_decimal')}
+                        {formatDecimalDisplay(resolveAgcDecimalText(member, 'max_ramp_kw_per_s', 'max_ramp_kw_per_s_decimal'))}
                       </Descriptions.Item>
                     </Descriptions>
                   ))}

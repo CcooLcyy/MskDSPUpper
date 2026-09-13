@@ -30,7 +30,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { api } from '../../adapters';
 import type { DcConnectionInfo, DcPointUpdate, DcRoute } from '../../adapters';
-import { formatAutoRealtimeNumber } from '../../utils/realtime-value';
+import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
 import { DATA_BUS_VIEW_QUERY_KEY, normalizeDataBusView } from '../../components/data-bus/data-bus-view';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import { usePointerReorder } from '../../components/interaction/use-pointer-reorder';
@@ -127,7 +127,7 @@ const formatPointValue = (value: DcPointUpdate['value']): string => {
     case 'Bool': return value.value ? '是' : '否';
     case 'Int': return String(value.value);
     case 'Double': return formatAutoRealtimeNumber(value.value);
-    case 'Decimal': return value.value;
+    case 'Decimal': return formatDecimalDisplay(value.value);
     case 'String': return value.value;
     case 'Bytes': return `[${value.value.length} 字节]`;
     default: return '-';

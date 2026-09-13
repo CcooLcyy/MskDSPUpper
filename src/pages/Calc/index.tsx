@@ -35,6 +35,7 @@ import type {
 } from '../../adapters';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import { getDecimalTextError, isDecimalTextZero } from '../../utils/decimal-input';
+import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
 import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import './index.css';
 
@@ -124,10 +125,10 @@ const sourceLabel = (operand: CalcOperandSpec | null | undefined): string => {
   if (!operand || operand.source_kind === 1) return '数据总线点位';
   if (operand.source_kind !== 2 || !operand.constant) return '常量';
   const constant = operand.constant;
-  if (constant.decimal_value !== undefined) return `常量：${constant.decimal_value}`;
+  if (constant.decimal_value !== undefined) return `常量：${formatDecimalDisplay(constant.decimal_value)}`;
   if (constant.bool_value !== undefined) return `常量：${constant.bool_value ? '真' : '假'}`;
   if (constant.int_value !== undefined) return `常量：${constant.int_value}`;
-  if (constant.double_value !== undefined) return `常量：${constant.double_value}`;
+  if (constant.double_value !== undefined) return `常量：${formatAutoRealtimeNumber(constant.double_value)}`;
   return '常量';
 };
 
