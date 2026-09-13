@@ -1327,14 +1327,12 @@ export const browserApi: typeof tauriApi = {
     if (!value) throw new Error(`浏览器开发模式 mock 未找到 IEC104 连接: ${connName}`);
     value.state = IEC104_LINK_STATE.RUNNING;
     value.connection_state = 3;
-    return clone(value);
   },
   iec104StopLink: async (connName: string) => {
     const value = iec104Links.get(connName);
     if (!value) throw new Error(`浏览器开发模式 mock 未找到 IEC104 连接: ${connName}`);
     value.state = IEC104_LINK_STATE.STOPPED;
     value.connection_state = 1;
-    return clone(value);
   },
   iec104UpsertPointTable: async (connName: string, points: Iec104Point[], replace: boolean) => {
     const previous = iec104Tables.get(connName)?.points ?? [];
