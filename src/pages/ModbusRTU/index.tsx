@@ -5,6 +5,7 @@ import { api } from '../../adapters';
 import type { ModbusLinkConfig, ModbusLinkInfo, ModbusPoint, ModbusReadPlan, ModbusSerialConfig } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import ResizableSplit from '../../components/layout/ResizableSplit';
+import { PARAMETER_HELP } from '../../components/help/parameter-help';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
 import {
@@ -886,13 +887,14 @@ const ModbusRTU: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="传输方式" name="transport_type" rules={[{ required: true, message: '请选择传输方式' }]}>
+              <Form.Item label="传输方式" tooltip={PARAMETER_HELP.modbus.transportType} name="transport_type" rules={[{ required: true, message: '请选择传输方式' }]}>
                 <Select options={TRANSPORT_TYPE_OPTIONS} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
               <Form.Item
                 label="从站地址（1-247）"
+                tooltip={PARAMETER_HELP.modbus.deviceId}
                 name="device_id"
                 rules={[{ required: true, message: '请输入 1 到 247 的从站地址' }]}
               >
@@ -911,6 +913,7 @@ const ModbusRTU: React.FC = () => {
             <Col xs={24} sm={12} lg={8}>
               <Form.Item
                 label={transportType === 2 ? '远端串口标识' : '本地串口设备'}
+                tooltip={PARAMETER_HELP.common.serialPort}
                 name={transportType === 2 ? 'serial_port' : 'serial_device'}
                 rules={[{ required: true, message: transportType === 2 ? '请输入远端串口标识' : '请输入本地串口设备' }]}
               >
@@ -918,28 +921,28 @@ const ModbusRTU: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="波特率" name="baud_rate" rules={[{ required: true, message: '请输入波特率' }]}>
+              <Form.Item label="波特率" tooltip={PARAMETER_HELP.common.baudRate} name="baud_rate" rules={[{ required: true, message: '请输入波特率' }]}>
                 <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="9600" />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="数据位" name="data_bits" rules={[{ required: true, message: '请选择数据位' }]}>
+              <Form.Item label="数据位" tooltip={PARAMETER_HELP.common.dataBits} name="data_bits" rules={[{ required: true, message: '请选择数据位' }]}>
                 <InputNumber min={5} max={8} precision={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="校验位" name="parity" rules={[{ required: true, message: '请选择校验位' }]}>
+              <Form.Item label="校验位" tooltip={PARAMETER_HELP.common.parity} name="parity" rules={[{ required: true, message: '请选择校验位' }]}>
                 <Select options={PARITY_OPTIONS} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="停止位" name="stop_bits" rules={[{ required: true, message: '请选择停止位' }]}>
+              <Form.Item label="停止位" tooltip={PARAMETER_HELP.common.stopBits} name="stop_bits" rules={[{ required: true, message: '请选择停止位' }]}>
                 <Select options={STOP_BITS_OPTIONS} />
               </Form.Item>
             </Col>
             {transportType === 1 ? (
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="读取超时（毫秒）" name="read_timeout_ms">
+                <Form.Item label="读取超时（毫秒）" tooltip={PARAMETER_HELP.common.requestTimeout} name="read_timeout_ms">
                   <InputNumber min={0} precision={0} style={{ width: '100%' }} addonAfter="ms" />
                 </Form.Item>
               </Col>
@@ -953,22 +956,22 @@ const ModbusRTU: React.FC = () => {
             <Text className="modbus-form-section-hint">填 0 表示使用模块默认值。</Text>
             <Row gutter={16}>
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="请求超时（毫秒）" name="request_timeout_ms" rules={[{ required: true, message: '请输入请求超时' }]}>
+                <Form.Item label="请求超时（毫秒）" tooltip={PARAMETER_HELP.common.requestTimeout} name="request_timeout_ms" rules={[{ required: true, message: '请输入请求超时' }]}>
                   <InputNumber min={0} precision={0} style={{ width: '100%' }} addonAfter="ms" />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="字节超时（毫秒）" name="serial_byte_timeout_ms" rules={[{ required: true, message: '请输入字节超时' }]}>
+                <Form.Item label="字节超时（毫秒）" tooltip={PARAMETER_HELP.common.serialByteTimeout} name="serial_byte_timeout_ms" rules={[{ required: true, message: '请输入字节超时' }]}>
                   <InputNumber min={0} precision={0} style={{ width: '100%' }} addonAfter="ms" />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="帧超时（毫秒）" name="serial_frame_timeout_ms" rules={[{ required: true, message: '请输入帧超时' }]}>
+                <Form.Item label="帧超时（毫秒）" tooltip={PARAMETER_HELP.common.serialFrameTimeout} name="serial_frame_timeout_ms" rules={[{ required: true, message: '请输入帧超时' }]}>
                   <InputNumber min={0} precision={0} style={{ width: '100%' }} addonAfter="ms" />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="预计最大响应字节数" name="serial_est_size" rules={[{ required: true, message: '请输入预计最大响应字节数' }]}>
+                <Form.Item label="预计最大响应字节数" tooltip={PARAMETER_HELP.common.serialEstimatedSize} name="serial_est_size" rules={[{ required: true, message: '请输入预计最大响应字节数' }]}>
                   <InputNumber min={1} precision={0} style={{ width: '100%' }} addonAfter="字节" />
                 </Form.Item>
               </Col>
@@ -980,13 +983,14 @@ const ModbusRTU: React.FC = () => {
           <Text className="modbus-form-section-title">采集基础参数</Text>
           <Row gutter={16}>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="轮询周期（毫秒）" name="poll_interval_ms" rules={[{ required: true, message: '请输入轮询周期' }]}>
+              <Form.Item label="轮询周期（毫秒）" tooltip={PARAMETER_HELP.common.pollInterval} name="poll_interval_ms" rules={[{ required: true, message: '请输入轮询周期' }]}>
                 <InputNumber min={1} precision={0} style={{ width: '100%' }} addonAfter="ms" />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
               <Form.Item
                 label="地址基准"
+                tooltip={PARAMETER_HELP.modbus.addressBase}
                 name="address_base"
                 extra={editingLink && points.length > 0
                   ? '已有点位时不能直接切换地址基准；请先完成点位迁移后再修改。'
@@ -1026,6 +1030,7 @@ const ModbusRTU: React.FC = () => {
           <Col xs={24} sm={12} lg={8}>
             <Form.Item
               label="Tag"
+              tooltip={PARAMETER_HELP.common.tag}
               name="tag"
               validateStatus={pointTagDuplicate ? 'error' : undefined}
               help={pointTagDuplicate ? 'Tag 已存在' : undefined}
@@ -1049,7 +1054,7 @@ const ModbusRTU: React.FC = () => {
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="功能码" name="function" rules={[{ required: true, message: '请选择功能码' }]}>
+            <Form.Item label="功能码" tooltip={PARAMETER_HELP.modbus.functionCode} name="function" rules={[{ required: true, message: '请选择功能码' }]}>
               <Select
                 options={ALL_FUNCTION_CODE_OPTIONS}
                 onChange={(value: number) => {
@@ -1071,6 +1076,7 @@ const ModbusRTU: React.FC = () => {
           <Col xs={24} sm={12} lg={8}>
             <Form.Item
               label={`地址（${pointAddressBase === MODBUS_ADDRESS_BASE.ONE ? '1 基' : '0 基'}）`}
+              tooltip={PARAMETER_HELP.modbus.address}
               name="address"
               rules={[{ required: true, message: '请输入地址' }]}
             >
@@ -1085,7 +1091,7 @@ const ModbusRTU: React.FC = () => {
         </Row>
         <Row gutter={16}>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="数据类型" name="data_type" rules={[{ required: true, message: '请选择数据类型' }]}>
+            <Form.Item label="数据类型" tooltip={PARAMETER_HELP.common.dataType} name="data_type" rules={[{ required: true, message: '请选择数据类型' }]}>
               <Select
                 options={pointDataTypeOptions}
                 onChange={(value: number) => {
@@ -1101,7 +1107,7 @@ const ModbusRTU: React.FC = () => {
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="寄存器数" name="reg_count" rules={[{ required: true, message: '请选择寄存器数' }]}>
+            <Form.Item label="寄存器数" tooltip={PARAMETER_HELP.modbus.registerCount} name="reg_count" rules={[{ required: true, message: '请选择寄存器数' }]}>
               <Select options={pointRegCountOptions} />
             </Form.Item>
           </Col>
@@ -1109,6 +1115,7 @@ const ModbusRTU: React.FC = () => {
             <Col xs={24} sm={12} lg={8}>
               <Form.Item
                 label="位索引"
+                tooltip={PARAMETER_HELP.modbus.bitIndex}
                 name="bit_index"
                 rules={[{ required: true, message: '请输入位索引' }]}
               >
@@ -1124,6 +1131,7 @@ const ModbusRTU: React.FC = () => {
               <Col xs={24} sm={12} lg={8}>
                 <Form.Item
                   label="缩放系数"
+                  tooltip={PARAMETER_HELP.common.scale}
                   name="scale"
                   rules={[{ validator: validateEngineeringDecimal('缩放系数') }]}
                 >
@@ -1133,6 +1141,7 @@ const ModbusRTU: React.FC = () => {
               <Col xs={24} sm={12} lg={8}>
                 <Form.Item
                   label="偏移量"
+                  tooltip={PARAMETER_HELP.common.offset}
                   name="offset"
                   rules={[{ validator: validateEngineeringDecimal('偏移量') }]}
                 >
@@ -1144,6 +1153,7 @@ const ModbusRTU: React.FC = () => {
                   <Col xs={24} sm={12} lg={8}>
                     <Form.Item
                       label="死区"
+                      tooltip={PARAMETER_HELP.common.deadband}
                       name="deadband"
                       rules={[{ validator: validateEngineeringDecimal('死区') }]}
                     >
@@ -1153,13 +1163,13 @@ const ModbusRTU: React.FC = () => {
                 ) : null}
               {(pointDataType === MODBUS_DATA_TYPE.UINT32 || pointDataType === MODBUS_DATA_TYPE.INT32) ? (
                 <Col xs={24} sm={12} lg={8}>
-                  <Form.Item label="字序" name="word_order">
+                  <Form.Item label="字序" tooltip={PARAMETER_HELP.modbus.wordOrder} name="word_order">
                     <Select options={WORD_ORDER_OPTIONS} />
                   </Form.Item>
                 </Col>
               ) : null}
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="字节序" name="byte_order">
+                <Form.Item label="字节序" tooltip={PARAMETER_HELP.modbus.byteOrder} name="byte_order">
                   <Select options={BYTE_ORDER_OPTIONS} />
                 </Form.Item>
               </Col>

@@ -45,6 +45,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import ResizableSplit from '../../components/layout/ResizableSplit';
+import { PARAMETER_HELP } from '../../components/help/parameter-help';
 import { usePointerReorder } from '../../components/interaction/use-pointer-reorder';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import {
@@ -3361,7 +3362,7 @@ const IEC104: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item name="role" label="传输角色 (role)">
+              <Form.Item name="role" label="传输角色 (role)" tooltip={PARAMETER_HELP.iec104.transportRole}>
                 <Select
                   options={[
                     { value: 0, label: 'UNSPECIFIED' },
@@ -3372,7 +3373,7 @@ const IEC104: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item name="station_role" label="站点角色 (station_role)">
+              <Form.Item name="station_role" label="站点角色 (station_role)" tooltip={PARAMETER_HELP.iec104.stationRole}>
                 <Select
                   options={[
                     { value: 0, label: 'UNSPECIFIED (按 role 默认)' },
@@ -3386,17 +3387,17 @@ const IEC104: React.FC = () => {
 
           <Row gutter={16}>
             <Col span={6}>
-              <Form.Item name="ca" label="公共地址 (ca)">
+              <Form.Item name="ca" label="公共地址 (ca)" tooltip={PARAMETER_HELP.iec104.commonAddress}>
                 <InputNumber min={0} max={65534} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={6}>
-              <Form.Item name="oa" label="源地址 (oa)">
+              <Form.Item name="oa" label="源地址 (oa)" tooltip={PARAMETER_HELP.iec104.originatorAddress}>
                 <InputNumber min={0} max={255} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="time_sync_tag" label="对时标签">
+              <Form.Item name="time_sync_tag" label="对时标签" tooltip={PARAMETER_HELP.iec104.timeSyncTag}>
                 <Input placeholder="sys_time" />
               </Form.Item>
             </Col>
@@ -3408,6 +3409,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="local_ip"
                 label="本地 IP"
+                tooltip={PARAMETER_HELP.iec104.localIp}
                 normalize={normalizeIpInput}
                 rules={[{ validator: validateOptionalIpv4 }]}
               >
@@ -3415,7 +3417,7 @@ const IEC104: React.FC = () => {
               </Form.Item>
             </Col>
             <Col span={localEndpointPortSpan} style={{ display: showLocalEndpointFields ? undefined : 'none' }}>
-              <Form.Item name="local_port" label="端口">
+              <Form.Item name="local_port" label="端口" tooltip={PARAMETER_HELP.iec104.port}>
                 <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="2404" />
               </Form.Item>
             </Col>
@@ -3423,6 +3425,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="remote_ip"
                 label={linkRole === ROLE_SERVER ? '允许的主站 IP' : '远程 IP'}
+                tooltip={linkRole === ROLE_SERVER ? PARAMETER_HELP.iec104.allowedMasterIps : PARAMETER_HELP.iec104.remoteIp}
                 normalize={normalizeIpInput}
                 rules={[
                   ...(linkRole === ROLE_CLIENT
@@ -3438,6 +3441,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="remote_port"
                 label="端口"
+                tooltip={PARAMETER_HELP.iec104.port}
                 rules={linkRole === ROLE_CLIENT ? [{ required: true, message: '请输入远程端口' }] : []}
               >
                 <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="2404" />
@@ -3448,32 +3452,32 @@ const IEC104: React.FC = () => {
           <Text type="secondary" style={{ display: 'block', margin: '8px 0 4px' }}>APCI 参数</Text>
           <Row gutter={16}>
             <Col span={4}>
-              <Form.Item name="k" label="k">
+              <Form.Item name="k" label="k" tooltip={PARAMETER_HELP.iec104.apciK}>
                 <InputNumber min={1} max={32767} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={4}>
-              <Form.Item name="w" label="w">
+              <Form.Item name="w" label="w" tooltip={PARAMETER_HELP.iec104.apciW}>
                 <InputNumber min={1} max={32767} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={4}>
-              <Form.Item name="t0" label="t0 (s)">
+              <Form.Item name="t0" label="t0 (s)" tooltip={PARAMETER_HELP.iec104.apciT0}>
                 <InputNumber min={1} max={255} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={4}>
-              <Form.Item name="t1" label="t1 (s)">
+              <Form.Item name="t1" label="t1 (s)" tooltip={PARAMETER_HELP.iec104.apciT1}>
                 <InputNumber min={1} max={255} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={4}>
-              <Form.Item name="t2" label="t2 (s)">
+              <Form.Item name="t2" label="t2 (s)" tooltip={PARAMETER_HELP.iec104.apciT2}>
                 <InputNumber min={1} max={255} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={4}>
-              <Form.Item name="t3" label="t3 (s)">
+              <Form.Item name="t3" label="t3 (s)" tooltip={PARAMETER_HELP.iec104.apciT3}>
                 <InputNumber min={1} max={255} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
@@ -3482,27 +3486,27 @@ const IEC104: React.FC = () => {
           <Text type="secondary" style={{ display: 'block', margin: '8px 0 4px' }}>点位设置</Text>
           <Row gutter={16}>
             <Col span={6}>
-              <Form.Item name="point_batch_window_ms" label="批量窗口 (ms)">
+              <Form.Item name="point_batch_window_ms" label="批量窗口 (ms)" tooltip={PARAMETER_HELP.iec104.batchWindow}>
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={6}>
-              <Form.Item name="point_max_asdu_bytes" label="最大 ASDU 字节">
+              <Form.Item name="point_max_asdu_bytes" label="最大 ASDU 字节" tooltip={PARAMETER_HELP.iec104.maxAsduBytes}>
                 <InputNumber min={1} max={65535} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={4}>
-              <Form.Item name="point_use_standard_limit" label="标准限值" valuePropName="checked">
+              <Form.Item name="point_use_standard_limit" label="标准限值" tooltip={PARAMETER_HELP.iec104.standardLimit} valuePropName="checked">
                 <Switch />
               </Form.Item>
             </Col>
             <Col span={4}>
-              <Form.Item name="point_with_time" label="带时标" valuePropName="checked">
+              <Form.Item name="point_with_time" label="带时标" tooltip={PARAMETER_HELP.iec104.withTimestamp} valuePropName="checked">
                 <Switch />
               </Form.Item>
             </Col>
             <Col span={4}>
-              <Form.Item name="point_dedupe" label="去重">
+              <Form.Item name="point_dedupe" label="去重" tooltip={PARAMETER_HELP.iec104.deduplicate}>
                 <Select
                   allowClear
                   placeholder="默认"
@@ -3543,6 +3547,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="tag"
                 label="Tag (标签)"
+                tooltip={PARAMETER_HELP.common.tag}
                 normalize={(value) => (typeof value === 'string' ? value.trim() : value)}
                 validateStatus={pointTagDuplicate ? 'error' : undefined}
                 help={pointTagDuplicate ? '该标签已存在' : undefined}
@@ -3565,6 +3570,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="ioa_category"
                 label="IOA 业务类别"
+                tooltip={PARAMETER_HELP.iec104.ioaCategory}
               >
                 <Select
                   options={IOA_CATEGORY_FORM_OPTIONS}
@@ -3577,6 +3583,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="ioa"
                 label="IOA (信息体地址)"
+                tooltip={PARAMETER_HELP.iec104.ioa}
                 extra={(
                   <Space size={[8, 2]} wrap className="iec104-ioa-form-extra">
                     <span>{pointIoaRange ? `范围：${formatIoaDual(pointIoaRange.start)} - ${formatIoaDual(pointIoaRange.end)}` : `允许范围：${formatIoaDual(1)} - ${formatIoaDual(MAX_IOA)}`}</span>
@@ -3612,6 +3619,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="point_type"
                 label="类型 (Type)"
+                tooltip={PARAMETER_HELP.iec104.pointType}
                 rules={[{ required: true, message: '请选择类型' }]}
               >
                 <Select
@@ -3627,6 +3635,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="business_type"
                 label="业务类型"
+                tooltip={PARAMETER_HELP.iec104.businessType}
                 rules={[{ required: true, message: '请选择业务类型' }]}
               >
                 <Select
@@ -3646,6 +3655,7 @@ const IEC104: React.FC = () => {
                   <Form.Item
                     name="remote_control_type"
                     label="遥控命令类型"
+                    tooltip={PARAMETER_HELP.iec104.remoteControlType}
                     rules={[{ required: true, message: '请选择单点或双点遥控' }]}
                   >
                     <Select options={REMOTE_CONTROL_TYPE_OPTIONS} />
@@ -3655,6 +3665,7 @@ const IEC104: React.FC = () => {
                   <Form.Item
                     name="command_execution_mode"
                     label="命令执行方式"
+                    tooltip={PARAMETER_HELP.iec104.commandExecutionMode}
                     rules={[{ required: true, message: '请选择直接执行或选择后执行' }]}
                   >
                     <Select options={COMMAND_EXECUTION_MODE_OPTIONS} />
@@ -3666,6 +3677,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="scale"
                 label="Scale"
+                tooltip={PARAMETER_HELP.common.scale}
                 extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}
                 rules={[{ validator: validateEngineeringDecimal('Scale') }]}
               >
@@ -3676,6 +3688,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="offset"
                 label="Offset"
+                tooltip={PARAMETER_HELP.common.offset}
                 extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}
                 rules={[{ validator: validateEngineeringDecimal('Offset') }]}
               >
@@ -3686,6 +3699,7 @@ const IEC104: React.FC = () => {
               <Form.Item
                 name="deadband"
                 label="Deadband"
+                tooltip={PARAMETER_HELP.common.deadband}
                 extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}
                 rules={[{ validator: validateEngineeringDecimal('Deadband') }]}
               >

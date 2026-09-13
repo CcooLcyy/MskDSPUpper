@@ -5,6 +5,7 @@ import { api } from '../../adapters';
 import type { ModbusPoint, ModbusTcpLinkConfig, ModbusTcpLinkInfo } from '../../adapters';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
+import { PARAMETER_HELP } from '../../components/help/parameter-help';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import { useProtocolRealtime } from '../../components/protocol/protocol-realtime';
 import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
@@ -731,6 +732,7 @@ const ModbusTCP: React.FC = () => {
             <Col xs={24} sm={12}>
               <Form.Item
                 label="Unit ID"
+                tooltip={PARAMETER_HELP.modbus.unitId}
                 name="unit_id"
                 rules={[
                   { required: true, message: '请输入 1 到 247 的 Unit ID' },
@@ -749,6 +751,7 @@ const ModbusTCP: React.FC = () => {
             <Col xs={24} sm={16}>
               <Form.Item
                 label="主机地址"
+                tooltip={PARAMETER_HELP.modbus.host}
                 name="host"
                 rules={[
                   { required: true, message: '请输入 IP 地址或域名' },
@@ -779,6 +782,7 @@ const ModbusTCP: React.FC = () => {
             <Col xs={24} sm={12} lg={6}>
               <Form.Item
                 label="连接超时"
+                tooltip={PARAMETER_HELP.common.connectTimeout}
                 name="connect_timeout_ms"
                 rules={[
                   { required: true, message: '请输入连接超时' },
@@ -791,6 +795,7 @@ const ModbusTCP: React.FC = () => {
             <Col xs={24} sm={12} lg={6}>
               <Form.Item
                 label="请求超时"
+                tooltip={PARAMETER_HELP.common.requestTimeout}
                 name="request_timeout_ms"
                 rules={[
                   { required: true, message: '请输入请求超时' },
@@ -803,6 +808,7 @@ const ModbusTCP: React.FC = () => {
             <Col xs={24} sm={12} lg={6}>
               <Form.Item
                 label="轮询周期"
+                tooltip={PARAMETER_HELP.common.pollInterval}
                 name="poll_interval_ms"
                 rules={[
                   { required: true, message: '请输入轮询周期' },
@@ -815,6 +821,7 @@ const ModbusTCP: React.FC = () => {
             <Col xs={24} sm={12} lg={6}>
               <Form.Item
                 label="地址基准"
+                tooltip={PARAMETER_HELP.modbus.addressBase}
                 name="address_base"
                 extra={editingLink && points.length > 0 ? '已有点位时不能直接切换地址基准。' : undefined}
                 rules={[{ required: true, message: '请选择地址基准' }]}
@@ -856,6 +863,7 @@ const ModbusTCP: React.FC = () => {
           <Col xs={24} sm={12} lg={8}>
             <Form.Item
               label="Tag"
+              tooltip={PARAMETER_HELP.common.tag}
               name="tag"
               validateStatus={pointTagDuplicate ? 'error' : undefined}
               help={pointTagDuplicate ? 'Tag 已存在' : undefined}
@@ -877,7 +885,7 @@ const ModbusTCP: React.FC = () => {
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="功能码" name="function" rules={[{ required: true, message: '请选择功能码' }]}>
+            <Form.Item label="功能码" tooltip={PARAMETER_HELP.modbus.functionCode} name="function" rules={[{ required: true, message: '请选择功能码' }]}>
               <Select
                 options={ALL_FUNCTION_CODE_OPTIONS}
                 onChange={(value: number) => {
@@ -901,6 +909,7 @@ const ModbusTCP: React.FC = () => {
           <Col xs={24} sm={12} lg={8}>
             <Form.Item
               label={`地址（${pointAddressBase === MODBUS_ADDRESS_BASE.ONE ? '1 基' : '0 基'}）`}
+              tooltip={PARAMETER_HELP.modbus.address}
               name="address"
               rules={[{ required: true, message: '请输入地址' }]}
             >
@@ -910,7 +919,7 @@ const ModbusTCP: React.FC = () => {
         </Row>
         <Row gutter={16}>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="数据类型" name="data_type" rules={[{ required: true, message: '请选择数据类型' }]}>
+            <Form.Item label="数据类型" tooltip={PARAMETER_HELP.common.dataType} name="data_type" rules={[{ required: true, message: '请选择数据类型' }]}>
               <Select
                 options={pointDataTypeOptions}
                 onChange={(value: number) => {
@@ -928,13 +937,13 @@ const ModbusTCP: React.FC = () => {
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="寄存器数" name="reg_count" rules={[{ required: true, message: '请选择寄存器数' }]}>
+            <Form.Item label="寄存器数" tooltip={PARAMETER_HELP.modbus.registerCount} name="reg_count" rules={[{ required: true, message: '请选择寄存器数' }]}>
               <Select options={pointRegCountOptions} />
             </Form.Item>
           </Col>
           {isRegisterBoolPoint ? (
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="位索引" name="bit_index" rules={[{ required: true, message: '请输入位索引' }]}>
+              <Form.Item label="位索引" tooltip={PARAMETER_HELP.modbus.bitIndex} name="bit_index" rules={[{ required: true, message: '请输入位索引' }]}>
                 <InputNumber min={0} max={pointBitMax} precision={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
@@ -947,6 +956,7 @@ const ModbusTCP: React.FC = () => {
               <Col xs={24} sm={12} lg={8}>
                 <Form.Item
                   label="缩放系数"
+                  tooltip={PARAMETER_HELP.common.scale}
                   name="scale"
                   rules={[{ validator: validateEngineeringDecimal('缩放系数') }]}
                 >
@@ -956,6 +966,7 @@ const ModbusTCP: React.FC = () => {
               <Col xs={24} sm={12} lg={8}>
                 <Form.Item
                   label="偏移量"
+                  tooltip={PARAMETER_HELP.common.offset}
                   name="offset"
                   rules={[{ validator: validateEngineeringDecimal('偏移量') }]}
                 >
@@ -964,11 +975,11 @@ const ModbusTCP: React.FC = () => {
               </Col>
               {(pointDataType === MODBUS_DATA_TYPE.UINT32 || pointDataType === MODBUS_DATA_TYPE.INT32) ? (
                 <Col xs={24} sm={12} lg={8}>
-                  <Form.Item label="字序" name="word_order"><Select options={WORD_ORDER_OPTIONS} /></Form.Item>
+                  <Form.Item label="字序" tooltip={PARAMETER_HELP.modbus.wordOrder} name="word_order"><Select options={WORD_ORDER_OPTIONS} /></Form.Item>
                 </Col>
               ) : null}
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="字节序" name="byte_order"><Select options={BYTE_ORDER_OPTIONS} /></Form.Item>
+                <Form.Item label="字节序" tooltip={PARAMETER_HELP.modbus.byteOrder} name="byte_order"><Select options={BYTE_ORDER_OPTIONS} /></Form.Item>
               </Col>
             </Row>
           </div>

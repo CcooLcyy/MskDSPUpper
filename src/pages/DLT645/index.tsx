@@ -6,6 +6,7 @@ import { api } from '../../adapters';
 import type { Dlt645LinkConfig, Dlt645LinkInfo, Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import ResizableSplit from '../../components/layout/ResizableSplit';
+import { PARAMETER_HELP } from '../../components/help/parameter-help';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
 import { getDecimalTextError, toDecimalInputText } from '../../utils/decimal-input';
@@ -870,13 +871,14 @@ const DLT645: React.FC = () => {
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="协议变体" name="protocol_variant" rules={[{ required: true, message: '请选择协议变体' }]}>
+            <Form.Item label="协议变体" tooltip={PARAMETER_HELP.dlt645.protocolVariant} name="protocol_variant" rules={[{ required: true, message: '请选择协议变体' }]}>
               <Select options={PROTOCOL_VARIANT_OPTIONS} placeholder="请选择协议变体" />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={8}>
             <Form.Item
               label="表计地址"
+              tooltip={PARAMETER_HELP.dlt645.meterAddress}
               name="meter_addr"
               rules={[{ required: true, message: '请输入表计地址' }]}
             >
@@ -887,6 +889,7 @@ const DLT645: React.FC = () => {
             <Col xs={24} sm={12} lg={8}>
               <Form.Item
                 label="设备序号 (PCD)"
+                tooltip={PARAMETER_HELP.dlt645.deviceNumber}
                 name="device_no"
                 rules={[{ required: true, message: '请输入设备序号' }]}
               >
@@ -901,22 +904,22 @@ const DLT645: React.FC = () => {
           <div className="dlt645-form-section-title">轮询参数</div>
           <Row gutter={[16, 0]}>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="通信方式" name="comm_mode" rules={[{ required: true, message: '请选择通信方式' }]}>
+            <Form.Item label="通信方式" tooltip={PARAMETER_HELP.dlt645.communicationMode} name="comm_mode" rules={[{ required: true, message: '请选择通信方式' }]}>
               <Select options={COMM_MODE_OPTIONS} placeholder="请选择通信方式" />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="轮询间隔（毫秒）" name="poll_interval_ms" rules={[{ required: true, message: '请输入轮询间隔' }]}>
+            <Form.Item label="轮询间隔（毫秒）" tooltip={PARAMETER_HELP.common.pollInterval} name="poll_interval_ms" rules={[{ required: true, message: '请输入轮询间隔' }]}>
               <InputNumber min={0} style={{ width: '100%' }} />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="点抄间隔（毫秒）" name="poll_item_interval_ms">
+            <Form.Item label="点抄间隔（毫秒）" tooltip={PARAMETER_HELP.dlt645.pollItemInterval} name="poll_item_interval_ms">
               <InputNumber min={0} style={{ width: '100%' }} placeholder="0=无额外等待" />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="请求超时（毫秒）" name="request_timeout_ms">
+            <Form.Item label="请求超时（毫秒）" tooltip={PARAMETER_HELP.common.requestTimeout} name="request_timeout_ms">
               <InputNumber min={0} style={{ width: '100%' }} placeholder="0=默认" />
             </Form.Item>
           </Col>
@@ -928,44 +931,44 @@ const DLT645: React.FC = () => {
             <div className="dlt645-form-section-title">串口参数</div>
             <Row gutter={[16, 0]}>
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="串口标识" name="serial_port" rules={[{ required: true, message: '请输入串口标识' }]}>
+                <Form.Item label="串口标识" tooltip={PARAMETER_HELP.common.serialPort} name="serial_port" rules={[{ required: true, message: '请输入串口标识' }]}>
                   <Input placeholder="RS485-1" />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} lg={4}>
-                <Form.Item label="波特率" name="serial_baud_rate">
+                <Form.Item label="波特率" tooltip={PARAMETER_HELP.common.baudRate} name="serial_baud_rate">
                   <InputNumber style={{ width: '100%' }} placeholder="2400" />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} lg={4}>
-                <Form.Item label="数据位" name="serial_data_bits">
+                <Form.Item label="数据位" tooltip={PARAMETER_HELP.common.dataBits} name="serial_data_bits">
                   <InputNumber min={5} max={8} style={{ width: '100%' }} />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} lg={4}>
-                <Form.Item label="校验位" name="serial_parity">
+                <Form.Item label="校验位" tooltip={PARAMETER_HELP.common.parity} name="serial_parity">
                   <Select options={VISIBLE_PARITY_OPTIONS} />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} lg={4}>
-                <Form.Item label="停止位" name="serial_stop_bits">
+                <Form.Item label="停止位" tooltip={PARAMETER_HELP.common.stopBits} name="serial_stop_bits">
                   <Select options={VISIBLE_STOP_BITS_OPTIONS} />
                 </Form.Item>
               </Col>
             </Row>
             <Row gutter={[16, 0]}>
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="字节超时（毫秒）" name="serial_byte_timeout_ms">
+                <Form.Item label="字节超时（毫秒）" tooltip={PARAMETER_HELP.common.serialByteTimeout} name="serial_byte_timeout_ms">
                   <InputNumber min={0} style={{ width: '100%' }} placeholder="0=默认" />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="帧超时（毫秒）" name="serial_frame_timeout_ms">
+                <Form.Item label="帧超时（毫秒）" tooltip={PARAMETER_HELP.common.serialFrameTimeout} name="serial_frame_timeout_ms">
                   <InputNumber min={0} style={{ width: '100%' }} placeholder="0=默认" />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} lg={8}>
-                <Form.Item label="估算帧长度" name="serial_est_size">
+                <Form.Item label="估算帧长度" tooltip={PARAMETER_HELP.common.serialEstimatedSize} name="serial_est_size">
                   <InputNumber min={0} style={{ width: '100%' }} placeholder="0=默认" />
                 </Form.Item>
               </Col>
@@ -1003,6 +1006,7 @@ const DLT645: React.FC = () => {
           <Col xs={24} sm={12} lg={8}>
             <Form.Item
               label="标签"
+              tooltip={PARAMETER_HELP.common.tag}
               name="tag"
               validateStatus={pointTagDuplicate ? 'error' : undefined}
               help={pointTagDuplicate ? '标签已存在' : undefined}
@@ -1029,6 +1033,7 @@ const DLT645: React.FC = () => {
           <Col xs={24} sm={12} lg={8}>
             <Form.Item
               label="数据标识 (DI)"
+              tooltip={PARAMETER_HELP.dlt645.dataIdentifier}
               name="di"
               dependencies={['tag', 'data_len', 'data_type', 'byte_index', 'bit_index']}
               rules={[
@@ -1058,7 +1063,7 @@ const DLT645: React.FC = () => {
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={8}>
-            <Form.Item label="数据长度" name="data_len" rules={[{ required: true, message: '请输入数据长度' }]}>
+            <Form.Item label="数据长度" tooltip={PARAMETER_HELP.dlt645.dataLength} name="data_len" rules={[{ required: true, message: '请输入数据长度' }]}>
               <InputNumber min={0} style={{ width: '100%' }} />
             </Form.Item>
           </Col>
@@ -1068,18 +1073,19 @@ const DLT645: React.FC = () => {
           <div className="dlt645-form-section-title">数据解析</div>
           <Row gutter={[16, 0]}>
           <Col xs={24} sm={12} lg={6}>
-            <Form.Item label="数据类型" name="data_type" rules={[{ required: true, message: '请选择数据类型' }]}>
+            <Form.Item label="数据类型" tooltip={PARAMETER_HELP.common.dataType} name="data_type" rules={[{ required: true, message: '请选择数据类型' }]}>
               <Select options={DATA_TYPE_OPTIONS} />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={6}>
-            <Form.Item label="读写属性" name="access" rules={[{ required: true, message: '请选择读写属性' }]}>
+            <Form.Item label="读写属性" tooltip={PARAMETER_HELP.dlt645.access} name="access" rules={[{ required: true, message: '请选择读写属性' }]}>
               <Select options={ACCESS_MODE_OPTIONS} />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12} lg={6}>
             <Form.Item
               label="缩放系数"
+              tooltip={PARAMETER_HELP.common.scale}
               name="scale"
               rules={[{ validator: validateEngineeringDecimal('缩放系数') }]}
             >
@@ -1089,6 +1095,7 @@ const DLT645: React.FC = () => {
           <Col xs={24} sm={12} lg={6}>
             <Form.Item
               label="偏移量"
+              tooltip={PARAMETER_HELP.common.offset}
               name="offset"
               rules={[{ validator: validateEngineeringDecimal('偏移量') }]}
             >
@@ -1098,6 +1105,7 @@ const DLT645: React.FC = () => {
           <Col xs={24} sm={12} lg={6}>
             <Form.Item
               label="死区"
+              tooltip={PARAMETER_HELP.common.deadband}
               name="deadband"
               rules={[{ validator: validateEngineeringDecimal('死区') }]}
             >
@@ -1111,12 +1119,12 @@ const DLT645: React.FC = () => {
             <div className="dlt645-form-section-title">位解析</div>
             <Row gutter={[16, 0]}>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="字节索引" name="byte_index">
+              <Form.Item label="字节索引" tooltip={PARAMETER_HELP.dlt645.byteIndex} name="byte_index">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="位索引" name="bit_index">
+              <Form.Item label="位索引" tooltip={PARAMETER_HELP.dlt645.bitIndex} name="bit_index">
                 <InputNumber min={0} max={7} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
@@ -1154,6 +1162,7 @@ const DLT645: React.FC = () => {
             <Col xs={24} sm={12} lg={8}>
               <Form.Item
                 label="块数据标识 (Block DI)"
+                tooltip={PARAMETER_HELP.dlt645.blockDataIdentifier}
                 name="block_di"
                 rules={[{ required: true, message: '请输入块数据标识' }]}
               >
@@ -1161,7 +1170,7 @@ const DLT645: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="块数据长度" name="block_data_len" rules={[{ required: true, message: '请输入块数据长度' }]}>
+              <Form.Item label="块数据长度" tooltip={PARAMETER_HELP.dlt645.dataLength} name="block_data_len" rules={[{ required: true, message: '请输入块数据长度' }]}>
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
@@ -1193,6 +1202,7 @@ const DLT645: React.FC = () => {
                         <Col xs={24} sm={12} lg={8}>
                           <Form.Item
                             label="标签"
+                            tooltip={PARAMETER_HELP.common.tag}
                             name={[field.name, 'tag']}
                             rules={[{ required: true, message: '标签' }]}
                           >
@@ -1202,6 +1212,7 @@ const DLT645: React.FC = () => {
                         <Col xs={24} sm={12} lg={4}>
                           <Form.Item
                             label="长度"
+                            tooltip={PARAMETER_HELP.dlt645.dataLength}
                             name={[field.name, 'data_len']}
                             rules={[{ required: true, message: '长度' }]}
                           >
@@ -1211,6 +1222,7 @@ const DLT645: React.FC = () => {
                         <Col xs={24} sm={12} lg={6}>
                           <Form.Item
                             label="类型"
+                            tooltip={PARAMETER_HELP.common.dataType}
                             name={[field.name, 'data_type']}
                             rules={[{ required: true, message: '类型' }]}
                           >
@@ -1227,7 +1239,7 @@ const DLT645: React.FC = () => {
                           </Form.Item>
                         </Col>
                         <Col xs={24} sm={12} lg={6}>
-                          <Form.Item label="读写" name={[field.name, 'access']}>
+                          <Form.Item label="读写" tooltip={PARAMETER_HELP.dlt645.access} name={[field.name, 'access']}>
                             <Select options={ACCESS_MODE_OPTIONS} placeholder="读写" />
                           </Form.Item>
                         </Col>
@@ -1247,12 +1259,12 @@ const DLT645: React.FC = () => {
                               {showBitFields ? (
                                 <>
                                   <Col xs={12} sm={6} lg={4}>
-                                    <Form.Item label="字节" name={[field.name, 'byte_index']}>
+                                    <Form.Item label="字节" tooltip={PARAMETER_HELP.dlt645.byteIndex} name={[field.name, 'byte_index']}>
                                       <InputNumber min={0} style={{ width: '100%' }} placeholder="0" />
                                     </Form.Item>
                                   </Col>
                                   <Col xs={12} sm={6} lg={4}>
-                                    <Form.Item label="位" name={[field.name, 'bit_index']}>
+                                    <Form.Item label="位" tooltip={PARAMETER_HELP.dlt645.bitIndex} name={[field.name, 'bit_index']}>
                                       <InputNumber min={0} max={7} style={{ width: '100%' }} placeholder="0" />
                                     </Form.Item>
                                   </Col>
@@ -1261,6 +1273,7 @@ const DLT645: React.FC = () => {
                               <Col xs={24} sm={6} lg={advancedColumnSpan}>
                                 <Form.Item
                                   label="Scale"
+                                  tooltip={PARAMETER_HELP.common.scale}
                                   name={[field.name, 'scale']}
                                   rules={[{ validator: validateEngineeringDecimal('Scale') }]}
                                 >
@@ -1270,6 +1283,7 @@ const DLT645: React.FC = () => {
                               <Col xs={24} sm={6} lg={advancedColumnSpan}>
                                 <Form.Item
                                   label="Offset"
+                                  tooltip={PARAMETER_HELP.common.offset}
                                   name={[field.name, 'offset']}
                                   rules={[{ validator: validateEngineeringDecimal('Offset') }]}
                                 >
@@ -1279,6 +1293,7 @@ const DLT645: React.FC = () => {
                               <Col xs={24} sm={6} lg={advancedColumnSpan}>
                                 <Form.Item
                                   label="Deadband"
+                                  tooltip={PARAMETER_HELP.common.deadband}
                                   name={[field.name, 'deadband']}
                                   rules={[{ validator: validateEngineeringDecimal('Deadband') }]}
                                 >
@@ -1288,6 +1303,7 @@ const DLT645: React.FC = () => {
                               <Col xs={24} sm={12} lg={advancedColumnSpan}>
                                 <Form.Item
                                   label="Trim 右侧空格"
+                                  tooltip={PARAMETER_HELP.dlt645.trimRightSpace}
                                   name={[field.name, 'trim_right_space']}
                                   valuePropName="checked"
                                 >

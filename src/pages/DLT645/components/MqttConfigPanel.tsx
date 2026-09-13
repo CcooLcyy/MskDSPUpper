@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Button, Form, Input, InputNumber, Modal, Switch, message } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 import { api } from '../../../adapters';
+import { PARAMETER_HELP } from '../../../components/help/parameter-help';
 import type { Dlt645MqttConfig } from '../../../adapters';
 import { createDefaultMqttConfig, loadStoredMqttConfig, saveStoredMqttConfig } from '../../../utils/mqtt';
 import { initializeMqttConfig } from '../../../utils/mqtt-initialization';
@@ -122,13 +123,13 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
         destroyOnClose
       >
         <Form form={form} layout="vertical" size="small">
-          <Form.Item label="主机地址" name="host" rules={[{ required: true, message: '请输入主机地址' }]}>
+          <Form.Item label="主机地址" tooltip={PARAMETER_HELP.mqtt.host} name="host" rules={[{ required: true, message: '请输入主机地址' }]}>
             <Input placeholder="127.0.0.1" />
           </Form.Item>
-          <Form.Item label="端口" name="port" rules={[{ required: true, message: '请输入端口' }]}>
+          <Form.Item label="端口" tooltip={PARAMETER_HELP.mqtt.port} name="port" rules={[{ required: true, message: '请输入端口' }]}>
             <InputNumber min={1} max={65535} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item label="客户端标识" name="client_id" rules={[{ required: true, message: '请输入客户端标识' }]}>
+          <Form.Item label="客户端标识" tooltip={PARAMETER_HELP.mqtt.clientId} name="client_id" rules={[{ required: true, message: '请输入客户端标识' }]}>
             <Input />
           </Form.Item>
           <Form.Item label="用户名" name="username">
@@ -137,13 +138,13 @@ const MqttConfigPanel: React.FC<Props> = ({ block = false }) => {
           <Form.Item label="密码" name="password">
             <Input.Password />
           </Form.Item>
-          <Form.Item label="保活时间（秒）" name="keepalive_sec">
+          <Form.Item label="保活时间（秒）" tooltip={PARAMETER_HELP.mqtt.keepalive} name="keepalive_sec">
             <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item label="清理会话" name="clean_session" valuePropName="checked">
+          <Form.Item label="清理会话" tooltip={PARAMETER_HELP.mqtt.cleanSession} name="clean_session" valuePropName="checked">
             <Switch />
           </Form.Item>
-          <Form.Item label="连接超时（毫秒）" name="connect_timeout_ms">
+          <Form.Item label="连接超时（毫秒）" tooltip={PARAMETER_HELP.common.connectTimeout} name="connect_timeout_ms">
             <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
         </Form>

@@ -42,6 +42,7 @@ import type {
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import ControlEmptyState from '../../components/control/ControlEmptyState';
+import { PARAMETER_HELP } from '../../components/help/parameter-help';
 import {
   ControlGroupRoutesError,
   buildControlDataBusRoutes,
@@ -2125,7 +2126,7 @@ const AVC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ width: 220 }}>
-              <Form.Item name="command_mode" label="命令模式">
+              <Form.Item name="command_mode" label="命令模式" tooltip={PARAMETER_HELP.control.avcCommandMode}>
                 <Select
                   onChange={(value: AvcCommandMode) => {
                     if (value === 'voltage' && controlMode === CONTROL_MODE_DIRECT_CYCLIC) {
@@ -2140,7 +2141,7 @@ const AVC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ width: 220 }}>
-              <Form.Item name="control_mode" label="控制方式">
+              <Form.Item name="control_mode" label="控制方式" tooltip={PARAMETER_HELP.control.controlMode}>
                 <Select<AvcControlMode>
                   options={[
                     { value: CONTROL_MODE_PI_EVENT, label: 'PI 事件触发' },
@@ -2150,7 +2151,7 @@ const AVC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ width: 220 }}>
-              <Form.Item label="分配方式">
+              <Form.Item label="分配方式" tooltip={PARAMETER_HELP.control.allocationMode}>
                 <Select<AllocationMode>
                   value={allocationMode}
                   onChange={handleAllocationModeChange}
@@ -2172,6 +2173,7 @@ const AVC: React.FC = () => {
                   <Form.Item
                     name="calculation_execution_period_seconds"
                     label="计算执行周期（秒）"
+                    tooltip={PARAMETER_HELP.control.calculationPeriod}
                     rules={[{ required: true, type: 'number', min: 1, max: 15, message: '请输入 1～15 秒' }]}
                   >
                     <InputNumber min={1} max={15} step={1} style={{ width: '100%' }} />
@@ -2181,6 +2183,7 @@ const AVC: React.FC = () => {
                   <Form.Item
                     name="command_control_period_seconds"
                     label="命令控制周期（秒）"
+                    tooltip={PARAMETER_HELP.control.commandPeriod}
                     rules={[{ required: true, type: 'number', min: 4, max: 30, message: '请输入 4～30 秒' }]}
                   >
                     <InputNumber min={4} max={30} step={1} style={{ width: '100%' }} />
@@ -2209,6 +2212,7 @@ const AVC: React.FC = () => {
                 <Form.Item
                   name={['voltage_meas', 'tag']}
                   label="测量点 tag"
+                  tooltip={PARAMETER_HELP.control.signalTag}
                   rules={requiredTagRules('voltage_meas.tag')}
                 >
                   <Input placeholder="bus_voltage_meas" />
@@ -2230,17 +2234,17 @@ const AVC: React.FC = () => {
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['voltage_meas', 'unit']} label="单位">
+                <Form.Item name={['voltage_meas', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
                   <Input placeholder="kV" />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['voltage_meas', 'scale']} label="缩放系数">
+                <Form.Item name={['voltage_meas', 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
                   <InputNumber step={0.01} style={{ width: '100%' }} />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['voltage_meas', 'offset']} label="偏移量">
+                <Form.Item name={['voltage_meas', 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
                   <InputNumber step={0.01} style={{ width: '100%' }} />
                 </Form.Item>
               </div>
@@ -2255,6 +2259,7 @@ const AVC: React.FC = () => {
                     <Form.Item
                       name={['voltage_cmd', 'tag']}
                       label="命令点 tag"
+                      tooltip={PARAMETER_HELP.control.signalTag}
                       rules={requiredTagRules('voltage_cmd.tag')}
                     >
                       <Input placeholder="bus_voltage_cmd" />
@@ -2276,17 +2281,17 @@ const AVC: React.FC = () => {
                     </Form.Item>
                   </div>
                   <div style={{ width: 140 }}>
-                    <Form.Item name={['voltage_cmd', 'unit']} label="单位">
+                    <Form.Item name={['voltage_cmd', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
                       <Input placeholder="kV" />
                     </Form.Item>
                   </div>
                   <div style={{ width: 140 }}>
-                    <Form.Item name={['voltage_cmd', 'scale']} label="缩放系数">
+                    <Form.Item name={['voltage_cmd', 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
                       <InputNumber step={0.01} style={{ width: '100%' }} />
                     </Form.Item>
                   </div>
                   <div style={{ width: 140 }}>
-                    <Form.Item name={['voltage_cmd', 'offset']} label="偏移量">
+                    <Form.Item name={['voltage_cmd', 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
                       <InputNumber step={0.01} style={{ width: '100%' }} />
                     </Form.Item>
                   </div>
@@ -2299,6 +2304,7 @@ const AVC: React.FC = () => {
                     <Form.Item
                       name={['voltage_control', 'kp']}
                       label="比例系数 kp"
+                      tooltip={PARAMETER_HELP.control.voltageKp}
                       rules={[{
                         validator: async (_rule, value: number | null) => {
                           if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
@@ -2314,6 +2320,7 @@ const AVC: React.FC = () => {
                     <Form.Item
                       name={['voltage_control', 'deadband']}
                       label="电压死区 deadband"
+                      tooltip={PARAMETER_HELP.control.voltageDeadband}
                       rules={[{
                         validator: async (_rule, value: number | null) => {
                           if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -2335,6 +2342,7 @@ const AVC: React.FC = () => {
                   <Form.Item
                     name={['q_total_cmd', 'signal', 'tag']}
                     label="命令点 tag"
+                    tooltip={PARAMETER_HELP.control.signalTag}
                     rules={requiredTagRules('q_total_cmd.signal.tag')}
                   >
                     <Input placeholder="q_total_cmd" />
@@ -2356,17 +2364,17 @@ const AVC: React.FC = () => {
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_total_cmd', 'signal', 'unit']} label="单位">
+                  <Form.Item name={['q_total_cmd', 'signal', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
                     <Input placeholder="kVar" />
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_total_cmd', 'signal', 'scale']} label="缩放系数">
+                  <Form.Item name={['q_total_cmd', 'signal', 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
                     <InputNumber step={0.01} style={{ width: '100%' }} />
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_total_cmd', 'signal', 'offset']} label="偏移量">
+                  <Form.Item name={['q_total_cmd', 'signal', 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
                     <InputNumber step={0.01} style={{ width: '100%' }} />
                   </Form.Item>
                 </div>
@@ -2376,6 +2384,7 @@ const AVC: React.FC = () => {
                     <Form.Item
                       name={['q_total_cmd', 'mode']}
                       label="指令模式"
+                      tooltip={PARAMETER_HELP.control.commandMode}
                       rules={valueModeRules('q_total_cmd.mode')}
                     >
                       <Select
@@ -2389,6 +2398,7 @@ const AVC: React.FC = () => {
                       <Form.Item
                         name={['q_total_cmd', 'delta_base']}
                         label="增量基准"
+                        tooltip={PARAMETER_HELP.control.deltaBase}
                         rules={deltaBaseRules('q_total_cmd.delta_base')}
                       >
                         <Select
@@ -2401,6 +2411,7 @@ const AVC: React.FC = () => {
                         <Form.Item
                           name={['q_total_cmd', 'base_tag']}
                           label="基准点 tag"
+                          tooltip={PARAMETER_HELP.control.baseTag}
                           rules={[
                             ...reservedTagRules('q_total_cmd.base_tag'),
                             {
@@ -2560,7 +2571,7 @@ const AVC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ width: 140 }}>
-              <Form.Item name="controllable" label="是否可控" valuePropName="checked">
+              <Form.Item name="controllable" label="是否可控" tooltip={PARAMETER_HELP.control.controllable} valuePropName="checked">
                 <Switch />
               </Form.Item>
             </div>
@@ -2571,6 +2582,7 @@ const AVC: React.FC = () => {
               <Form.Item
                 name="weight"
                 label="调节权重"
+                tooltip={PARAMETER_HELP.control.weight}
                 dependencies={['controllable']}
                 rules={[{
                   validator: async (_rule, value) => {
@@ -2593,12 +2605,12 @@ const AVC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ flex: 1 }}>
-              <Form.Item name="q_min_kvar" label="无功下限（kVar）">
+              <Form.Item name="q_min_kvar" label="无功下限（kVar）" tooltip={PARAMETER_HELP.control.reactiveLimits}>
                 <InputNumber style={{ width: '100%' }} step={0.1} />
               </Form.Item>
             </div>
             <div style={{ flex: 1 }}>
-              <Form.Item name="q_max_kvar" label="无功上限（kVar）">
+              <Form.Item name="q_max_kvar" label="无功上限（kVar）" tooltip={PARAMETER_HELP.control.reactiveLimits}>
                 <InputNumber style={{ width: '100%' }} step={0.1} />
               </Form.Item>
             </div>
@@ -2610,6 +2622,7 @@ const AVC: React.FC = () => {
                 <Form.Item
                   name={['q_meas', 'tag']}
                   label="测量点 tag"
+                  tooltip={PARAMETER_HELP.control.signalTag}
                   rules={requiredTagRules('q_meas.tag')}
                 >
                   <Input placeholder="pcs_1_q_meas" />
@@ -2631,17 +2644,17 @@ const AVC: React.FC = () => {
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['q_meas', 'unit']} label="单位">
+                <Form.Item name={['q_meas', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
                   <Input placeholder="kVar" />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['q_meas', 'scale']} label="缩放系数">
+                <Form.Item name={['q_meas', 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
                   <InputNumber step={0.01} style={{ width: '100%' }} />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['q_meas', 'offset']} label="偏移量">
+                <Form.Item name={['q_meas', 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
                   <InputNumber step={0.01} style={{ width: '100%' }} />
                 </Form.Item>
               </div>
@@ -2655,6 +2668,7 @@ const AVC: React.FC = () => {
                   <Form.Item
                     name={['q_set', 'signal', 'tag']}
                     label="设定点 tag"
+                    tooltip={PARAMETER_HELP.control.signalTag}
                     rules={requiredTagRules('q_set.signal.tag')}
                   >
                     <Input placeholder="pcs_1_q_set" />
@@ -2676,17 +2690,17 @@ const AVC: React.FC = () => {
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_set', 'signal', 'unit']} label="单位">
+                  <Form.Item name={['q_set', 'signal', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
                     <Input placeholder="kVar" />
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_set', 'signal', 'scale']} label="缩放系数">
+                  <Form.Item name={['q_set', 'signal', 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
                     <InputNumber step={0.01} style={{ width: '100%' }} />
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['q_set', 'signal', 'offset']} label="偏移量">
+                  <Form.Item name={['q_set', 'signal', 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
                     <InputNumber step={0.01} style={{ width: '100%' }} />
                   </Form.Item>
                 </div>
@@ -2696,6 +2710,7 @@ const AVC: React.FC = () => {
                     <Form.Item
                       name={['q_set', 'mode']}
                       label="指令模式"
+                      tooltip={PARAMETER_HELP.control.commandMode}
                       rules={valueModeRules('q_set.mode')}
                     >
                       <Select
@@ -2709,6 +2724,7 @@ const AVC: React.FC = () => {
                         <Form.Item
                           name={['q_set', 'delta_base']}
                           label="增量基准"
+                          tooltip={PARAMETER_HELP.control.deltaBase}
                           rules={deltaBaseRules('q_set.delta_base')}
                         >
                           <Select
@@ -2721,6 +2737,7 @@ const AVC: React.FC = () => {
                           <Form.Item
                             name={['q_set', 'base_tag']}
                             label="基准点 tag"
+                            tooltip={PARAMETER_HELP.control.baseTag}
                             rules={[
                               ...reservedTagRules('q_set.base_tag'),
                               {

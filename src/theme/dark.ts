@@ -34,5 +34,8 @@ export const darkTheme: ThemeConfig = {
     Card: {
       colorBgContainer: '#2d2d30',
     },
+    Tooltip: {
+      maxWidth: 360,
+    },
   },
 };

@@ -46,6 +46,7 @@ import type {
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import ControlEmptyState from '../../components/control/ControlEmptyState';
+import { PARAMETER_HELP } from '../../components/help/parameter-help';
 import {
   ControlGroupRoutesError,
   buildControlDataBusRoutes,
@@ -2053,7 +2054,7 @@ const AGC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ width: 220 }}>
-              <Form.Item name="control_mode" label="控制方式">
+              <Form.Item name="control_mode" label="控制方式" tooltip={PARAMETER_HELP.control.controlMode}>
                 <Select<AgcControlMode>
                   options={[
                     { value: CONTROL_MODE_PI_EVENT, label: 'PI 事件触发' },
@@ -2063,7 +2064,7 @@ const AGC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ width: 220 }}>
-              <Form.Item label="分配方式">
+              <Form.Item label="分配方式" tooltip={PARAMETER_HELP.control.allocationMode}>
                 <Select<AllocationMode>
                   value={allocationMode}
                   onChange={handleAllocationModeChange}
@@ -2085,6 +2086,7 @@ const AGC: React.FC = () => {
                   <Form.Item
                     name="calculation_execution_period_seconds"
                     label="计算执行周期（秒）"
+                    tooltip={PARAMETER_HELP.control.calculationPeriod}
                     rules={[
                       { required: true, message: '请输入计算执行周期' },
                       { type: 'number', min: 1, max: 15, message: '计算执行周期必须在 1～15 秒范围内' },
@@ -2097,6 +2099,7 @@ const AGC: React.FC = () => {
                   <Form.Item
                     name="command_control_period_seconds"
                     label="命令控制周期（秒）"
+                    tooltip={PARAMETER_HELP.control.commandPeriod}
                     rules={[
                       { required: true, message: '请输入命令控制周期' },
                       { type: 'number', min: 4, max: 30, message: '命令控制周期必须在 4～30 秒范围内' },
@@ -2118,13 +2121,14 @@ const AGC: React.FC = () => {
                 <Form.Item
                   name={['p_cmd', 'signal', 'tag']}
                   label="目标点位 tag"
+                  tooltip={PARAMETER_HELP.control.signalTag}
                   rules={[{ required: true, whitespace: true, message: '请输入 AGC 总控点 tag' }]}
                 >
                   <Input placeholder="agc_cmd_tag" />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['p_cmd', 'signal', 'unit']} label="单位">
+                <Form.Item name={['p_cmd', 'signal', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
                   <Input placeholder="kW" />
                 </Form.Item>
               </div>
@@ -2132,6 +2136,7 @@ const AGC: React.FC = () => {
                 <Form.Item
                   name={['p_cmd', 'signal', 'scale_decimal']}
                   label="缩放系数"
+                  tooltip={PARAMETER_HELP.common.scale}
                   rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '控制目标缩放系数') }]}
                 >
                   <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
@@ -2141,6 +2146,7 @@ const AGC: React.FC = () => {
                 <Form.Item
                   name={['p_cmd', 'signal', 'offset_decimal']}
                   label="偏移量"
+                  tooltip={PARAMETER_HELP.common.offset}
                   rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '控制目标偏移量') }]}
                 >
                   <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
@@ -2149,7 +2155,7 @@ const AGC: React.FC = () => {
             </div>
             <div style={{ display: 'flex', gap: 16 }}>
               <div style={{ width: 260 }}>
-                <Form.Item name={['p_cmd', 'mode']} label="指令模式">
+                <Form.Item name={['p_cmd', 'mode']} label="指令模式" tooltip={PARAMETER_HELP.control.commandMode}>
                   <Select
                     options={Object.entries(VALUE_MODE_LABELS).map(([value, label]) => ({
                       value: Number(value),
@@ -2168,6 +2174,7 @@ const AGC: React.FC = () => {
                         <Form.Item
                           name={['p_cmd', 'delta_base']}
                           label="增量基准"
+                          tooltip={PARAMETER_HELP.control.deltaBase}
                           preserve={false}
                           rules={[{
                             validator: async (_rule, value) => {
@@ -2189,6 +2196,7 @@ const AGC: React.FC = () => {
                           <Form.Item
                             name={['p_cmd', 'base_tag']}
                             label="基准点 tag"
+                            tooltip={PARAMETER_HELP.control.baseTag}
                             preserve={false}
                             rules={[{ required: true, whitespace: true, message: '请输入增量基准 tag' }]}
                           >
@@ -2211,12 +2219,12 @@ const AGC: React.FC = () => {
             ].map((item) => (
               <div key={item.key} style={{ display: 'flex', gap: 16 }}>
                 <div style={{ flex: 1 }}>
-                  <Form.Item name={['outputs', item.key, 'tag']} label={`${item.label}（${item.protocolLabel}）`}>
+                  <Form.Item name={['outputs', item.key, 'tag']} label={`${item.label}（${item.protocolLabel}）`} tooltip={PARAMETER_HELP.control.signalTag}>
                     <Input placeholder={item.label} />
                   </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
-                  <Form.Item name={['outputs', item.key, 'unit']} label="单位">
+                  <Form.Item name={['outputs', item.key, 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
                     <Input placeholder="kW" />
                   </Form.Item>
                 </div>
@@ -2224,6 +2232,7 @@ const AGC: React.FC = () => {
                   <Form.Item
                     name={['outputs', item.key, 'scale_decimal']}
                     label="缩放系数"
+                    tooltip={PARAMETER_HELP.common.scale}
                     rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, `${item.label}缩放系数`) }]}
                   >
                     <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
@@ -2233,6 +2242,7 @@ const AGC: React.FC = () => {
                   <Form.Item
                     name={['outputs', item.key, 'offset_decimal']}
                     label="偏移量"
+                    tooltip={PARAMETER_HELP.common.offset}
                     rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, `${item.label}偏移量`) }]}
                   >
                     <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
@@ -2326,7 +2336,7 @@ const AGC: React.FC = () => {
               </Form.Item>
             </div>
             <div style={{ width: 140 }}>
-              <Form.Item name="controllable" label="是否可控" valuePropName="checked">
+              <Form.Item name="controllable" label="是否可控" tooltip={PARAMETER_HELP.control.controllable} valuePropName="checked">
                 <Switch />
               </Form.Item>
             </div>
@@ -2337,6 +2347,7 @@ const AGC: React.FC = () => {
               <Form.Item
                 name="capacity_kw_decimal"
                 label="额定容量（kW）"
+                tooltip={PARAMETER_HELP.control.capacity}
                 rules={[
                   {
                     validator: async (_rule, value) => {
@@ -2352,6 +2363,7 @@ const AGC: React.FC = () => {
               <Form.Item
                 name="weight_decimal"
                 label="调节权重"
+                tooltip={PARAMETER_HELP.control.weight}
                 dependencies={['controllable']}
                 rules={[
                   {
@@ -2380,6 +2392,7 @@ const AGC: React.FC = () => {
               <Form.Item
                 name="min_kw_decimal"
                 label="有功下限（kW）"
+                tooltip={PARAMETER_HELP.control.activeLimits}
                 rules={[
                   {
                     validator: async (_rule, value) => {
@@ -2395,6 +2408,7 @@ const AGC: React.FC = () => {
               <Form.Item
                 name="max_kw_decimal"
                 label="有功上限（kW）"
+                tooltip={PARAMETER_HELP.control.activeLimits}
                 dependencies={['capacity_kw_decimal', 'min_kw_decimal']}
                 rules={[
                   {
@@ -2431,6 +2445,7 @@ const AGC: React.FC = () => {
                 <Form.Item
                   name={['p_meas', 'tag']}
                   label="测量点 tag"
+                  tooltip={PARAMETER_HELP.control.signalTag}
                   rules={[{ required: true, whitespace: true, message: '请输入成员有功测量点 tag' }]}
                 >
                   <Input placeholder="pcs_1_p_meas" />
@@ -2452,7 +2467,7 @@ const AGC: React.FC = () => {
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['p_meas', 'unit']} label="单位">
+                <Form.Item name={['p_meas', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
                   <Input placeholder="kW" />
                 </Form.Item>
               </div>
@@ -2460,6 +2475,7 @@ const AGC: React.FC = () => {
                 <Form.Item
                   name={['p_meas', 'scale_decimal']}
                   label="缩放系数"
+                  tooltip={PARAMETER_HELP.common.scale}
                   rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '成员测量点缩放系数') }]}
                 >
                   <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
@@ -2469,6 +2485,7 @@ const AGC: React.FC = () => {
                 <Form.Item
                   name={['p_meas', 'offset_decimal']}
                   label="偏移量"
+                  tooltip={PARAMETER_HELP.common.offset}
                   rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '成员测量点偏移量') }]}
                 >
                   <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
@@ -2484,6 +2501,7 @@ const AGC: React.FC = () => {
                 <Form.Item
                   name={['p_set', 'signal', 'tag']}
                   label="设定点 tag"
+                  tooltip={PARAMETER_HELP.control.signalTag}
                   rules={[{ required: true, whitespace: true, message: '请输入成员有功设定点 tag' }]}
                 >
                   <Input placeholder="pcs_1_p_set" />
@@ -2505,7 +2523,7 @@ const AGC: React.FC = () => {
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
-                <Form.Item name={['p_set', 'signal', 'unit']} label="单位">
+                <Form.Item name={['p_set', 'signal', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
                   <Input placeholder="kW" />
                 </Form.Item>
               </div>
@@ -2513,6 +2531,7 @@ const AGC: React.FC = () => {
                 <Form.Item
                   name={['p_set', 'signal', 'scale_decimal']}
                   label="缩放系数"
+                  tooltip={PARAMETER_HELP.common.scale}
                   rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '成员设定点缩放系数') }]}
                 >
                   <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
@@ -2522,6 +2541,7 @@ const AGC: React.FC = () => {
                 <Form.Item
                   name={['p_set', 'signal', 'offset_decimal']}
                   label="偏移量"
+                  tooltip={PARAMETER_HELP.common.offset}
                   rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '成员设定点偏移量') }]}
                 >
                   <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
@@ -2530,7 +2550,7 @@ const AGC: React.FC = () => {
             </div>
             <div style={{ display: 'flex', gap: 16 }}>
               <div style={{ width: 260 }}>
-                <Form.Item name={['p_set', 'mode']} label="指令模式">
+                <Form.Item name={['p_set', 'mode']} label="指令模式" tooltip={PARAMETER_HELP.control.commandMode}>
                   <Select
                     options={Object.entries(VALUE_MODE_LABELS).map(([value, label]) => ({
                       value: Number(value),
@@ -2549,6 +2569,7 @@ const AGC: React.FC = () => {
                         <Form.Item
                           name={['p_set', 'delta_base']}
                           label="增量基准"
+                          tooltip={PARAMETER_HELP.control.deltaBase}
                           preserve={false}
                           rules={[{
                             validator: async (_rule, value) => {
@@ -2570,6 +2591,7 @@ const AGC: React.FC = () => {
                           <Form.Item
                             name={['p_set', 'base_tag']}
                             label="基准点 tag"
+                            tooltip={PARAMETER_HELP.control.baseTag}
                             preserve={false}
                             rules={[{ required: true, whitespace: true, message: '请输入增量基准 tag' }]}
                           >
