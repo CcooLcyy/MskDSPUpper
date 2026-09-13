@@ -3,11 +3,11 @@
 ## Current Baseline
 
 - App version: `0.1.0`
-- CI updater URL: `https://update.clsclear.top/mskdsp-upper/ci/latest.json`
-- Stable updater URL: `https://update.clsclear.top/mskdsp-upper/stable/latest.json`
-- Beta updater URL: `https://update.clsclear.top/mskdsp-upper/beta/latest.json`
-- Nightly updater URL: `https://update.clsclear.top/mskdsp-upper/nightly/latest.json`
-- Static updater base URL: `https://update.clsclear.top/mskdsp-upper`
+- CI updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/ci/latest.json`
+- Stable updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/stable/latest.json`
+- Beta updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/beta/latest.json`
+- Nightly updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/nightly/latest.json`
+- Static updater base URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper`
 - Stable workflow trigger: push tag `v*`
 - Beta workflow trigger: push branch `beta/**`, or manual `workflow_dispatch`
 - Nightly workflow trigger: schedule or manual `workflow_dispatch`
@@ -31,8 +31,8 @@
 
 `CI` runs verification on pull requests and pushes to `main`. Only `main` pushes
 run `package-main`; that job builds the CI package, writes updater metadata for
-`https://update.clsclear.top/mskdsp-upper/ci/latest.json`, uploads updater assets
-to `ci/windows-x64/`, and uploads `latest.json` last.
+the R2 URL above, uploads updater assets to `ci/windows-x64/`, and uploads
+`latest.json` last.
 
 ## GitHub Secrets
 
@@ -46,18 +46,22 @@ Create these repository secrets in `Settings -> Secrets and variables -> Actions
   Optional. Use a GitHub token that can read `CcooLcyy/MskDSPProto` if anonymous HTTPS checkout is not enough.
 - `SUBMODULE_SSH_KEY`
   Optional alternative to `SUBMODULE_TOKEN` for submodule access.
-- `UPDATE_STATIC_SSH_KEY`
-  SSH private key used by GitHub Actions to upload updater assets to the static update server.
+- `R2_ACCOUNT_ID`
+  Cloudflare account ID used to build the R2 S3 endpoint.
+- `R2_ACCESS_KEY_ID`
+  R2 API token access key with read/write access to the update bucket.
+- `R2_SECRET_ACCESS_KEY`
+  Secret corresponding to `R2_ACCESS_KEY_ID`.
 
 Notes:
 
 - `scripts/workflow/Prepare-SubmoduleAccess.ps1` falls back to anonymous HTTPS if neither submodule secret is set.
 - If the `proto` submodule is private, at least one of `SUBMODULE_TOKEN` or `SUBMODULE_SSH_KEY` is required.
-- Static update server defaults are configured through repository variables:
-  `UPDATE_STATIC_BASE_URL`, `UPDATE_STATIC_REMOTE_ROOT`, `UPDATE_STATIC_SSH_HOST`,
-  `UPDATE_STATIC_SSH_PORT`, and `UPDATE_STATIC_SSH_USER`.
-  If unset, workflows use `https://update.clsclear.top/mskdsp-upper`,
-  `/home/daniel/update-server/www/mskdsp-upper`, `clsclear.top`, `32118`, and `daniel`.
+- R2 defaults are configured through repository variables `R2_BUCKET`,
+  `R2_PREFIX`, `R2_PUBLIC_BASE_URL` and optional `UPDATE_STATIC_BASE_URL`.
+  If unset, workflows use bucket `mskdsp-update`, prefix `mskdsp-upper`, and
+  the public `r2.dev` address listed above. `UPDATE_STATIC_BASE_URL` should
+  include the `mskdsp-upper` path when overriding the public URL.
 - `Sync Static Updater Source` can backfill the static source from an existing
   GitHub Release without building or publishing a new version. Leave `release_tag`
   empty to use `v<package version>` for stable, `beta-latest` for beta, or
@@ -89,7 +93,7 @@ The workflows create or update releases, upload release assets, and the auto-pro
    - the delivery zip
    - the symbols zip
    - the SHA256 sums file
-6. Open `https://update.clsclear.top/mskdsp-upper/nightly/latest.json` and confirm it downloads.
+6. Open the R2 Nightly URL listed in the baseline and confirm it downloads.
 
 ### 2. First Beta
 
@@ -101,7 +105,7 @@ The workflows create or update releases, upload release assets, and the auto-pro
 4. Confirm `verify-beta` and `publish-beta` both succeed.
 5. Open the rolling release `beta-latest` and confirm its assets were refreshed.
 6. Confirm there is also a timestamped beta prerelease whose tag starts with `beta-0-1-`.
-7. Open `https://update.clsclear.top/mskdsp-upper/beta/latest.json` and confirm it downloads.
+7. Open the R2 Beta URL listed in the baseline and confirm it downloads.
 
 ### 3. First Stable
 
@@ -112,7 +116,7 @@ The workflows create or update releases, upload release assets, and the auto-pro
    `git push origin v0.1.0`
 4. Wait for `Actions -> Release` to finish successfully.
 5. Open the `v0.1.0` release and confirm it is marked as the latest release.
-6. Open `https://update.clsclear.top/mskdsp-upper/stable/latest.json` and confirm it downloads.
+6. Open the R2 Stable URL listed in the baseline and confirm it downloads.
 
 ### 4. Client Updater Validation
 
@@ -130,13 +134,13 @@ Beta validation:
 
 1. Install an older beta build generated from the beta channel.
 2. Repeat the same updater flow.
-3. Confirm the downloaded metadata comes from `https://update.clsclear.top/mskdsp-upper/beta/latest.json`.
+3. Confirm the downloaded metadata comes from the R2 Beta URL listed in the baseline.
 
 Stable validation:
 
 1. Install an older stable build.
 2. Repeat the same updater flow.
-3. Confirm the downloaded metadata comes from `https://update.clsclear.top/mskdsp-upper/stable/latest.json`.
+3. Confirm the downloaded metadata comes from the R2 Stable URL listed in the baseline.
 
 ## Static Source Backfill
 
@@ -154,8 +158,9 @@ Inputs:
 The workflow downloads all assets from the selected GitHub Release, rewrites
 `latest.json` so `platforms.*.url` points at
 `<UPDATE_STATIC_BASE_URL>/<channel>/<platform>/`, uploads all assets first, and
-uploads `latest.json` last. Nginx does not need to restart after the files are
-uploaded.
+uploads `latest.json` last. The R2 publish script then removes stale objects
+only from the same channel/platform prefix. No server or nginx restart is
+needed.
 
 ## Optional Follow-up
 

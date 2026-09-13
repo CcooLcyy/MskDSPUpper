@@ -27,7 +27,8 @@ pub enum LowerUpdateSshAuthDto {
     Certificate,
 }
 
-const DEFAULT_LOWER_UPDATE_BASE_URL: &str = "https://update.clsclear.top/mskdsp-lower";
+const DEFAULT_LOWER_UPDATE_BASE_URL: &str =
+    "https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-lower";
 const LOWER_UPDATE_PLATFORM: &str = "linux-arm64";
 const LOWER_UPDATE_PRODUCT: &str = "mskdsp-lower";
 const LOWER_UPDATE_SCHEMA_VERSION: u32 = 1;
