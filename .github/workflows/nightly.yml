@@ -65,12 +65,19 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Cache Rust dependencies
+        id: rust_cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: mskdsp-upper-${{ runner.os }}-${{ env.RUST_TARGET }}
           workspaces: |
             ./src-tauri -> target
+          cache-targets: 'false'
           cache-bin: 'false'
+
+      - name: Report Rust cache status
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          Write-Host "Cargo registry cache hit: ${{ steps.rust_cache.outputs.cache-hit }}"
 
       - name: Prepare package/log directories
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"

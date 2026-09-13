@@ -19,6 +19,33 @@ function extractStepBlock(fileText, stepName) {
   return blockLines.join('\n');
 }
 
+function extractNamedStepBlocks(fileText) {
+  const lines = fileText.split(/\r?\n/);
+  const blocks = [];
+  let currentBlock = null;
+
+  for (const line of lines) {
+    if (line.trimStart().startsWith('- name: ')) {
+      if (currentBlock) {
+        blocks.push(currentBlock.join('\n'));
+      }
+      currentBlock = [line];
+    } else if (currentBlock) {
+      currentBlock.push(line);
+    }
+  }
+
+  if (currentBlock) {
+    blocks.push(currentBlock.join('\n'));
+  }
+
+  return blocks;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
 
 for (const [workflowPath, stepName] of [
@@ -73,6 +100,70 @@ test('ci package publishes updater artifacts to the ci static channel', () => {
   assert.match(syncBlock, /Sync-StaticUpdater\.ps1/);
   assert.match(syncBlock, /-ChannelPath ci/);
   assert.match(syncBlock, /secrets\.UPDATE_STATIC_SSH_KEY/);
+});
+
+// 验证 Rust 缓存只保留依赖缓存，并为每个缓存步骤输出命中状态。
+test('release workflows disable Rust target caching and report cache hits', () => {
+  const workflowPaths = [
+    '.github/workflows/ci.yml',
+    '.github/workflows/beta.yml',
+    '.github/workflows/nightly.yml',
+    '.github/workflows/release.yml',
+  ];
+  let rustCacheStepCount = 0;
+
+  for (const workflowPath of workflowPaths) {
+    const fileText = fs.readFileSync(path.join(repoRoot, workflowPath), 'utf8');
+    const namedStepBlocks = extractNamedStepBlocks(fileText);
+    const rustCacheEntries = namedStepBlocks
+      .map((block, index) => ({ block, index }))
+      .filter(({ block }) => /uses:\s*Swatinem\/rust-cache@/m.test(block));
+    const rustCacheSteps = rustCacheEntries.map(({ block }) => block);
+
+    assert.ok(rustCacheSteps.length > 0, `${workflowPath} must configure Swatinem/rust-cache`);
+    rustCacheStepCount += rustCacheSteps.length;
+
+    for (const [entryIndex, { block: stepBlock, index: stepIndex }] of rustCacheEntries.entries()) {
+      assert.match(
+        stepBlock,
+        /^\s*cache-targets:\s*'false'\s*$/m,
+        `${workflowPath} Rust cache step ${entryIndex + 1} must disable target caching`,
+      );
+
+      const idMatch = stepBlock.match(/^\s*id:\s*([A-Za-z_][\w-]*)\s*$/m);
+      assert.ok(idMatch, `${workflowPath} Rust cache step ${entryIndex + 1} must define an id`);
+
+      const nextCacheStepIndex = rustCacheEntries[entryIndex + 1]?.index ?? namedStepBlocks.length;
+      const followingSteps = namedStepBlocks.slice(stepIndex, nextCacheStepIndex).join('\n');
+      const cacheHitOutput = new RegExp(
+        `steps\\.${escapeRegExp(idMatch[1])}\\.outputs\\.cache-hit`,
+      );
+      assert.match(
+        followingSteps,
+        cacheHitOutput,
+        `${workflowPath} must report cache-hit for Rust cache id ${idMatch[1]}`,
+      );
+    }
+  }
+
+  assert.equal(rustCacheStepCount, 6, 'ci/beta/nightly/release should expose six Rust cache steps');
+});
+
+// 验证上位机静态服务器资产上传提供异步进度、远端大小轮询和退出码传播。
+test('上位机静态更新上传显示远端进度', () => {
+  const script = fs.readFileSync(
+    path.join(repoRoot, 'scripts/workflow/Sync-StaticUpdater.ps1'),
+    'utf8',
+  );
+
+  assert.match(script, /Start-Process/);
+  assert.match(script, /Start-Sleep -Seconds 10/);
+  assert.match(script, /stat -c %s/);
+  assert.match(script, /上传进度/);
+  assert.match(script, /每 10 秒显示一次进度/);
+  assert.match(script, /预计剩余/);
+  assert.match(script, /WaitForExit/);
+  assert.match(script, /latest\.json last|latest\.json.*最后|最后上传 latest\.json/);
 });
 
 test('beta workflow only triggers one-segment beta branch names', () => {
