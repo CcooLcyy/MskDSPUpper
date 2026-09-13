@@ -77,7 +77,7 @@ type RouteDirectionDraft = {
   customMappings: CustomMapping[];
 };
 
-type RouteDraftStatus = 'ready' | 'existing' | 'duplicate' | 'manyToOne' | 'bidirectional' | 'self';
+type RouteDraftStatus = 'ready' | 'existing' | 'duplicate' | 'bidirectional' | 'self';
 
 type RouteTagDrag = {
   side: 'source' | 'destination';
@@ -275,15 +275,6 @@ const DataBus: React.FC = () => {
   const routeConnectionOptions = connections
     .filter((connection) => !isControlOrchestratorConnection(connection))
     .map((connection) => ({ value: connection.conn_id, label: `${connection.module_name}/${connection.conn_name}` }));
-  const occupiedDestinationTags = useMemo(() => {
-    if (!routeDestinationConn) return new Set<string>();
-    return new Set(
-      routes
-        .filter((route) => route.dst.module_name === routeDestinationConn.module_name && route.dst.conn_name === routeDestinationConn.conn_name)
-        .map((route) => route.dst.tag),
-    );
-  }, [routeDestinationConn, routes]);
-
   const openCreateRoute = useCallback(() => {
     const directionId = Date.now();
     const selectedConnection = connections.find((connection) => connection.conn_id === selectedConnId) ?? null;
@@ -369,13 +360,6 @@ const DataBus: React.FC = () => {
       const seen = new Set<string>();
       const draftRouteKeys = new Set(draftRoutes.map(routeKey));
       const existingRouteKeys = new Set(routes.map(routeKey));
-      const sourcesByDestination = new Map<string, Set<string>>();
-      for (const route of draftRoutes) {
-        const destinationKey = endpointKey(route.dst);
-        const sourceKeys = sourcesByDestination.get(destinationKey) ?? new Set<string>();
-        sourceKeys.add(endpointKey(route.src));
-        sourcesByDestination.set(destinationKey, sourceKeys);
-      }
       return draftRoutes.map((route) => {
         const key = routeKey(route);
         const status = getDraftStatus(route);
@@ -384,9 +368,7 @@ const DataBus: React.FC = () => {
           ? 'bidirectional'
           : status === 'ready' && seen.has(key)
             ? 'duplicate'
-            : status === 'ready' && (sourcesByDestination.get(endpointKey(route.dst))?.size ?? 0) > 1
-              ? 'manyToOne'
-              : status;
+            : status;
         seen.add(key);
         return { route, status: nextStatus as RouteDraftStatus };
       });
@@ -399,7 +381,6 @@ const DataBus: React.FC = () => {
   );
   const existingRouteCount = draftRouteStatuses.filter((item) => item.status === 'existing').length;
   const duplicateRouteCount = draftRouteStatuses.filter((item) => item.status === 'duplicate').length;
-  const manyToOneRouteCount = draftRouteStatuses.filter((item) => item.status === 'manyToOne').length;
   const bidirectionalRouteCount = draftRouteStatuses.filter((item) => item.status === 'bidirectional').length;
   const selfRouteCount = draftRouteStatuses.filter((item) => item.status === 'self').length;
   const incompletePairCount = useMemo(() => routeDirections.reduce((total, direction) => {
@@ -423,7 +404,6 @@ const DataBus: React.FC = () => {
         routeCount: routesToSubmit.length,
         skippedExisting: existingRouteCount,
         skippedDuplicate: duplicateRouteCount,
-        blockedManyToOne: manyToOneRouteCount,
         blockedBidirectional: bidirectionalRouteCount,
         incompletePairCount,
       });
@@ -436,7 +416,7 @@ const DataBus: React.FC = () => {
     } finally {
       setRouteSubmitting(false);
     }
-  }, [bidirectionalRouteCount, duplicateRouteCount, existingRouteCount, incompletePairCount, manyToOneRouteCount, messageApi, refreshRoutes]);
+  }, [bidirectionalRouteCount, duplicateRouteCount, existingRouteCount, incompletePairCount, messageApi, refreshRoutes]);
 
   const handleRouteSubmit = useCallback(async () => {
     const hasDraftSelection = routeDirections.some((direction) => direction.sourceTags.length > 0
@@ -460,10 +440,6 @@ const DataBus: React.FC = () => {
       messageApi.error('请先处理预览中标记为自环的映射');
       return;
     }
-    if (manyToOneRouteCount > 0) {
-      messageApi.error('当前存在多对一映射：一个目标点不能被多个源点使用');
-      return;
-    }
     if (bidirectionalRouteCount > 0) {
       messageApi.error('当前存在双向路由：同一对点位不能同时配置两个方向');
       return;
@@ -483,7 +459,7 @@ const DataBus: React.FC = () => {
       return;
     }
     await submitRouteBatch(readyRoutes);
-  }, [bidirectionalRouteCount, duplicateRouteCount, existingRouteCount, incompletePairCount, manyToOneRouteCount, messageApi, modal, readyRoutes, routeDirections, selfRouteCount, submitRouteBatch]);
+  }, [bidirectionalRouteCount, duplicateRouteCount, existingRouteCount, incompletePairCount, messageApi, modal, readyRoutes, routeDirections, selfRouteCount, submitRouteBatch]);
 
   const toggleRouteTag = useCallback((side: 'source' | 'destination', tag: string) => {
     const current = side === 'source' ? selectedSourceTags : selectedDestinationTags;
@@ -778,7 +754,7 @@ const DataBus: React.FC = () => {
     >
       <Space direction="vertical" size={14} style={{ width: '100%' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text type="secondary">一对一模式按顺序匹配且两侧数量需一致；自定义映射允许一对多，但同一目标点不能被多个源点使用，也不能配置反向路由。方向最多保留正向和反向两个。</Text>
+          <Text type="secondary">一对一模式按顺序匹配且两侧数量需一致；自定义映射支持一对一、一对多和多对一，也不能配置反向路由。方向最多保留正向和反向两个。</Text>
           <Segmented<RouteBatchMode>
             value={routeBatchMode}
             onChange={(value) => updateActiveDirection({ mode: value })}
@@ -881,7 +857,7 @@ const DataBus: React.FC = () => {
             </div>
             <div className="route-builder-panel route-builder-panel-destination">
               <Text strong>目标点位</Text>
-              <Text type="secondary" className="route-builder-caption">点选标签，按点击顺序编号；已有入站路由的目标点不可再次选择</Text>
+              <Text type="secondary" className="route-builder-caption">点选标签，按点击顺序编号</Text>
               <Select
                 mode="multiple"
                 showSearch
@@ -891,7 +867,6 @@ const DataBus: React.FC = () => {
                 options={routeDestinationTags.map((tag) => ({
                   value: tag,
                   label: tag,
-                  disabled: occupiedDestinationTags.has(tag) && !selectedDestinationTags.includes(tag),
                 }))}
                 disabled={!routeDestinationConnId || routeDestinationTags.length === 0}
                 onChange={(value) => updateActiveDirection({ destinationTags: value })}
@@ -939,7 +914,7 @@ const DataBus: React.FC = () => {
                 const status = route
                   ? draftRouteStatuses.find(({ route: draftRoute }) => routeKey(draftRoute) === routeKey(route))?.status ?? getDraftStatus(route)
                   : null;
-                return <div className="route-pair-row" key={index}><span className="route-pair-index">{index + 1}</span><span>{sourceTag ?? '待选择'}</span><span className="route-pair-arrow">→</span><span>{destinationTag ?? '待选择'}</span>{status === 'existing' ? <Tag color="orange">已存在</Tag> : status === 'duplicate' ? <Tag color="orange">本次重复</Tag> : status === 'manyToOne' ? <Tag color="red">多对一不允许</Tag> : status === 'bidirectional' ? <Tag color="red">双向不允许</Tag> : status === 'self' ? <Tag color="red">自环</Tag> : null}</div>;
+                return <div className="route-pair-row" key={index}><span className="route-pair-index">{index + 1}</span><span>{sourceTag ?? '待选择'}</span><span className="route-pair-arrow">→</span><span>{destinationTag ?? '待选择'}</span>{status === 'existing' ? <Tag color="orange">已存在</Tag> : status === 'duplicate' ? <Tag color="orange">本次重复</Tag> : status === 'bidirectional' ? <Tag color="red">双向不允许</Tag> : status === 'self' ? <Tag color="red">自环</Tag> : null}</div>;
               })}
               {selectedSourceTags.length === 0 && selectedDestinationTags.length === 0 ? <Text type="secondary">左右选择点位后将在这里显示匹配关系</Text> : null}
             </div>
@@ -948,23 +923,22 @@ const DataBus: React.FC = () => {
           <div className="route-custom-builder">
             <div className="route-custom-header"><Text strong>源点位</Text><span className="route-pair-arrow">→</span><Text strong>目标点位</Text><span /></div>
             {customMappings.map((mapping) => {
-              const usedByOtherMapping = new Set(customMappings.filter((item) => item.id !== mapping.id).map((item) => item.destinationTag).filter((tag): tag is string => Boolean(tag)));
               return <div className="route-custom-row" key={mapping.id}>
               <Select showSearch allowClear value={mapping.sourceTag} placeholder="选择源标签" options={routeSourceTags.map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateCustomMapping(mapping.id, 'sourceTag', value)} disabled={!routeSourceConnId} optionFilterProp="label" />
               <span className="route-pair-arrow">→</span>
-              <Select showSearch allowClear value={mapping.destinationTag} placeholder="选择目标标签" options={routeDestinationTags.map((tag) => ({ value: tag, label: tag, disabled: (occupiedDestinationTags.has(tag) || usedByOtherMapping.has(tag)) && tag !== mapping.destinationTag }))} onChange={(value) => updateCustomMapping(mapping.id, 'destinationTag', value)} disabled={!routeDestinationConnId} optionFilterProp="label" />
+              <Select showSearch allowClear value={mapping.destinationTag} placeholder="选择目标标签" options={routeDestinationTags.map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateCustomMapping(mapping.id, 'destinationTag', value)} disabled={!routeDestinationConnId} optionFilterProp="label" />
               <Button type="text" danger icon={<DeleteOutlined />} onClick={() => removeCustomMapping(mapping.id)} />
             </div>;
             })}
             <Button type="dashed" icon={<PlusOutlined />} onClick={addCustomMapping}>添加映射行</Button>
-            <Text type="secondary">同一个源点可以重复使用来实现一对多；目标点已被其他源点使用或已有入站路由时不可再次选择。</Text>
+            <Text type="secondary">源点和目标点均可重复使用，以实现一对多或多对一；不能配置反向路由。</Text>
           </div>
         )}
 
         <div className="route-submit-summary">
           <Text strong>提交预览</Text>
           <Text type="secondary">已配置 {draftRoutes.length} 条，其中 {readyRoutes.length} 条可创建{incompletePairCount > 0 ? `，${incompletePairCount} 个点位未配对` : ''}</Text>
-          {draftRouteStatuses.map(({ route, status }, index) => <div key={`${routeKey(route)}-${index}`} className="route-summary-row"><span>{index + 1}</span><span>{route.src.tag}</span><span className="route-pair-arrow">→</span><span>{route.dst.tag}</span><Tag color={status === 'ready' ? 'green' : status === 'self' || status === 'manyToOne' || status === 'bidirectional' ? 'red' : 'orange'}>{status === 'ready' ? '可创建' : status === 'existing' ? '已存在' : status === 'duplicate' ? '本次重复' : status === 'manyToOne' ? '多对一不允许' : status === 'bidirectional' ? '双向不允许' : '自环'}</Tag></div>)}
+          {draftRouteStatuses.map(({ route, status }, index) => <div key={`${routeKey(route)}-${index}`} className="route-summary-row"><span>{index + 1}</span><span>{route.src.tag}</span><span className="route-pair-arrow">→</span><span>{route.dst.tag}</span><Tag color={status === 'ready' ? 'green' : status === 'self' || status === 'bidirectional' ? 'red' : 'orange'}>{status === 'ready' ? '可创建' : status === 'existing' ? '已存在' : status === 'duplicate' ? '本次重复' : status === 'bidirectional' ? '双向不允许' : '自环'}</Tag></div>)}
         </div>
       </Space>
     </Modal>
