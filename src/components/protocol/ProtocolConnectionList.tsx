@@ -26,6 +26,10 @@ interface ProtocolConnectionListProps<T extends ProtocolConnectionListItemBase> 
   onDelete: (connName: string) => void;
   onRefresh: () => void;
   getStateColor: (item: T) => string;
+  /** 可选的真实通信状态颜色；未提供时沿用功能运行状态颜色。 */
+  getConnectionStateColor?: (item: T) => string;
+  /** 可选的真实通信状态文案。 */
+  getConnectionStateLabel?: (item: T) => string;
   getStateLabel?: (item: T) => string;
   getDescription?: (item: T) => React.ReactNode;
   actionsDisabled?: boolean;
@@ -51,6 +55,8 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
   onDelete,
   onRefresh,
   getStateColor,
+  getConnectionStateColor,
+  getConnectionStateLabel,
   getStateLabel,
   getDescription,
   actionsDisabled = false,
@@ -86,7 +92,8 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
           renderItem={(item) => {
             const connName = getConnName(item);
             const isSelected = selectedConn === connName;
-            const stateColor = getStateColor(item);
+            const stateColor = getConnectionStateColor?.(item) ?? getStateColor(item);
+            const stateLabel = getConnectionStateLabel?.(item);
             const itemActionsDisabled = actionsDisabled || getItemActionsDisabled(item);
 
             return (
@@ -112,16 +119,19 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
                     }}
                   >
                     <Space size={8} align="start">
-                      <span
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: '50%',
-                          background: stateColor,
-                          boxShadow: `0 0 10px ${stateColor}`,
-                          flexShrink: 0,
-                        }}
-                      />
+                      <Tooltip title={stateLabel}>
+                        <span
+                          aria-label={stateLabel}
+                          style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: '50%',
+                            background: stateColor,
+                            boxShadow: `0 0 10px ${stateColor}`,
+                            flexShrink: 0,
+                          }}
+                        />
+                      </Tooltip>
                       <div style={{ minWidth: 0 }}>
                         <Text strong style={{ display: 'block', color: '#fff' }} ellipsis>
                           {connName}

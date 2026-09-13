@@ -674,6 +674,7 @@ function seedDemoData() {
     config: iecConfig,
     conn_id: nextId(),
     state: IEC104_LINK_STATE.STOPPED,
+    connection_state: 1,
     last_error: '',
   });
   iec104Tables.set(iecConfig.conn_name, {
@@ -707,6 +708,7 @@ function seedDemoData() {
     config: iecSecondaryConfig,
     conn_id: iecSecondaryId,
     state: IEC104_LINK_STATE.RUNNING,
+    connection_state: 3,
     last_error: '',
   });
   iec104Tables.set(iecSecondaryConfig.conn_name, {
@@ -1308,6 +1310,7 @@ export const browserApi: typeof tauriApi = {
       config: clone(config),
       conn_id: connId,
       state: previous?.state ?? IEC104_LINK_STATE.STOPPED,
+      connection_state: previous?.connection_state ?? 1,
       last_error: '',
     })),
   iec104RenameLink: async (oldConnName: string, newConnName: string) =>
@@ -1319,8 +1322,20 @@ export const browserApi: typeof tauriApi = {
   },
   iec104ListLinks: async () => clone([...iec104Links.values()]),
   iec104DeleteLink: async (connName: string) => deleteByName(iec104Links, connName),
-  iec104StartLink: async (connName: string) => setLinkState(iec104Links, connName, IEC104_LINK_STATE.RUNNING),
-  iec104StopLink: async (connName: string) => setLinkState(iec104Links, connName, IEC104_LINK_STATE.STOPPED),
+  iec104StartLink: async (connName: string) => {
+    const value = iec104Links.get(connName);
+    if (!value) throw new Error(`浏览器开发模式 mock 未找到 IEC104 连接: ${connName}`);
+    value.state = IEC104_LINK_STATE.RUNNING;
+    value.connection_state = 3;
+    return clone(value);
+  },
+  iec104StopLink: async (connName: string) => {
+    const value = iec104Links.get(connName);
+    if (!value) throw new Error(`浏览器开发模式 mock 未找到 IEC104 连接: ${connName}`);
+    value.state = IEC104_LINK_STATE.STOPPED;
+    value.connection_state = 1;
+    return clone(value);
+  },
   iec104UpsertPointTable: async (connName: string, points: Iec104Point[], replace: boolean) => {
     const previous = iec104Tables.get(connName)?.points ?? [];
     const normalizePoint = (point: Iec104Point): Iec104Point => ({

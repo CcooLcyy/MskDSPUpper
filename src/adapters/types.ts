@@ -276,6 +276,8 @@ export interface Iec104LinkInfo {
   config: Iec104LinkConfig | null;
   conn_id: number;
   state: number;
+  /** IEC104 TCP 会话状态：1=断开，2=连接中，3=已连接。 */
+  connection_state: number;
   last_error: string;
 }
 

@@ -74,6 +74,7 @@ pub struct LinkInfoDto {
     pub config: Option<LinkConfigDto>,
     pub conn_id: u32,
     pub state: i32,
+    pub connection_state: i32,
     pub last_error: String,
 }
 
@@ -154,6 +155,7 @@ impl From<LinkInfo> for LinkInfoDto {
             config: link.config.map(|config| config.into()),
             conn_id: link.conn_id,
             state: link.state,
+            connection_state: link.connection_state,
             last_error: link.last_error,
         }
     }

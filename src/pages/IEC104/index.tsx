@@ -166,6 +166,20 @@ const LIST_STATE_COLOR_MAP: Record<number, string> = {
   3: '#ff9800',
 };
 
+const CONNECTION_STATE_COLOR_MAP: Record<number, string> = {
+  3: '#4caf50',
+  2: '#f5222d',
+  1: '#f5222d',
+  0: '#f5222d',
+};
+
+const CONNECTION_STATE_LABEL_MAP: Record<number, string> = {
+  3: 'TCP 已连接',
+  2: 'TCP 连接中',
+  1: 'TCP 已断开',
+  0: 'TCP 状态未知',
+};
+
 const POINT_TYPE_LABELS: Record<number, string> = {
   1: 'FLOAT (短浮点值)',
   2: 'SINGLE (单点值)',
@@ -2998,6 +3012,8 @@ const IEC104: React.FC = () => {
               onDelete={(connName) => void handleDeleteLink(connName)}
               onRefresh={() => void refreshLinks()}
               getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
+              getConnectionStateColor={(item) => CONNECTION_STATE_COLOR_MAP[item.connection_state] ?? '#f5222d'}
+              getConnectionStateLabel={(item) => CONNECTION_STATE_LABEL_MAP[item.connection_state] ?? 'TCP 已断开'}
               getDescription={(item) => {
                 const config = item.config;
                 if (!config) return STATE_MAP[item.state]?.label ?? '未知状态';
@@ -3012,6 +3028,11 @@ const IEC104: React.FC = () => {
                 title={(
                   <Space size={8} wrap className="iec104-connection-title">
                     <span className="iec104-connection-name">{selectedLink?.config?.conn_name || '连接详情'}</span>
+                    {selectedLink?.config ? (
+                      <Tooltip title={CONNECTION_STATE_LABEL_MAP[selectedLink.connection_state] ?? 'TCP 已断开'}>
+                        <span aria-label="IEC104 TCP 连接状态" style={{ width: 9, height: 9, borderRadius: '50%', background: CONNECTION_STATE_COLOR_MAP[selectedLink.connection_state] ?? '#f5222d', boxShadow: `0 0 10px ${CONNECTION_STATE_COLOR_MAP[selectedLink.connection_state] ?? '#f5222d'}`, display: 'inline-block' }} />
+                      </Tooltip>
+                    ) : null}
                     {selectedLink?.config ? <Tag color={stateInfo.color}>{stateInfo.label}</Tag> : null}
                     {selectedLink?.config ? <Text type="secondary">{ROLE_LABELS[selectedLink.config.role] ?? '未知角色'}</Text> : null}
                   </Space>
@@ -3246,6 +3267,8 @@ const IEC104: React.FC = () => {
             onDelete={(connName) => void handleDeleteLink(connName)}
             onRefresh={() => void refreshLinks()}
             getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
+            getConnectionStateColor={(item) => CONNECTION_STATE_COLOR_MAP[item.connection_state] ?? '#f5222d'}
+            getConnectionStateLabel={(item) => CONNECTION_STATE_LABEL_MAP[item.connection_state] ?? 'TCP 已断开'}
             getDescription={(item) => {
               const config = item.config;
               if (!config) return STATE_MAP[item.state]?.label ?? '未知状态';
