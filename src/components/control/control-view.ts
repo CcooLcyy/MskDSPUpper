@@ -1,4 +1,4 @@
-export type ControlViewKey = 'strategy' | 'logs';
+export type ControlViewKey = 'strategy' | 'default-points' | 'logs';
 
 export const CONTROL_VIEW_QUERY_KEY = 'view';
 export const DEFAULT_CONTROL_VIEW: ControlViewKey = 'strategy';
@@ -9,12 +9,17 @@ export const CONTROL_VIEW_OPTIONS: Array<{ label: string; value: ControlViewKey 
     value: 'strategy',
   },
   {
+    label: '默认点',
+    value: 'default-points',
+  },
+  {
     label: '控制日志',
     value: 'logs',
   },
 ];
 
 export function normalizeControlView(value: string | null | undefined): ControlViewKey {
+  if (value === 'default-points') return 'default-points';
   return value === 'logs' ? 'logs' : DEFAULT_CONTROL_VIEW;
 }
 

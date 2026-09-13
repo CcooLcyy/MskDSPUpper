@@ -6,7 +6,6 @@ import {
   Form,
   Input,
   InputNumber,
-  List,
   message,
   Modal,
   Popconfirm,
@@ -40,6 +39,7 @@ import type {
   DcPointUpdate,
 } from '../../adapters';
 import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/control/control-view';
+import ControlGroupList from '../../components/control/ControlGroupList';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import ControlEmptyState from '../../components/control/ControlEmptyState';
 import { PARAMETER_HELP } from '../../components/help/parameter-help';
@@ -913,7 +913,7 @@ const AVC: React.FC = () => {
   }, [refreshDataBusEndpointOptions]);
 
   useEffect(() => {
-    if (currentView !== 'strategy' || !selectedGroup?.conn_id) {
+    if ((currentView !== 'strategy' && currentView !== 'default-points') || !selectedGroup?.conn_id) {
       runtimeRequestIdRef.current += 1;
       setRuntimeUpdates({});
       setRuntimeStatus(EMPTY_RUNTIME_STATUS);
@@ -928,6 +928,12 @@ const AVC: React.FC = () => {
 
     return () => window.clearInterval(timer);
   }, [currentView, refreshRuntime, selectedGroup?.conn_id]);
+
+  useEffect(() => {
+    if (currentView === 'default-points') {
+      console.info('AVC 默认点页已切换', { groupName: selectedGroupName });
+    }
+  }, [currentView, selectedGroupName]);
 
   const handleSelectGroup = useCallback((groupName: string) => {
     if (groupOperationRef.current) {
@@ -1536,6 +1542,19 @@ const AVC: React.FC = () => {
   const renameDisabled = !selectedGroup || selectedGroup.state !== 1 || groupOperation !== null;
   const startDisabled = !selectedGroup || selectedGroup.state !== 1 || groupOperation !== null;
   const stopDisabled = !selectedGroup || selectedGroup.state !== 2 || groupOperation !== null;
+  const controlGroupListItems = useMemo(
+    () => groups.map((item) => ({
+      name: item.config?.group_name ?? `group_${item.conn_id}`,
+      connId: item.conn_id,
+      stateLabel: STATE_MAP[item.state]?.label ?? '未知',
+      stateColor: item.state === 2 ? '#4caf50' : item.state === 3 ? '#ff9800' : '#9e9e9e',
+      stateTagColor: STATE_MAP[item.state]?.color ?? 'default',
+      commandMode: item.config?.voltage_cmd ? '目标电压' : item.config?.q_total_cmd ? '总无功' : '未配置',
+      memberCount: item.config?.members.length ?? 0,
+      defaultPointCount: item.default_points.length,
+    })),
+    [groups],
+  );
 
   const runtimeStatusLabel =
     runtimeStatus.state === 'ok'
@@ -1780,73 +1799,15 @@ const AVC: React.FC = () => {
           maxSize={440}
           storageKey="mskdsp.layout.avc.control-groups"
         >
-          <Card
-            title="控制组列表"
-            size="small"
-            bordered
-            style={{ width: '100%', minWidth: 0, minHeight: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-            styles={{ body: { flex: '1 1 auto', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '8px 0' } }}
-            extra={
-              <Button
-                type="text"
-                size="small"
-                icon={<ReloadOutlined />}
-                loading={loading}
-                onClick={() => void refreshGroups()}
-              />
-            }
-          >
-            <div style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0, overflowY: 'auto', scrollbarGutter: 'stable' }}>
-              <List
-                dataSource={groups}
-                locale={{ emptyText: '暂无 AVC 控制组' }}
-                renderItem={(item) => {
-                  const groupName = item.config?.group_name ?? `group_${item.conn_id}`;
-                  const isActive = groupName === selectedGroupName;
-                  const color = item.state === 2 ? '#4caf50' : item.state === 3 ? '#ff9800' : '#9e9e9e';
-                  const commandMode = item.config?.voltage_cmd ? '目标电压' : item.config?.q_total_cmd ? '总无功' : '未配置';
-                  return (
-                    <List.Item
-                      onClick={() => handleSelectGroup(groupName)}
-                      style={{
-                        cursor: 'pointer',
-                        padding: '8px 16px',
-                        background: isActive ? '#37373d' : 'transparent',
-                      }}
-                    >
-                      <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                        <Space size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
-                          <Space size={10}>
-                            <span
-                              style={{
-                                display: 'inline-block',
-                                width: 8,
-                                height: 8,
-                                borderRadius: '50%',
-                                background: color,
-                              }}
-                            />
-                            <Text style={{ color: '#fff' }}>{groupName}</Text>
-                          </Space>
-                          <Tag color={STATE_MAP[item.state]?.color ?? 'default'} style={{ marginInlineEnd: 0 }}>
-                            {STATE_MAP[item.state]?.label ?? '未知'}
-                          </Tag>
-                        </Space>
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          conn_id={item.conn_id} | {commandMode} | 成员 {item.config?.members.length ?? 0} | 默认点 {item.default_points.length}
-                        </Text>
-                      </Space>
-                    </List.Item>
-                  );
-                }}
-              />
-            </div>
-            <div style={{ padding: '8px 12px', borderTop: '1px solid #3e3e42' }}>
-              <Button block icon={<PlusOutlined />} onClick={openCreateGroup}>
-                + 新增控制组
-              </Button>
-            </div>
-          </Card>
+          <ControlGroupList
+            items={controlGroupListItems}
+            loading={loading}
+            selectedName={selectedGroupName}
+            emptyText="暂无 AVC 控制组"
+            onReload={() => void refreshGroups()}
+            onSelect={handleSelectGroup}
+            onCreate={openCreateGroup}
+          />
 
           {!selectedConfig ? (
             <ControlEmptyState moduleName="AVC" onCreate={openCreateGroup} />
@@ -2048,20 +2009,6 @@ const AVC: React.FC = () => {
               </Card>
             </div>
 
-            <Card title="默认点" size="small" bordered className="protocol-point-card">
-              <div className="protocol-table-scroll">
-                <Table
-                  rowKey={(record) => `${record.kind}-${record.tag}`}
-                  columns={defaultPointColumns}
-                  dataSource={selectedGroup?.default_points ?? []}
-                  pagination={false}
-                  size="small"
-                  scroll={{ x: 780 }}
-                  locale={{ emptyText: selectedGroup ? '当前控制组暂无默认点' : '请先选择控制组' }}
-                />
-              </div>
-            </Card>
-
             <Card title="成员配置" size="small" bordered className="protocol-point-card">
               <div className="protocol-table-scroll">
                 <Table
@@ -2076,6 +2023,43 @@ const AVC: React.FC = () => {
               </div>
             </Card>
           </div>}
+        </ResizableSplit>
+      ) : currentView === 'default-points' ? (
+        <ResizableSplit
+          className="control-strategy-split"
+          defaultSize={260}
+          minSize={220}
+          maxSize={440}
+          storageKey="mskdsp.layout.avc.default-points"
+        >
+          <ControlGroupList
+            items={controlGroupListItems}
+            loading={loading}
+            selectedName={selectedGroupName}
+            emptyText="暂无 AVC 控制组"
+            onReload={() => void refreshGroups()}
+            onSelect={handleSelectGroup}
+            onCreate={openCreateGroup}
+          />
+          <Card
+            title="默认点"
+            size="small"
+            bordered
+            className="protocol-point-card"
+            style={{ flex: 1, minWidth: 0, minHeight: 0 }}
+          >
+            <div className="protocol-table-scroll">
+              <Table
+                rowKey={(record) => `${record.kind}-${record.tag}`}
+                columns={defaultPointColumns}
+                dataSource={selectedGroup?.default_points ?? []}
+                pagination={false}
+                size="small"
+                scroll={{ x: 780 }}
+                locale={{ emptyText: selectedGroup ? '当前控制组暂无默认点' : '请先选择控制组' }}
+              />
+            </div>
+          </Card>
         </ResizableSplit>
       ) : (
         <Card title="控制日志" size="small" bordered className="protocol-log-card">
