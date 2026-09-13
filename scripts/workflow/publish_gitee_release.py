@@ -14,6 +14,7 @@ import mimetypes
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -25,6 +26,11 @@ from urllib.request import Request, urlopen
 
 API_BASE = "https://gitee.com/api/v5"
 CHUNK_SIZE = 1024 * 1024
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 def parse_args() -> argparse.Namespace:

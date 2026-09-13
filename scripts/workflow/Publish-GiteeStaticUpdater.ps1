@@ -78,6 +78,7 @@ foreach ($asset in $assetFiles) {
     $arguments += @("--asset", $asset.FullName)
 }
 
+$env:PYTHONUTF8 = "1"
 python $arguments
 if ($LASTEXITCODE -ne 0) {
     throw "Gitee Release 上传失败，退出码: $LASTEXITCODE"
