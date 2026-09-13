@@ -285,7 +285,7 @@ jobs:
           path: ${{ steps.bundle.outputs.output_dir }}
           if-no-files-found: error
 
-      - name: Publish CI package to Gitee and notify server
+      - name: Sync CI static updater source
         shell: pwsh
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
