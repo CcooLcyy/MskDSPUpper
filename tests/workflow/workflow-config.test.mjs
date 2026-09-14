@@ -97,10 +97,10 @@ test('ci package publishes updater artifacts to the ci static channel', () => {
 
   assert.match(renderBlock, /\$env:STATIC_UPDATE_BASE_URL\/ci\/latest\.json/);
   assert.match(stageBlock, /\$env:STATIC_UPDATE_BASE_URL\/ci\/\$env:PLATFORM_ID/);
-  assert.match(syncBlock, /Publish-GiteeStaticUpdater\.ps1/);
-  assert.match(syncBlock, /GITEE_TOKEN: \$\{\{ secrets\.GITEE_TOKEN \}\}/);
+  assert.match(syncBlock, /Publish-R2StaticUpdater\.ps1/);
+  assert.match(syncBlock, /AWS_ACCESS_KEY_ID: \$\{\{ secrets\.R2_ACCESS_KEY_ID \}\}/);
+  assert.match(syncBlock, /AWS_SECRET_ACCESS_KEY: \$\{\{ secrets\.R2_SECRET_ACCESS_KEY \}\}/);
   assert.match(syncBlock, /-ChannelPath ci/);
-  assert.match(syncBlock, /secrets\.UPDATE_STATIC_SSH_KEY/);
 });
 
 // 验证 Rust 缓存只保留依赖缓存，并为每个缓存步骤输出命中状态。
