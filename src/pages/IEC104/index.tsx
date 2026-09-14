@@ -166,6 +166,13 @@ const LIST_STATE_COLOR_MAP: Record<number, string> = {
   3: '#ff9800',
 };
 
+const CONNECTION_STATE_COLOR_MAP: Record<number, string> = {
+  3: '#4caf50',
+  2: '#faad14',
+  1: '#f5222d',
+  0: '#8c8c8c',
+};
+
 const CONNECTION_STATE_LABEL_MAP: Record<number, string> = {
   3: 'TCP 已连接',
   2: 'TCP 连接中',
@@ -606,6 +613,7 @@ const IEC104: React.FC = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [searchParams] = useSearchParams();
   const pointLoadRequestRef = useRef(0);
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
 
   const [linkForm] = Form.useForm();
   const [pointForm] = Form.useForm();
@@ -832,32 +840,60 @@ const IEC104: React.FC = () => {
 
   // ── Data Loading ──
 
-  const refreshLinks = useCallback(async (options?: { silent?: boolean }) => {
-    if (!options?.silent) {
-      setLoading(true);
+  const refreshLinks = useCallback((options?: { silent?: boolean }): Promise<void> => {
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
     }
-    try {
-      const list = (await api.iec104ListLinks()).sort((left, right) => {
-        const leftName = left.config?.conn_name ?? `conn_${left.conn_id}`;
-        const rightName = right.config?.conn_name ?? `conn_${right.conn_id}`;
-        return leftName.localeCompare(rightName, 'zh-CN');
-      });
-      setLinks(list);
-      setRefreshError(null);
-      setLastRefreshAt(Date.now());
-      if (selectedConn && !list.some((item) => item.config?.conn_name === selectedConn)) {
-        setSelectedConn(null);
-      } else if (!selectedConn && list.length === 1 && list[0].config?.conn_name) {
-        setSelectedConn(list[0].config.conn_name);
-      }
-    } catch (error) {
-      setRefreshError(formatErrorText(error));
-    } finally {
+
+    const request = (async () => {
       if (!options?.silent) {
-        setLoading(false);
+        setLoading(true);
       }
-    }
-  }, [selectedConn]);
+      try {
+        const list = (await api.iec104ListLinks()).sort((left, right) => {
+          const leftName = left.config?.conn_name ?? `conn_${left.conn_id}`;
+          const rightName = right.config?.conn_name ?? `conn_${right.conn_id}`;
+          return leftName.localeCompare(rightName, 'zh-CN');
+        });
+        setLinks(list);
+        setRefreshError(null);
+        setLastRefreshAt(Date.now());
+        console.info('IEC104 连接列表刷新完成', {
+          count: list.length,
+          silent: Boolean(options?.silent),
+        });
+        setSelectedConn((current) => {
+          if (current && !list.some((item) => item.config?.conn_name === current)) {
+            return null;
+          }
+          if (!current && list.length === 1 && list[0].config?.conn_name) {
+            return list[0].config.conn_name;
+          }
+          return current;
+        });
+      } catch (error) {
+        const errorText = formatErrorText(error);
+        setLinks((current) => current.map((link) => ({ ...link, connection_state: 0 })));
+        setRefreshError(errorText);
+        console.warn('IEC104 连接列表刷新失败', {
+          error: errorText,
+          silent: Boolean(options?.silent),
+        });
+      } finally {
+        if (!options?.silent) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    refreshPromiseRef.current = request;
+    void request.finally(() => {
+      if (refreshPromiseRef.current === request) {
+        refreshPromiseRef.current = null;
+      }
+    });
+    return request;
+  }, []);
 
   const loadPoints = useCallback(
     async (connName: string) => {
@@ -1060,6 +1096,26 @@ const IEC104: React.FC = () => {
 
   useEffect(() => {
     void refreshLinks();
+    const refreshWhenActive = () => {
+      if (document.visibilityState !== 'hidden') {
+        void refreshLinks({ silent: true });
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshLinks({ silent: true });
+      }
+    };
+    const refreshTimer = window.setInterval(() => {
+      void refreshLinks({ silent: true });
+    }, 3000);
+    window.addEventListener('focus', refreshWhenActive);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', refreshWhenActive);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, [refreshLinks]);
 
   useEffect(() => {
@@ -1395,7 +1451,7 @@ const IEC104: React.FC = () => {
       await api.iec104StartLink(selectedConn);
       const reached = await waitForLinkState(selectedConn, 2);
       await refreshLinks({ silent: true });
-      messageApi[reached ? 'success' : 'warning'](reached ? '连接已建立' : '连接请求已发送，状态仍在确认中');
+      messageApi[reached ? 'success' : 'warning'](reached ? '连接功能已启动' : '连接请求已发送，状态仍在确认中');
     } catch (e) {
       messageApi.error(`连接失败: ${e}`);
     } finally {
@@ -3005,6 +3061,8 @@ const IEC104: React.FC = () => {
               onDelete={(connName) => void handleDeleteLink(connName)}
               onRefresh={() => void refreshLinks()}
               getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
+              getConnectionStateColor={(item) => CONNECTION_STATE_COLOR_MAP[item.connection_state] ?? CONNECTION_STATE_COLOR_MAP[0]}
+              getConnectionStateLabel={(item) => CONNECTION_STATE_LABEL_MAP[item.connection_state] ?? CONNECTION_STATE_LABEL_MAP[0]}
               getStateLabel={(item) => STATE_MAP[item.state]?.label ?? '未知状态'}
               getDescription={(item) => {
                 const config = item.config;
@@ -3254,6 +3312,8 @@ const IEC104: React.FC = () => {
             onDelete={(connName) => void handleDeleteLink(connName)}
             onRefresh={() => void refreshLinks()}
             getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
+            getConnectionStateColor={(item) => CONNECTION_STATE_COLOR_MAP[item.connection_state] ?? CONNECTION_STATE_COLOR_MAP[0]}
+            getConnectionStateLabel={(item) => CONNECTION_STATE_LABEL_MAP[item.connection_state] ?? CONNECTION_STATE_LABEL_MAP[0]}
             getStateLabel={(item) => STATE_MAP[item.state]?.label ?? '未知状态'}
             getDescription={(item) => {
               const config = item.config;
