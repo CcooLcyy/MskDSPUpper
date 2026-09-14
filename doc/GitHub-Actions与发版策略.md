@@ -221,7 +221,8 @@
   - 通过 `SCCACHE_GHA_ENABLED=true` 使用 GitHub Actions cache backend
   - `SCCACHE_GHA_VERSION=mskdsp-upper-windows-msvc-v1` 作为共享命名空间，CI / Beta / Nightly / Release 复用同一类编译缓存
   - 不再把 `github.sha` 放入编译缓存维度，避免每个 commit 生成彼此隔离的 `.sccache` 缓存包
-  - `Swatinem/rust-cache` 仅缓存 Cargo registry/git 依赖（`cache-targets: false`），不再上传体积很大的 `src-tauri/target`；Rust 编译产物由 sccache 复用
+  - `Swatinem/rust-cache` 同时缓存 Cargo registry/git 依赖和依赖类 `src-tauri/target` 产物（`cache-targets: true`）；CI/Beta 的 verify 与 package Job 使用独立 shared key，分别保留 test 与 release profile 的依赖缓存，避免前一个 Job 的缓存阻止后一个 Job 保存更新
+  - `rust-cache` 默认不保存 workspace crate；上位机自身源码和最终链接仍由 Cargo/Tauri 在对应 profile 中重新生成，Rust 编译结果由共享 sccache 跨 Job、跨 profile 补充复用
   - 每个 Rust job 在缓存步骤后输出 `cache-hit`，并在构建结束输出 sccache 命中统计，便于区分依赖缓存和编译缓存问题
   - 每个 Rust/Tauri 构建 job 结束时执行 [scripts/workflow/Show-SccacheStats.ps1](../scripts/workflow/Show-SccacheStats.ps1)，输出命中率用于评估提速效果
 

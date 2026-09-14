@@ -63,10 +63,10 @@ jobs:
         id: rust_cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: mskdsp-upper-${{ runner.os }}-${{ env.RUST_TARGET }}
+          shared-key: mskdsp-upper-${{ runner.os }}-${{ env.RUST_TARGET }}-verify
           workspaces: |
             ./src-tauri -> target
-          cache-targets: 'false'
+          cache-targets: 'true'
           cache-bin: 'false'
 
       - name: Report Rust cache status
@@ -191,10 +191,10 @@ jobs:
         id: rust_cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: mskdsp-upper-${{ runner.os }}-${{ env.RUST_TARGET }}
+          shared-key: mskdsp-upper-${{ runner.os }}-${{ env.RUST_TARGET }}-package
           workspaces: |
             ./src-tauri -> target
-          cache-targets: 'false'
+          cache-targets: 'true'
           cache-bin: 'false'
 
       - name: Report Rust cache status

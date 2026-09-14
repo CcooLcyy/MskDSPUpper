@@ -103,8 +103,8 @@ test('ci package publishes updater artifacts to the ci static channel', () => {
   assert.match(syncBlock, /-ChannelPath ci/);
 });
 
-// 验证 Rust 缓存只保留依赖缓存，并为每个缓存步骤输出命中状态。
-test('release workflows disable Rust target caching and report cache hits', () => {
+// 验证 Rust 依赖和 target 产物均缓存，并为每个缓存步骤输出命中状态。
+test('release workflows enable Rust target caching and report cache hits', () => {
   const workflowPaths = [
     '.github/workflows/ci.yml',
     '.github/workflows/beta.yml',
@@ -127,8 +127,8 @@ test('release workflows disable Rust target caching and report cache hits', () =
     for (const [entryIndex, { block: stepBlock, index: stepIndex }] of rustCacheEntries.entries()) {
       assert.match(
         stepBlock,
-        /^\s*cache-targets:\s*'false'\s*$/m,
-        `${workflowPath} Rust cache step ${entryIndex + 1} must disable target caching`,
+        /^\s*cache-targets:\s*'true'\s*$/m,
+        `${workflowPath} Rust cache step ${entryIndex + 1} must enable target caching`,
       );
 
       const idMatch = stepBlock.match(/^\s*id:\s*([A-Za-z_][\w-]*)\s*$/m);

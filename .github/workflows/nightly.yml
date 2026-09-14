@@ -71,7 +71,7 @@ jobs:
           shared-key: mskdsp-upper-${{ runner.os }}-${{ env.RUST_TARGET }}
           workspaces: |
             ./src-tauri -> target
-          cache-targets: 'false'
+          cache-targets: 'true'
           cache-bin: 'false'
 
       - name: Report Rust cache status
