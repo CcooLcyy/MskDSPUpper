@@ -6,6 +6,7 @@ const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const page = read('../../src/pages/IEC104/index.tsx');
 const panel = read('../../src/pages/IEC104/SoeHistoryPanel.tsx');
 const views = read('../../src/components/protocol/protocol-view.ts');
+const switcher = read('../../src/components/protocol/ProtocolHeaderViewSwitcher.tsx');
 const adapter = read('../../src/adapters/tauri.ts');
 const mock = read('../../src/adapters/browser.ts');
 
@@ -13,6 +14,10 @@ test('IEC104 页面在连接配置和报文日志之间提供 SOE 历史视图',
   assert.match(views, /value: 'soe'/);
   assert.match(page, /currentView === 'soe'/);
   assert.match(page, /<SoeHistoryPanel connName=\{selectedConn\}/);
+});
+
+test('SOE 历史页签切换保留 SOE 视图标识', () => {
+  assert.match(switcher, /normalizeProtocolView\(String\(nextValue\), includeSoe\)/);
 });
 
 test('SOE 历史页提供北京时间、筛选、5 秒刷新和两种导出', () => {

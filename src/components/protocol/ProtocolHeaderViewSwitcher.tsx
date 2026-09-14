@@ -19,13 +19,14 @@ const ProtocolHeaderViewSwitcher: React.FC<ProtocolHeaderViewSwitcherProps> = ({
   const value = normalizeProtocolView(new URLSearchParams(location.search).get(PROTOCOL_VIEW_QUERY_KEY), includeSoe);
 
   const handleChange = (nextValue: string | number) => {
-    const nextView = normalizeProtocolView(String(nextValue));
+    const nextView = normalizeProtocolView(String(nextValue), includeSoe);
     const nextSearch = createProtocolViewSearch(location.search, nextView);
 
     if (nextSearch === location.search) {
       return;
     }
 
+    console.info('协议页签已切换', { view: nextView });
     navigate(
       {
         pathname: location.pathname,
