@@ -80,7 +80,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ env.RUST_TARGET }}
 
@@ -148,19 +148,6 @@ jobs:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           cargo test --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET 2>&1 | Tee-Object -FilePath package\logs\cargo-test.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Render debug tauri config
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          node scripts/workflow/render-tauri-config.mjs --output package/generated/tauri.release.verify.conf.json --endpoint "$env:STATIC_UPDATE_BASE_URL/stable/latest.json" --updater-artifacts false
-
-      - name: Build debug validation bundle
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        env:
-          MSKDSP_UPPER_SOURCEMAP: 'false'
-        run: |
-          npx tauri build --debug --no-bundle --target $env:RUST_TARGET --ci --config package/generated/tauri.release.verify.conf.json 2>&1 | Tee-Object -FilePath package\logs\tauri-release-debug-build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify beta lineage

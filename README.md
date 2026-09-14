@@ -58,7 +58,7 @@ npm run build
 npm run test:workflow
 ```
 
-执行最小 CI Debug 校验链路：
+执行最小 CI 校验链路：
 
 ```bash
 npm run ci:debug

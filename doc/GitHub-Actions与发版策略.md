@@ -76,7 +76,7 @@
 
 - `CI`
   - 触发 `pull_request`、`push main`
-  - 输出 Debug 校验结果；`push main` 时额外输出主线测试交付包并同步到静态源 `ci` 通道
+  - PR 输出一次 Debug Tauri 校验结果；`push main` 在基础校验通过后只执行一次 Release Tauri 构建，输出主线测试交付包并同步到静态源 `ci` 通道
 - `Nightly`
   - 固定基于默认分支
   - 每日或手动重建最新包
@@ -145,7 +145,8 @@
   - 运行 `npm run test:workflow`
   - 运行 `npm run lint`
   - 运行 `cargo test --locked --manifest-path src-tauri/Cargo.toml`
-  - 运行 `npx tauri build --debug --no-bundle`
+  - PR 运行一次 `npx tauri build --debug --no-bundle`
+  - `push main` 只运行一次 Release Tauri 构建
   - 失败时上传 diagnostics
   - `push main` 时继续打包 `ci` 渠道交付包，上传 artifact，并同步到 `<UPDATE_STATIC_BASE_URL>/ci/latest.json`
 
@@ -168,8 +169,8 @@
   - `workflow_dispatch`
 - 行为：
   - 解析目标 beta 版本线
-  - 先跑 Debug 校验
-  - 再做 Release 打包与 staging
+  - 先运行 workflow tests、lint 和 Cargo tests
+  - 再做一次 Release 打包与 staging
   - 上传 artifact
   - 清理同版本线旧 prerelease
   - 创建当前最新 prerelease
@@ -180,7 +181,7 @@
 - 触发：
   - `push tags v*`
 - 行为：
-  - 跑发布前 Debug 校验
+  - 运行 workflow tests、lint 和 Cargo tests
   - 校验 tag 对应提交属于某条 `beta/*`
   - 生成正式安装包、symbols 包、校验文件
   - 创建或更新 GitHub Release

@@ -47,7 +47,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ env.RUST_TARGET }}
 
@@ -119,11 +119,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Render debug tauri config
+        if: github.event_name == 'pull_request'
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           node scripts/workflow/render-tauri-config.mjs --output package/generated/tauri.verify.conf.json --endpoint "$env:STATIC_UPDATE_BASE_URL/stable/latest.json" --updater-artifacts false
 
       - name: Build debug validation bundle
+        if: github.event_name == 'pull_request'
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           MSKDSP_UPPER_SOURCEMAP: 'false'
@@ -173,7 +175,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ env.RUST_TARGET }}
 

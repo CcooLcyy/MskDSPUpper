@@ -46,7 +46,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ env.RUST_TARGET }}
 
