@@ -13,6 +13,7 @@ test('协议连接列表使用独立通信状态颜色', () => {
   assert.match(listSource, /getConnectionStateLabel\?:/);
   assert.match(listSource, /getConnectionStateColor\?\.\(item\)/);
   assert.match(listSource, /aria-label=\{stateLabel\}/);
+  assert.match(listSource, /display: 'inline-block'/);
 });
 
 // 验证 IEC104 页面只将 CONNECTED 显示为绿色，并读取 connection_state 字段。

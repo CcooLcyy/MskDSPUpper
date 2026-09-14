@@ -123,6 +123,7 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
                         <span
                           aria-label={stateLabel}
                           style={{
+                            display: 'inline-block',
                             width: 8,
                             height: 8,
                             borderRadius: '50%',
