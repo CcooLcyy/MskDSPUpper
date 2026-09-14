@@ -58,10 +58,10 @@ Notes:
 - `scripts/workflow/Prepare-SubmoduleAccess.ps1` falls back to anonymous HTTPS if neither submodule secret is set.
 - If the `proto` submodule is private, at least one of `SUBMODULE_TOKEN` or `SUBMODULE_SSH_KEY` is required.
 - R2 defaults are configured through repository variables `R2_BUCKET`,
-  `R2_PREFIX`, `R2_PUBLIC_BASE_URL` and optional `UPDATE_STATIC_BASE_URL`.
+  `R2_PREFIX` and `R2_PUBLIC_BASE_URL`.
   If unset, workflows use bucket `mskdsp-update`, prefix `mskdsp-upper`, and
-  the public `r2.dev` address listed above. `UPDATE_STATIC_BASE_URL` should
-  include the `mskdsp-upper` path when overriding the public URL.
+  the public `r2.dev` address listed above. The workflow appends the
+  `mskdsp-upper` path automatically; legacy static-server variables are ignored.
 - `Sync Static Updater Source` can backfill the static source from an existing
   GitHub Release without building or publishing a new version. Leave `release_tag`
   empty to use `v<package version>` for stable, `beta-latest` for beta, or
