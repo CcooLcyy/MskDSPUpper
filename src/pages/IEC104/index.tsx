@@ -166,13 +166,6 @@ const LIST_STATE_COLOR_MAP: Record<number, string> = {
   3: '#ff9800',
 };
 
-const CONNECTION_STATE_COLOR_MAP: Record<number, string> = {
-  3: '#4caf50',
-  2: '#f5222d',
-  1: '#f5222d',
-  0: '#f5222d',
-};
-
 const CONNECTION_STATE_LABEL_MAP: Record<number, string> = {
   3: 'TCP 已连接',
   2: 'TCP 连接中',
@@ -3012,13 +3005,12 @@ const IEC104: React.FC = () => {
               onDelete={(connName) => void handleDeleteLink(connName)}
               onRefresh={() => void refreshLinks()}
               getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
-              getConnectionStateColor={(item) => CONNECTION_STATE_COLOR_MAP[item.connection_state] ?? '#f5222d'}
-              getConnectionStateLabel={(item) => CONNECTION_STATE_LABEL_MAP[item.connection_state] ?? 'TCP 已断开'}
+              getStateLabel={(item) => STATE_MAP[item.state]?.label ?? '未知状态'}
               getDescription={(item) => {
                 const config = item.config;
                 if (!config) return STATE_MAP[item.state]?.label ?? '未知状态';
                 const endpoint = config.role === ROLE_SERVER ? config.local : config.remote;
-                return `${STATE_MAP[item.state]?.label ?? '未知状态'} · ${ROLE_LABELS[config.role] ?? '未知角色'} · ${formatEndpoint(endpoint)}`;
+                return `${STATE_MAP[item.state]?.label ?? '未知状态'} · ${CONNECTION_STATE_LABEL_MAP[item.connection_state] ?? 'TCP 状态未知'} · ${ROLE_LABELS[config.role] ?? '未知角色'} · ${formatEndpoint(endpoint)}`;
               }}
               getDeleteTitle={(connName) => `确认删除 ${connName}？`}
             />
@@ -3262,17 +3254,16 @@ const IEC104: React.FC = () => {
             onDelete={(connName) => void handleDeleteLink(connName)}
             onRefresh={() => void refreshLinks()}
             getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
-            getConnectionStateColor={(item) => CONNECTION_STATE_COLOR_MAP[item.connection_state] ?? '#f5222d'}
-            getConnectionStateLabel={(item) => CONNECTION_STATE_LABEL_MAP[item.connection_state] ?? 'TCP 已断开'}
+            getStateLabel={(item) => STATE_MAP[item.state]?.label ?? '未知状态'}
             getDescription={(item) => {
               const config = item.config;
               if (!config) return STATE_MAP[item.state]?.label ?? '未知状态';
               const endpoint = config.role === ROLE_SERVER ? config.local : config.remote;
-              return `${STATE_MAP[item.state]?.label ?? '未知状态'} · ${ROLE_LABELS[config.role] ?? '未知角色'} · ${formatEndpoint(endpoint)}`;
+              return `${STATE_MAP[item.state]?.label ?? '未知状态'} · ${CONNECTION_STATE_LABEL_MAP[item.connection_state] ?? 'TCP 状态未知'} · ${ROLE_LABELS[config.role] ?? '未知角色'} · ${formatEndpoint(endpoint)}`;
             }}
             getDeleteTitle={(connName) => `确认删除 ${connName}？`}
           />
-          <SoeHistoryPanel connName={selectedConn} />
+          <SoeHistoryPanel connName={selectedConn} points={points} />
         </ResizableSplit>
       ) : (
         <Card title="报文日志" size="small" bordered className="protocol-log-card">

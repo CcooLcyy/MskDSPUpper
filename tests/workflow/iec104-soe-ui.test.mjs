@@ -28,6 +28,13 @@ test('SOE 历史页提供北京时间、筛选、5 秒刷新和两种导出', ()
   assert.match(panel, /acknowledged_filter/);
 });
 
+test('SOE 历史页按点表 IOA 显示点名并导出', () => {
+  assert.match(page, /<SoeHistoryPanel connName=\{selectedConn\} points=\{points\}/);
+  assert.match(panel, /pointNameByIoa/);
+  assert.match(panel, /title: '名称'/);
+  assert.match(panel, /'事件序号', 'IOA', '名称'/);
+});
+
 test('IEC104 SOE 查询在 Tauri 和浏览器适配器中均可用', () => {
   assert.match(adapter, /iec104QuerySoe:/);
   assert.match(adapter, /iec104_query_soe/);

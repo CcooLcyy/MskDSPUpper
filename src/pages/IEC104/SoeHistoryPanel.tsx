@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Card, Input, InputNumber, Select, Space, Statistic, Table, Typography, message } from 'antd';
 import { DownloadOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { api, type Iec104SoeQuery, type Iec104SoeRecord } from '../../adapters';
+import { api, type Iec104Point, type Iec104SoeQuery, type Iec104SoeRecord } from '../../adapters';
 
 const { Text } = Typography;
 const PAGE_SIZE = 100;
@@ -30,9 +30,10 @@ const csvCell = (value: unknown): string => {
 
 interface Props {
   connName: string | null;
+  points: Iec104Point[];
 }
 
-const SoeHistoryPanel: React.FC<Props> = ({ connName }) => {
+const SoeHistoryPanel: React.FC<Props> = ({ connName, points }) => {
   const [rows, setRows] = useState<Iec104SoeRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [unacknowledgedCount, setUnacknowledgedCount] = useState(0);
@@ -47,6 +48,14 @@ const SoeHistoryPanel: React.FC<Props> = ({ connName }) => {
   const [messageApi, contextHolder] = message.useMessage();
   const loadRef = useRef<(beforeEventSequence?: number, silent?: boolean) => Promise<void>>(() => Promise.resolve());
   const requestIdRef = useRef(0);
+  const pointNameByIoa = useMemo(
+    () => new Map(points.map((point) => [point.ioa, point.tag.trim()])),
+    [points],
+  );
+  const getPointName = useCallback(
+    (ioa: number): string => pointNameByIoa.get(ioa) || '未配置',
+    [pointNameByIoa],
+  );
 
   const buildQuery = useCallback((beforeEventSequence?: number): Iec104SoeQuery | null => {
     if (!connName) return null;
@@ -104,14 +113,14 @@ const SoeHistoryPanel: React.FC<Props> = ({ connName }) => {
   }, [connName]);
 
   const exportRows = useCallback((items: Iec104SoeRecord[], filename: string) => {
-    const header = ['事件序号', 'IOA', '状态', '事件时标（北京时间）', '品质', '确认状态'];
+    const header = ['事件序号', 'IOA', '名称', '状态', '事件时标（北京时间）', '品质', '确认状态'];
     const lines = [header, ...items.map((row) => [
-      row.event_sequence, row.ioa, stateLabel(row.state), formatBeijingTime(row.ts_ms), qualityLabel(row.quality), row.acknowledged ? '已确认' : '未确认',
+      row.event_sequence, row.ioa, getPointName(row.ioa), stateLabel(row.state), formatBeijingTime(row.ts_ms), qualityLabel(row.quality), row.acknowledged ? '已确认' : '未确认',
     ])].map((line) => line.map(csvCell).join(','));
     const blob = new Blob([`\ufeff${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url);
-  }, []);
+  }, [getPointName]);
 
   const exportAll = useCallback(async (): Promise<void> => {
     const first = buildQuery();
@@ -137,11 +146,12 @@ const SoeHistoryPanel: React.FC<Props> = ({ connName }) => {
   const columns = useMemo<ColumnsType<Iec104SoeRecord>>(() => [
     { title: '事件序号', dataIndex: 'event_sequence', key: 'sequence', width: 110 },
     { title: 'IOA', dataIndex: 'ioa', key: 'ioa', width: 90 },
+    { title: '名称', key: 'name', width: 180, ellipsis: true, render: (_value: unknown, row: Iec104SoeRecord) => getPointName(row.ioa) },
     { title: '状态', dataIndex: 'state', key: 'state', width: 90, render: (value: boolean) => stateLabel(value) },
     { title: '事件时标（北京时间）', dataIndex: 'ts_ms', key: 'ts', width: 210, render: (value: number) => formatBeijingTime(value) },
     { title: '品质', dataIndex: 'quality', key: 'quality', width: 90, render: (value: number) => qualityLabel(value) },
     { title: '确认状态', dataIndex: 'acknowledged', key: 'ack', width: 110, render: (value: boolean) => value ? <Text type="success">已确认</Text> : <Text type="warning">未确认</Text> },
-  ], []);
+  ], [getPointName]);
 
   if (!connName) return <Card title="SOE 历史" size="small"><Text type="secondary">请先从左侧选择连接。</Text></Card>;
 
@@ -164,7 +174,7 @@ const SoeHistoryPanel: React.FC<Props> = ({ connName }) => {
         <Statistic title="未确认" value={unacknowledgedCount} suffix="条" />
         <Text type="secondary">每 5 秒自动刷新{lastRefreshAt ? ` · 最近 ${formatBeijingTime(lastRefreshAt)}` : ''}</Text>
       </Space>
-      <Table<Iec104SoeRecord> rowKey="event_sequence" size="small" loading={loading} columns={columns} dataSource={rows} pagination={false} scroll={{ x: 760 }} locale={{ emptyText: '暂无 SOE 记录' }} />
+      <Table<Iec104SoeRecord> rowKey="event_sequence" size="small" loading={loading} columns={columns} dataSource={rows} pagination={false} scroll={{ x: 940 }} locale={{ emptyText: '暂无 SOE 记录' }} />
       {hasMore ? <Button type="link" size="small" onClick={() => void load(rows[rows.length - 1]?.event_sequence)}>加载更早记录</Button> : null}
     </Card>
   </>;

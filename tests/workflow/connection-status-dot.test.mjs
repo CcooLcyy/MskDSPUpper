@@ -12,16 +12,19 @@ test('协议连接列表使用独立通信状态颜色', () => {
   assert.match(listSource, /getConnectionStateColor\?:/);
   assert.match(listSource, /getConnectionStateLabel\?:/);
   assert.match(listSource, /getConnectionStateColor\?\.\(item\)/);
+  assert.match(listSource, /getConnectionStateLabel\?\.\(item\) \?\? getStateLabel\?\.\(item\)/);
   assert.match(listSource, /aria-label=\{stateLabel\}/);
   assert.match(listSource, /display: 'inline-block'/);
 });
 
-// 验证 IEC104 页面只将 CONNECTED 显示为绿色，并读取 connection_state 字段。
-test('IEC104 页面显示 TCP 通信状态点', () => {
+// 验证 IEC104 页面按链路运行状态显示连接列表状态点，而不是按 TCP 会话状态显示。
+test('IEC104 页面按链路运行状态显示状态点', () => {
   assert.match(typesSource, /connection_state: number/);
-  assert.match(iec104Source, /CONNECTION_STATE_COLOR_MAP/);
-  assert.match(iec104Source, /item\.connection_state/);
-  assert.doesNotMatch(iec104Source, /selectedLink\.connection_state/);
+  assert.match(iec104Source, /LIST_STATE_COLOR_MAP/);
+  assert.match(iec104Source, /getStateColor=\{\(item\) => LIST_STATE_COLOR_MAP\[item\.state\]/);
+  assert.match(iec104Source, /getStateLabel=\{\(item\) => STATE_MAP\[item\.state\]\?\.label/);
+  assert.doesNotMatch(iec104Source, /CONNECTION_STATE_COLOR_MAP/);
+  assert.doesNotMatch(iec104Source, /getConnectionStateColor=\{\(item\) => CONNECTION_STATE_COLOR_MAP/);
 });
 
 // 验证 IEC61850 页面依据任一已连接 MMS 通道显示绿色状态点。

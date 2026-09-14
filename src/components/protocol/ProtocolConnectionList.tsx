@@ -93,7 +93,7 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
             const connName = getConnName(item);
             const isSelected = selectedConn === connName;
             const stateColor = getConnectionStateColor?.(item) ?? getStateColor(item);
-            const stateLabel = getConnectionStateLabel?.(item);
+            const stateLabel = getConnectionStateLabel?.(item) ?? getStateLabel?.(item);
             const itemActionsDisabled = actionsDisabled || getItemActionsDisabled(item);
 
             return (
