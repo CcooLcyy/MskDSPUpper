@@ -20,7 +20,7 @@ test('IEC104 页面显示 TCP 通信状态点', () => {
   assert.match(typesSource, /connection_state: number/);
   assert.match(iec104Source, /CONNECTION_STATE_COLOR_MAP/);
   assert.match(iec104Source, /item\.connection_state/);
-  assert.match(iec104Source, /selectedLink\.connection_state/);
+  assert.doesNotMatch(iec104Source, /selectedLink\.connection_state/);
 });
 
 // 验证 IEC61850 页面依据任一已连接 MMS 通道显示绿色状态点。

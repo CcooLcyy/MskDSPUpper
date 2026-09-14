@@ -3028,11 +3028,6 @@ const IEC104: React.FC = () => {
                 title={(
                   <Space size={8} wrap className="iec104-connection-title">
                     <span className="iec104-connection-name">{selectedLink?.config?.conn_name || '连接详情'}</span>
-                    {selectedLink?.config ? (
-                      <Tooltip title={CONNECTION_STATE_LABEL_MAP[selectedLink.connection_state] ?? 'TCP 已断开'}>
-                        <span aria-label="IEC104 TCP 连接状态" style={{ width: 9, height: 9, borderRadius: '50%', background: CONNECTION_STATE_COLOR_MAP[selectedLink.connection_state] ?? '#f5222d', boxShadow: `0 0 10px ${CONNECTION_STATE_COLOR_MAP[selectedLink.connection_state] ?? '#f5222d'}`, display: 'inline-block' }} />
-                      </Tooltip>
-                    ) : null}
                     {selectedLink?.config ? <Tag color={stateInfo.color}>{stateInfo.label}</Tag> : null}
                     {selectedLink?.config ? <Text type="secondary">{ROLE_LABELS[selectedLink.config.role] ?? '未知角色'}</Text> : null}
                   </Space>
