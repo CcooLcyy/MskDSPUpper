@@ -562,6 +562,8 @@ export interface ModbusLinkInfo {
   conn_id: number;
   state: number;
   last_error: string;
+  /** 现场通信健康状态：0=未知，1=正常，2=异常。 */
+  communication_state: number;
 }
 
 export interface ModbusPoint {
@@ -656,6 +658,8 @@ export interface Dlt645LinkInfo {
   conn_id: number;
   state: number;
   last_error: string;
+  /** 现场通信健康状态：0=未知，1=正常，2=异常。 */
+  communication_state: number;
 }
 
 export interface Dlt645Point {

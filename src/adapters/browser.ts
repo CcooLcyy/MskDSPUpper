@@ -102,6 +102,13 @@ const IEC104_LINK_STATE = {
   PENDING_DELETE: 3,
 } as const;
 
+// ModbusRTU / DLT645 现场通信健康状态值与对应 proto 保持一致。
+const COMMUNICATION_STATE = {
+  UNSPECIFIED: 0,
+  HEALTHY: 1,
+  UNHEALTHY: 2,
+} as const;
+
 let managerAddr = DEFAULT_MANAGER_ADDR;
 let nextConnId = 100;
 const browserThroughputSamples: DataBusThroughputSample[] = [];
@@ -354,12 +361,15 @@ function deleteByName<T>(store: Map<string, T>, name: string) {
   store.delete(name);
 }
 
-function setLinkState<T extends { state: number }>(store: Map<string, T>, name: string, state: number) {
+function setLinkState<T extends { state: number; communication_state?: number }>(store: Map<string, T>, name: string, state: number) {
   const value = store.get(name);
   if (!value) {
     throw new Error(`浏览器开发模式 mock 未找到: ${name}`);
   }
   value.state = state;
+  if ('communication_state' in value) {
+    value.communication_state = COMMUNICATION_STATE.UNSPECIFIED;
+  }
 }
 
 function mergeByTag<T extends { tag: string }>(previous: T[], next: T[]) {
@@ -751,6 +761,7 @@ function seedDemoData() {
     conn_id: modbusId,
     state: 2,
     last_error: '',
+    communication_state: COMMUNICATION_STATE.UNSPECIFIED,
   });
   modbusTables.set(modbusConfig.conn_name, {
     conn_name: modbusConfig.conn_name,
@@ -783,6 +794,7 @@ function seedDemoData() {
     conn_id: modbusSerialId,
     state: 1,
     last_error: '',
+    communication_state: COMMUNICATION_STATE.UNSPECIFIED,
   });
   modbusTables.set(modbusSerialConfig.conn_name, {
     conn_name: modbusSerialConfig.conn_name,
@@ -828,6 +840,7 @@ function seedDemoData() {
     conn_id: dltId,
     state: 2,
     last_error: '',
+    communication_state: COMMUNICATION_STATE.UNSPECIFIED,
   });
   dlt645Tables.set(dltConfig.conn_name, {
     conn_name: dltConfig.conn_name,
@@ -872,6 +885,7 @@ function seedDemoData() {
     conn_id: dltSerialId,
     state: 1,
     last_error: '',
+    communication_state: COMMUNICATION_STATE.UNSPECIFIED,
   });
   dlt645Tables.set(dltSerialConfig.conn_name, {
     conn_name: dltSerialConfig.conn_name,
@@ -1555,6 +1569,7 @@ export const browserApi: typeof tauriApi = {
       conn_id: connId,
       state: previous?.state ?? 1,
       last_error: modbusMqtt ? '' : '浏览器开发模式 mock 未连接真实 MQTT',
+      communication_state: previous?.communication_state ?? COMMUNICATION_STATE.UNSPECIFIED,
     })),
   modbusRtuRenameLink: async (oldConnName: string, newConnName: string) =>
     renameByName(modbusLinks, oldConnName, newConnName),
@@ -1637,8 +1652,9 @@ export const browserApi: typeof tauriApi = {
     upsertByName(dlt645Links, config.conn_name, createOnly, (connId, previous) => ({
       config: clone(config),
       conn_id: connId,
-      state: previous?.state ?? 0,
+      state: previous?.state ?? 1,
       last_error: dlt645Mqtt ? '' : '浏览器开发模式 mock 未连接真实 MQTT',
+      communication_state: previous?.communication_state ?? COMMUNICATION_STATE.UNSPECIFIED,
     })),
   dlt645RenameLink: async (oldConnName: string, newConnName: string) =>
     renameByName(dlt645Links, oldConnName, newConnName),
@@ -1649,8 +1665,8 @@ export const browserApi: typeof tauriApi = {
   },
   dlt645ListLinks: async () => clone([...dlt645Links.values()]),
   dlt645DeleteLink: async (connName: string) => deleteByName(dlt645Links, connName),
-  dlt645StartLink: async (connName: string) => setLinkState(dlt645Links, connName, 1),
-  dlt645StopLink: async (connName: string) => setLinkState(dlt645Links, connName, 0),
+  dlt645StartLink: async (connName: string) => setLinkState(dlt645Links, connName, 2),
+  dlt645StopLink: async (connName: string) => setLinkState(dlt645Links, connName, 1),
   dlt645UpsertPointTable: async (connName: string, points: Dlt645Point[], blocks: Dlt645Block[], replace: boolean) => {
     const previous = dlt645Tables.get(connName) ?? { conn_name: connName, points: [], blocks: [] };
     const nextPoints = replace ? points : mergeByTag(previous.points, points);

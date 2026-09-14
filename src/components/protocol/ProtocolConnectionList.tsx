@@ -10,6 +10,8 @@ export interface ProtocolConnectionListItemBase {
   } | null;
   conn_id: number;
   state: number;
+  /** 可选的现场通信健康状态，具体协议通过 getConnectionStateColor 提供映射。 */
+  communication_state?: number;
 }
 
 interface ProtocolConnectionListProps<T extends ProtocolConnectionListItemBase> {

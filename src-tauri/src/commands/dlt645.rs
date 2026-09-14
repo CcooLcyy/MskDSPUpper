@@ -47,6 +47,7 @@ pub struct Dlt645LinkInfoDto {
     pub conn_id: u32,
     pub state: i32,
     pub last_error: String,
+    pub communication_state: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -172,6 +173,7 @@ impl From<LinkInfo> for Dlt645LinkInfoDto {
             conn_id: link.conn_id,
             state: link.state,
             last_error: link.last_error,
+            communication_state: link.communication_state,
         }
     }
 }

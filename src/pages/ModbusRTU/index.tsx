@@ -71,6 +71,16 @@ const LIST_STATE_COLOR_MAP: Record<number, string> = {
   2: '#4caf50',
   3: '#ff9800',
 };
+const COMMUNICATION_STATE_COLOR_MAP: Record<number, string> = {
+  0: '#8c8c8c',
+  1: '#4caf50',
+  2: '#f44336',
+};
+const COMMUNICATION_STATE_LABELS: Record<number, string> = {
+  0: '等待首轮抄读',
+  1: '通信正常',
+  2: '本轮无有效数据',
+};
 const WORD_ORDER_OPTIONS = [
   { value: 0, label: '默认 (HL)' },
   { value: 1, label: 'HL' },
@@ -830,7 +840,7 @@ const ModbusRTU: React.FC = () => {
     void refreshLinks();
     const refreshTimer = window.setInterval(() => {
       void refreshLinks({ silent: true });
-    }, 5000);
+    }, 3000);
     return () => window.clearInterval(refreshTimer);
   }, [refreshLinks]);
 
@@ -1239,6 +1249,12 @@ const ModbusRTU: React.FC = () => {
               onDelete={(connName) => void handleDeleteLink(connName)}
               onRefresh={() => void refreshLinks()}
               getStateColor={(item) => LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
+              getConnectionStateColor={(item) => item.state === 2
+                ? COMMUNICATION_STATE_COLOR_MAP[item.communication_state] ?? '#8c8c8c'
+                : LIST_STATE_COLOR_MAP[item.state] ?? '#8c8c8c'}
+              getConnectionStateLabel={(item) => item.state === 2
+                ? COMMUNICATION_STATE_LABELS[item.communication_state] ?? COMMUNICATION_STATE_LABELS[0]
+                : LINK_STATE_LABELS[item.state] ?? '状态未知'}
               getDescription={(item) => {
                 const config = item.config;
                 if (!config) {
