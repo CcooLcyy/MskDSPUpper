@@ -42,6 +42,37 @@ function extractNamedStepBlocks(fileText) {
   return blocks;
 }
 
+function extractRunBlock(stepBlock) {
+  const lines = stepBlock.split('\n');
+  const runIndex = lines.findIndex((line) => /^\s*run:/.test(line));
+  if (runIndex === -1) {
+    return null;
+  }
+
+  const runLine = lines[runIndex];
+  const inlineValue = runLine.replace(/^\s*run:\s*/, '');
+  if (!/^[|>]/.test(inlineValue)) {
+    return inlineValue;
+  }
+
+  const runIndent = runLine.match(/^\s*/)[0].length;
+  const bodyLines = [];
+
+  for (let index = runIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim() === '') {
+      bodyLines.push(line);
+      continue;
+    }
+    if (line.match(/^\s*/)[0].length <= runIndent) {
+      break;
+    }
+    bodyLines.push(line);
+  }
+
+  return bodyLines.join('\n');
+}
+
 function extractJobBlock(fileText, jobName) {
   const lines = fileText.split(/\r?\n/);
   const startIndex = lines.findIndex((line) => line === `  ${jobName}:`);
@@ -233,6 +264,61 @@ test('ci workflow never exports an empty CARGO_NET_OFFLINE', () => {
       `CARGO_NET_OFFLINE must explicitly disable offline mode on cache miss: ${line.trim()}`,
     );
   }
+});
+
+// 回归：run 块会被 runner 写成无 BOM 的 UTF-8 脚本，Windows PowerShell 5.1 按 ANSI 代码页读取，
+// 非 ASCII 字符可能被解码成智能引号并触发 ParserError，因此 5.1 步骤的 run 块必须保持纯 ASCII。
+test('powershell 5.1 steps keep their run blocks ASCII-only', () => {
+  const workflowPaths = [
+    '.github/workflows/ci.yml',
+    '.github/workflows/beta.yml',
+    '.github/workflows/nightly.yml',
+    '.github/workflows/release.yml',
+  ];
+  let checkedStepCount = 0;
+
+  for (const workflowPath of workflowPaths) {
+    const fileText = fs
+      .readFileSync(path.join(repoRoot, workflowPath), 'utf8')
+      .replace(/\r\n/g, '\n');
+
+    for (const stepBlock of extractNamedStepBlocks(fileText)) {
+      if (!/^\s*shell:\s*powershell\b/m.test(stepBlock)) {
+        continue;
+      }
+
+      const runBlock = extractRunBlock(stepBlock);
+      assert.notEqual(runBlock, null, `${workflowPath} powershell step must define a run block`);
+      checkedStepCount += 1;
+
+      assert.doesNotMatch(
+        runBlock,
+        /[^\t\n\r\x20-\x7e]/,
+        `${workflowPath} powershell 5.1 run block must stay ASCII-only`,
+      );
+    }
+  }
+
+  assert.ok(checkedStepCount > 0, 'expected at least one powershell 5.1 step to check');
+});
+
+// publish 工作区是干净检出，package/metadata 与 package/.manifest-backup 都不存在，
+// 因此产物来源只能用已下载产物自身内嵌的提交信息校验。
+test('ci publish verifies the downloaded artifact against the current commit', () => {
+  const fileText = fs
+    .readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const verifyBlock = extractStepBlock(fileText, 'Verify artifact commit');
+
+  assert.match(verifyBlock, /needs\.package-build\.outputs\.output_dir/);
+  assert.match(verifyBlock, /latest\.json/);
+  assert.match(verifyBlock, /\$env:GITHUB_SHA\.Substring\(0, 7\)/);
+  assert.match(verifyBlock, /sha\\\./);
+  assert.doesNotMatch(
+    verifyBlock,
+    /package[/\\]metadata/,
+    'publish 工作区没有 package/metadata，不能据此校验产物来源',
+  );
 });
 
 // 验证上位机静态服务器资产上传提供异步进度、远端大小轮询和退出码传播。

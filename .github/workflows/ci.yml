@@ -303,15 +303,38 @@ jobs:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $ErrorActionPreference = "Stop"
-          $metadataPath = "package/metadata/ci.json"
-          if (-not (Test-Path -LiteralPath $metadataPath)) {
-            throw "未找到构建元数据，无法校验产物来源: $metadataPath"
+          # NOTE: keep this run block ASCII-only. Windows PowerShell 5.1 reads the runner generated
+          # script with the ANSI code page, so non-ASCII text turns into smart quotes and fails to parse.
+          $artifactDir = "${{ needs.package-build.outputs.output_dir }}"
+          if (-not (Test-Path -LiteralPath $artifactDir)) {
+            throw "Missing downloaded CI artifact directory: $artifactDir"
           }
-          $artifactSha = (Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json).sha
-          if ($artifactSha -ne $env:GITHUB_SHA) {
-            throw "产物 sha 与当前提交不一致: artifact=$artifactSha current=$env:GITHUB_SHA"
+
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+
+          $manifestPath = Get-ChildItem -LiteralPath $artifactDir -Recurse -File -Filter latest.json |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $manifestPath) {
+            throw "Missing latest.json in the CI artifact, cannot verify its provenance: $artifactDir"
           }
-          Write-Host "产物来源校验通过: $artifactSha"
+
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $artifactSha = if ($manifest.version -match 'sha\.([0-9a-f]+)') { $Matches[1] } else { '' }
+          if ($artifactSha -ne $shortSha) {
+            throw "Artifact version does not match the current commit: version=$($manifest.version) current=$shortSha"
+          }
+
+          $deliveryArchive = Get-ChildItem -LiteralPath $artifactDir -File -Filter *.zip |
+            Where-Object { $_.Name -match 'sha\.([0-9a-f]+)' } |
+            Select-Object -First 1
+          if (-not $deliveryArchive) {
+            throw "Missing a delivery archive carrying a commit sha in the CI artifact: $artifactDir"
+          }
+          if ($deliveryArchive.Name -notmatch "sha\.$shortSha") {
+            throw "Delivery archive does not match the current commit: $($deliveryArchive.Name) current=$shortSha"
+          }
+
+          Write-Host "Artifact provenance verified: version=$($manifest.version) delivery=$($deliveryArchive.Name)"
 
       - name: Setup AWS CLI
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
