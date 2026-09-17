@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { App, Button, Input, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { FolderOpenOutlined } from '@ant-design/icons';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import type { WorkspaceSummary } from '../../adapters/types.ts';
+import { api as tauriApi } from '../../adapters/tauri.ts';
 import { useAppMode } from '../app-mode-context.ts';
 import { deleteWorkspaceFile } from '../workspace/store.ts';
 import { WORKSPACE_FILE_EXTENSION, type OfflineWorkspace } from '../workspace/types.ts';
@@ -199,6 +201,15 @@ const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({ open: isO
     }
   }, [message, refresh]);
 
+  // 直接打开默认工作区目录：列表为空或需要手工备份/放入文件时最省事。
+  const handleOpenWorkspaceDirectory = useCallback(async () => {
+    try {
+      await tauriApi.openRuntimeDirectory('workspaces');
+    } catch (error) {
+      message.error(`打开工作区目录失败：${String(error)}`);
+    }
+  }, [message]);
+
   const columns: ColumnsType<WorkspaceSummary> = [
     {
       title: '文件名',
@@ -273,6 +284,9 @@ const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({ open: isO
           <Button onClick={() => void handleSaveAs()} loading={busy}>另存为…</Button>
           <Button onClick={handleImportExistingConfig} loading={busy}>导入现有配置…</Button>
           <Button onClick={() => void refresh()} loading={loading}>刷新列表</Button>
+          <Button icon={<FolderOpenOutlined />} onClick={() => void handleOpenWorkspaceDirectory()}>
+            打开工作区目录
+          </Button>
         </Space>
 
         <Table

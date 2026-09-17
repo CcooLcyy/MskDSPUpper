@@ -21,13 +21,19 @@ export const ALL_CAPABILITIES = [
   'iec61850',
   'orchestrator',
   'local.settings',
+  'workspace.manage',
 ] as const;
 
 export type Capability = (typeof ALL_CAPABILITIES)[number];
 
 export type CapabilityMatrix = Record<Capability, boolean>;
 
-/** 在线模式保持全部能力为真，确保门禁分支与改造前行为等价。 */
+/**
+ * 在线模式启用全部与既有功能有关的能力，保证门禁分支不会改变改造前的行为。
+ *
+ * 唯一例外是 `workspace.manage`（离线工作区目录入口）：在线模式没有工作区，
+ * 它也不对应任何既有功能，因此恒为 false。
+ */
 const ONLINE_CAPABILITIES: CapabilityMatrix = {
   'config.read': true,
   'config.write': true,
@@ -41,9 +47,10 @@ const ONLINE_CAPABILITIES: CapabilityMatrix = {
   iec61850: true,
   orchestrator: true,
   'local.settings': true,
+  'workspace.manage': false,
 };
 
-/** 离线工作区只保留配置读写、导出与本地能力，运行态与控制类能力全部关闭。 */
+/** 离线工作区只保留配置读写、导出与本地能力（含工作区目录入口），运行态与控制类能力全部关闭。 */
 const OFFLINE_CAPABILITIES: CapabilityMatrix = {
   'config.read': true,
   'config.write': true,
@@ -57,6 +64,7 @@ const OFFLINE_CAPABILITIES: CapabilityMatrix = {
   iec61850: false,
   orchestrator: false,
   'local.settings': true,
+  'workspace.manage': true,
 };
 
 const CAPABILITY_MATRICES: Record<AppMode, CapabilityMatrix> = {

@@ -12,8 +12,6 @@ import { ensureWorkspaceFileName, parseWorkspace, serializeWorkspace } from './s
 import { snapshotToWorkspace } from './snapshot.ts';
 import { createEmptyWorkspace, type OfflineWorkspace } from './types.ts';
 
-/** 工作区文件放在运行数据目录的 workspaces 子目录下。 */
-const WORKSPACE_SUBDIRECTORY = 'workspaces';
 /** 编辑防抖落盘间隔。 */
 const AUTOSAVE_DELAY_MS = 1000;
 
@@ -142,12 +140,21 @@ export async function deleteWorkspaceFile(filePath: string): Promise<void> {
   }
 }
 
-/** 工作区目录：`<运行数据目录>/workspaces`。 */
+/**
+ * 工作区目录：`<运行数据目录>/workspaces`。
+ *
+ * 目录由 Rust 侧 `RuntimePaths::workspaces_dir()` 计算并通过 `workspaces_dir` 下发，
+ * 前端不重复拼接子目录名，避免两处硬编码漂移。
+ */
 export async function resolveWorkspaceDirectory(): Promise<string> {
   const paths = await tauriApi.getRuntimePaths();
-  const base = (paths.data_dir ?? '').replace(/[\\/]+$/, '');
+  const directory = (paths.workspaces_dir ?? '').trim().replace(/[\\/]+$/, '');
 
-  return `${base}/${WORKSPACE_SUBDIRECTORY}`;
+  if (!directory) {
+    throw new Error('未获取到离线工作区目录，请确认上位机后端与前端版本一致');
+  }
+
+  return directory;
 }
 
 function scheduleAutosave(): void {

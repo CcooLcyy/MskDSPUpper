@@ -8,15 +8,21 @@ import {
   isCapabilityEnabled,
 } from '../../src/offline/capabilities.ts';
 
-// 在线模式必须保持全部能力为真，保证门禁分支不会影响既有功能。
-test('online mode enables every capability', () => {
+// 在线模式必须启用全部与既有功能有关的能力，保证门禁分支不会影响既有功能。
+// 唯一例外是 workspace.manage（离线工作区目录入口）：在线模式没有工作区，也没有对应既有功能。
+test('online mode enables every capability except the offline-only workspace entry', () => {
   const matrix = capabilitiesFor('online');
 
   for (const capability of ALL_CAPABILITIES) {
+    if (capability === 'workspace.manage') {
+      continue;
+    }
+
     assert.equal(matrix[capability], true, `在线模式应启用能力: ${capability}`);
   }
 
-  assert.deepEqual(disabledCapabilities('online'), []);
+  assert.equal(matrix['workspace.manage'], false);
+  assert.deepEqual(disabledCapabilities('online'), ['workspace.manage']);
 });
 
 // 离线模式只保留配置读写、导出与本地能力，运行态与控制类能力必须关闭。
@@ -25,6 +31,7 @@ test('offline mode keeps only workspace and local capabilities', () => {
   assert.equal(isCapabilityEnabled('offline', 'config.write'), true);
   assert.equal(isCapabilityEnabled('offline', 'config.export'), true);
   assert.equal(isCapabilityEnabled('offline', 'local.settings'), true);
+  assert.equal(isCapabilityEnabled('offline', 'workspace.manage'), true);
 
   assert.equal(isCapabilityEnabled('offline', 'config.push'), false);
   assert.equal(isCapabilityEnabled('offline', 'runtime.read'), false);
@@ -50,9 +57,10 @@ test('offline disabled capability list matches the enabled subset', () => {
   const disabled = disabledCapabilities('offline');
   const enabled = ALL_CAPABILITIES.length - disabled.length;
 
-  assert.equal(enabled, 4);
+  assert.equal(enabled, 5);
   assert.ok(disabled.includes('runtime.control'));
   assert.ok(!disabled.includes('config.export'));
+  assert.ok(!disabled.includes('workspace.manage'));
 });
 
 // 每次取用能力矩阵都必须返回独立副本，避免页面之间互相污染。

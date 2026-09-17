@@ -1129,6 +1129,7 @@ export const browserApi: typeof tauriApi = {
     data_dir: 'browser-dev://localStorage',
     cache_dir: 'browser-dev://memory-cache',
     log_dir: 'browser-dev://console',
+    workspaces_dir: 'browser-dev://workspaces',
     using_fallback: false,
   }),
   openRuntimeDirectory: async () => {

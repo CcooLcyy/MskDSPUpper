@@ -8,6 +8,10 @@ use std::{
 use serde::Serialize;
 
 pub const APP_IDENTIFIER: &str = "com.mskdsp.upper";
+/// 离线工作区子目录名（`data_dir/workspaces`）。
+///
+/// 这是工作区目录的唯一来源：前端不再自行拼接，避免两处硬编码漂移。
+pub const WORKSPACES_SUBDIRECTORY: &str = "workspaces";
 const UPDATER_TEMP_PREFIX: &str = "MskDSP Upper-";
 const UPDATER_TEMP_MARKER: &str = "-updater-";
 
@@ -26,6 +30,8 @@ pub struct RuntimePathsDto {
     pub data_dir: String,
     pub cache_dir: String,
     pub log_dir: String,
+    /// 离线工作区目录：`data_dir/workspaces`。
+    pub workspaces_dir: String,
     pub using_fallback: bool,
 }
 
@@ -92,12 +98,18 @@ impl RuntimePaths {
         self.cache_dir.join("lower-update")
     }
 
+    /// 离线工作区目录：`<data_dir>/workspaces`。
+    pub fn workspaces_dir(&self) -> PathBuf {
+        self.data_dir.join(WORKSPACES_SUBDIRECTORY)
+    }
+
     pub fn to_dto(&self) -> RuntimePathsDto {
         RuntimePathsDto {
             executable_dir: self.executable_dir.to_string_lossy().into_owned(),
             data_dir: self.data_dir.to_string_lossy().into_owned(),
             cache_dir: self.cache_dir.to_string_lossy().into_owned(),
             log_dir: self.log_dir.to_string_lossy().into_owned(),
+            workspaces_dir: self.workspaces_dir().to_string_lossy().into_owned(),
             using_fallback: self.using_fallback,
         }
     }
@@ -238,6 +250,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn workspaces_dir_is_a_data_subdirectory_and_exposed_in_dto() {
+        let root = temp_test_dir("workspaces-dir");
+        let paths = super::RuntimePaths {
+            executable_dir: root.clone(),
+            data_dir: root.join("data"),
+            cache_dir: root.join("cache"),
+            log_dir: root.join("logs"),
+            using_fallback: false,
+        };
+
+        assert_eq!(paths.workspaces_dir(), root.join("data").join("workspaces"));
+        assert_eq!(
+            paths.to_dto().workspaces_dir,
+            paths.workspaces_dir().to_string_lossy()
+        );
     }
 
     #[test]

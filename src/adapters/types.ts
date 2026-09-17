@@ -62,10 +62,12 @@ export interface RuntimePaths {
   data_dir: string;
   cache_dir: string;
   log_dir: string;
+  /** 离线工作区目录：`data_dir/workspaces`（由 Rust 侧计算，前端不再自行拼接）。 */
+  workspaces_dir: string;
   using_fallback: boolean;
 }
 
-export type RuntimeDirectoryKind = 'data' | 'cache' | 'logs';
+export type RuntimeDirectoryKind = 'data' | 'cache' | 'logs' | 'workspaces';
 
 export interface CacheClearResult {
   removed_files: number;

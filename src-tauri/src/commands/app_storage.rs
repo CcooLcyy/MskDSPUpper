@@ -337,14 +337,15 @@ pub fn get_runtime_paths(state: State<'_, AppState>) -> RuntimePathsDto {
 #[tauri::command]
 pub fn open_runtime_directory(kind: String, state: State<'_, AppState>) -> Result<(), String> {
     let path = match kind.as_str() {
-        "data" => state.runtime_paths.data_dir(),
-        "cache" => state.runtime_paths.cache_dir(),
-        "logs" => state.runtime_paths.log_dir(),
+        "data" => state.runtime_paths.data_dir().to_path_buf(),
+        "cache" => state.runtime_paths.cache_dir().to_path_buf(),
+        "logs" => state.runtime_paths.log_dir().to_path_buf(),
+        "workspaces" => state.runtime_paths.workspaces_dir(),
         _ => return Err(format!("不支持的运行目录类型: {kind}")),
     };
-    fs::create_dir_all(path)
+    fs::create_dir_all(&path)
         .map_err(|error| format!("创建运行目录失败: path={}, error={error}", path.display()))?;
-    tauri_plugin_opener::open_path(path, None::<&str>)
+    tauri_plugin_opener::open_path(&path, None::<&str>)
         .map_err(|error| format!("打开运行目录失败: path={}, error={error}", path.display()))
 }
 

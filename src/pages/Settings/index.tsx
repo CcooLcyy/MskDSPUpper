@@ -22,6 +22,8 @@ import type {
   FullConfigImportResult,
   FullConfigImportSelection,
 } from '../../utils/config-export';
+import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
+import { useCapability } from '../../offline/use-capability.ts';
 import ConfigSectionPickerModal from './components/ConfigSectionPickerModal';
 
 const { Paragraph, Text } = Typography;
@@ -104,6 +106,8 @@ const Settings: React.FC = () => {
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
+  // 离线工作区目录入口只在离线模式出现：页面查询能力，不判断模式。
+  const canManageWorkspace = useCapability('workspace.manage');
 
   const exportSectionOptions = useMemo(() => getConfigSectionOptions(), []);
   const fullImportSections = useMemo(
@@ -373,6 +377,11 @@ const Settings: React.FC = () => {
               <Descriptions.Item label="存储位置">
                 {runtimePaths.using_fallback ? '当前用户 LocalAppData' : '上位机程序目录'}
               </Descriptions.Item>
+              {canManageWorkspace ? (
+                <Descriptions.Item label="工作区目录">
+                  <Text code copyable>{runtimePaths.workspaces_dir}</Text>
+                </Descriptions.Item>
+              ) : null}
             </Descriptions>
             <Space wrap style={{ marginTop: 12 }}>
               <Button icon={<FolderOpenOutlined />} onClick={() => void handleOpenRuntimeDirectory('data')}>
@@ -384,6 +393,14 @@ const Settings: React.FC = () => {
               <Button icon={<FolderOpenOutlined />} onClick={() => void handleOpenRuntimeDirectory('cache')}>
                 打开缓存目录
               </Button>
+              <CapabilityGate need="workspace.manage">
+                <Button
+                  icon={<FolderOpenOutlined />}
+                  onClick={() => void handleOpenRuntimeDirectory('workspaces')}
+                >
+                  打开工作区目录
+                </Button>
+              </CapabilityGate>
               <Popconfirm
                 title="清理下位机更新缓存"
                 description="将删除已下载的下位机更新包和未完成的下载文件。"
