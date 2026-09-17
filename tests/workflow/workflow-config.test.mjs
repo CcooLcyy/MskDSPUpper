@@ -42,6 +42,22 @@ function extractNamedStepBlocks(fileText) {
   return blocks;
 }
 
+function extractJobBlock(fileText, jobName) {
+  const lines = fileText.split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => line === `  ${jobName}:`);
+  assert.notEqual(startIndex, -1, `missing workflow job: ${jobName}`);
+
+  const blockLines = [lines[startIndex]];
+  for (let index = startIndex + 1; index < lines.length; index += 1) {
+    if (/^  \S/.test(lines[index])) {
+      break;
+    }
+    blockLines.push(lines[index]);
+  }
+
+  return blockLines.join('\n');
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -85,7 +101,51 @@ test('ci workflow only runs push builds on main while keeping pull request check
 
   assert.match(
     fileText,
-    /^  package-main:\n    if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'$/m,
+    /^  package-build:\n    if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'$/m,
+  );
+});
+
+test('ci workflow gates static publishing behind verification and packaging', () => {
+  const fileText = fs
+    .readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
+    .replace(/\r\n/g, '\n');
+
+  const packageBlock = extractJobBlock(fileText, 'package-build');
+  const publishBlock = extractJobBlock(fileText, 'publish');
+
+  assert.doesNotMatch(
+    packageBlock,
+    /^    needs:/m,
+    'package-build must start in parallel with verify-debug instead of waiting for it',
+  );
+  assert.match(publishBlock, /^    needs:\n      - verify-debug\n      - package-build$/m);
+  assert.match(
+    publishBlock,
+    /^    if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'$/m,
+  );
+
+  assert.match(
+    packageBlock,
+    /^      artifact_base_name: \$\{\{ steps\.metadata\.outputs\.artifact_base_name \}\}$/m,
+  );
+  assert.doesNotMatch(packageBlock, /Publish-R2StaticUpdater\.ps1/);
+  assert.ok(
+    packageBlock.indexOf('Upload CI package artifact') <
+      packageBlock.indexOf('name: Restore manifests'),
+    'package-build must upload its artifact before restoring manifests',
+  );
+  assert.ok(
+    publishBlock.indexOf('Download CI package artifact') <
+      publishBlock.indexOf('Sync CI static updater source'),
+    'publish must download the package artifact before syncing to the static channel',
+  );
+  assert.match(
+    publishBlock,
+    /name: \$\{\{ needs\.package-build\.outputs\.artifact_base_name \}\}/,
+  );
+  assert.match(
+    publishBlock,
+    /-PackageOutputDir "\$\{\{ needs\.package-build\.outputs\.output_dir \}\}"/,
   );
 });
 
