@@ -241,29 +241,18 @@ test('release workflows enable Rust target caching and report cache hits', () =>
   assert.equal(rustCacheStepCount, 6, 'ci/beta/nightly/release should expose six Rust cache steps');
 });
 
-// 回归：CARGO_NET_OFFLINE 只能取 true/false，空字符串会让 cargo 直接报错并中断构建与测试。
-test('ci workflow never exports an empty CARGO_NET_OFFLINE', () => {
+// 回归：rust-cache 恢复的 registry 索引无法支撑 offline 解析，缓存命中时开启 CARGO_NET_OFFLINE
+// 会让 cargo 直接报 "no matching package named `anyhow` found"，因此 CI 不得强制离线模式。
+test('ci workflow does not force cargo into offline mode', () => {
   const fileText = fs
     .readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
     .replace(/\r\n/g, '\n');
-  const assignments = fileText
-    .split('\n')
-    .filter((line) => /^\s*CARGO_NET_OFFLINE:/.test(line));
 
-  assert.ok(assignments.length > 0, 'ci.yml must configure CARGO_NET_OFFLINE');
-
-  for (const line of assignments) {
-    assert.doesNotMatch(
-      line,
-      /\|\|\s*''/,
-      `CARGO_NET_OFFLINE fallback must not be an empty string: ${line.trim()}`,
-    );
-    assert.match(
-      line,
-      /\|\|\s*'false'\s*\}\}$/,
-      `CARGO_NET_OFFLINE must explicitly disable offline mode on cache miss: ${line.trim()}`,
-    );
-  }
+  assert.doesNotMatch(
+    fileText,
+    /CARGO_NET_OFFLINE/,
+    'CARGO_NET_OFFLINE breaks cargo resolution on a Rust cache hit',
+  );
 });
 
 // 回归：run 块会被 runner 写成无 BOM 的 UTF-8 脚本，Windows PowerShell 5.1 按 ANSI 代码页读取，
