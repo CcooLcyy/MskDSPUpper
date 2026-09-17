@@ -17,6 +17,10 @@ const SETTINGS_SCHEMA_VERSION: u32 = 1;
 pub const MANAGER_ADDR_KEY: &str = "mskdsp_manager_addr";
 pub const MODBUS_MQTT_KEY: &str = "protocol.modbus_rtu.mqtt";
 pub const DLT645_MQTT_KEY: &str = "protocol.dlt645.mqtt";
+/// 离线工作区：上次使用的运行模式（online / offline）。
+pub const APP_MODE_KEY: &str = "mskdsp_app_mode";
+/// 离线工作区：上次打开的工作区文件路径。
+pub const LAST_WORKSPACE_KEY: &str = "mskdsp_last_workspace";
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SettingsDocument {
@@ -97,7 +101,7 @@ impl AppSettingsStore {
 
 fn validate_setting_key(key: &str) -> Result<(), String> {
     match key {
-        MANAGER_ADDR_KEY | MODBUS_MQTT_KEY | DLT645_MQTT_KEY => Ok(()),
+        MANAGER_ADDR_KEY | MODBUS_MQTT_KEY | DLT645_MQTT_KEY | APP_MODE_KEY | LAST_WORKSPACE_KEY => Ok(()),
         _ => Err(format!("不支持的上位机设置项: {key}")),
     }
 }
@@ -348,7 +352,7 @@ pub fn open_runtime_directory(kind: String, state: State<'_, AppState>) -> Resul
 mod tests {
     use serde_json::json;
 
-    use super::{read_settings_document, AppSettingsStore, MANAGER_ADDR_KEY};
+    use super::{read_settings_document, AppSettingsStore, APP_MODE_KEY, LAST_WORKSPACE_KEY, MANAGER_ADDR_KEY};
 
     fn temp_settings_path(name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -375,6 +379,30 @@ mod tests {
         );
         let document = read_settings_document(&path).unwrap();
         assert_eq!(document.schema_version, 1);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    // 离线工作区的运行模式与工作区路径必须可以持久化，否则每次启动都会退回在线模式。
+    #[test]
+    fn persists_offline_workspace_settings() {
+        let path = temp_settings_path("offline-workspace");
+        let store = AppSettingsStore::new(path.clone());
+        store
+            .save_setting(APP_MODE_KEY.to_string(), json!("offline"))
+            .unwrap();
+        store
+            .save_setting(
+                LAST_WORKSPACE_KEY.to_string(),
+                json!("C:/data/workspaces/demo.mskwsp"),
+            )
+            .unwrap();
+
+        let settings = store.load().unwrap();
+        assert_eq!(settings.get(APP_MODE_KEY), Some(&json!("offline")));
+        assert_eq!(
+            settings.get(LAST_WORKSPACE_KEY),
+            Some(&json!("C:/data/workspaces/demo.mskwsp"))
+        );
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
