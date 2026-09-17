@@ -128,6 +128,7 @@ export function snapshotToWorkspace(
       source: 'device-snapshot',
       exported_at: snapshot.exported_at,
       included_sections: [...snapshot.metadata.included_sections],
+      conn_tags: clone(snapshot.config.data_bus?.conn_tags ?? []),
     },
     conn_ids: rebuildConnIdRegistry(config),
     config,

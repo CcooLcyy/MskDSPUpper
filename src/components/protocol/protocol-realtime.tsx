@@ -2,6 +2,7 @@ import React, { useEffect, useEffectEvent, useMemo, useRef, useState } from 'rea
 import { Tag, Typography } from 'antd';
 import { api } from '../../adapters';
 import type { DcPointUpdate, DcPointValue, DcSourcePointUpdate } from '../../adapters';
+import { useCapability } from '../../offline/use-capability.ts';
 import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
 
 const { Text } = Typography;
@@ -177,7 +178,9 @@ export function useProtocolRealtime(
 } {
   const normalizedTags = useMemo(() => normalizeTags(tags), [tags]);
   const tagSignature = normalizedTags.join('\u0001');
-  const hasSelection = Boolean(sourceConnId && normalizedTags.length > 0);
+  // 离线工作区没有实时数据：直接视为无查询，既不请求也不轮询。
+  const realtimeEnabled = useCapability('realtime');
+  const hasSelection = realtimeEnabled && Boolean(sourceConnId && normalizedTags.length > 0);
   const activeConnIdRef = useRef<number | null>(sourceConnId ?? null);
   const activeTagSetRef = useRef<Set<string>>(new Set(normalizedTags));
   const snapshotRefreshInFlightRef = useRef(false);

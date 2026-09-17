@@ -1,6 +1,7 @@
 import React from 'react';
 import { Alert, Button, Card, Descriptions, Popconfirm, Space, Tag, Typography } from 'antd';
 import { DisconnectOutlined, EditOutlined, LinkOutlined } from '@ant-design/icons';
+import CapabilityGate from '../../../offline/ui/CapabilityGate.tsx';
 import type { Dlt645LinkInfo } from '../../../adapters';
 
 const { Text } = Typography;
@@ -94,30 +95,35 @@ const ConnectionConfig: React.FC<Props> = ({
               <Button icon={<EditOutlined />} disabled={!hasSelection || isPendingDelete || busy} onClick={onEdit}>
                 编辑配置
               </Button>
-              <Button
-                type="primary"
-                icon={<LinkOutlined />}
-                disabled={!isStopped || !hasSelection || busy}
-                loading={runtimeAction === 'start'}
-                onClick={onStart}
-              >
-                {runtimeAction === 'start' ? '启动中…' : '启动轮询'}
-              </Button>
-              <Popconfirm
-                title="确认停止轮询？"
-                description="停止后将不再轮询和处理该连接的数据。"
-                disabled={!isRunning || !hasSelection || busy}
-                onConfirm={onStop}
-              >
+              {/* 离线工作区没有运行态，隐藏启动/停止轮询按钮 */}
+              <CapabilityGate need="runtime.control">
                 <Button
-                  danger
-                  icon={<DisconnectOutlined />}
-                  disabled={!isRunning || !hasSelection || busy}
-                  loading={runtimeAction === 'stop'}
+                  type="primary"
+                  icon={<LinkOutlined />}
+                  disabled={!isStopped || !hasSelection || busy}
+                  loading={runtimeAction === 'start'}
+                  onClick={onStart}
                 >
-                  {runtimeAction === 'stop' ? '停止中…' : '停止轮询'}
+                  {runtimeAction === 'start' ? '启动中…' : '启动轮询'}
                 </Button>
-              </Popconfirm>
+              </CapabilityGate>
+              <CapabilityGate need="runtime.control">
+                <Popconfirm
+                  title="确认停止轮询？"
+                  description="停止后将不再轮询和处理该连接的数据。"
+                  disabled={!isRunning || !hasSelection || busy}
+                  onConfirm={onStop}
+                >
+                  <Button
+                    danger
+                    icon={<DisconnectOutlined />}
+                    disabled={!isRunning || !hasSelection || busy}
+                    loading={runtimeAction === 'stop'}
+                  >
+                    {runtimeAction === 'stop' ? '停止中…' : '停止轮询'}
+                  </Button>
+                </Popconfirm>
+              </CapabilityGate>
             </>
           ) : null}
         </Space>

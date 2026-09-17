@@ -67,6 +67,7 @@ import type {
   ModbusPoint,
   ModbusPointTable,
   ModbusUpdateConfigResponse,
+  WorkspaceSummary,
   ModbusTcpLinkConfig,
   ModbusTcpLinkInfo,
   ModuleInfo,
@@ -495,4 +496,14 @@ export const api = {
     invoke<string>('save_vertical_security_script', { filePath, content }),
   loadFullConfigExport: (filePath: string) =>
     invoke<FullConfigExportSnapshot>('load_full_config_export', { filePath }),
+
+  // 离线工作区文件：纯文件操作，不依赖下位机。
+  listWorkspaces: (directory: string) =>
+    invoke<WorkspaceSummary[]>('list_workspaces', { directory }),
+  loadWorkspace: (filePath: string) =>
+    invoke<string>('load_workspace', { filePath }),
+  saveWorkspace: (filePath: string, content: string) =>
+    invoke<string>('save_workspace', { filePath, content }),
+  deleteWorkspace: (filePath: string) =>
+    invoke<void>('delete_workspace', { filePath }),
 };

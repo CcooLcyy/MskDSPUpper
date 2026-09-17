@@ -20,7 +20,7 @@ test('empty workspace contains every config section and an empty registry', () =
   assert.equal(workspace.created_at, '2026-05-20T10:00:00.000Z');
   assert.equal(workspace.updated_at, '2026-05-20T10:00:00.000Z');
   assert.deepEqual(workspace.conn_ids, { map: {}, next_conn_id: 1 });
-  assert.deepEqual(workspace.base, { source: 'empty', exported_at: '', included_sections: [] });
+  assert.deepEqual(workspace.base, { source: 'empty', exported_at: '', included_sections: [], conn_tags: [] });
   assert.deepEqual(workspace.metadata, { scope: 'full', included_sections: [] });
   assert.deepEqual(workspace.agc_control_profiles, []);
   assert.deepEqual(workspace.config.iec104.links, []);

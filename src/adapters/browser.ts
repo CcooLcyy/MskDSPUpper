@@ -2005,4 +2005,16 @@ export const browserApi: typeof tauriApi = {
     }
     return clone(snapshot);
   },
+
+  // 离线工作区文件依赖桌面端文件系统，浏览器开发模式不支持。
+  listWorkspaces: async () => [],
+  loadWorkspace: async (filePath: string) => {
+    throw new Error(`浏览器开发模式不支持读取工作区文件: ${filePath}`);
+  },
+  saveWorkspace: async (filePath: string) => {
+    throw new Error(`浏览器开发模式不支持保存工作区文件: ${filePath}`);
+  },
+  deleteWorkspace: async (filePath: string) => {
+    throw new Error(`浏览器开发模式不支持删除工作区文件: ${filePath}`);
+  },
 };

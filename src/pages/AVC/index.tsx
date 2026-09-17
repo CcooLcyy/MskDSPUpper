@@ -27,6 +27,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
+import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
 import type {
   AvcDefaultPointInfo,
   AvcGroupConfig,
@@ -1970,27 +1971,30 @@ const AVC: React.FC = () => {
                     </div>
                     <div>
                       <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>运行控制</Text>
-                      <Space wrap>
-                        <Button
-                          type="primary"
-                          icon={<PlayCircleOutlined />}
-                          style={{ background: '#4caf50', borderColor: '#4caf50' }}
-                          disabled={startDisabled}
-                          loading={groupOperation === 'start'}
-                          onClick={() => void handleStartGroup()}
-                        >
-                          启动控制组
-                        </Button>
-                        <Button
-                          danger
-                          icon={<PauseCircleOutlined />}
-                          disabled={stopDisabled}
-                          loading={groupOperation === 'stop'}
-                          onClick={() => void handleStopGroup()}
-                        >
-                          停止控制组
-                        </Button>
-                      </Space>
+                      {/* 离线工作区没有运行态，隐藏启动/停止控制组按钮 */}
+                      <CapabilityGate need="runtime.control">
+                        <Space wrap>
+                          <Button
+                            type="primary"
+                            icon={<PlayCircleOutlined />}
+                            style={{ background: '#4caf50', borderColor: '#4caf50' }}
+                            disabled={startDisabled}
+                            loading={groupOperation === 'start'}
+                            onClick={() => void handleStartGroup()}
+                          >
+                            启动控制组
+                          </Button>
+                          <Button
+                            danger
+                            icon={<PauseCircleOutlined />}
+                            disabled={stopDisabled}
+                            loading={groupOperation === 'stop'}
+                            onClick={() => void handleStopGroup()}
+                          >
+                            停止控制组
+                          </Button>
+                        </Space>
+                      </CapabilityGate>
                     </div>
                     {importantRuntimeRows.length > 0 ? (
                       importantRuntimeRows.map((item) => (

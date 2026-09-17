@@ -1,6 +1,7 @@
 import React from 'react';
 import { Button, Card, Popconfirm, Space } from 'antd';
 import { DisconnectOutlined, LinkOutlined } from '@ant-design/icons';
+import CapabilityGate from '../../../offline/ui/CapabilityGate.tsx';
 
 interface Props {
   selectedConn: string | null;
@@ -14,24 +15,27 @@ const OperationsPanel: React.FC<Props> = ({ selectedConn, onStart, onStop, extra
 
   return (
     <Card title="运行操作" size="small" bordered>
-      <Space direction="vertical" style={{ width: '100%' }}>
-        <Button
-          type="primary"
-          block
-          disabled={disabled}
-          icon={<LinkOutlined />}
-          style={{ background: '#4caf50', borderColor: '#4caf50' }}
-          onClick={onStart}
-        >
-          启动轮询
-        </Button>
-        <Popconfirm title="确认停止轮询？" onConfirm={onStop} disabled={disabled}>
-          <Button block danger disabled={disabled} icon={<DisconnectOutlined />}>
-            停止轮询
+      {/* 离线工作区没有运行态，隐藏控制按钮 */}
+      <CapabilityGate need="runtime.control">
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Button
+            type="primary"
+            block
+            disabled={disabled}
+            icon={<LinkOutlined />}
+            style={{ background: '#4caf50', borderColor: '#4caf50' }}
+            onClick={onStart}
+          >
+            启动轮询
           </Button>
-        </Popconfirm>
-        {extraAction ? <div style={{ width: '100%' }}>{extraAction}</div> : null}
-      </Space>
+          <Popconfirm title="确认停止轮询？" onConfirm={onStop} disabled={disabled}>
+            <Button block danger disabled={disabled} icon={<DisconnectOutlined />}>
+              停止轮询
+            </Button>
+          </Popconfirm>
+          {extraAction ? <div style={{ width: '100%' }}>{extraAction}</div> : null}
+        </Space>
+      </CapabilityGate>
     </Card>
   );
 };

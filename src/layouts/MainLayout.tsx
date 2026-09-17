@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Badge, Layout, Menu, Typography } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Badge, Layout, Menu, Space, Typography } from 'antd';
 import {
   AlertOutlined,
   ApiOutlined,
@@ -19,22 +19,36 @@ import DataBusHeaderViewSwitcher from '../components/data-bus/DataBusHeaderViewS
 import { useAppUpdate } from '../components/app-update/app-update-context';
 import SoftwareUpdateHeaderViewSwitcher from '../components/app-update/SoftwareUpdateHeaderViewSwitcher';
 import ProtocolHeaderViewSwitcher from '../components/protocol/ProtocolHeaderViewSwitcher';
+import { useAppMode } from '../offline/app-mode-context.ts';
+import type { Capability } from '../offline/capabilities.ts';
+import OfflineModeControls from '../offline/ui/OfflineModeControls.tsx';
 import './MainLayout.css';
 import '../components/protocol/protocol-page.css';
 
 const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
 
-const menuItems = [
+interface MenuItemConfig {
+  key: string;
+  icon: React.ReactNode;
+  label: string;
+  /** 该菜单项需要的运行能力；离线工作区缺少能力时会被隐藏。 */
+  requires?: Capability;
+  children?: Array<{ key: string; label: string; requires?: Capability }>;
+}
+
+const menuItems: MenuItemConfig[] = [
   {
     key: '/',
     icon: <DashboardOutlined />,
     label: '系统总览',
+    requires: 'runtime.read',
   },
   {
     key: '/module-ops',
     icon: <AppstoreOutlined />,
     label: '模块运维',
+    requires: 'module.ops',
   },
   {
     key: '/protocol',
@@ -42,7 +56,7 @@ const menuItems = [
     label: '协议接入',
     children: [
       { key: '/protocol/iec104', label: 'IEC104' },
-      { key: '/protocol/iec61850', label: 'IEC61850' },
+      { key: '/protocol/iec61850', label: 'IEC61850', requires: 'iec61850' },
       { key: '/protocol/modbus-rtu', label: 'Modbus RTU' },
       { key: '/protocol/modbus-tcp', label: 'Modbus TCP' },
       { key: '/protocol/dlt645', label: 'DLT645' },
@@ -72,6 +86,7 @@ const menuItems = [
     key: '/control-orchestrator',
     icon: <OrderedListOutlined />,
     label: '控制编排',
+    requires: 'orchestrator',
   },
   {
     key: '/security-config',
@@ -94,30 +109,57 @@ const MainLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { hasAvailableUpdate } = useAppUpdate();
+  const { can } = useAppMode();
   const [collapsed, setCollapsed] = useState(false);
   // Protocol remains a navigation group; page-level view switchers live in the header.
   const parentMenuKeys = new Set(['/protocol', '/alerts-logs']);
   const renderedMenuItems = useMemo(
     () =>
-      menuItems.map((item) =>
-        item.key === '/software-update'
-          ? {
-              ...item,
-              icon: (
-                <Badge dot={hasAvailableUpdate} offset={[2, 1]} className="main-layout-update-badge">
-                  <CloudDownloadOutlined />
-                </Badge>
-              ),
-            }
-          : item,
-      ),
-    [hasAvailableUpdate],
+      menuItems
+        .filter((item) => !item.requires || can(item.requires))
+        .map((item) => ({
+          ...item,
+          ...(item.children
+            ? { children: item.children.filter((child) => !child.requires || can(child.requires)) }
+            : {}),
+          ...(item.key === '/software-update'
+            ? {
+                icon: (
+                  <Badge dot={hasAvailableUpdate} offset={[2, 1]} className="main-layout-update-badge">
+                    <CloudDownloadOutlined />
+                  </Badge>
+                ),
+              }
+            : {}),
+        })),
+    [can, hasAvailableUpdate],
   );
 
   const selectedKey = location.pathname;
+  const navigableKeys = useMemo(
+    () =>
+      renderedMenuItems.flatMap((item) =>
+        item.children ? item.children.map((child) => child.key) : [item.key],
+      ),
+    [renderedMenuItems],
+  );
   const openKeys = renderedMenuItems
-    .filter((item) => 'children' in item && item.children?.some((child) => selectedKey.startsWith(child.key)))
+    .filter((item) => item.children?.some((child) => selectedKey.startsWith(child.key)))
     .map((item) => item.key);
+
+  // 当前页面在该模式下不可用时（例如离线模式下的系统总览），跳到第一个可用页面。
+  useEffect(() => {
+    if (navigableKeys.includes(selectedKey)) {
+      return;
+    }
+
+    const fallback = navigableKeys.find((key) => key !== '/protocol');
+
+    if (fallback) {
+      console.info('[离线工作区] 当前页面在该模式下不可用，已跳转', { from: selectedKey, to: fallback });
+      navigate(fallback, { replace: true });
+    }
+  }, [navigableKeys, navigate, selectedKey]);
 
   const currentLabel =
     renderedMenuItems.find((item) => item.key === selectedKey)?.label ||
@@ -194,12 +236,15 @@ const MainLayout: React.FC = () => {
                 {currentLabel}
               </Text>
             ) : null}
-            {isProtocolPage && !isIec61850Page ? <ProtocolHeaderViewSwitcher includeSoe={isIec104Page} /> : null}
+            {isProtocolPage && !isIec61850Page ? <ProtocolHeaderViewSwitcher includeSoe={isIec104Page && can('soe')} /> : null}
             {isControlPage ? <ControlHeaderViewSwitcher /> : null}
             {isDataBusPage ? <DataBusHeaderViewSwitcher /> : null}
             {isSoftwareUpdatePage ? <SoftwareUpdateHeaderViewSwitcher /> : null}
           </div>
-          <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
+          <Space size={12} align="center">
+            <OfflineModeControls />
+            <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
+          </Space>
         </Header>
         <Content
           style={{

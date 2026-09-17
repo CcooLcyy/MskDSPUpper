@@ -153,6 +153,8 @@ export type {
   StableDataBusConnTags,
   StableDataBusRoute,
 } from './types';
+import { createWorkspaceApi } from '../offline/adapter/workspace-api.ts';
+import { getAppMode } from '../offline/mode.ts';
 import { browserApi } from './browser';
 import { api as tauriApi } from './tauri';
 
@@ -160,4 +162,41 @@ function hasTauriRuntime() {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
-export const api: typeof tauriApi = hasTauriRuntime() ? tauriApi : browserApi;
+let workspaceApi: typeof tauriApi | null = null;
+
+/**
+ * 按当前运行模式解析实际实现。
+ *
+ * 在线模式与改造前完全一致（就是 tauriApi）；离线工作区只在桌面端生效，
+ * 浏览器开发模式仍然使用内存 mock。
+ */
+export function resolveApiImplementation(): typeof tauriApi {
+  if (!hasTauriRuntime()) {
+    return browserApi;
+  }
+
+  if (getAppMode() === 'offline') {
+    workspaceApi ??= createWorkspaceApi();
+
+    return workspaceApi;
+  }
+
+  return tauriApi;
+}
+
+/**
+ * 端口代理：页面继续 `api.xxx()` 调用，实现在访问时按模式分发。
+ * 这样离线模式不需要修改任何页面的取数方式。
+ */
+export const api: typeof tauriApi = new Proxy({} as typeof tauriApi, {
+  get(_target, property) {
+    if (typeof property !== 'string') {
+      return undefined;
+    }
+
+    const implementation = resolveApiImplementation() as unknown as Record<string, unknown>;
+    const value = implementation[property];
+
+    return typeof value === 'function' ? value.bind(implementation) : value;
+  },
+});

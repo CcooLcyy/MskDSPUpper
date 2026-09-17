@@ -94,6 +94,7 @@ function normalizeBase(value: unknown): WorkspaceBase {
     source: record.source === 'device-snapshot' ? 'device-snapshot' : 'empty',
     exported_at: asText(record.exported_at),
     included_sections: asArray<ConfigExportSectionId>(record.included_sections),
+    conn_tags: asArray<StableDataBusConnTags>(record.conn_tags),
   };
 }
 

@@ -10,6 +10,7 @@ import type {
   ConfigExportMetadata,
   ConfigExportSectionId,
   FullConfigExportSnapshot,
+  StableDataBusConnTags,
 } from '../../adapters/types.ts';
 
 export const WORKSPACE_SCHEMA_VERSION = 1;
@@ -27,6 +28,8 @@ export interface WorkspaceBase {
   exported_at: string;
   /** 打底快照包含的分区。 */
   included_sections: ConfigExportSectionId[];
+  /** 打底快照的标签注册表；导出时用于检测"标签减少"这类会剪除路由的改动。 */
+  conn_tags: StableDataBusConnTags[];
 }
 
 /** 稳定键(module_name + conn_name) → 本地 conn_id 的注册表。 */
@@ -77,7 +80,7 @@ export function createEmptyWorkspace(workspaceName: string, nowIso: string): Off
     workspace_name: workspaceName,
     created_at: nowIso,
     updated_at: nowIso,
-    base: { source: 'empty', exported_at: '', included_sections: [] },
+    base: { source: 'empty', exported_at: '', included_sections: [], conn_tags: [] },
     conn_ids: { map: {}, next_conn_id: 1 },
     config: createEmptyWorkspaceConfig(),
     agc_control_profiles: [],

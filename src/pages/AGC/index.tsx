@@ -29,6 +29,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
+import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
 import type {
   AgcDefaultPointInfo,
   AgcDerivedOutputs,
@@ -1721,37 +1722,45 @@ const AGC: React.FC = () => {
                     </div>
                     <div>
                       <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>运行控制</Text>
-                      <Space wrap>
-                        <Button
-                          type="primary"
-                          icon={<PlayCircleOutlined />}
-                          style={{ background: '#4caf50', borderColor: '#4caf50' }}
-                          loading={runtimeAction === 'start'}
-                          disabled={startDisabled}
-                          onClick={() => void handleStartGroup()}
-                        >
-                          启动控制组
-                        </Button>
-                        <Button
-                          danger
-                          icon={<PauseCircleOutlined />}
-                          loading={runtimeAction === 'stop'}
-                          disabled={stopDisabled}
-                          onClick={() => void handleStopGroup()}
-                        >
-                          停止控制组
-                        </Button>
-                        <Button
-                          onClick={openTuning}
-                          disabled={
-                            !selectedGroup
-                            || selectedGroup.state === 3
-                            || (selectedGroup.state === 2 && tuningStatus?.state !== 2)
-                          }
-                        >
-                          自动调试参数
-                        </Button>
-                      </Space>
+                      {/* 离线工作区没有运行态，隐藏启动/停止控制组按钮 */}
+                      <CapabilityGate need="runtime.control">
+                        <Space wrap>
+                          <Button
+                            type="primary"
+                            icon={<PlayCircleOutlined />}
+                            style={{ background: '#4caf50', borderColor: '#4caf50' }}
+                            loading={runtimeAction === 'start'}
+                            disabled={startDisabled}
+                            onClick={() => void handleStartGroup()}
+                          >
+                            启动控制组
+                          </Button>
+                          <Button
+                            danger
+                            icon={<PauseCircleOutlined />}
+                            loading={runtimeAction === 'stop'}
+                            disabled={stopDisabled}
+                            onClick={() => void handleStopGroup()}
+                          >
+                            停止控制组
+                          </Button>
+                        </Space>
+                      </CapabilityGate>
+                      {/* 离线工作区没有运行态，隐藏自动调试入口 */}
+                      <CapabilityGate need="runtime.control">
+                        <Space wrap>
+                          <Button
+                            onClick={openTuning}
+                            disabled={
+                              !selectedGroup
+                              || selectedGroup.state === 3
+                              || (selectedGroup.state === 2 && tuningStatus?.state !== 2)
+                            }
+                          >
+                            自动调试参数
+                          </Button>
+                        </Space>
+                      </CapabilityGate>
                     </div>
                     {runtimeRows.map((item) => (
                       <div key={item.label}>

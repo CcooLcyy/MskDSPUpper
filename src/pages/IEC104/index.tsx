@@ -43,6 +43,7 @@ import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
+import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import { PARAMETER_HELP } from '../../components/help/parameter-help';
@@ -3092,23 +3093,30 @@ const IEC104: React.FC = () => {
                         <Button icon={<EditOutlined />} disabled={actionsDisabled || selectedLink.state === 3} onClick={openEditLink}>
                           编辑配置
                         </Button>
-                        <Button
-                          type="primary"
-                          icon={<LinkOutlined />}
-                          disabled={selectedLink.state !== 1 || actionsDisabled}
-                          loading={runtimeAction === 'start'}
-                          onClick={() => void handleStartLink()}
-                        >
-                          {runtimeAction === 'start' ? '连接中…' : '连接'}
-                        </Button>
-                        <Popconfirm title="确认断开连接？" description="断开后将停止 IEC104 链路。" onConfirm={() => void handleStopLink()} disabled={selectedLink.state !== 2 || actionsDisabled}>
-                          <Button danger icon={<DisconnectOutlined />} disabled={selectedLink.state !== 2 || actionsDisabled} loading={runtimeAction === 'stop'}>
-                            {runtimeAction === 'stop' ? '断开中…' : '断开'}
+                        {/* 离线工作区没有运行态，隐藏连接/断开与对时按钮 */}
+                        <CapabilityGate need="runtime.control">
+                          <Button
+                            type="primary"
+                            icon={<LinkOutlined />}
+                            disabled={selectedLink.state !== 1 || actionsDisabled}
+                            loading={runtimeAction === 'start'}
+                            onClick={() => void handleStartLink()}
+                          >
+                            {runtimeAction === 'start' ? '连接中…' : '连接'}
                           </Button>
-                        </Popconfirm>
-                        <Button icon={<ClockCircleOutlined />} disabled={selectedLink.state !== 2 || actionsDisabled} onClick={() => void handleTimeSync()}>
-                          手工对时
-                        </Button>
+                        </CapabilityGate>
+                        <CapabilityGate need="runtime.control">
+                          <Popconfirm title="确认断开连接？" description="断开后将停止 IEC104 链路。" onConfirm={() => void handleStopLink()} disabled={selectedLink.state !== 2 || actionsDisabled}>
+                            <Button danger icon={<DisconnectOutlined />} disabled={selectedLink.state !== 2 || actionsDisabled} loading={runtimeAction === 'stop'}>
+                              {runtimeAction === 'stop' ? '断开中…' : '断开'}
+                            </Button>
+                          </Popconfirm>
+                        </CapabilityGate>
+                        <CapabilityGate need="runtime.control">
+                          <Button icon={<ClockCircleOutlined />} disabled={selectedLink.state !== 2 || actionsDisabled} onClick={() => void handleTimeSync()}>
+                            手工对时
+                          </Button>
+                        </CapabilityGate>
                         <Tooltip title="后端暂不支持总召唤">
                           <Button icon={<ThunderboltOutlined />} disabled>
                             总召唤
@@ -3387,22 +3395,30 @@ const IEC104: React.FC = () => {
             onChange={setSimulationBoolMode}
             disabled={simulationLoading || actionsDisabled}
           />
-          <Button
-            icon={<ThunderboltOutlined />}
-            loading={simulationLoading}
-            disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || points.length === 0 || actionsDisabled}
-            onClick={() => void handleGenerateSimulation()}
-          >生成模拟值</Button>
-          <Button
-            type="primary"
-            icon={<LinkOutlined />}
-            loading={simulationLoading}
-            disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !simulationSnapshot?.points.length || selectedLink?.state !== 2 || actionsDisabled}
-            onClick={() => void handleApplySimulation()}
-          >应用并发送</Button>
-          <Popconfirm title="确认清除当前模拟值？" onConfirm={() => void handleClearSimulation()}>
-            <Button danger icon={<ClearOutlined />} loading={simulationLoading} disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !simulationSnapshot?.points.length || actionsDisabled}>清除模拟值</Button>
-          </Popconfirm>
+          {/* 离线工作区没有运行态，隐藏模拟值生成/清除按钮 */}
+          <CapabilityGate need="runtime.control">
+            <Button
+              icon={<ThunderboltOutlined />}
+              loading={simulationLoading}
+              disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || points.length === 0 || actionsDisabled}
+              onClick={() => void handleGenerateSimulation()}
+            >生成模拟值</Button>
+          </CapabilityGate>
+          {/* 离线工作区没有运行态，隐藏应用模拟值按钮 */}
+          <CapabilityGate need="runtime.control">
+            <Button
+              type="primary"
+              icon={<LinkOutlined />}
+              loading={simulationLoading}
+              disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !simulationSnapshot?.points.length || selectedLink?.state !== 2 || actionsDisabled}
+              onClick={() => void handleApplySimulation()}
+            >应用并发送</Button>
+          </CapabilityGate>
+          <CapabilityGate need="runtime.control">
+            <Popconfirm title="确认清除当前模拟值？" onConfirm={() => void handleClearSimulation()}>
+              <Button danger icon={<ClearOutlined />} loading={simulationLoading} disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !simulationSnapshot?.points.length || actionsDisabled}>清除模拟值</Button>
+            </Popconfirm>
+          </CapabilityGate>
         </Space>
         <Alert
           type="warning"

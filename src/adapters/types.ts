@@ -1182,6 +1182,14 @@ export interface ConfigExportMetadata {
   included_sections: ConfigExportSectionId[];
 }
 
+/** 离线工作区文件摘要（由 Rust 侧文件系统读取）。 */
+export interface WorkspaceSummary {
+  file_path: string;
+  file_name: string;
+  size_bytes: number;
+  updated_at_ms: number;
+}
+
 export interface FullConfigExportSnapshot {
   schema_version: 1;
   exported_at: string;
