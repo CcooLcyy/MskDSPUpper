@@ -210,6 +210,31 @@ test('release workflows enable Rust target caching and report cache hits', () =>
   assert.equal(rustCacheStepCount, 6, 'ci/beta/nightly/release should expose six Rust cache steps');
 });
 
+// 回归：CARGO_NET_OFFLINE 只能取 true/false，空字符串会让 cargo 直接报错并中断构建与测试。
+test('ci workflow never exports an empty CARGO_NET_OFFLINE', () => {
+  const fileText = fs
+    .readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const assignments = fileText
+    .split('\n')
+    .filter((line) => /^\s*CARGO_NET_OFFLINE:/.test(line));
+
+  assert.ok(assignments.length > 0, 'ci.yml must configure CARGO_NET_OFFLINE');
+
+  for (const line of assignments) {
+    assert.doesNotMatch(
+      line,
+      /\|\|\s*''/,
+      `CARGO_NET_OFFLINE fallback must not be an empty string: ${line.trim()}`,
+    );
+    assert.match(
+      line,
+      /\|\|\s*'false'\s*\}\}$/,
+      `CARGO_NET_OFFLINE must explicitly disable offline mode on cache miss: ${line.trim()}`,
+    );
+  }
+});
+
 // 验证上位机静态服务器资产上传提供异步进度、远端大小轮询和退出码传播。
 test('上位机静态更新上传显示远端进度', () => {
   const script = fs.readFileSync(
