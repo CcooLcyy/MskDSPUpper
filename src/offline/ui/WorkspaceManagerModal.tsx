@@ -5,7 +5,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import type { WorkspaceSummary } from '../../adapters/types.ts';
 import { useAppMode } from '../app-mode-context.ts';
 import { deleteWorkspaceFile } from '../workspace/store.ts';
-import { WORKSPACE_FILE_EXTENSION } from '../workspace/types.ts';
+import { WORKSPACE_FILE_EXTENSION, type OfflineWorkspace } from '../workspace/types.ts';
 
 const { Text } = Typography;
 
@@ -34,7 +34,24 @@ function formatTime(updatedAtMs: number): string {
   return new Date(updatedAtMs).toLocaleString('zh-CN');
 }
 
-/** 工作区管理：新建 / 打开 / 另存为 / 用 .mskcfg 打底 / 删除。 */
+/** 工作区是否还没有任何配置：用于判断导入现存配置前是否需要二次确认。 */
+function isWorkspaceEmpty(workspace: OfflineWorkspace): boolean {
+  const config = workspace.config;
+
+  return config.iec104.links.length === 0
+    && config.modbus_rtu.links.length === 0
+    && config.modbus_tcp.links.length === 0
+    && config.dlt645.links.length === 0
+    && config.agc.groups.length === 0
+    && config.avc.groups.length === 0
+    && config.calc.groups.length === 0
+    && config.data_bus.connections.length === 0
+    && config.data_bus.conn_tags.length === 0
+    && config.data_bus.routes.items.length === 0
+    && workspace.agc_control_profiles.length === 0;
+}
+
+/** 工作区管理：新建 / 打开 / 另存为 / 导入现有配置 / 删除。 */
 const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({ open: isOpen, onClose }) => {
   const {
     workspace,
@@ -45,7 +62,7 @@ const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({ open: isO
     seedWorkspaceFromSnapshotFile,
     saveWorkspaceAs,
   } = useAppMode();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [files, setFiles] = useState<WorkspaceSummary[]>([]);
   const [newName, setNewName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -128,9 +145,9 @@ const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({ open: isO
     }
   }, [message, refresh, saveWorkspaceAs, workspace]);
 
-  const handleSeed = useCallback(async () => {
+  const runImportExistingConfig = useCallback(async () => {
     const selected = await open({
-      title: '选择用于打底的 .mskcfg',
+      title: '选择要导入的现有配置（.mskcfg）',
       multiple: false,
       directory: false,
       filters: [{ name: 'MskDSP 配置', extensions: ['mskcfg'] }],
@@ -145,14 +162,32 @@ const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({ open: isO
     try {
       const savedPath = await seedWorkspaceFromSnapshotFile(selected);
 
-      message.success(`已用 .mskcfg 打底，工作区已保存：${savedPath}`);
+      message.success(`已导入现有配置，工作区已保存：${savedPath}`);
       await refresh();
     } catch (error) {
-      message.error(`载入 .mskcfg 失败：${String(error)}`);
+      message.error(`导入现有配置失败：${String(error)}`);
     } finally {
       setBusy(false);
     }
   }, [message, refresh, seedWorkspaceFromSnapshotFile]);
+
+  // 导入会用所选配置替换当前工作区内容，非空工作区先确认一次。
+  const handleImportExistingConfig = useCallback(() => {
+    if (!workspace || isWorkspaceEmpty(workspace)) {
+      void runImportExistingConfig();
+
+      return;
+    }
+
+    modal.confirm({
+      title: '导入现有配置？',
+      content: `导入会用所选 .mskcfg 替换当前工作区「${workspace.workspace_name}」的配置，并另存为新的工作区文件；当前工作区里未保存到文件的改动会丢失。`,
+      okText: '继续导入',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => runImportExistingConfig(),
+    });
+  }, [modal, runImportExistingConfig, workspace]);
 
   const handleDelete = useCallback(async (filePath: string) => {
     try {
@@ -236,7 +271,7 @@ const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({ open: isO
           <Button onClick={handleNew}>新建</Button>
           <Button onClick={() => void handleSelectFile()} loading={busy}>打开文件…</Button>
           <Button onClick={() => void handleSaveAs()} loading={busy}>另存为…</Button>
-          <Button onClick={() => void handleSeed()} loading={busy}>从 .mskcfg 打底…</Button>
+          <Button onClick={handleImportExistingConfig} loading={busy}>导入现有配置…</Button>
           <Button onClick={() => void refresh()} loading={loading}>刷新列表</Button>
         </Space>
 

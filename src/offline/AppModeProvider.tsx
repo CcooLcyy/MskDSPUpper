@@ -154,7 +154,7 @@ export function AppModeProvider({ children }: { children: React.ReactNode }) {
     const savedPath = await saveWorkspaceTo(`${directory}/${name}.mskwsp`);
 
     await saveAppSetting(LAST_WORKSPACE_SETTING_KEY, savedPath);
-    console.info('[离线工作区] 已用 .mskcfg 打底', { filePath, savedPath });
+    console.info('[离线工作区] 已导入现有配置', { filePath, savedPath });
 
     return savedPath;
   }, []);
