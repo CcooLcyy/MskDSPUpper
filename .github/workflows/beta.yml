@@ -53,15 +53,19 @@ jobs:
         id: resolve_beta
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
+          BETA_REF_INPUT: ${{ github.event.inputs.beta_ref }}
           ALLOW_MISSING_BETA: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
+        # 空字符串会被 PowerShell 从原生命令的参数列表里丢掉，导致 node 只收到孤立的 --beta-ref，
+        # parseArgs 会把它判成 ambiguous。因此仅在确有输入时才追加该选项（等价于脚本里"未指定"的分支）。
         run: |
           $args = @(
             'scripts/workflow/resolve-beta-ref.mjs'
-            '--beta-ref'
-            "${{ github.event.inputs.beta_ref }}"
             '--current-ref'
             "${{ github.ref_name }}"
           )
+          if ($env:BETA_REF_INPUT) {
+            $args += @('--beta-ref', $env:BETA_REF_INPUT)
+          }
           if ($env:ALLOW_MISSING_BETA -eq 'true') {
             $args += '--allow-missing'
           }
@@ -137,24 +141,28 @@ jobs:
       - name: Install Node dependencies
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $ErrorActionPreference = "Continue"
           npm ci 2>&1 | Tee-Object -FilePath package\logs\npm-ci.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run workflow helper tests
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $ErrorActionPreference = "Continue"
           npm run test:workflow 2>&1 | Tee-Object -FilePath package\logs\workflow-tests.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run lint
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $ErrorActionPreference = "Continue"
           npm run lint 2>&1 | Tee-Object -FilePath package\logs\lint.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run cargo tests
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $ErrorActionPreference = "Continue"
           cargo test --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET 2>&1 | Tee-Object -FilePath package\logs\cargo-test.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -261,6 +269,7 @@ jobs:
       - name: Install Node dependencies
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $ErrorActionPreference = "Continue"
           npm ci 2>&1 | Tee-Object -FilePath package\logs\npm-ci.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -287,6 +296,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          $ErrorActionPreference = "Continue"
           npx tauri build --bundles nsis --target $env:RUST_TARGET --ci --config package/generated/tauri.beta.conf.json 2>&1 | Tee-Object -FilePath package\logs\tauri-beta-build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

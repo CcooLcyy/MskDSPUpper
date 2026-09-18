@@ -31,7 +31,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: false
+          # proto 子模块必须拉取：tests/workflow 里有 4 个用例会读取 proto/*.proto，
+          # 缺失时整个测试步骤会以 ENOENT 失败，导致自动晋升链路中断。
+          submodules: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

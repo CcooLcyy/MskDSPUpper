@@ -91,18 +91,21 @@ jobs:
       - name: Install Node dependencies
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $ErrorActionPreference = "Continue"
           npm ci 2>&1 | Tee-Object -FilePath package\logs\npm-ci.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run workflow helper tests
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $ErrorActionPreference = "Continue"
           npm run test:workflow 2>&1 | Tee-Object -FilePath package\logs\workflow-tests.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run lint
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $ErrorActionPreference = "Continue"
           npm run lint 2>&1 | Tee-Object -FilePath package\logs\lint.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -197,6 +200,7 @@ jobs:
       - name: Install Node dependencies
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
+          $ErrorActionPreference = "Continue"
           npm ci 2>&1 | Tee-Object -FilePath package\logs\npm-ci.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

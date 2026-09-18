@@ -89,6 +89,33 @@ function extractJobBlock(fileText, jobName) {
   return blockLines.join('\n');
 }
 
+function listJobBlocks(fileText) {
+  const lines = fileText.split('\n');
+  const jobsIndex = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+  assert.notEqual(jobsIndex, -1, 'missing jobs: section');
+
+  const blocks = [];
+  let current = null;
+
+  for (let index = jobsIndex + 1; index < lines.length; index += 1) {
+    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[index])) {
+      if (current) {
+        blocks.push(current);
+      }
+      current = { name: lines[index].trim().replace(/:$/, ''), lines: [] };
+    }
+    if (current) {
+      current.lines.push(lines[index]);
+    }
+  }
+
+  if (current) {
+    blocks.push(current);
+  }
+
+  return blocks.map((block) => ({ name: block.name, block: block.lines.join('\n') }));
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -289,6 +316,113 @@ test('powershell 5.1 steps keep their run blocks ASCII-only', () => {
   }
 
   assert.ok(checkedStepCount > 0, 'expected at least one powershell 5.1 step to check');
+});
+
+// 回归：runner 会先注入 $ErrorActionPreference='Stop'，而 cargo 即使成功也会把进度写到 stderr；
+// 只要 run 块接了 2>&1，那一行 stderr 就会被当成终止性错误（nightly 曾经因此每天必挂）。
+// 凡含 2>&1 的 5.1 步骤都必须覆盖成 Continue；真实失败仍由各步的 $LASTEXITCODE 判断负责。
+test('powershell 5.1 steps with 2>&1 must relax $ErrorActionPreference', () => {
+  const workflowPaths = [
+    '.github/workflows/ci.yml',
+    '.github/workflows/beta.yml',
+    '.github/workflows/nightly.yml',
+    '.github/workflows/release.yml',
+  ];
+  let checkedStepCount = 0;
+
+  for (const workflowPath of workflowPaths) {
+    const fileText = fs
+      .readFileSync(path.join(repoRoot, workflowPath), 'utf8')
+      .replace(/\r\n/g, '\n');
+
+    for (const stepBlock of extractNamedStepBlocks(fileText)) {
+      if (!/^\s*shell:\s*powershell\b/m.test(stepBlock)) {
+        continue;
+      }
+
+      const runBlock = extractRunBlock(stepBlock);
+      if (runBlock === null || !/2>&1/.test(runBlock)) {
+        continue;
+      }
+
+      checkedStepCount += 1;
+      assert.match(
+        stepBlock,
+        /\$ErrorActionPreference\s*=\s*["']Continue["']/,
+        `${workflowPath} 步骤使用了 2>&1，必须在 run 块内覆盖 $ErrorActionPreference 为 Continue`,
+      );
+    }
+  }
+
+  assert.ok(
+    checkedStepCount >= 20,
+    `expected at least 20 guarded 2>&1 steps, got ${checkedStepCount}`,
+  );
+});
+
+// 回归：PowerShell 向原生命令传参时会丢掉空字符串元素，于是后面的 flag 会被当成它的值，
+// node 的 parseArgs 会报 "argument is ambiguous"（beta 的 resolve 步骤曾经如此）。
+test('powershell steps do not pass possibly-empty expressions as standalone arguments', () => {
+  const workflowPaths = [
+    '.github/workflows/ci.yml',
+    '.github/workflows/beta.yml',
+    '.github/workflows/nightly.yml',
+    '.github/workflows/release.yml',
+  ];
+
+  for (const workflowPath of workflowPaths) {
+    const lines = fs
+      .readFileSync(path.join(repoRoot, workflowPath), 'utf8')
+      .replace(/\r\n/g, '\n')
+      .split('\n');
+
+    for (let index = 0; index < lines.length - 1; index += 1) {
+      if (!/^\s*'--[a-zA-Z][\w-]*'?,?\s*$/.test(lines[index])) {
+        continue;
+      }
+
+      // 只盯"确实可能为空"的命名空间：dispatch 输入、仓库变量、环境变量。
+      // github.ref_name / github.sha / github.repository 这类在支持的事件里不会为空。
+      assert.doesNotMatch(
+        lines[index + 1],
+        /^\s*"\$\{\{\s*(?:github\.event\.inputs|inputs|vars|env)\./,
+        `${workflowPath}:${index + 2} 把可能为空的表达式当作独立参数传递，PowerShell 会丢弃空字符串`,
+      );
+    }
+  }
+});
+
+// 回归：tests/workflow 里有 4 个用例直接读取 proto/*.proto，凡是执行该测试套件的 job 都必须
+// 让子模块可用（checkout 时 submodules: true，或显式 git submodule update --init），
+// 否则会以 ENOENT 失败（promote 曾经因此中断了 beta→stable 的自动晋升链路）。
+test('jobs running the workflow test suite must make the proto submodule available', () => {
+  const workflowDir = path.join(repoRoot, '.github', 'workflows');
+  const workflowPaths = fs
+    .readdirSync(workflowDir)
+    .filter((file) => /\.ya?ml$/.test(file))
+    .map((file) => `.github/workflows/${file}`);
+  let checkedJobCount = 0;
+
+  for (const workflowPath of workflowPaths) {
+    const fileText = fs
+      .readFileSync(path.join(repoRoot, workflowPath), 'utf8')
+      .replace(/\r\n/g, '\n');
+
+    for (const job of listJobBlocks(fileText)) {
+      if (!/npm run test:workflow|node --test tests\/workflow/.test(job.block)) {
+        continue;
+      }
+
+      checkedJobCount += 1;
+      assert.match(
+        job.block,
+        /git submodule update --init|submodules:\s*true/,
+        `${workflowPath} 的 job「${job.name}」会运行 tests/workflow，必须先让 proto 子模块可用`,
+      );
+    }
+  }
+
+  assert.ok(checkedJobCount >= 5, `expected at least 5 test jobs, got ${checkedJobCount}`);
 });
 
 // publish 工作区是干净检出，package/metadata 与 package/.manifest-backup 都不存在，
