@@ -1,8 +1,10 @@
 name: Promote Stable
 
 on:
-  schedule:
-    - cron: '30 3 * * *'
+  # 定时触发暂时冻结：避免在未确认的情况下自动打正式 tag 并触发 release 流程。
+  # 需要恢复"每天自动检查 beta 线是否可晋升"时，取消下面两行注释即可。
+  # schedule:
+  #   - cron: '30 3 * * *'
   workflow_dispatch:
     inputs:
       beta_ref:

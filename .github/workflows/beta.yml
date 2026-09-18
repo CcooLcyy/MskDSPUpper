@@ -4,8 +4,10 @@ on:
   push:
     branches:
       - beta/*
-  schedule:
-    - cron: '45 2 * * *'
+  # 定时触发暂时冻结：避免修复落地后自动选中最高 beta 线并真的发布一版。
+  # 需要恢复"每天自动重建最新 beta 线"时，取消下面两行注释即可。
+  # schedule:
+  #   - cron: '45 2 * * *'
   workflow_dispatch:
     inputs:
       beta_ref:

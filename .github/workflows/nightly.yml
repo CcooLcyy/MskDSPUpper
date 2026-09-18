@@ -1,8 +1,10 @@
 name: Nightly
 
 on:
-  schedule:
-    - cron: '15 2 * * *'
+  # 定时触发暂时冻结：避免修复落地后自动发布 nightly 通道 / 刷新 nightly-latest 预发布。
+  # 需要恢复自动出包时，取消下面两行注释即可（或在 Actions 页面 Enable 后手动 dispatch）。
+  # schedule:
+  #   - cron: '15 2 * * *'
   workflow_dispatch:
 
 concurrency:
