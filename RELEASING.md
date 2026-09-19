@@ -156,10 +156,10 @@ Inputs:
 
 The workflow downloads all assets from the selected GitHub Release, rewrites
 `latest.json` so `platforms.*.url` points at
-`<UPDATE_STATIC_BASE_URL>/<channel>/<platform>/`, uploads all assets first, and
-uploads `latest.json` last. The R2 publish script then removes stale objects
-only from the same channel/platform prefix. No server or nginx restart is
-needed.
+`<R2_PUBLIC_BASE_URL>/mskdsp-upper/<channel>/<platform>/`, uploads all assets
+first, and uploads `latest.json` last. The R2 publish script then removes stale
+objects only from the same channel/platform prefix. No server or nginx restart
+is needed.
 
 ## Optional Follow-up
 

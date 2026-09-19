@@ -60,12 +60,12 @@
 | `SUBMODULE_SSH_KEY` | submodule SSH key 回退 | 空 |
 | `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater 签名私钥 | 空 |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Tauri updater 私钥口令，可留空 | 空 |
-| `UPDATE_STATIC_SSH_KEY` | 同步静态更新源的 SSH 私钥 secret | 必填 |
-| `UPDATE_STATIC_BASE_URL` | 静态更新源公网基地址变量 | `https://update.clsclear.top/mskdsp-upper` |
-| `UPDATE_STATIC_REMOTE_ROOT` | 静态更新源远端根目录变量 | `/home/daniel/update-server/www/mskdsp-upper` |
-| `UPDATE_STATIC_SSH_HOST` | 静态更新源 SSH 主机变量 | `clsclear.top` |
-| `UPDATE_STATIC_SSH_PORT` | 静态更新源 SSH 端口变量 | `32118` |
-| `UPDATE_STATIC_SSH_USER` | 静态更新源 SSH 用户变量 | `daniel` |
+| `R2_ACCOUNT_ID` | Cloudflare R2 账户 ID（secret） | 必填 |
+| `R2_ACCESS_KEY_ID` | R2 访问密钥 ID（secret） | 必填 |
+| `R2_SECRET_ACCESS_KEY` | R2 访问密钥（secret） | 必填 |
+| `R2_BUCKET` | R2 桶名（variable，可留空走默认） | `mskdsp-update` |
+| `R2_PREFIX` | R2 对象前缀（variable，可留空走默认） | `mskdsp-upper` |
+| `R2_PUBLIC_BASE_URL` | R2 公网基地址（variable，可留空走默认） | `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev` |
 | `MSKDSP_UPPER_SOURCEMAP` | 是否产出前端 sourcemap | `false` |
 | `beta_ref` | Beta workflow 手动指定版本线 | 空 |
 
@@ -109,10 +109,10 @@
   - 构建日志、锁文件、配置、submodule 状态、staging manifest
 - `package/out/<channel>/<platform>`
   - 最终交付 zip、symbols zip、校验文件、原始安装包
-- 静态更新源：
-  - `<UPDATE_STATIC_REMOTE_ROOT>/<channel>/latest.json`
-  - `<UPDATE_STATIC_REMOTE_ROOT>/<channel>/<platform>/` 下保存安装包、签名、交付包、symbols 包与校验文件
-  - 对应公网地址为 `<UPDATE_STATIC_BASE_URL>/<channel>/latest.json` 与 `<UPDATE_STATIC_BASE_URL>/<channel>/<platform>/<asset>`
+- 静态更新源（Cloudflare R2 桶 `<R2_BUCKET>`、前缀 `<R2_PREFIX>`）：
+  - 对象键 `<R2_PREFIX>/<channel>/latest.json`
+  - 对象键 `<R2_PREFIX>/<channel>/<platform>/` 下保存安装包、签名、交付包、symbols 包与校验文件
+  - 对应公网地址为 `<R2_PUBLIC_BASE_URL>/<R2_PREFIX>/<channel>/latest.json` 与 `<R2_PUBLIC_BASE_URL>/<R2_PREFIX>/<channel>/<platform>/<asset>`
 
 ## 静态更新源同步
 
@@ -143,11 +143,11 @@
   - 准备 submodule 访问并拉取 `proto/`
   - 运行 `npm run test:workflow`
   - 运行 `npm run lint`
-  - 运行 `cargo test --locked --manifest-path src-tauri/Cargo.toml`
-  - PR 运行一次 `npx tauri build --debug --no-bundle`
-  - `push main` 只运行一次 Release Tauri 构建
+  - 运行 `cargo test --locked --lib --manifest-path src-tauri/Cargo.toml`
+  - PR 只跑上面的 verify-debug，不产出安装包
+  - `push main` 时 verify-debug 与 package-build 并行执行，package-build 只做一次 Release Tauri 构建
   - 失败时上传 diagnostics
-  - `push main` 时继续打包 `ci` 渠道交付包，上传 artifact，并同步到 `<UPDATE_STATIC_BASE_URL>/ci/latest.json`
+  - `push main` 时把交付包上传 artifact，并在 publish 中校验产物来源后同步到 `<R2_PUBLIC_BASE_URL>/mskdsp-upper/ci/latest.json`
 
 ### Nightly
 
