@@ -682,8 +682,8 @@ fn format_remote_command_error(context: &str, output: &RemoteCommandOutput) -> S
 fn normalize_channel(channel: &str) -> Result<String, String> {
     let trimmed = channel.trim();
     match trimmed {
-        "stable" | "beta" | "nightly" | "ci" => Ok(trimmed.to_string()),
-        _ => Err("下位机更新通道只能是 stable、beta、nightly 或 ci".into()),
+        "stable" | "beta" | "ci" => Ok(trimmed.to_string()),
+        _ => Err("下位机更新通道只能是 stable、beta 或 ci".into()),
     }
 }
 
@@ -1683,7 +1683,7 @@ pub async fn list_cached_lower_updates(
     let cache_root = state.runtime_paths.lower_update_dir();
     let mut cached = Vec::new();
 
-    for candidate_channel in ["stable", "beta", "nightly", "ci"] {
+    for candidate_channel in ["stable", "beta", "ci"] {
         if requested_channel
             .as_deref()
             .is_some_and(|requested| requested != candidate_channel)

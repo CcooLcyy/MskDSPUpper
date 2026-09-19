@@ -51,7 +51,6 @@ export const initialLowerUpdateAutoStatus: LowerUpdateAutoStatus = {
   channels: {
     stable: createInitialChannelStatus('stable'),
     beta: createInitialChannelStatus('beta'),
-    nightly: createInitialChannelStatus('nightly'),
     ci: createInitialChannelStatus('ci'),
   },
 };

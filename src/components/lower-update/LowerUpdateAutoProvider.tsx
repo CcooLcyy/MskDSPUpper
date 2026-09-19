@@ -17,7 +17,7 @@ import type {
 } from './lower-update-auto-context';
 
 const LOWER_UPDATE_CHECK_INTERVAL_MS = 30_000;
-const LOWER_UPDATE_CHANNELS: LowerUpdateChannel[] = ['stable', 'beta', 'nightly', 'ci'];
+const LOWER_UPDATE_CHANNELS: LowerUpdateChannel[] = ['stable', 'beta', 'ci'];
 
 function cacheKey(manifest: LowerUpdateManifest): string {
   return [

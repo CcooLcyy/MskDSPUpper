@@ -100,7 +100,6 @@ const LINUX_ABSOLUTE_PATH_PATTERN = /^\/[^\s]*$/;
 const UPDATE_CHANNEL_OPTIONS: Array<{ label: string; value: LowerUpdateChannel }> = [
   { label: 'Stable', value: 'stable' },
   { label: 'Beta', value: 'beta' },
-  { label: 'Nightly', value: 'nightly' },
   { label: 'CI', value: 'ci' },
 ];
 

@@ -74,7 +74,7 @@ export interface CacheClearResult {
   reclaimed_bytes: number;
 }
 
-export type LowerUpdateChannel = 'stable' | 'beta' | 'nightly' | 'ci';
+export type LowerUpdateChannel = 'stable' | 'beta' | 'ci';
 
 export interface LowerUpdateSource {
   repository: string;
