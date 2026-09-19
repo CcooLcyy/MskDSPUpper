@@ -7,7 +7,11 @@ edition = "2021"
 
 [lib]
 name = "mskdsp_upper_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
+# 上位机只面向 Windows 桌面产物（NSIS 安装包），后续也不会构建移动端，
+# 因此只保留 rlib，去掉 Tauri 模板默认的 cdylib/staticlib 两种 crate-type：
+# 否则 cargo 会把同一份代码按三种 crate-type 各编译一遍，且 sccache 无法缓存，
+# 每次 CI/Beta/Stable 构建都要多花约 2 分钟。若将来需要移动端或对外 FFI 产物，再补回。
+crate-type = ["lib"]
 
 [[bin]]
 name = "mskdsp-upper"
