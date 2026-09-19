@@ -3,7 +3,7 @@
 ## 目标
 
 - 建立一套与 `mskdsp` workflow 等价、但适配当前 `React + Vite + Tauri + Rust` 技术栈的研发与发版流程。
-- 将开发校验、Nightly、Beta、Stable 四条渠道统一到同一套命名、缓存、staging、交付与验收约定下。
+- 将开发校验、Beta、Stable 三条渠道统一到同一套命名、缓存、staging、交付与验收约定下。
 - 让构建、打包、校验、预发布、正式发布都能通过仓库内脚本与 GitHub Actions 复用同一条真实链路。
 
 ## 范围与非目标
@@ -76,9 +76,6 @@
 - `CI`
   - 触发 `pull_request`、`push main`
   - PR 输出一次 Debug Tauri 校验结果；`push main` 在基础校验通过后只执行一次 Release Tauri 构建，输出主线测试交付包并同步到静态源 `ci` 通道
-- `Nightly`
-  - 固定基于默认分支
-  - 每日或手动重建最新包
 - `Beta`
   - 固定基于 `beta/x.y` 或 `beta/x.y.z`
   - 同一版本线默认只保留当前最新 prerelease
@@ -92,7 +89,7 @@
 - 统一字段：
   - 项目标识：`mskdsp-upper`
   - 版本：基础版本或带渠道后缀的 `effectiveVersion`
-  - 渠道：`ci`、`nightly`、`beta-x.y`、`stable`
+  - 渠道：`ci`、`beta-x.y`、`stable`
   - 时间戳：`YYYYMMDDtHHMMSSz`
   - 短 SHA：7 位
   - 平台：`windows-x64`
@@ -116,7 +113,7 @@
 
 ## 静态更新源同步
 
-- CI / Nightly / Beta / Stable 在生成 `package/out` 后调用 `scripts/workflow/Publish-R2StaticUpdater.ps1` 上传到 R2 静态源。
+- CI / Beta / Stable 在生成 `package/out` 后调用 `scripts/workflow/Publish-R2StaticUpdater.ps1` 上传到 R2 静态源。
 - 同步顺序固定为先上传安装包、签名、交付包、symbols 包与校验文件，再最后覆盖 `latest.json`。
 - `latest.json` 中的 `platforms.*.url` 由 `stage-release.mjs --asset-base-url` 生成，指向静态源 `<channel>/<platform>/` 下的安装包。
 - 若 GitHub Release 资产已经存在，但静态源为空或需要完整重同步，可手动运行 `Sync Static Updater Source`。
@@ -149,17 +146,6 @@
   - 失败时上传 diagnostics
   - `push main` 时把交付包上传 artifact，并在 publish 中校验产物来源后同步到 `<R2_PUBLIC_BASE_URL>/mskdsp-upper/ci/latest.json`
 
-### Nightly
-
-- 触发：
-  - `schedule`
-  - `workflow_dispatch`
-- 行为：
-  - 始终 checkout 默认分支
-  - 使用 nightly 渠道版本后缀
-  - 生成安装包、symbols 包、校验文件
-  - 上传 artifact
-
 ### Beta
 
 - 触发：
@@ -190,8 +176,8 @@
 - 触发：
   - `workflow_dispatch`
 - 输入：
-  - `channel`: `stable`、`beta` 或 `nightly`
-  - `release_tag`: 可选；默认 stable 使用 `v<package.json version>`，beta 使用 `beta-latest`，nightly 使用 `nightly-latest`
+  - `channel`: `stable` 或 `beta`
+  - `release_tag`: 可选；默认 stable 使用 `v<package.json version>`，beta 使用 `beta-latest`
   - `platform`: 可选；默认 `windows-x64`
 - 行为：
   - 下载指定 GitHub Release 的全部资产
@@ -208,7 +194,7 @@
 - 编译缓存：
   - `mozilla-actions/sccache-action@v0.0.10`
   - 通过 `SCCACHE_GHA_ENABLED=true` 使用 GitHub Actions cache backend
-  - `SCCACHE_GHA_VERSION=mskdsp-upper-windows-msvc-v1` 作为共享命名空间，CI / Beta / Nightly / Release 复用同一类编译缓存
+  - `SCCACHE_GHA_VERSION=mskdsp-upper-windows-msvc-v1` 作为共享命名空间，CI / Beta / Release 复用同一类编译缓存
   - 不再把 `github.sha` 放入编译缓存维度，避免每个 commit 生成彼此隔离的 `.sccache` 缓存包
   - `Swatinem/rust-cache` 同时缓存 Cargo registry/git 依赖和依赖类 `src-tauri/target` 产物（`cache-targets: true`）；CI/Beta 的 verify 与 package Job 使用独立 shared key，分别保留 test 与 release profile 的依赖缓存，避免前一个 Job 的缓存阻止后一个 Job 保存更新
   - `rust-cache` 默认不保存 workspace crate；上位机自身源码和最终链接仍由 Cargo/Tauri 在对应 profile 中重新生成，Rust 编译结果由共享 sccache 跨 Job、跨 profile 补充复用
@@ -228,7 +214,7 @@
 ## 调试符号策略
 
 - 当前项目原生支持 Windows `.pdb`。
-- Nightly / Beta / Stable 默认单独产出 symbols 包。
+- Beta / Stable 默认单独产出 symbols 包。
 - 前端调试信息通过 `MSKDSP_UPPER_SOURCEMAP=true` 生成 `.map` 并并入 symbols 包。
 
 ## 约束与异常场景

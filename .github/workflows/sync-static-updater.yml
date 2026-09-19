@@ -10,9 +10,8 @@ on:
         options:
           - stable
           - beta
-          - nightly
       release_tag:
-        description: 'GitHub release tag to copy; defaults to v<package version>, beta-latest, or nightly-latest'
+        description: 'GitHub release tag to copy; defaults to v<package version> for stable or beta-latest for beta'
         required: false
         type: string
       platform:
@@ -66,8 +65,6 @@ jobs:
               $releaseTag = "v$version"
             } elseif ($channel -eq "beta") {
               $releaseTag = "beta-latest"
-            } elseif ($channel -eq "nightly") {
-              $releaseTag = "nightly-latest"
             } else {
               throw "Unsupported channel: $channel"
             }

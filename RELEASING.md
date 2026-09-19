@@ -6,18 +6,15 @@
 - CI updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/ci/latest.json`
 - Stable updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/stable/latest.json`
 - Beta updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/beta/latest.json`
-- Nightly updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/nightly/latest.json`
 - Static updater base URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper`
 - Stable workflow trigger: push tag `v*`
 - Beta workflow trigger: push branch `beta/**`, or manual `workflow_dispatch`
-- Nightly workflow trigger: schedule or manual `workflow_dispatch`
 - Static source backfill trigger: manual `workflow_dispatch`
 - CI workflow trigger: pull request, or push to `main`
 
 ## Before The First GitHub Run
 
 1. Push the release-prep workflow changes to the default branch first.
-   The nightly workflow always checks out the repository default branch.
    If the GitHub repository is still empty, this first push should create `main` and establish it as the default branch.
 2. Keep `package.json` and `src-tauri/tauri.conf.json` at the same stable version.
    The current expected stable tag is `v0.6.0`.
@@ -63,8 +60,7 @@ Notes:
   `mskdsp-upper` path automatically; legacy static-server variables are ignored.
 - `Sync Static Updater Source` can backfill the static source from an existing
   GitHub Release without building or publishing a new version. Leave `release_tag`
-  empty to use `v<package version>` for stable, `beta-latest` for beta, or
-  `nightly-latest` for nightly.
+  empty to use `v<package version>` for stable or `beta-latest` for beta.
 
 ## Actions Permissions
 
@@ -72,29 +68,13 @@ In `Settings -> Actions -> General`:
 
 1. Make sure GitHub Actions is enabled for this repository.
 2. Under `Workflow permissions`, select `Read and write permissions`.
-3. Save the setting before the first nightly/beta/stable run.
+3. Save the setting before the first beta/stable run.
 
 The workflows create or update releases and upload release assets, so `contents: write` must be effective.
 
 ## First Validation Order
 
-### 1. First Nightly
-
-1. Push the current release-prep commit set to `origin/main`.
-   If this is the first ever push to the GitHub repository, confirm the repository default branch becomes `main` before running the workflow.
-2. Open `Actions -> Nightly -> Run workflow` and run it on `main`.
-3. Wait for the `build-nightly` job to finish successfully.
-4. Open the `nightly-latest` release and confirm it exists.
-5. Confirm the release assets include at least:
-   - `latest.json`
-   - `latest.json.sig` or another updater signature file
-   - the NSIS installer renamed with the generated artifact base name
-   - the delivery zip
-   - the symbols zip
-   - the SHA256 sums file
-6. Open the R2 Nightly URL listed in the baseline and confirm it downloads.
-
-### 2. First Beta
+### 1. First Beta
 
 1. Create the beta branch from the same commit you want to validate:
    `git switch -c beta/0.6`
@@ -106,7 +86,7 @@ The workflows create or update releases and upload release assets, so `contents:
 6. Confirm there is also a timestamped beta prerelease whose tag starts with `beta-0-6-`.
 7. Open the R2 Beta URL listed in the baseline and confirm it downloads.
 
-### 3. First Stable
+### 2. First Stable
 
 1. Pick the commit that already passed beta.
 2. Create the stable tag locally on that exact commit:
@@ -117,17 +97,7 @@ The workflows create or update releases and upload release assets, so `contents:
 5. Open the `v0.6.0` release and confirm it is marked as the latest release.
 6. Open the R2 Stable URL listed in the baseline and confirm it downloads.
 
-### 4. Client Updater Validation
-
-Nightly validation:
-
-1. Install an older nightly build on a Windows test machine.
-2. Start the app and open the app update card on the ModuleOps page.
-3. Run the update check action.
-4. Confirm the app reports the newly published nightly version.
-5. Start the download-and-install action.
-6. After installation completes, relaunch the app.
-7. Confirm the app version changed to the newly published nightly version.
+### 3. Client Updater Validation
 
 Beta validation:
 
@@ -149,9 +119,9 @@ resynced.
 
 Inputs:
 
-- `channel`: `stable`, `beta`, or `nightly`.
-- `release_tag`: optional. Defaults to `v<package version>` for stable,
-  `beta-latest` for beta, and `nightly-latest` for nightly.
+- `channel`: `stable` or `beta`.
+- `release_tag`: optional. Defaults to `v<package version>` for stable or
+  `beta-latest` for beta.
 - `platform`: optional. Defaults to `windows-x64`.
 
 The workflow downloads all assets from the selected GitHub Release, rewrites

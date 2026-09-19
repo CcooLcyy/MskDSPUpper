@@ -124,7 +124,6 @@ const repoRoot = path.resolve(import.meta.dirname, '..', '..');
 
 for (const [workflowPath, stepName] of [
   ['.github/workflows/beta.yml', 'Render beta tauri config'],
-  ['.github/workflows/nightly.yml', 'Render tauri config'],
   ['.github/workflows/release.yml', 'Render stable tauri config'],
   ['.github/workflows/ci.yml', 'Render release tauri config'],
 ]) {
@@ -226,7 +225,6 @@ test('release workflows enable Rust target caching and report cache hits', () =>
   const workflowPaths = [
     '.github/workflows/ci.yml',
     '.github/workflows/beta.yml',
-    '.github/workflows/nightly.yml',
     '.github/workflows/release.yml',
   ];
   let rustCacheStepCount = 0;
@@ -265,7 +263,7 @@ test('release workflows enable Rust target caching and report cache hits', () =>
     }
   }
 
-  assert.equal(rustCacheStepCount, 6, 'ci/beta/nightly/release should expose six Rust cache steps');
+  assert.equal(rustCacheStepCount, 5, 'ci/beta/release should expose five Rust cache steps');
 });
 
 // 回归：rust-cache 恢复的 registry 索引无法支撑 offline 解析，缓存命中时开启 CARGO_NET_OFFLINE
@@ -288,7 +286,6 @@ test('powershell 5.1 steps keep their run blocks ASCII-only', () => {
   const workflowPaths = [
     '.github/workflows/ci.yml',
     '.github/workflows/beta.yml',
-    '.github/workflows/nightly.yml',
     '.github/workflows/release.yml',
   ];
   let checkedStepCount = 0;
@@ -319,13 +316,12 @@ test('powershell 5.1 steps keep their run blocks ASCII-only', () => {
 });
 
 // 回归：runner 会先注入 $ErrorActionPreference='Stop'，而 cargo 即使成功也会把进度写到 stderr；
-// 只要 run 块接了 2>&1，那一行 stderr 就会被当成终止性错误（nightly 曾经因此每天必挂）。
+// 只要 run 块接了 2>&1，那一行 stderr 就会被当成终止性错误（定时构建曾因此每天必挂）。
 // 凡含 2>&1 的 5.1 步骤都必须覆盖成 Continue；真实失败仍由各步的 $LASTEXITCODE 判断负责。
 test('powershell 5.1 steps with 2>&1 must relax $ErrorActionPreference', () => {
   const workflowPaths = [
     '.github/workflows/ci.yml',
     '.github/workflows/beta.yml',
-    '.github/workflows/nightly.yml',
     '.github/workflows/release.yml',
   ];
   let checkedStepCount = 0;
@@ -355,8 +351,8 @@ test('powershell 5.1 steps with 2>&1 must relax $ErrorActionPreference', () => {
   }
 
   assert.ok(
-    checkedStepCount >= 20,
-    `expected at least 20 guarded 2>&1 steps, got ${checkedStepCount}`,
+    checkedStepCount >= 17,
+    `expected at least 17 guarded 2>&1 steps, got ${checkedStepCount}`,
   );
 });
 
@@ -366,7 +362,6 @@ test('powershell steps do not pass possibly-empty expressions as standalone argu
   const workflowPaths = [
     '.github/workflows/ci.yml',
     '.github/workflows/beta.yml',
-    '.github/workflows/nightly.yml',
     '.github/workflows/release.yml',
   ];
 
@@ -422,7 +417,7 @@ test('jobs running the workflow test suite must make the proto submodule availab
     }
   }
 
-  assert.ok(checkedJobCount >= 4, `expected at least 4 test jobs, got ${checkedJobCount}`);
+  assert.ok(checkedJobCount >= 3, `expected at least 3 test jobs, got ${checkedJobCount}`);
 });
 
 // publish 工作区是干净检出，package/metadata 与 package/.manifest-backup 都不存在，
@@ -467,13 +462,10 @@ test('beta workflow tolerates target branches without the sccache stats helper',
 });
 
 test('rolling release tags are created from the build commit', () => {
-  const nightlyText = fs.readFileSync(path.join(repoRoot, '.github/workflows/nightly.yml'), 'utf8');
   const betaText = fs.readFileSync(path.join(repoRoot, '.github/workflows/beta.yml'), 'utf8');
-  const nightlyBlock = extractStepBlock(nightlyText, 'Create or update rolling nightly release');
   const betaPrereleaseBlock = extractStepBlock(betaText, 'Create GitHub prerelease');
   const betaRollingBlock = extractStepBlock(betaText, 'Create or update rolling beta release');
 
-  assert.match(nightlyBlock, /gh release create \$tag \$files --target "\$\{\{ steps\.nightly_head\.outputs\.sha \}\}"/);
   assert.match(betaPrereleaseBlock, /\$args \+= @\('--target', "\$\{\{ steps\.beta_head\.outputs\.sha \}\}"\)/);
   assert.match(betaRollingBlock, /gh release create \$tag \$files --target "\$\{\{ steps\.beta_head\.outputs\.sha \}\}"/);
 });
