@@ -116,12 +116,12 @@
 
 ## 静态更新源同步
 
-- CI / Nightly / Beta / Stable 在生成 `package/out` 后调用 `scripts/workflow/Sync-StaticUpdater.ps1`。
+- CI / Nightly / Beta / Stable 在生成 `package/out` 后调用 `scripts/workflow/Publish-R2StaticUpdater.ps1` 上传到 R2 静态源。
 - 同步顺序固定为先上传安装包、签名、交付包、symbols 包与校验文件，再最后覆盖 `latest.json`。
 - `latest.json` 中的 `platforms.*.url` 由 `stage-release.mjs --asset-base-url` 生成，指向静态源 `<channel>/<platform>/` 下的安装包。
 - 若 GitHub Release 资产已经存在，但静态源为空或需要完整重同步，可手动运行 `Sync Static Updater Source`。
   它会下载指定 release 的所有资产，用 `rewrite-static-updater-manifest.mjs` 将 `latest.json` 的下载地址改写为静态源地址，再调用同一个上传脚本同步。
-- 静态文件上传或覆盖后，nginx 正常不需要重启；只有修改 nginx 配置、挂载目录、TLS 或缓存策略时才需要 reload/restart。
+- 静态源现已托管在 Cloudflare R2，上传后不需要任何服务器操作（旧的 nginx/SSH 静态服务器链路已停用）。
 - 发布仍会更新 GitHub Release。由于静态源同步发生在 GitHub Release 上传前，旧客户端即使从 GitHub endpoint 读取新的 `latest.json`，也能下载已经同步到静态源的安装包。
 
 ## 研发流程

@@ -444,23 +444,6 @@ test('ci publish verifies the downloaded artifact against the current commit', (
   );
 });
 
-// 验证上位机静态服务器资产上传提供异步进度、远端大小轮询和退出码传播。
-test('上位机静态更新上传显示远端进度', () => {
-  const script = fs.readFileSync(
-    path.join(repoRoot, 'scripts/workflow/Sync-StaticUpdater.ps1'),
-    'utf8',
-  );
-
-  assert.match(script, /Start-Process/);
-  assert.match(script, /Start-Sleep -Seconds 10/);
-  assert.match(script, /stat -c %s/);
-  assert.match(script, /上传进度/);
-  assert.match(script, /每 10 秒显示一次进度/);
-  assert.match(script, /预计剩余/);
-  assert.match(script, /WaitForExit/);
-  assert.match(script, /latest\.json last|latest\.json.*最后|最后上传 latest\.json/);
-});
-
 test('beta workflow only triggers one-segment beta branch names', () => {
   const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/beta.yml'), 'utf8');
 
