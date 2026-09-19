@@ -36,7 +36,7 @@ import {
   type LowerUpdateUploadProgress,
   type LowerUpdateUploadResult,
 } from '../../adapters';
-import { useAppUpdate } from '../../components/app-update/app-update-context';
+import { useAppUpdate, type AppUpdateInstallResult } from '../../components/app-update/app-update-context';
 import { useLowerUpdateAuto } from '../../components/lower-update/lower-update-auto-context';
 import {
   normalizeSoftwareUpdateView,
@@ -618,6 +618,8 @@ const AdvancedConfigPage: React.FC = () => {
   const {
     appVersion,
     availableUpdate,
+    downloadedVersion,
+    supersededUpdate,
     updateStatus,
     isCheckingUpdate,
     isDownloadingUpdate,
@@ -627,6 +629,8 @@ const AdvancedConfigPage: React.FC = () => {
     totalBytes: appTotalBytes,
     checkForUpdate,
     installUpdate,
+    installDownloadedUpdate,
+    acceptLatestUpdate,
     relaunchAfterUpdate,
   } = useAppUpdate();
   const targetUploadAccountValidation = validateUploadAccount(targetUploadAccount);
@@ -754,12 +758,36 @@ const AdvancedConfigPage: React.FC = () => {
     }
   };
 
+  const reportAppInstallResult = (result: AppUpdateInstallResult): void => {
+    if (result.kind === 'installed') {
+      messageApi.success(`客户端 ${result.update.version} 已安装完成`);
+      return;
+    }
+
+    messageApi.warning(`已下载 ${result.downloaded.version}，通道已有 ${result.latest.version}，请选择要安装的版本`);
+  };
+
   const handleInstallAppUpdate = async (): Promise<void> => {
     try {
-      const update = await installUpdate();
-      messageApi.success(`客户端 ${update.version} 已安装完成`);
+      reportAppInstallResult(await installUpdate());
     } catch (error) {
       messageApi.error(`安装客户端更新失败: ${error}`);
+    }
+  };
+
+  const handleInstallDownloadedAppUpdate = async (): Promise<void> => {
+    try {
+      reportAppInstallResult(await installDownloadedUpdate());
+    } catch (error) {
+      messageApi.error(`安装客户端更新失败: ${error}`);
+    }
+  };
+
+  const handleAcceptLatestAppUpdate = async (): Promise<void> => {
+    try {
+      reportAppInstallResult(await acceptLatestUpdate());
+    } catch (error) {
+      messageApi.error(`下载并安装最新客户端更新失败: ${error}`);
     }
   };
 
@@ -1414,6 +1442,7 @@ const AdvancedConfigPage: React.FC = () => {
           <Tag color={getAppUpdateTagColor(updateStatus.kind)}>{getAppUpdateTagLabel(updateStatus.kind)}</Tag>
         </Descriptions.Item>
         <Descriptions.Item label="可用版本">{availableUpdate?.version || '-'}</Descriptions.Item>
+        <Descriptions.Item label="已下载版本">{downloadedVersion || '-'}</Descriptions.Item>
         <Descriptions.Item label="发布时间">{formatReleaseDate(availableUpdate?.date)}</Descriptions.Item>
       </Descriptions>
 
@@ -1427,6 +1456,12 @@ const AdvancedConfigPage: React.FC = () => {
       {availableUpdate?.body ? (
         <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 12 }}>
           {availableUpdate.body}
+        </Paragraph>
+      ) : null}
+
+      {supersededUpdate && downloadedVersion ? (
+        <Paragraph type="warning" style={{ marginBottom: 12 }}>
+          {`安装前检查发现通道已有 ${supersededUpdate.version}，晚于已下载的 ${downloadedVersion}。请选择仍安装已下载的版本，或改为下载并安装通道最新版本。`}
         </Paragraph>
       ) : null}
 
@@ -1445,7 +1480,7 @@ const AdvancedConfigPage: React.FC = () => {
         <Button
           type="primary"
           onClick={() => void handleInstallAppUpdate()}
-          disabled={!isUpdateDownloaded}
+          disabled={!isUpdateDownloaded || isDownloadingUpdate}
           loading={isInstallingUpdate}
         >
           安装更新
@@ -1454,6 +1489,17 @@ const AdvancedConfigPage: React.FC = () => {
           重启上位机
         </Button>
       </Space>
+
+      {supersededUpdate && downloadedVersion ? (
+        <Space wrap style={{ marginTop: 12 }}>
+          <Button onClick={() => void handleInstallDownloadedAppUpdate()} loading={isInstallingUpdate}>
+            {`仍安装已下载的 ${downloadedVersion}`}
+          </Button>
+          <Button type="primary" onClick={() => void handleAcceptLatestAppUpdate()} loading={isInstallingUpdate}>
+            {`改为下载并安装 ${supersededUpdate.version}`}
+          </Button>
+        </Space>
+      ) : null}
     </Card>
   );
 

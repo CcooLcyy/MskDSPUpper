@@ -120,26 +120,72 @@ function toAppUpdateInfo(update: NonNullable<PendingAppUpdate>): AppUpdateInfo {
   };
 }
 
+/**
+ * 释放上一次检查留下、且尚未下载的句柄。
+ *
+ * 每次清单检查都会新建 updater 资源，未下载的旧句柄必须释放，否则会持续泄漏；
+ * 已下载的待安装包绝不能在这里丢弃，否则会出现“没有任何可安装版本”的空窗。
+ */
+async function releaseStalePendingUpdate(): Promise<void> {
+  const stale = pendingAppUpdate;
+
+  if (!stale || stale === downloadedAppUpdate) {
+    return;
+  }
+
+  pendingAppUpdate = null;
+
+  try {
+    await stale.close();
+  } catch {
+    // 旧检查句柄释放失败不影响后续检查。
+  }
+}
+
 async function downloadAppUpdate(
   onEvent?: (event: AppUpdateDownloadEvent) => void,
 ): Promise<AppUpdateInfo> {
-  const update = pendingAppUpdate ?? (await check());
+  const update = pendingAppUpdate ?? (await check({ allowDowngrades: true }));
 
   if (!update) {
     throw new Error('没有可下载的客户端更新');
   }
 
-  pendingAppUpdate = update;
-  try {
-    await update.download((event) => {
-      onEvent?.(event as AppUpdateDownloadEvent);
-    });
-    downloadedAppUpdate = update;
-    return toAppUpdateInfo(update);
-  } catch (error) {
-    downloadedAppUpdate = null;
-    throw error;
+  const previous = downloadedAppUpdate;
+
+  // 版本一致：复用已下载的包，只释放本次检查新建的句柄，不重复下载。
+  if (previous && previous.version === update.version) {
+    pendingAppUpdate = previous;
+
+    if (update !== previous) {
+      try {
+        await update.close();
+      } catch {
+        // 冗余检查句柄释放失败不影响已下载的包。
+      }
+    }
+
+    return toAppUpdateInfo(previous);
   }
+
+  pendingAppUpdate = update;
+
+  // 先下后丢：新包下载失败时保留旧包，避免出现没有可安装版本的窗口。
+  await update.download((event) => {
+    onEvent?.(event as AppUpdateDownloadEvent);
+  });
+
+  downloadedAppUpdate = update;
+
+  if (previous && previous !== update) {
+    try {
+      await previous.close();
+    } catch {
+      // 旧包释放失败不影响新包安装。
+    }
+  }
+
+  return toAppUpdateInfo(update);
 }
 
 async function installAppUpdate(): Promise<AppUpdateInfo> {
@@ -148,23 +194,25 @@ async function installAppUpdate(): Promise<AppUpdateInfo> {
     throw new Error('没有已下载的客户端更新包');
   }
 
-  try {
-    await update.install();
-    return toAppUpdateInfo(update);
-  } finally {
-    if (pendingAppUpdate === update) {
-      pendingAppUpdate = null;
-    }
-    if (downloadedAppUpdate === update) {
-      downloadedAppUpdate = null;
-    }
+  const info = toAppUpdateInfo(update);
 
-    try {
-      await update.close();
-    } catch {
-      // 安装可能触发进程退出，资源清理失败可忽略。
-    }
+  // 安装成功后 Windows 上进程会被安装器接管并退出，下面的清理不会执行；
+  // 安装失败时保留已下载包，界面状态与适配器保持一致，可直接重试。
+  await update.install();
+
+  downloadedAppUpdate = null;
+
+  if (pendingAppUpdate === update) {
+    pendingAppUpdate = null;
   }
+
+  try {
+    await update.close();
+  } catch {
+    // 安装后资源清理失败可忽略。
+  }
+
+  return info;
 }
 
 async function downloadAndInstallAppUpdate(
@@ -196,9 +244,11 @@ export const api = {
 
   getAppVersion: () => getVersion(),
   checkAppUpdate: async (): Promise<AppUpdateInfo | null> => {
-    await disposePendingAppUpdate();
+    // 只释放上一次未下载的检查句柄，绝不丢弃已下载的待安装包。
+    await releaseStalePendingUpdate();
 
-    const update = await check();
+    // 版本串不同即视为有更新：CI 构建只变构建时间戳或提交 sha 时同样要能发现。
+    const update = await check({ allowDowngrades: true });
     pendingAppUpdate = update;
 
     return update ? toAppUpdateInfo(update) : null;

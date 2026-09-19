@@ -6,13 +6,16 @@ import assert from 'node:assert/strict';
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
 const source = (relativePath) => fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 
-// 验证自动更新方案明确了 30 秒调度和安装边界。
+// 验证自动更新方案明确了 30 秒调度、安装边界与待安装状态下的持续检查。
 test('software auto update design fixes the 30 second no-side-effect policy', () => {
   const design = source('doc/软件自动更新方案.md');
 
   assert.match(design, /每 30 秒自动检查/);
   assert.match(design, /上位机更新只进入“待安装”状态/);
   assert.match(design, /不自动上传、安装或连接目标设备/);
+  assert.match(design, /清单版本与已下载包版本一致：复用已下载包/);
+  assert.match(design, /先下载新包，下载成功后再释放旧包/);
+  assert.match(design, /“已下载待安装”不跳过/);
 });
 // 验证上位机后台任务会自动下载，但安装动作仍由用户触发。
 test('upper updater separates download from install and keeps the 30 second timer', () => {
