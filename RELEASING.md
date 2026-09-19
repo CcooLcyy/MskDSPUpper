@@ -12,7 +12,6 @@
 - Beta workflow trigger: push branch `beta/**`, or manual `workflow_dispatch`
 - Nightly workflow trigger: schedule or manual `workflow_dispatch`
 - Static source backfill trigger: manual `workflow_dispatch`
-- Auto-promote workflow trigger: schedule or manual `workflow_dispatch`
 - CI workflow trigger: pull request, or push to `main`
 
 ## Before The First GitHub Run
@@ -75,7 +74,7 @@ In `Settings -> Actions -> General`:
 2. Under `Workflow permissions`, select `Read and write permissions`.
 3. Save the setting before the first nightly/beta/stable run.
 
-The workflows create or update releases, upload release assets, and the auto-promote workflow pushes tags, so `contents: write` must be effective.
+The workflows create or update releases and upload release assets, so `contents: write` must be effective.
 
 ## First Validation Order
 
@@ -164,5 +163,5 @@ needed.
 
 ## Optional Follow-up
 
-- Validate `Actions -> Promote Stable` after the first manual stable release is complete.
-- For a fast dry run of auto-promotion logic, use `workflow_dispatch` and temporarily set `threshold_hours` to `0` on a disposable beta branch.
+- After a manual stable release, confirm the `stable` channel manifest and the GitHub Release assets are in sync.
+- The pushed tag version must match `package.json`: `release.yml` publishes the version it finds in `package.json`, so a mismatched tag produces a mislabeled release.

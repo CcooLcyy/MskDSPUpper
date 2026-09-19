@@ -394,7 +394,7 @@ test('powershell steps do not pass possibly-empty expressions as standalone argu
 
 // 回归：tests/workflow 里有 4 个用例直接读取 proto/*.proto，凡是执行该测试套件的 job 都必须
 // 让子模块可用（checkout 时 submodules: true，或显式 git submodule update --init），
-// 否则会以 ENOENT 失败（promote 曾经因此中断了 beta→stable 的自动晋升链路）。
+// 否则会以 ENOENT 失败（曾有 workflow 因为忘记拉子模块而整条链路失败）。
 test('jobs running the workflow test suite must make the proto submodule available', () => {
   const workflowDir = path.join(repoRoot, '.github', 'workflows');
   const workflowPaths = fs
@@ -422,7 +422,7 @@ test('jobs running the workflow test suite must make the proto submodule availab
     }
   }
 
-  assert.ok(checkedJobCount >= 5, `expected at least 5 test jobs, got ${checkedJobCount}`);
+  assert.ok(checkedJobCount >= 4, `expected at least 4 test jobs, got ${checkedJobCount}`);
 });
 
 // publish 工作区是干净检出，package/metadata 与 package/.manifest-backup 都不存在，
@@ -508,17 +508,11 @@ test('release workflow verifies existing stable tags and fetches beta refs befor
   assert.match(releaseBlock, /gh release create \$tag \$files --verify-tag --title \$title --generate-notes --latest/);
 });
 
-test('promote workflow only dispatches release workflow after successful promotions', () => {
-  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/promote.yml'), 'utf8');
-  const evaluateBlock = extractStepBlock(fileText, 'Evaluate stale beta branches');
-  const promoteBlock = extractStepBlock(fileText, 'Promote beta branches to stable tags');
-  const triggerBlock = extractStepBlock(fileText, 'Trigger release workflows for promoted tags');
+test('release workflow keeps manual stable publishing path', () => {
+  const fileText = fs
+    .readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8')
+    .replace(/\r\n/g, '\n');
 
-  assert.match(evaluateBlock, /GH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
-  assert.match(promoteBlock, /if: steps\.evaluate\.outputs\.has_release_dispatches == 'true'/);
-  assert.match(
-    triggerBlock,
-    /if: steps\.evaluate\.outputs\.has_release_dispatches == 'true' && steps\.promote\.outputs\.release_dispatch_count != '0'/,
-  );
-  assert.match(triggerBlock, /steps\.promote\.outputs\.release_dispatch_tags_json/);
+  assert.match(fileText, /^\s{2}push:\n\s{4}tags:\n\s{6}- v\*$/m);
+  assert.match(fileText, /^\s{2}workflow_dispatch:$/m);
 });
