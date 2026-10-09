@@ -18,6 +18,20 @@ const realtimeUpdate = {
   sequence: 9,
 };
 
+// 验证固定点的源值显示不被旧模拟快照覆盖，也不能被标为模拟数据。
+test('IEC104 固定上报点的源值显示忽略临时模拟快照', () => {
+  const updates = buildIec104SimulationUpdates({ conn_name: '从站', points: [{
+    tag: '全站有功', point_type: 1, bool_value: null, double_value: 123,
+    quality: 0, ts_ms: 1_800_000_000_000,
+  }] });
+  assert.deepEqual(resolveIec104RuntimeDisplay('全站有功', updates, realtimeUpdate, true), {
+    update: realtimeUpdate, simulated: false,
+  });
+  assert.deepEqual(resolveIec104RuntimeDisplay('全站有功', updates, undefined, true), {
+    update: undefined, simulated: false,
+  });
+});
+
 // 验证同一 Tag 同时存在实时值和模拟值时，运行视图选择模拟值与模拟时间。
 test('IEC104 simulation values override DataCenter realtime values by tag', () => {
   const simulationUpdates = buildIec104SimulationUpdates({

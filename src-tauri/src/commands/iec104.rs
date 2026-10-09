@@ -98,6 +98,10 @@ pub struct PointDto {
     pub offset_decimal: String,
     #[serde(default)]
     pub deadband_decimal: String,
+    #[serde(default)]
+    pub fixed_value_enabled: bool,
+    #[serde(default)]
+    pub fixed_value: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -176,6 +180,8 @@ impl From<Point> for PointDto {
             scale_decimal: point.scale_decimal,
             offset_decimal: point.offset_decimal,
             deadband_decimal: point.deadband_decimal,
+            fixed_value_enabled: point.fixed_value_enabled,
+            fixed_value: point.fixed_value,
         }
     }
 }
@@ -247,6 +253,8 @@ impl PointDto {
             scale_decimal: self.scale_decimal.clone(),
             offset_decimal: self.offset_decimal.clone(),
             deadband_decimal: self.deadband_decimal.clone(),
+            fixed_value_enabled: self.fixed_value_enabled,
+            fixed_value: self.fixed_value,
         }
     }
 }
@@ -380,6 +388,11 @@ pub async fn iec104_upsert_point_table(
     replace: bool,
 ) -> Result<(), String> {
     tracing::info!(protocol = "IEC104", conn_name = %conn_name, point_count = points.len(), replace, "开始保存协议点表");
+    for point in &points {
+        tracing::info!(protocol = "IEC104", conn_name = %conn_name, tag = %point.tag,
+            ioa = point.ioa, fixed_value_enabled = point.fixed_value_enabled,
+            fixed_value = point.fixed_value, "保存逐点固定上报值配置，原倍率与偏移保持不变");
+    }
     let client = Iec104Client::new(&state.conn_manager);
     client
         .upsert_point_table(
@@ -593,4 +606,47 @@ pub async fn iec104_query_soe(
         total_count: response.total_count,
         unacknowledged_count: response.unacknowledged_count,
     })
+}
+
+#[cfg(test)]
+mod fixed_value_tests {
+    use super::{Point, PointDto};
+
+    fn legacy_point_json() -> serde_json::Value {
+        serde_json::json!({
+            "tag": "电压", "ioa": 16385, "point_type": 1,
+            "business_type": 2, "scale": 2.5, "offset": -3.0, "deadband": 0.1,
+            "scale_decimal": "2.5", "offset_decimal": "-3", "deadband_decimal": "0.1"
+        })
+    }
+
+    // 验证旧 JSON 缺省关闭固定值，仍保留原工程量参数。
+    #[test]
+    fn legacy_point_defaults_to_live_value() {
+        let dto: PointDto = serde_json::from_value(legacy_point_json()).unwrap();
+        assert!(!dto.fixed_value_enabled);
+        assert_eq!(dto.fixed_value, 0.0);
+        assert_eq!(dto.to_proto().scale, 2.5);
+        assert_eq!(dto.to_proto().offset_decimal, "-3");
+    }
+
+    // 验证固定零值、非零值和关闭后保留值经过 JSON 与 protobuf 双向转换不丢失。
+    #[test]
+    fn fixed_values_survive_json_and_proto_round_trip() {
+        for (enabled, value) in [(true, 0.0), (true, 10.0), (false, 10.0)] {
+            let mut json = legacy_point_json();
+            json["fixed_value_enabled"] = serde_json::json!(enabled);
+            json["fixed_value"] = serde_json::json!(value);
+            let dto: PointDto = serde_json::from_value(json).unwrap();
+            let proto: Point = dto.to_proto();
+            assert_eq!(proto.fixed_value_enabled, enabled);
+            assert_eq!(proto.fixed_value, value);
+            let output = serde_json::to_value(PointDto::from(proto)).unwrap();
+            assert_eq!(output["fixed_value_enabled"], serde_json::json!(enabled));
+            assert_eq!(output["fixed_value"], serde_json::json!(value));
+            assert_eq!(output["scale"], serde_json::json!(2.5));
+            assert_eq!(output["offset"], serde_json::json!(-3.0));
+            assert_eq!(output["scale_decimal"], "2.5");
+        }
+    }
 }

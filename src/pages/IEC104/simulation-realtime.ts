@@ -44,7 +44,10 @@ export function resolveIec104RuntimeDisplay(
   tag: string,
   simulationUpdates: ReadonlyMap<string, DcSourcePointUpdate>,
   realtimeUpdate: DcSourcePointUpdate | null | undefined,
+  fixedValueEnabled = false,
 ): Iec104RuntimeDisplay {
+  // 固定上报点的临时模拟不生效；源值列仍展示真实源数据，固定报文值在独立列显示。
+  if (fixedValueEnabled) return { update: realtimeUpdate, simulated: false };
   const simulationUpdate = simulationUpdates.get(tag);
   return simulationUpdate
     ? { update: simulationUpdate, simulated: true }

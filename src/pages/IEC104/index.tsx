@@ -127,6 +127,12 @@ import {
   toDecimalInputText,
 } from './decimal-input';
 import SoeHistoryPanel from './SoeHistoryPanel';
+import {
+  DEFAULT_IEC104_FIXED_VALUE_FIELDS,
+  canUseIec104FixedValue,
+  getIec104FixedValueError,
+  normalizeIec104FixedValueFields,
+} from './fixed-value';
 
 const { Text } = Typography;
 
@@ -416,6 +422,7 @@ const getCreatePointInitialValues = (points: Iec104Point[]) => {
   return {
     ...DEFAULT_POINT_FORM_VALUES,
     ...DEFAULT_REMOTE_CONTROL_FIELDS,
+    ...DEFAULT_IEC104_FIXED_VALUE_FIELDS,
     ioa_category: 'custom' as IoaCategoryKey,
     ioa,
     point_type: points[points.length - 1]?.point_type ?? 1,
@@ -622,6 +629,7 @@ const IEC104: React.FC = () => {
   const pointIoaCategory = Form.useWatch('ioa_category', pointForm) as IoaCategoryKey | undefined;
   const pointType = Form.useWatch('point_type', pointForm);
   const pointBusinessType = Form.useWatch('business_type', pointForm);
+  const pointFixedValueEnabled = Form.useWatch('fixed_value_enabled', pointForm) === true;
   const pointTag = Form.useWatch('tag', pointForm);
   const pointIoa = Form.useWatch('ioa', pointForm);
 
@@ -630,6 +638,10 @@ const IEC104: React.FC = () => {
   const selectedLink = links.find(
     (l) => l.config?.conn_name === selectedConn,
   ) ?? null;
+  const selectedSlaveStation = isSlaveStationConfig(selectedLink?.config);
+  const pointFixedValueAvailable = canUseIec104FixedValue({
+    ioa: pointIoa, point_type: pointType, business_type: pointBusinessType,
+  }, selectedSlaveStation);
   const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY), true);
   const showLocalEndpointFields = linkRole !== ROLE_CLIENT;
   const showRemotePortField = linkRole !== ROLE_SERVER;
@@ -910,7 +922,7 @@ const IEC104: React.FC = () => {
             return;
           }
           setPoints(pt.points.map((point) => normalizeIec104PointEngineeringFields(
-            normalizeRemoteControlFields(point),
+            normalizeIec104FixedValueFields(normalizeRemoteControlFields(point)),
           )));
         } catch (error) {
           if (requestId !== pointLoadRequestRef.current) {
@@ -1307,6 +1319,17 @@ const IEC104: React.FC = () => {
         }
 
         await api.iec104UpsertLink(config, createOnly);
+        if (editingLink && !isSlaveStationConfig(config)) {
+          const table = await api.iec104GetPointTable(config.conn_name);
+          if (table.points.some((point) => point.fixed_value_enabled)) {
+            const nextPoints = table.points.map((point) => normalizeIec104FixedValueFields(point, false));
+            await api.iec104UpsertPointTable(config.conn_name, nextPoints, true);
+            setPoints(nextPoints);
+            console.info('IEC104 连接改为非从站后已解除逐点固定值，保留原数值及倍率偏移', {
+              connName: config.conn_name,
+            });
+          }
+        }
       };
       const restartResult = createOnly
         ? await runWithRuntimeRestart({
@@ -1611,13 +1634,15 @@ const IEC104: React.FC = () => {
         business_type: p.business_type,
         remote_control_type: p.remote_control_type || DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
         command_execution_mode: p.command_execution_mode || DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
+        fixed_value_enabled: selectedSlaveStation && (p.fixed_value_enabled ?? false),
+        fixed_value: p.fixed_value ?? 0,
         scale: resolveIec104PointDecimalText(p, 'scale'),
         offset: resolveIec104PointDecimalText(p, 'offset'),
         deadband: resolveIec104PointDecimalText(p, 'deadband'),
       });
       setPointModalOpen(true);
     },
-    [points, pointForm],
+    [points, pointForm, selectedSlaveStation],
   );
 
   const reorderImportDrafts = useCallback((fromKey: string, toKey: string) => {
@@ -1760,7 +1785,7 @@ const IEC104: React.FC = () => {
           nextPoint = { ...nextPoint, command_execution_mode: pointCommandExecutionModeBatchValue };
         }
       }
-      return nextPoint;
+      return nextPoint === point ? point : normalizeIec104FixedValueFields(nextPoint, selectedSlaveStation);
     });
     const changedCount = newPoints.filter((point, index) => point !== points[index]).length;
     if (changedCount === 0) {
@@ -1795,7 +1820,7 @@ const IEC104: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [messageApi, pointCommandExecutionModeBatchValue, pointRemoteControlTypeBatchValue, pointSubmitting, pointTypeBatchValue, points, runSelectedLinkStopped, selectedConn, selectedPointTags]);
+  }, [messageApi, pointCommandExecutionModeBatchValue, pointRemoteControlTypeBatchValue, pointSubmitting, pointTypeBatchValue, points, runSelectedLinkStopped, selectedConn, selectedPointTags, selectedSlaveStation]);
 
   const reorderIoaAdjustDrafts = useCallback((fromKey: string, toKey: string) => {
     if (fromKey === toKey) return;
@@ -1943,15 +1968,14 @@ const IEC104: React.FC = () => {
     if (!selectedConn || pointSubmitting) return;
     setPointSubmitting(true);
     try {
-      const values = await pointForm.validateFields();
+      const validatedValues = await pointForm.validateFields();
+      const values = { ...pointForm.getFieldsValue(true), ...validatedValues };
       const engineeringFields = createIec104EngineeringFields(
-        values.point_type === POINT_TYPE_SINGLE
-          ? DEFAULT_POINT_FORM_VALUES
-          : {
-            scale: toDecimalInputText(values.scale),
-            offset: toDecimalInputText(values.offset),
-            deadband: toDecimalInputText(values.deadband),
-          },
+        {
+          scale: toDecimalInputText(values.scale),
+          offset: toDecimalInputText(values.offset),
+          deadband: toDecimalInputText(values.deadband),
+        },
       );
       const newPoint: Iec104Point = normalizeRemoteControlFields({
         tag: values.tag.trim(),
@@ -1960,8 +1984,12 @@ const IEC104: React.FC = () => {
         business_type: values.business_type ?? 0,
         remote_control_type: values.remote_control_type,
         command_execution_mode: values.command_execution_mode,
+        fixed_value_enabled: pointFixedValueAvailable && values.fixed_value_enabled === true,
+        fixed_value: values.fixed_value ?? 0,
         ...engineeringFields,
       });
+      const fixedValueError = getIec104FixedValueError(newPoint);
+      if (fixedValueError) throw new Error(fixedValueError);
       const duplicateTag = points.some((point, index) => index !== editingPointIndex && point.tag.trim() === newPoint.tag);
       const duplicateIoa = points.some((point, index) => index !== editingPointIndex && point.ioa === newPoint.ioa);
       if (duplicateTag) {
@@ -1980,6 +2008,10 @@ const IEC104: React.FC = () => {
       }
       const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
       messageApi.success(editingPointIndex !== null ? '点位已更新' : '点位已添加');
+      console.info('IEC104 已保存逐点固定上报值配置，保留原倍率与偏移', {
+        connName: selectedConn, tag: newPoint.tag, ioa: newPoint.ioa,
+        fixedValueEnabled: newPoint.fixed_value_enabled, fixedValue: newPoint.fixed_value,
+      });
       if (restartResult.restartError) {
         messageApi.warning(`点表已保存，但重新启动失败: ${formatErrorText(restartResult.restartError)}`);
       } else if (restartResult.stoppedBeforeRun) {
@@ -1995,7 +2027,7 @@ const IEC104: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [selectedConn, pointForm, editingPointIndex, points, messageApi, pointSubmitting, runSelectedLinkStopped]);
+  }, [selectedConn, pointForm, pointFixedValueAvailable, editingPointIndex, points, messageApi, pointSubmitting, runSelectedLinkStopped]);
 
   const openCopyPoint = useCallback((index: number) => {
     if (!selectedConn || pointSubmitting) return;
@@ -2022,12 +2054,14 @@ const IEC104: React.FC = () => {
       business_type: source.business_type,
       remote_control_type: source.remote_control_type || DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
       command_execution_mode: source.command_execution_mode || DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
+      fixed_value_enabled: source.fixed_value_enabled === true && selectedSlaveStation,
+      fixed_value: source.fixed_value ?? 0,
       scale: resolveIec104PointDecimalText(source, 'scale'),
       offset: resolveIec104PointDecimalText(source, 'offset'),
       deadband: resolveIec104PointDecimalText(source, 'deadband'),
     });
     setPointModalOpen(true);
-  }, [messageApi, pointForm, pointSubmitting, points, selectedConn]);
+  }, [messageApi, pointForm, pointSubmitting, points, selectedConn, selectedSlaveStation]);
 
   useEffect(() => {
     if (!pointModalOpen || editingPointIndex !== null) {
@@ -2242,21 +2276,21 @@ const IEC104: React.FC = () => {
 
   const updateImportPointDraft = useCallback((key: string, patch: Partial<ImportedPointDraft>) => {
     setImportPointDrafts((prev) =>
-      prev.map((item) => (item.key === key ? { ...item, ...patch } : item)),
+      prev.map((item) => (item.key === key ? normalizeIec104FixedValueFields({ ...item, ...patch }, selectedSlaveStation) : item)),
     );
-  }, []);
+  }, [selectedSlaveStation]);
 
   const applyImportBatchType = useCallback((nextType: number | undefined) => {
     setImportBatchType(nextType);
     if (nextType === undefined) {
       return;
     }
-    setImportPointDrafts((prev) => prev.map((item) => ({
+    setImportPointDrafts((prev) => prev.map((item) => normalizeIec104FixedValueFields({
       ...item,
       point_type: nextType,
       ...(nextType === POINT_TYPE_SINGLE ? DEFAULT_POINT_ENGINEERING_FIELDS : {}),
-    })));
-  }, []);
+    }, selectedSlaveStation)));
+  }, [selectedSlaveStation]);
 
   const applyImportBatchCategory = useCallback((nextCategory: IoaCategoryKey | undefined) => {
     setImportBatchCategory(nextCategory);
@@ -2272,15 +2306,15 @@ const IEC104: React.FC = () => {
       return prev.map((item) => {
         const nextIoa = getSuggestedIoaByCategory(usedIoas, nextCategory, item.ioa);
         usedIoas.add(nextIoa);
-        return {
+        return normalizeIec104FixedValueFields({
           ...item,
           ioa_category: nextCategory,
           ioa: nextIoa,
           business_type: getPointBusinessTypeByCategory(nextCategory),
-        };
+        }, selectedSlaveStation);
       });
     });
-  }, [points]);
+  }, [points, selectedSlaveStation]);
 
   const applyImportBatchRemoteControlType = useCallback((nextType: number | undefined) => {
     setImportBatchRemoteControlType(nextType);
@@ -2319,16 +2353,16 @@ const IEC104: React.FC = () => {
 
         return prev.map((item) =>
           item.key === key
-            ? {
+            ? normalizeIec104FixedValueFields({
                 ...item,
                 ...nextDraftFields,
                 business_type: getPointBusinessTypeByCategory(nextCategory),
-              }
+              }, selectedSlaveStation)
             : item,
         );
       });
     },
-    [points],
+    [points, selectedSlaveStation],
   );
 
   const handleImportPointIoaChange = useCallback(
@@ -2412,6 +2446,7 @@ const IEC104: React.FC = () => {
             deadband: resolveIec104PointDecimalText(draft, 'deadband'),
           },
       );
+      const fixedValueFields = normalizeIec104FixedValueFields(draft, selectedSlaveStation);
       normalizedPoints.push({
         tag,
         ioa: draft.ioa,
@@ -2419,6 +2454,8 @@ const IEC104: React.FC = () => {
         business_type: draft.business_type,
         remote_control_type: draft.remote_control_type || DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
         command_execution_mode: draft.command_execution_mode || DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
+        fixed_value_enabled: fixedValueFields.fixed_value_enabled,
+        fixed_value: fixedValueFields.fixed_value,
         ...engineeringFields,
       });
       draftTags.add(tag);
@@ -2522,6 +2559,7 @@ const IEC104: React.FC = () => {
     runSelectedLinkStopped,
     selectedConn,
     importStationRole,
+    selectedSlaveStation,
   ]);
 
   // ── Point Table Columns ──
@@ -2644,7 +2682,7 @@ const IEC104: React.FC = () => {
         : '-',
     };
     const realtimeValueColumn = {
-      title: '实时值',
+      title: selectedSlaveStation ? '实时源值 / 临时模拟值' : '实时值',
       key: 'realtime_value',
       width: 160,
       render: (_value: unknown, record: Iec104Point) => {
@@ -2652,6 +2690,7 @@ const IEC104: React.FC = () => {
           record.tag,
           simulationUpdatesByTag,
           realtimeByTag[record.tag],
+          selectedSlaveStation && record.fixed_value_enabled === true,
         );
         return renderProtocolRealtimeValueCell(
           display.update,
@@ -2660,7 +2699,7 @@ const IEC104: React.FC = () => {
       },
     };
     const realtimeTimestampColumn = {
-      title: '时间',
+      title: selectedSlaveStation ? '源值时间' : '时间',
       key: 'realtime_ts',
       width: 130,
       render: (_value: unknown, record: Iec104Point) => {
@@ -2668,6 +2707,7 @@ const IEC104: React.FC = () => {
           record.tag,
           simulationUpdatesByTag,
           realtimeByTag[record.tag],
+          selectedSlaveStation && record.fixed_value_enabled === true,
         );
         return renderProtocolRealtimeTimestampCell(
           display.update,
@@ -2676,7 +2716,7 @@ const IEC104: React.FC = () => {
       },
     };
     const realtimeQualityColumn = {
-      title: '质量',
+      title: selectedSlaveStation ? '源值质量' : '质量',
       key: 'realtime_quality',
       width: 100,
       render: (_value: unknown, record: Iec104Point) => {
@@ -2684,11 +2724,20 @@ const IEC104: React.FC = () => {
           record.tag,
           simulationUpdatesByTag,
           realtimeByTag[record.tag],
+          selectedSlaveStation && record.fixed_value_enabled === true,
         );
         return display.simulated
           ? <Tag color="warning">模拟</Tag>
           : renderProtocolRealtimeQualityCell(display.update, realtimeRevisionByTag[record.tag]?.quality);
       },
+    };
+    const fixedValueColumn = {
+      title: '固定上报值',
+      key: 'fixed_value',
+      width: 170,
+      render: (_value: unknown, record: Iec104Point) => selectedSlaveStation && record.fixed_value_enabled
+        ? <Tooltip title="报文直接发送此固定值，倍率、偏移及临时模拟值不生效；源值时间和品质不代表固定报文。"><Tag color="magenta">固定：{record.fixed_value ?? 0}</Tag></Tooltip>
+        : <Text type="secondary">{canUseIec104FixedValue(record, selectedSlaveStation) ? '关闭' : '不适用'}</Text>,
     };
     const actionColumn = {
       title: '操作',
@@ -2740,7 +2789,7 @@ const IEC104: React.FC = () => {
     };
 
     if (pointTableView === 'runtime') {
-      return [tagColumn, ioaColumn, typeColumn, businessTypeColumn, remoteControlColumn, realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
+      return [tagColumn, ioaColumn, typeColumn, businessTypeColumn, remoteControlColumn, ...(selectedSlaveStation ? [fixedValueColumn] : []), realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
     }
 
     return [
@@ -2749,6 +2798,7 @@ const IEC104: React.FC = () => {
       typeColumn,
       businessTypeColumn,
       remoteControlColumn,
+      ...(selectedSlaveStation ? [fixedValueColumn] : []),
       {
         title: 'Scale',
         dataIndex: 'scale_decimal',
@@ -2785,6 +2835,7 @@ const IEC104: React.FC = () => {
     realtimeByTag,
     realtimeRevisionByTag,
     simulationUpdatesByTag,
+    selectedSlaveStation,
   ]);
 
   const importPointColumns: ColumnsType<ImportedPointDraft> = [
@@ -3661,7 +3712,20 @@ const IEC104: React.FC = () => {
         keyboard={!pointSubmitting}
         destroyOnClose
       >
-        <Form form={pointForm} layout="vertical" size="small">
+        <Form
+          form={pointForm}
+          layout="vertical"
+          size="small"
+          onValuesChange={(changedValues, values) => {
+            if ('point_type' in changedValues || 'business_type' in changedValues || 'ioa' in changedValues) {
+              const normalized = normalizeIec104FixedValueFields(values, selectedSlaveStation);
+              if (values.fixed_value_enabled && !normalized.fixed_value_enabled) {
+                pointForm.setFieldValue('fixed_value_enabled', false);
+                console.info('IEC104 点位类型或业务变更后解除非法固定值模式，保留原固定数值');
+              }
+            }
+          }}
+        >
           <Row gutter={16}>
             <Col xs={24} sm={12} lg={8}>
               <Form.Item
@@ -3793,15 +3857,45 @@ const IEC104: React.FC = () => {
                 </Col>
               </>
             ) : null}
+            {pointFixedValueAvailable ? (
+              <>
+                <Col xs={24} sm={12} lg={12}>
+                  <Form.Item name="fixed_value_enabled" label="固定上报值" valuePropName="checked"
+                    extra="直接发送固定报文值，保留真实源值及原倍率、偏移；关闭后恢复原换算。">
+                    <Switch onChange={(enabled) => {
+                      if (enabled && pointType === POINT_TYPE_SINGLE) {
+                        const value = pointForm.getFieldValue('fixed_value');
+                        if (value !== 0 && value !== 1) pointForm.setFieldValue('fixed_value', 0);
+                      }
+                    }} />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} sm={12} lg={12}>
+                  <Form.Item name="fixed_value" label={pointType === POINT_TYPE_SINGLE ? '固定值 (0/1)' : '固定报文数值'}
+                    dependencies={['fixed_value_enabled', 'point_type', 'business_type']}
+                    rules={[{ validator: async (_rule, value) => {
+                      const error = getIec104FixedValueError({
+                        ioa: pointIoa, point_type: pointType, business_type: pointBusinessType,
+                        fixed_value_enabled: pointForm.getFieldValue('fixed_value_enabled'), fixed_value: value,
+                      });
+                      if (error) throw new Error(error);
+                    } }]}>
+                    {pointType === POINT_TYPE_SINGLE
+                      ? <Select disabled={!pointFixedValueEnabled} options={[{ value: 0, label: '0 (分)' }, { value: 1, label: '1 (合)' }]} />
+                      : <InputNumber disabled={!pointFixedValueEnabled} style={{ width: '100%' }} />}
+                  </Form.Item>
+                </Col>
+              </>
+            ) : null}
             <Col xs={8} sm={4} lg={4}>
               <Form.Item
                 name="scale"
                 label="Scale"
                 tooltip={PARAMETER_HELP.common.scale}
-                extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}
+                extra={pointFixedValueEnabled ? '固定值模式下不生效' : isSinglePoint ? '仅 FLOAT 生效' : undefined}
                 rules={[{ validator: validateEngineeringDecimal('Scale') }]}
               >
-                <InputNumber<string> stringMode step={0.01} disabled={isSinglePoint} style={{ width: '100%' }} />
+                <InputNumber<string> stringMode step={0.01} disabled={isSinglePoint || pointFixedValueEnabled} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={8} sm={4} lg={4}>
@@ -3809,10 +3903,10 @@ const IEC104: React.FC = () => {
                 name="offset"
                 label="Offset"
                 tooltip={PARAMETER_HELP.common.offset}
-                extra={isSinglePoint ? '仅 FLOAT 生效' : undefined}
+                extra={pointFixedValueEnabled ? '固定值模式下不生效' : isSinglePoint ? '仅 FLOAT 生效' : undefined}
                 rules={[{ validator: validateEngineeringDecimal('Offset') }]}
               >
-                <InputNumber<string> stringMode step={0.01} disabled={isSinglePoint} style={{ width: '100%' }} />
+                <InputNumber<string> stringMode step={0.01} disabled={isSinglePoint || pointFixedValueEnabled} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={8} sm={4} lg={4}>

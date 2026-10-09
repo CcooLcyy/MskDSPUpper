@@ -296,6 +296,10 @@ export interface Iec104Point {
   scale_decimal: string;
   offset_decimal: string;
   deadband_decimal: string;
+  /** 固定上报值开关；旧配置缺省为关闭。 */
+  fixed_value_enabled?: boolean;
+  /** 直接发送的报文值，不经过倍率和偏移；关闭时保留。 */
+  fixed_value?: number;
 }
 
 export interface Iec104PointTable {

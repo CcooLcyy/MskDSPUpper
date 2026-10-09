@@ -1712,6 +1712,8 @@ function normalizeIec104Point(point: Iec104Point): Iec104Point {
     scale_decimal: scaleDecimal,
     offset_decimal: offsetDecimal,
     deadband_decimal: deadbandDecimal,
+    fixed_value_enabled: point.fixed_value_enabled ?? false,
+    fixed_value: point.fixed_value ?? 0,
   };
 }
 

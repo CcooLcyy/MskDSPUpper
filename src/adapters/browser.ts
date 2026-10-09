@@ -1362,6 +1362,8 @@ export const browserApi: typeof tauriApi = {
       scale_decimal: point.scale_decimal || String(point.scale),
       offset_decimal: point.offset_decimal || String(point.offset),
       deadband_decimal: point.deadband_decimal || String(point.deadband),
+      fixed_value_enabled: point.fixed_value_enabled ?? false,
+      fixed_value: point.fixed_value ?? 0,
     });
     const nextPoints = replace ? points : mergeByTag(previous, points);
     iec104Tables.set(connName, { conn_name: connName, points: clone(nextPoints.map(normalizePoint)) });
@@ -1374,7 +1376,7 @@ export const browserApi: typeof tauriApi = {
     const tsMs = Date.now();
     let floatIndex = 0;
     const points = table.points
-      .filter(isIec104SimulationPoint)
+      .filter((point) => isIec104SimulationPoint(point) && !point.fixed_value_enabled)
       .sort((left, right) => left.ioa - right.ioa);
     if (points.length === 0) throw new Error('浏览器开发模式 mock 点表中没有可模拟的遥信或遥测点');
     const previous = iec104Simulation.get(connName);
