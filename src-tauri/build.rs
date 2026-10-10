@@ -3,6 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 
 fn main() {
+    // 图标变更必须重新编译 Windows 资源，避免增量构建或 CI 缓存沿用旧图标。
+    println!("cargo:rerun-if-changed=icons/icon.ico");
+    println!("cargo:rerun-if-changed=icons/icon.png");
     tauri_build::build();
 
     // Proto files are provided by the repository-local submodule at ../proto.
