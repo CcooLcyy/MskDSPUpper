@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use super::lower_update_runtime;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -49,18 +50,7 @@ const VERTICAL_SECURITY_INSTALL_PATH: &str = "/usr/local/libexec/mskdsp-vertical
 const VERTICAL_SECURITY_SERVICE_NAME: &str = "mskdsp-vertical-security.service";
 const VERTICAL_SECURITY_SERVICE_PATH: &str = "/etc/systemd/system/mskdsp-vertical-security.service";
 const VERTICAL_SECURITY_MAX_SCRIPT_BYTES: usize = 1024 * 1024;
-const LOWER_UPDATE_RUNTIME_QUERY_COMMAND: &str = concat!(
-    "set -e; ",
-    "if ! command -v docker >/dev/null 2>&1; then ",
-    "printf '%s\\n' '__MSKDSP_DOCKER_UNAVAILABLE__' >&2; exit 127; fi; ",
-    "RESULT=\"$(docker inspect --type=container --format ",
-    "'{{.State.Running}} {{.Image}}' mskdsp 2>&1)\" || { ",
-    "case \"$RESULT\" in ",
-    "*\"No such container\"*|*\"No such object\"*) ",
-    "printf '%s\\n' '__MSKDSP_CONTAINER_MISSING__'; exit 0 ;; ",
-    "*) printf '%s\\n' \"$RESULT\" >&2; exit 1 ;; esac; }; ",
-    "printf '%s\\n' \"$RESULT\""
-);
+const LOWER_UPDATE_RUNTIME_QUERY_COMMAND: &str = lower_update_runtime::PROBE_COMMAND;
 pub const LOWER_UPDATE_DOWNLOAD_PROGRESS_EVENT: &str = "lower-update-download-progress";
 pub const LOWER_UPDATE_UPLOAD_PROGRESS_EVENT: &str = "lower-update-upload-progress";
 static LOWER_UPDATE_CACHE_LOCK: Mutex<()> = Mutex::const_new(());
@@ -642,26 +632,74 @@ async fn query_lower_update_runtime_info(
     auth: &LowerUpdateSshAuthDto,
     sudo_password: &str,
 ) -> Result<LowerUpdateRuntimeInfoDto, String> {
-    let output = tokio::time::timeout(
-        LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT,
-        execute_root_ssh_command(
+    tokio::time::timeout(LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT, async {
+        let output = execute_root_ssh_command(
             target,
             auth,
             sudo_password,
             LOWER_UPDATE_RUNTIME_QUERY_COMMAND,
-        ),
-    )
+        )
+        .await?;
+        if output.exit_code != Some(0) {
+            return Err(format_remote_command_error("查询下位机运行镜像失败", &output));
+        }
+        let (state, inspection) = lower_update_runtime::split_probe_output(&output.stdout);
+        let mut runtime = parse_runtime_query_output(state)?;
+        let Some(raw_image_id) = runtime.image_id.clone() else {
+            return Ok(runtime);
+        };
+        if !lower_update_runtime::requires_config_resolution(&raw_image_id, inspection)? {
+            return Ok(runtime);
+        }
+        if let Some(config_digest) = lower_update_runtime::cached_config_digest(&raw_image_id).await {
+            tracing::debug!(%raw_image_id, %config_digest, "命中已验证的运行镜像配置摘要映射");
+            runtime.image_id = Some(config_digest);
+            return Ok(runtime);
+        }
+        let started_at = Instant::now();
+        tracing::info!(%raw_image_id, "解析 containerd 运行镜像的配置摘要");
+        let command = format!(
+            "python3 -c {} {}",
+            shell_quote(lower_update_runtime::CONFIG_DIGEST_SCRIPT),
+            shell_quote(&raw_image_id),
+        );
+        let resolved = execute_root_ssh_command(target, auth, sudo_password, &command).await?;
+        if resolved.exit_code != Some(0) {
+            return Err(format_remote_command_error("解析运行镜像配置摘要失败", &resolved));
+        }
+        let config_digest = normalize_image_id(resolved.stdout.trim())
+            .ok_or_else(|| "运行镜像配置摘要解析结果不合法".to_string())?;
+        lower_update_runtime::cache_verified_config_digest(
+            raw_image_id.clone(),
+            config_digest.clone(),
+        )
+        .await;
+        tracing::info!(
+            %raw_image_id,
+            %config_digest,
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            "已验证运行镜像引用与配置摘要关联"
+        );
+        let current = execute_root_ssh_command(
+            target,
+            auth,
+            sudo_password,
+            LOWER_UPDATE_RUNTIME_QUERY_COMMAND,
+        )
+        .await?;
+        if current.exit_code != Some(0) {
+            return Err(format_remote_command_error("重新确认运行容器状态失败", &current));
+        }
+        let (state, _) = lower_update_runtime::split_probe_output(&current.stdout);
+        let mut current_runtime = parse_runtime_query_output(state)?;
+        if current_runtime.image_id.as_deref() != Some(raw_image_id.as_str()) {
+            return Err("查询期间容器运行镜像发生变化，请重新确认".into());
+        }
+        current_runtime.image_id = Some(config_digest);
+        Ok(current_runtime)
+    })
     .await
-    .map_err(|_| "查询下位机运行镜像超时".to_string())??;
-
-    if output.exit_code != Some(0) {
-        return Err(format_remote_command_error(
-            "查询下位机运行镜像失败",
-            &output,
-        ));
-    }
-
-    parse_runtime_query_output(&output.stdout)
+    .map_err(|_| "查询下位机运行镜像超时".to_string())?
 }
 
 fn format_remote_command_error(context: &str, output: &RemoteCommandOutput) -> String {
