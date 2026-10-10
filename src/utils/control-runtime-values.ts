@@ -2,6 +2,62 @@ import type { DcPointUpdate, DcSourcePointUpdate } from '../adapters';
 
 export type ControlRuntimeUpdates = Record<string, DcPointUpdate>;
 
+// 展示时钟每秒更新，容忍刚到达的点值比最近一次计时略晚。
+export const CONTROL_RUNTIME_FUTURE_TOLERANCE_MS = 1000;
+
+export interface ControlRuntimeSummary {
+  state: 'waiting' | 'ok' | 'stale' | 'quality' | 'missing';
+  latestTimestamp: number | null;
+  staleCount: number;
+  missingCount: number;
+  uncertainCount: number;
+}
+
+/** 根据点值的实际时间和质量汇总展示状态，不修改原始运行值。 */
+export const summarizeControlRuntime = (
+  updates: ControlRuntimeUpdates,
+  expectedTags: string[],
+  nowMs: number,
+  maxAgeMs: number,
+): ControlRuntimeSummary => {
+  const tags = [...new Set(expectedTags.filter(Boolean))];
+  const summary: ControlRuntimeSummary = {
+    state: 'waiting',
+    latestTimestamp: null,
+    staleCount: 0,
+    missingCount: 0,
+    uncertainCount: 0,
+  };
+  let observedCount = 0;
+  const ageLimit = Number.isFinite(maxAgeMs) ? Math.max(0, maxAgeMs) : 0;
+
+  tags.forEach((tag) => {
+    const update = updates[tag];
+    if (!update) {
+      summary.missingCount += 1;
+      return;
+    }
+    observedCount += 1;
+    const knownTimestamp = Number.isFinite(update.ts_ms) && update.ts_ms > 0;
+    if (knownTimestamp) {
+      summary.latestTimestamp = Math.max(summary.latestTimestamp ?? update.ts_ms, update.ts_ms);
+    }
+    if (!knownTimestamp || update.ts_ms - nowMs > CONTROL_RUNTIME_FUTURE_TOLERANCE_MS || nowMs - update.ts_ms > ageLimit) {
+      summary.staleCount += 1;
+    }
+    if (update.quality !== 1) {
+      summary.uncertainCount += 1;
+    }
+  });
+
+  if (observedCount > 0) {
+    summary.state = summary.missingCount > 0 ? 'missing'
+      : summary.staleCount > 0 ? 'stale'
+        : summary.uncertainCount > 0 ? 'quality' : 'ok';
+  }
+  return summary;
+};
+
 /**
  * Read a BOOL state from the runtime snapshot while retaining the group DTO
  * value until the corresponding point has been observed.

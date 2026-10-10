@@ -11,11 +11,17 @@ export type ControlDataBusBinding = {
 export class ControlGroupRoutesError extends Error {
   readonly groupSaved = true;
   readonly routeError: unknown;
+  readonly routes: DcRoute[];
+  readonly removedRoutes: DcRoute[];
+  readonly phase: 'upsert' | 'delete';
 
-  constructor(routeError: unknown) {
+  constructor(routeError: unknown, routes: DcRoute[] = [], removedRoutes: DcRoute[] = [], phase: 'upsert' | 'delete' = 'upsert') {
     super('控制组已保存，路由创建失败');
     this.name = 'ControlGroupRoutesError';
     this.routeError = routeError;
+    this.routes = routes.map((route) => ({ src: { ...route.src }, dst: { ...route.dst } }));
+    this.removedRoutes = removedRoutes.map((route) => ({ src: { ...route.src }, dst: { ...route.dst } }));
+    this.phase = phase;
   }
 }
 
@@ -78,18 +84,43 @@ export const saveControlGroupWithOptionalRoutes = async (options: {
   routes: DcRoute[];
   saveGroup: () => Promise<unknown>;
   saveRoutes: (routes: DcRoute[]) => Promise<unknown>;
+  removedRoutes?: DcRoute[];
+  deleteRoutes?: (routes: DcRoute[]) => Promise<unknown>;
 }): Promise<{ routesSubmitted: number }> => {
   await options.saveGroup();
 
-  if (!options.createRoutes || options.routes.length === 0) {
+  if (!options.createRoutes || (options.routes.length === 0 && !options.removedRoutes?.length)) {
     return { routesSubmitted: 0 };
   }
 
-  try {
-    await options.saveRoutes(options.routes);
-  } catch (error) {
-    throw new ControlGroupRoutesError(error);
-  }
+  await applyControlRoutePlan(options.routes, options.removedRoutes ?? [], options);
 
   return { routesSubmitted: options.routes.length };
 };
+
+type ControlRouteWriter = {
+  saveRoutes: (routes: DcRoute[]) => Promise<unknown>;
+  deleteRoutes?: (routes: DcRoute[]) => Promise<unknown>;
+};
+
+/** 先新增后解除旧绑定；失败时保存完整计划，重试使用幂等路由接口。 */
+async function applyControlRoutePlan(routes: DcRoute[], removedRoutes: DcRoute[], writer: ControlRouteWriter): Promise<void> {
+  let phase: ControlGroupRoutesError['phase'] = 'upsert';
+  try {
+    if (routes.length > 0) await writer.saveRoutes(routes);
+    phase = 'delete';
+    if (removedRoutes.length > 0) {
+      if (!writer.deleteRoutes) throw new Error('缺少旧路由清理接口');
+      await writer.deleteRoutes(removedRoutes);
+    }
+    console.info('控制组映射同步完成', { 新增数量: routes.length, 解除数量: removedRoutes.length });
+  } catch (error) {
+    console.error('控制组映射同步失败，保留待重试计划', { 阶段: phase, 错误: error });
+    throw new ControlGroupRoutesError(error, routes, removedRoutes, phase);
+  }
+}
+
+/** 仅重试路由同步，不重复创建或更新已经保存的控制组。 */
+export async function retryControlRoutes(error: ControlGroupRoutesError, writer: ControlRouteWriter): Promise<void> {
+  await applyControlRoutePlan(error.routes, error.removedRoutes, writer);
+}

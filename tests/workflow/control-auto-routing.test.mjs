@@ -153,12 +153,35 @@ test('control group save reports route failure after the group was saved', async
   );
 });
 
-// 验证 AGC 仅为成员快速选点提供默认关闭的自动路由，p_cmd 继续手动填写。
-test('AGC member picker exposes opt-in auto routing while p_cmd stays manual', () => {
+// 验证 AGC 保留成员快速选点，并提供总控输入和派生输出统一映射编辑。
+test('AGC exposes unified group mappings and retains opt-in member routing', () => {
   assert.match(agcSource, /const \[createMemberRoutes, setCreateMemberRoutes\] = useState\(false\)/);
   assert.match(agcSource, /保存控制组时自动创建 DataCenter 路由/);
   assert.doesNotMatch(agcSource, /从数据总线点位回填 p_cmd/);
   assert.match(agcSource, /moduleName: connection\.module_name/);
+  assert.match(agcSource, /useControlMappings\('AGC'\)/);
+  assert.match(agcSource, /<ControlMappingsEditor mapping=\{mappings\} fields=\{mappingFields\}/);
+  assert.match(agcSource, /p_cmd\.base_tag/);
+  assert.match(agcSource, /config\.outputs\?\.p_total_meas\?\.tag, 'output'/);
+  assert.match(agcSource, /mappings\.open\(config\.group_name, selectedGroup\.conn_id\)/);
+  assert.match(agcSource, /mappings\.open\('', undefined\)/);
+});
+
+// 验证 AGC 的草稿保护、端点读取错误和路由部分成功重试入口接入。
+test('AGC preserves drafts and route retry plans and shows runtime freshness', () => {
+  assert.match(agcSource, /okText="暂存成员"/);
+  assert.match(agcSource, /modalApi\.confirm\(/);
+  assert.match(agcSource, /仍需保存控制组/);
+  assert.match(agcSource, /保存时会先停止控制组，保存后恢复运行/);
+  assert.match(agcSource, /setDataBusEndpointError\(errorText\)/);
+  assert.match(agcSource, /setPendingRouteError\(routeSaveError\)/);
+  assert.match(agcSource, /<ControlRouteRetry error=\{pendingRouteError\}/);
+  assert.match(agcSource, /<ControlRuntimeStatus/);
+  assert.match(agcSource, /offline=\{runtimeOffline\}/);
+  assert.match(agcSource, /runtimeRequestIdRef\.current/);
+  assert.match(agcSource, /usePendingControlRoutes\('AGC'\)/);
+  assert.match(agcSource, /const openCreateGroup[\s\S]*if \(pendingRouteError\)/);
+  assert.match(agcSource, /const handleDeleteGroup[\s\S]*if \(pendingRouteError\)/);
 });
 
 // 验证 AGC 成员量测/base_tag 为输入路由，p_set 为输出路由，并在组保存后增量提交。

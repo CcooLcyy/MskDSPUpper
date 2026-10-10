@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Button,
   Card,
   Descriptions,
@@ -14,6 +15,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import {
@@ -43,10 +45,15 @@ import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/c
 import ControlGroupList from '../../components/control/ControlGroupList';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import ControlEmptyState from '../../components/control/ControlEmptyState';
+import useControlMappings from '../../components/control/useControlMappings';
+import ControlMappingsEditor from '../../components/control/ControlMappingsEditor';
+import ControlRouteRetry from '../../components/control/ControlRouteRetry';
+import usePendingControlRoutes from '../../components/control/usePendingControlRoutes';
+import ControlRuntimeStatus from '../../components/control/ControlRuntimeStatus';
+import type { ControlMappingField } from '../../utils/control-mapping-editor';
 import { PARAMETER_HELP } from '../../components/help/parameter-help';
 import {
   ControlGroupRoutesError,
-  buildControlDataBusRoutes,
   saveControlGroupWithOptionalRoutes,
 } from '../../utils/control-auto-routing';
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
@@ -110,6 +117,8 @@ type DataBusConnectionOption = {
   value: string;
   label: string;
   memberName: string;
+  moduleName: string;
+  connName: string;
 };
 
 type GroupTagPickerKey = 'voltage_meas' | 'voltage_cmd' | 'q_total_cmd' | 'q_total_base_tag';
@@ -126,9 +135,7 @@ type MemberRouteDraft = {
 type GroupOperation = 'start' | 'stop' | 'delete';
 
 type RuntimeMonitorStatus = {
-  state: 'idle' | 'ok' | 'stale' | 'offline';
   error: string | null;
-  updatedAt: number | null;
 };
 
 const inferAllocationMode = (members: AvcMemberConfig[]): AllocationMode => {
@@ -207,9 +214,7 @@ const DELTA_BASE_OPTIONS = Object.entries(DELTA_BASE_LABELS)
   .map(([value, label]) => ({ value: Number(value), label }));
 
 const EMPTY_RUNTIME_STATUS: RuntimeMonitorStatus = {
-  state: 'idle',
   error: null,
-  updatedAt: null,
 };
 
 const DEFAULT_VOLTAGE_SIGNAL: AvcSignalSpec = {
@@ -620,6 +625,38 @@ const validateGroupConfig = (config: AvcGroupConfig) => {
   }
 };
 
+// 映射字段只包含当前命令模式和增量基准实际使用的本地点位。
+const buildAvcMappingFields = (config: Pick<AvcGroupConfig, 'voltage_meas' | 'voltage_cmd' | 'q_total_cmd' | 'members'>): ControlMappingField[] => {
+  const fields: ControlMappingField[] = [];
+  const add = (label: string, tag: string | null | undefined, direction: 'input' | 'output') => {
+    if (tag?.trim()) fields.push({ label, tag: tag.trim(), direction });
+  };
+  add('电压量测', config.voltage_meas?.tag, 'input');
+  add('目标电压命令', config.voltage_cmd?.tag, 'input');
+  add('总无功命令', config.q_total_cmd?.signal?.tag, 'input');
+  if (config.q_total_cmd?.mode === 2 && config.q_total_cmd.delta_base === 3) {
+    add('总无功增量基准', config.q_total_cmd.base_tag, 'input');
+  }
+  config.members.forEach((member, index) => {
+    const label = member.member_name || `成员 ${index + 1}`;
+    add(`${label} / 无功量测`, member.q_meas?.tag, 'input');
+    if (member.controllable) {
+      add(`${label} / 无功设定`, member.q_set?.signal?.tag, 'output');
+      if (member.q_set?.mode === 2 && member.q_set.delta_base === 3) {
+        add(`${label} / 增量基准`, member.q_set.base_tag, 'input');
+      }
+    }
+  });
+  return fields;
+};
+
+// 稳定比较表单和关联草稿，避免对象属性顺序产生误报。
+const draftFingerprint = (value: unknown): string => JSON.stringify(value, (_key, item) => (
+  item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right)))
+    : item
+));
+
 const collectObservedTags = (group: AvcGroupInfo | null): string[] => {
   if (!group?.config) {
     return [];
@@ -633,13 +670,7 @@ const collectObservedTags = (group: AvcGroupInfo | null): string[] => {
     }
   };
 
-  collectTag(group.config.voltage_meas?.tag);
-  collectTag(group.config.voltage_cmd?.tag);
-  collectTag(group.config.q_total_cmd?.signal?.tag);
-  group.config.members.forEach((member) => {
-    collectTag(member.q_meas?.tag);
-    collectTag(member.q_set?.signal?.tag);
-  });
+  buildAvcMappingFields(group.config).forEach((field) => collectTag(field.tag));
   group.default_points.forEach((point) => collectTag(point.tag));
 
   return Array.from(tags);
@@ -668,9 +699,14 @@ const AVC: React.FC = () => {
   const [allocationMode, setAllocationMode] = useState<AllocationMode>('equal');
   const [membersDraft, setMembersDraft] = useState<AvcMemberConfig[]>([]);
   const [memberRouteDrafts, setMemberRouteDrafts] = useState<MemberRouteDraft[]>([]);
-  const [dataBusConnectionOptions, setDataBusConnectionOptions] = useState<DataBusConnectionOption[]>([]);
-  const [dataBusEndpointOptions, setDataBusEndpointOptions] = useState<DataBusEndpointOption[]>([]);
+  const [allDataBusConnectionOptions, setDataBusConnectionOptions] = useState<DataBusConnectionOption[]>([]);
+  const [allDataBusEndpointOptions, setDataBusEndpointOptions] = useState<DataBusEndpointOption[]>([]);
   const [dataBusEndpointLoading, setDataBusEndpointLoading] = useState(false);
+  const [dataBusEndpointError, setDataBusEndpointError] = useState<string | null>(null);
+  const [pendingRouteError, setPendingRouteError] = usePendingControlRoutes('AVC');
+  const mappings = useControlMappings('AVC');
+  const groupDraftBaseline = useRef('');
+  const memberDraftBaseline = useRef('');
   const [groupAutoRouteEnabled, setGroupAutoRouteEnabled] = useState(false);
   const [groupRouteEndpoints, setGroupRouteEndpoints] = useState<GroupRouteEndpoints>({});
   const [groupTagPickerValues, setGroupTagPickerValues] = useState<Partial<Record<GroupTagPickerKey, string>>>({});
@@ -691,7 +727,20 @@ const AVC: React.FC = () => {
   const [memberForm] = Form.useForm<AvcMemberConfig>();
   const [searchParams] = useSearchParams();
 
+  const groupValues = Form.useWatch([], { form: groupForm, preserve: true }) as AvcGroupFormValues | undefined;
+  const currentGroupName = String(groupValues?.group_name ?? editingGroup?.group_name ?? '').trim();
+  const isCurrentGroup = (connection: { module_name: string; conn_name: string }) => (
+    connection.module_name === AVC_MODULE_NAME && connection.conn_name === currentGroupName
+  );
+  const dataBusEndpointOptions = allDataBusEndpointOptions.filter((item) => !isCurrentGroup({ module_name: item.moduleName, conn_name: item.connName }));
+  const dataBusConnectionOptions = allDataBusConnectionOptions.filter((item) => !isCurrentGroup({ module_name: item.moduleName, conn_name: item.connName }));
   const commandMode = Form.useWatch('command_mode', groupForm) ?? 'voltage';
+  const mappingFields = buildAvcMappingFields({
+    voltage_meas: groupValues?.voltage_meas ?? null,
+    voltage_cmd: commandMode === 'voltage' ? groupValues?.voltage_cmd ?? null : null,
+    q_total_cmd: commandMode === 'q_total' ? groupValues?.q_total_cmd ?? null : null,
+    members: membersDraft,
+  });
   const controlMode = effectiveControlMode(Form.useWatch('control_mode', groupForm));
   const qTotalMode = Form.useWatch(['q_total_cmd', 'mode'], groupForm) ?? 1;
   const qTotalDeltaBase = Form.useWatch(['q_total_cmd', 'delta_base'], groupForm) ?? 0;
@@ -808,41 +857,37 @@ const AVC: React.FC = () => {
 
   const refreshDataBusEndpointOptions = useCallback(async () => {
     setDataBusEndpointLoading(true);
+    setDataBusEndpointError(null);
     try {
       const connections = await api.dcListConnections();
-      setDataBusConnectionOptions(
-        connections
-          .map((connection) => ({
-            value: String(connection.conn_id),
-            label: `${connection.module_name}/${connection.conn_name}`,
-            memberName: connection.conn_name,
-          }))
-          .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN')),
-      );
-      const endpointGroups = await Promise.all(
-        connections.map(async (connection) => {
-          try {
-            const connTags = await api.dcGetConnTags(connection.conn_id);
-            return connTags.tags.map((tag) => ({
-              value: `${connection.conn_id}:${tag}`,
-              label: `${connection.module_name}/${connection.conn_name} : ${tag}`,
-              tag,
-              moduleName: connection.module_name,
-              connName: connection.conn_name,
-            }));
-          } catch {
-            return [];
-          }
-        }),
-      );
-      setDataBusEndpointOptions(
-        endpointGroups
-          .flat()
-          .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN')),
-      );
-    } catch {
-      setDataBusConnectionOptions([]);
-      setDataBusEndpointOptions([]);
+      setDataBusConnectionOptions(connections.map((connection) => ({
+        value: String(connection.conn_id),
+        label: `${connection.module_name}/${connection.conn_name}`,
+        memberName: connection.conn_name,
+        moduleName: connection.module_name,
+        connName: connection.conn_name,
+      })).sort((left, right) => left.label.localeCompare(right.label, 'zh-CN')));
+      const endpointGroups = await Promise.allSettled(connections.map(async (connection) => {
+        const connTags = await api.dcGetConnTags(connection.conn_id);
+        return connTags.tags.map((tag) => ({
+          value: `${connection.conn_id}:${tag}`,
+          label: `${connection.module_name}/${connection.conn_name} : ${tag}`,
+          tag,
+          moduleName: connection.module_name,
+          connName: connection.conn_name,
+        }));
+      }));
+      setDataBusEndpointOptions(endpointGroups.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
+        .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN')));
+      const failedConnections = endpointGroups.flatMap((result, index) => result.status === 'rejected'
+        ? [`${connections[index].module_name}/${connections[index].conn_name}: ${formatErrorText(result.reason)}`] : []);
+      if (failedConnections.length) {
+        setDataBusEndpointError(`部分连接点位读取失败：${failedConnections.join('；')}`);
+        console.error('AVC 快速选点读取部分失败', { 连接错误: failedConnections });
+      }
+    } catch (error) {
+      setDataBusEndpointError(`数据总线连接读取失败：${formatErrorText(error)}`);
+      console.error('AVC 快速选点加载失败', error);
     } finally {
       setDataBusEndpointLoading(false);
     }
@@ -861,7 +906,7 @@ const AVC: React.FC = () => {
     const tags = collectObservedTags(selectedGroup);
     if (tags.length === 0) {
       setRuntimeUpdates({});
-      setRuntimeStatus({ state: 'stale', error: null, updatedAt: null });
+      setRuntimeStatus({ error: null });
       setRuntimeLoading(false);
       return;
     }
@@ -877,21 +922,13 @@ const AVC: React.FC = () => {
       }
       const nextUpdates = mergeControlRuntimeUpdates(destinationUpdates, sourceUpdates);
       setRuntimeUpdates(nextUpdates);
-      setRuntimeStatus({
-        state: Object.keys(nextUpdates).length > 0 ? 'ok' : 'stale',
-        error: null,
-        updatedAt: Date.now(),
-      });
+      setRuntimeStatus({ error: null });
     } catch (error) {
       if (requestId !== runtimeRequestIdRef.current) {
         return;
       }
       const errorText = formatErrorText(error);
-      setRuntimeStatus((prev) => ({
-        state: 'offline',
-        error: errorText,
-        updatedAt: prev.updatedAt,
-      }));
+      setRuntimeStatus({ error: errorText });
       const now = Date.now();
       const previousToast = runtimeErrorToastRef.current;
       if (!previousToast || previousToast.text !== errorText || now - previousToast.at >= 30000) {
@@ -1078,6 +1115,7 @@ const AVC: React.FC = () => {
   );
 
   const openCreateGroupForm = useCallback(() => {
+    if (pendingRouteError) { messageApi.warning('请先完成待处理映射的重试，再修改控制组配置'); return; }
     setEditingGroup(null);
     setAllocationMode('equal');
     setMembersDraft([]);
@@ -1087,10 +1125,13 @@ const AVC: React.FC = () => {
     setGroupTagPickerValues({});
     groupForm.resetFields();
     groupForm.setFieldsValue(buildEmptyGroupForm());
+    groupDraftBaseline.current = draftFingerprint({ values: groupForm.getFieldsValue(true), members: [], routes: [], allocation: 'equal', auto: false, endpoints: {} });
+    void mappings.open('', undefined);
     setGroupModalOpen(true);
-  }, [groupForm]);
+  }, [groupForm, mappings, messageApi, pendingRouteError]);
 
   const openCreateGroup = useCallback(() => {
+    if (pendingRouteError) { messageApi.warning('请先完成待处理映射的重试，再修改控制组配置'); return; }
     modalApi.confirm({
       title: '新增 AVC 控制组前请确认',
       width: 760,
@@ -1099,9 +1140,10 @@ const AVC: React.FC = () => {
       cancelText: '取消',
       onOk: openCreateGroupForm,
     });
-  }, [modalApi, openCreateGroupForm]);
+  }, [modalApi, openCreateGroupForm, messageApi, pendingRouteError]);
 
   const openEditGroup = useCallback(() => {
+    if (pendingRouteError) { messageApi.warning('请先完成待处理映射的重试，再修改控制组配置'); return; }
     if (!selectedConfig) {
       return;
     }
@@ -1115,10 +1157,13 @@ const AVC: React.FC = () => {
     setGroupTagPickerValues({});
     groupForm.resetFields();
     groupForm.setFieldsValue(buildGroupFormValues(selectedConfig));
+    groupDraftBaseline.current = draftFingerprint({ values: groupForm.getFieldsValue(true), members: selectedConfig.members.map(cloneMember), routes: selectedConfig.members.map(() => ({ enabled: false, endpoints: {} })), allocation: inferAllocationMode(selectedConfig.members), auto: false, endpoints: {} });
+    void mappings.open(selectedConfig.group_name, selectedGroup?.conn_id);
     setGroupModalOpen(true);
-  }, [groupForm, selectedConfig]);
+  }, [groupForm, mappings, selectedConfig, selectedGroup?.conn_id, messageApi, pendingRouteError]);
 
   const openRenameGroup = useCallback(() => {
+    if (pendingRouteError) { messageApi.warning('请先完成待处理映射的重试，再修改控制组配置'); return; }
     if (!selectedConfig) {
       return;
     }
@@ -1129,7 +1174,7 @@ const AVC: React.FC = () => {
       new_group_name: '',
     });
     setRenameModalOpen(true);
-  }, [renameForm, selectedConfig]);
+  }, [renameForm, selectedConfig, messageApi, pendingRouteError]);
 
   const openCreateMember = useCallback(() => {
     setEditingMemberIndex(null);
@@ -1139,6 +1184,7 @@ const AVC: React.FC = () => {
     setMemberTagPickerValues({});
     memberForm.resetFields();
     memberForm.setFieldsValue(cloneMember(DEFAULT_MEMBER));
+    memberDraftBaseline.current = draftFingerprint({ values: memberForm.getFieldsValue(true), auto: false, endpoints: {} });
     setMemberModalOpen(true);
   }, [memberForm]);
 
@@ -1172,6 +1218,7 @@ const AVC: React.FC = () => {
       setMemberTagPickerValues(pickerValues);
       memberForm.resetFields();
       memberForm.setFieldsValue(cloneMember(member));
+      memberDraftBaseline.current = draftFingerprint({ values: memberForm.getFieldsValue(true), auto: routeDraft.enabled, endpoints: routeDraft.endpoints });
       setMemberModalOpen(true);
     },
     [dataBusEndpointOptions, memberForm, memberRouteDrafts, membersDraft],
@@ -1179,6 +1226,7 @@ const AVC: React.FC = () => {
 
   const handleDeleteGroup = useCallback(
     async (groupName: string) => {
+      if (pendingRouteError) { messageApi.warning('请先完成待处理映射的重试，再删除控制组'); return; }
       if (!beginGroupOperation('delete')) {
         return;
       }
@@ -1196,7 +1244,7 @@ const AVC: React.FC = () => {
         endGroupOperation();
       }
     },
-    [beginGroupOperation, endGroupOperation, messageApi, refreshGroups, selectedGroupName],
+    [beginGroupOperation, endGroupOperation, messageApi, refreshGroups, selectedGroupName, pendingRouteError],
   );
 
   const handleStartGroup = useCallback(async () => {
@@ -1236,7 +1284,7 @@ const AVC: React.FC = () => {
   }, [beginGroupOperation, endGroupOperation, messageApi, refreshGroups, selectedGroup, selectedGroupName]);
 
   const handleGroupSubmit = useCallback(async () => {
-    if (groupSubmitting) return;
+    if (groupSubmitting || mappings.loading || mappings.error || pendingRouteError) return;
     setGroupSubmitting(true);
     let savedGroup: AvcGroupInfo | null = null;
     let savedGroupName = '';
@@ -1326,19 +1374,17 @@ const AVC: React.FC = () => {
         }
       });
 
-      const routes = buildControlDataBusRoutes({
-        moduleName: AVC_MODULE_NAME,
-        groupName: config.group_name,
-        bindings: routeBindings,
-      });
-      plannedRouteCount = routes.length;
-      const createRoutes = groupAutoRouteEnabled || memberRouteDrafts.some((draft) => draft.enabled);
+      const plan = mappings.plan(buildAvcMappingFields(config), routeBindings, config.group_name);
+      plannedRouteCount = plan.routes.length + plan.removedRoutes.length;
+      const createRoutes = plannedRouteCount > 0;
       const createOnly = !editingGroup;
       let routesSubmitted = 0;
       const saveGroup = async () => {
         const result = await saveControlGroupWithOptionalRoutes({
           createRoutes,
-          routes,
+          routes: plan.routes,
+          removedRoutes: plan.removedRoutes,
+          deleteRoutes: (nextRoutes) => api.dcDeleteRoutes(nextRoutes),
           saveGroup: async () => {
             savedGroup = await api.avcUpsertGroup(config, createOnly);
           },
@@ -1383,6 +1429,7 @@ const AVC: React.FC = () => {
             ? error.operationError
             : null;
       if (routeSaveError) {
+        setPendingRouteError(routeSaveError);
         if (savedGroup) {
           const savedGroupSnapshot = savedGroup;
           setGroups((prev) => {
@@ -1426,10 +1473,13 @@ const AVC: React.FC = () => {
     messageApi,
     refreshGroups,
     runSelectedGroupStopped,
+    mappings,
+    pendingRouteError,
+    setPendingRouteError,
   ]);
 
   const handleRenameGroup = useCallback(async () => {
-    if (renameSubmitting) return;
+    if (renameSubmitting || pendingRouteError) return;
     setRenameSubmitting(true);
     try {
       const values = await renameForm.validateFields();
@@ -1447,7 +1497,7 @@ const AVC: React.FC = () => {
     } finally {
       setRenameSubmitting(false);
     }
-  }, [messageApi, refreshGroups, renameForm, renameSubmitting]);
+  }, [messageApi, refreshGroups, renameForm, renameSubmitting, pendingRouteError]);
 
   const handleMemberSubmit = useCallback(async () => {
     if (memberSubmitting) return;
@@ -1517,6 +1567,8 @@ const AVC: React.FC = () => {
 
         return prev.map((draft, index) => (index === editingMemberIndex ? nextRouteDraft : draft));
       });
+      console.info('AVC 成员草稿已暂存', { 成员: nextMember.member_name });
+      messageApi.success('成员已暂存，仍需保存控制组才能下发');
       setMemberModalOpen(false);
     } catch (error) {
       messageApi.error(`保存成员失败: ${error instanceof Error ? error.message : String(error)}`);
@@ -1539,8 +1591,22 @@ const AVC: React.FC = () => {
     setMemberRouteDrafts((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
   }, []);
 
-  const editDisabled = !selectedGroup || selectedGroup.state !== 1 || groupOperation !== null;
-  const renameDisabled = !selectedGroup || selectedGroup.state !== 1 || groupOperation !== null;
+  const closeGroupDraft = () => {
+    if (groupSubmitting) return;
+    const changed = mappings.changed || draftFingerprint({ values: groupForm.getFieldsValue(true), members: membersDraft, routes: memberRouteDrafts, allocation: allocationMode, auto: groupAutoRouteEnabled, endpoints: groupRouteEndpoints }) !== groupDraftBaseline.current;
+    if (!changed) { setGroupModalOpen(false); return; }
+    modalApi.confirm({ title: '放弃未保存的控制组改动？', content: '关闭后将丢弃本次配置与映射草稿。', okText: '放弃改动', cancelText: '继续编辑', onOk: () => { console.info('AVC 控制组草稿已放弃'); setGroupModalOpen(false); } });
+  };
+
+  const closeMemberDraft = () => {
+    if (memberSubmitting) return;
+    const changed = draftFingerprint({ values: memberForm.getFieldsValue(true), auto: memberAutoRouteEnabled, endpoints: memberRouteEndpoints }) !== memberDraftBaseline.current;
+    if (!changed) { setMemberModalOpen(false); return; }
+    modalApi.confirm({ title: '放弃未暂存的成员改动？', content: '当前成员改动尚未暂存到控制组草稿。', okText: '放弃改动', cancelText: '继续编辑', onOk: () => { console.info('AVC 成员草稿已放弃'); setMemberModalOpen(false); } });
+  };
+
+  const editDisabled = !selectedGroup || selectedGroup.state !== 1 || groupOperation !== null || !!pendingRouteError;
+  const renameDisabled = !selectedGroup || selectedGroup.state !== 1 || groupOperation !== null || !!pendingRouteError;
   const startDisabled = !selectedGroup || selectedGroup.state !== 1 || groupOperation !== null;
   const stopDisabled = !selectedGroup || selectedGroup.state !== 2 || groupOperation !== null;
   const controlGroupListItems = useMemo(
@@ -1556,23 +1622,6 @@ const AVC: React.FC = () => {
     })),
     [groups],
   );
-
-  const runtimeStatusLabel =
-    runtimeStatus.state === 'ok'
-      ? '数据正常'
-      : runtimeStatus.state === 'stale'
-        ? '暂无最新数据'
-        : runtimeStatus.state === 'offline'
-          ? '数据总线不可用'
-          : '等待数据';
-  const runtimeStatusColor =
-    runtimeStatus.state === 'ok'
-      ? 'green'
-      : runtimeStatus.state === 'offline'
-        ? 'red'
-        : runtimeStatus.state === 'stale'
-          ? 'orange'
-          : 'default';
 
   const importantRuntimeRows = useMemo(() => {
     if (!selectedGroup) {
@@ -1833,9 +1882,11 @@ const AVC: React.FC = () => {
                 extra={
                   selectedConfig ? (
                     <Space>
-                      <Button type="link" size="small" icon={<EditOutlined />} disabled={editDisabled} onClick={openEditGroup}>
-                        编辑
-                      </Button>
+                      <Tooltip title={pendingRouteError ? '请先重试待处理映射，再编辑控制组' : selectedGroup?.state === 2 ? 'AVC 控制组运行中，请先停止控制组后再编辑' : editDisabled ? '仅停止状态允许编辑控制组' : undefined}>
+                        <span><Button type="link" size="small" icon={<EditOutlined />} disabled={editDisabled} onClick={openEditGroup}>
+                          编辑
+                        </Button></span>
+                      </Tooltip>
                       <Button type="link" size="small" disabled={renameDisabled} onClick={openRenameGroup}>
                         重命名
                       </Button>
@@ -1849,7 +1900,7 @@ const AVC: React.FC = () => {
                           danger
                           icon={<DeleteOutlined />}
                           loading={groupOperation === 'delete'}
-                          disabled={groupOperation !== null}
+                          disabled={groupOperation !== null || !!pendingRouteError}
                         >
                           {selectedGroup?.state === 3 ? '重试删除' : '删除'}
                         </Button>
@@ -1955,19 +2006,13 @@ const AVC: React.FC = () => {
                       </Tag>
                     </div>
                     <div>
-                      <Text type="secondary" style={{ marginRight: 12 }}>数据状态</Text>
-                      <Tag color={runtimeStatusColor}>{runtimeStatusLabel}</Tag>
-                      {runtimeStatus.updatedAt ? (
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          {' '}
-                          更新于 {new Date(runtimeStatus.updatedAt).toLocaleTimeString()}
-                        </Text>
-                      ) : null}
-                      {runtimeStatus.error ? (
-                        <Text type="danger" style={{ display: 'block', marginTop: 4 }}>
-                          {runtimeStatus.error}
-                        </Text>
-                      ) : null}
+                      <ControlRuntimeStatus
+                        updates={runtimeUpdates}
+                        tags={collectObservedTags(selectedGroup)}
+                        maxAgeMs={Math.max(30000, Math.max(selectedConfig?.calculation_execution_period_seconds || 1, selectedConfig?.command_control_period_seconds || 4) * 3000)}
+                        offline={!!runtimeStatus.error}
+                      />
+                      {runtimeStatus.error ? <Text type="danger" style={{ display: 'block' }}>{runtimeStatus.error}</Text> : null}
                     </div>
                     <div>
                       <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>运行控制</Text>
@@ -2052,6 +2097,15 @@ const AVC: React.FC = () => {
             className="protocol-point-card"
             style={{ flex: 1, minWidth: 0, minHeight: 0 }}
           >
+            <div style={{ marginBottom: 12 }}>
+              <ControlRuntimeStatus
+                updates={runtimeUpdates}
+                tags={collectObservedTags(selectedGroup)}
+                maxAgeMs={Math.max(30000, Math.max(selectedConfig?.calculation_execution_period_seconds || 1, selectedConfig?.command_control_period_seconds || 4) * 3000)}
+                offline={!!runtimeStatus.error}
+              />
+              {runtimeStatus.error ? <Text type="danger" style={{ display: 'block' }}>{runtimeStatus.error}</Text> : null}
+            </div>
             <div className="protocol-table-scroll">
               <Table
                 rowKey={(record) => `${record.kind}-${record.tag}`}
@@ -2078,16 +2132,17 @@ const AVC: React.FC = () => {
         </Card>
       )}
 
+      <ControlRouteRetry error={pendingRouteError} onComplete={() => setPendingRouteError(null)} onFailure={setPendingRouteError} />
+
       <Modal
         title={editingGroup ? '编辑 AVC 控制组' : '新增 AVC 控制组'}
         open={groupModalOpen}
         onOk={() => void handleGroupSubmit()}
-        onCancel={() => {
-          if (!groupSubmitting) setGroupModalOpen(false);
-        }}
+        onCancel={closeGroupDraft}
         okText="保存配置"
         cancelText="取消"
         confirmLoading={groupSubmitting}
+        okButtonProps={{ disabled: mappings.loading || !!mappings.error || !!pendingRouteError }}
         maskClosable={!groupSubmitting}
         closable={!groupSubmitting}
         keyboard={!groupSubmitting}
@@ -2184,6 +2239,10 @@ const AVC: React.FC = () => {
             </Text>
           </div>
 
+          {pendingRouteError ? <Alert type="warning" showIcon title="已有控制组配置保存成功、映射尚未完成，请先重试映射，再保存新的配置。" style={{ marginBottom: 12 }} /> : null}
+          <ControlMappingsEditor mapping={mappings} fields={mappingFields} groupName={currentGroupName} />
+          <Space style={{ marginBottom: 12 }}><Button icon={<ReloadOutlined />} loading={dataBusEndpointLoading} onClick={() => void refreshDataBusEndpointOptions()}>刷新快速选点</Button></Space>
+          {dataBusEndpointError ? <Alert type="error" showIcon title={dataBusEndpointError} style={{ marginBottom: 12 }} /> : null}
           <div className="control-config-section control-config-section--routing">
             <Space>
               <Switch checked={groupAutoRouteEnabled} onChange={setGroupAutoRouteEnabled} />
@@ -2508,10 +2567,8 @@ const AVC: React.FC = () => {
         title={editingMemberIndex === null ? '添加成员' : '编辑成员'}
         open={memberModalOpen}
         onOk={() => void handleMemberSubmit()}
-        onCancel={() => {
-          if (!memberSubmitting) setMemberModalOpen(false);
-        }}
-        okText="保存成员"
+        onCancel={closeMemberDraft}
+        okText="暂存成员"
         cancelText="取消"
         confirmLoading={memberSubmitting}
         maskClosable={!memberSubmitting}
@@ -2523,6 +2580,9 @@ const AVC: React.FC = () => {
         destroyOnClose
       >
         <Form form={memberForm} layout="vertical" size="small">
+          <Alert type="info" showIcon title="暂存成员仅更新当前草稿，仍需保存控制组才能下发配置与映射。" style={{ marginBottom: 16 }} />
+          <Space style={{ marginBottom: 12 }}><Button icon={<ReloadOutlined />} loading={dataBusEndpointLoading} onClick={() => void refreshDataBusEndpointOptions()}>刷新快速选点</Button></Space>
+          {dataBusEndpointError ? <Alert type="error" showIcon title={dataBusEndpointError} style={{ marginBottom: 12 }} /> : null}
           <div style={{ marginBottom: 16 }}>
             <Space>
               <Switch checked={memberAutoRouteEnabled} onChange={setMemberAutoRouteEnabled} />

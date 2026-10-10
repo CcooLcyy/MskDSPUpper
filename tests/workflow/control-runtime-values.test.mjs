@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import {
   mergeControlRuntimeUpdates,
   readControlRuntimeBool,
+  summarizeControlRuntime,
 } from '../../src/utils/control-runtime-values.ts';
 
 const agcSource = readFileSync(new URL('../../src/pages/AGC/index.tsx', import.meta.url), 'utf8');
@@ -74,4 +75,89 @@ test('AGC and AVC runtime monitors include source latest values', () => {
     assert.match(source, /mergeControlRuntimeUpdates\(/);
     assert.match(source, /readControlRuntimeBool\(/);
   }
+});
+
+const runtimeUpdate = (tag, ts_ms = 9900, quality = 1) => ({
+  ...destinationUpdate(tag, 42),
+  ts_ms,
+  quality,
+});
+
+// 验证未返回任何期望点值时保持等待，同时记录缺点数量。
+test('运行摘要在尚未收到期望点值时等待', () => {
+  assert.deepEqual(summarizeControlRuntime({}, ['p', 'q'], 10000, 1000), {
+    state: 'waiting', latestTimestamp: null, staleCount: 0, missingCount: 2, uncertainCount: 0,
+  });
+  assert.equal(summarizeControlRuntime({ extra: runtimeUpdate('extra') }, [], 10000, 1000).state, 'waiting');
+});
+
+// 验证所有期望点均新鲜且质量有效才正常，数据时间取点值时间而非查询时间。
+test('运行摘要使用真实点值时间并要求所有点有效', () => {
+  assert.deepEqual(summarizeControlRuntime({ p: runtimeUpdate('p'), q: runtimeUpdate('q', 10000) }, ['p', 'q'], 10000, 1000), {
+    state: 'ok', latestTimestamp: 10000, staleCount: 0, missingCount: 0, uncertainCount: 0,
+  });
+});
+
+// 验证阈值边界有效，超过阈值后进入陈旧状态，即使查询仍然成功。
+test('运行摘要按点值年龄区分阈值边界与过期', () => {
+  const updates = { p: runtimeUpdate('p', 9000) };
+  assert.equal(summarizeControlRuntime(updates, ['p'], 10000, 1000).state, 'ok');
+  const result = summarizeControlRuntime(updates, ['p'], 10001, 1000);
+  assert.equal(result.state, 'stale');
+  assert.equal(result.latestTimestamp, 9000);
+  assert.equal(result.staleCount, 1);
+});
+
+// 验证零、负数、非有限时间均为未知且陈旧，不能伪装为最新数据。
+test('运行摘要将未知时间视为陈旧', () => {
+  for (const timestamp of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const result = summarizeControlRuntime({ p: runtimeUpdate('p', timestamp) }, ['p'], 10000, 1000);
+    assert.equal(result.state, 'stale');
+    assert.equal(result.latestTimestamp, null);
+    assert.equal(result.staleCount, 1);
+  }
+});
+
+// 验证未来异常时间不可显示正常，但保留原始时间供界面解释。
+test('运行摘要标识未来异常时间', () => {
+  const result = summarizeControlRuntime({ p: runtimeUpdate('p', 11001) }, ['p'], 10000, 1000);
+  assert.equal(result.state, 'stale');
+  assert.equal(result.latestTimestamp, 11001);
+  assert.equal(result.staleCount, 1);
+});
+
+// 验证展示时钟比刚到达的点值落后时，一秒以内的新值不会误判为未来异常。
+test('运行摘要允许一秒展示时钟容差并保留真实时间', () => {
+  for (const timestamp of [10001, 10500, 11000]) {
+    const result = summarizeControlRuntime({ p: runtimeUpdate('p', timestamp) }, ['p'], 10000, 1000);
+    assert.equal(result.state, 'ok');
+    assert.equal(result.latestTimestamp, timestamp);
+    assert.equal(result.staleCount, 0);
+  }
+});
+
+// 验证未指定、无效、不确定质量均不可显示正常，也不丢弃其点值。
+test('运行摘要保留质量异常点并计数', () => {
+  for (const quality of [0, 2, 3]) {
+    const updates = { p: runtimeUpdate('p', 9900, quality) };
+    const result = summarizeControlRuntime(updates, ['p'], 10000, 1000);
+    assert.equal(result.state, 'quality');
+    assert.equal(result.uncertainCount, 1);
+    assert.equal(result.latestTimestamp, 9900);
+    assert.equal(updates.p.value.value, 42);
+  }
+});
+
+// 验证部分缺点优先显示缺点，并同时保留陈旧和质量异常计数。
+test('运行摘要同时汇总缺点陈旧与质量异常', () => {
+  assert.deepEqual(summarizeControlRuntime({ p: runtimeUpdate('p', 5000, 2) }, ['p', 'q'], 10000, 1000), {
+    state: 'missing', latestTimestamp: 5000, staleCount: 1, missingCount: 1, uncertainCount: 1,
+  });
+});
+
+// 验证重复及空标签不重复计数，额外点值不会改变控制组摘要。
+test('运行摘要只计算去重后的有效期望标签', () => {
+  const result = summarizeControlRuntime({ p: runtimeUpdate('p'), extra: runtimeUpdate('extra', 1, 2) }, ['p', 'p', ''], 10000, 1000);
+  assert.equal(result.state, 'ok');
+  assert.equal(result.latestTimestamp, 9900);
 });

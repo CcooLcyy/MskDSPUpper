@@ -2,6 +2,7 @@
   max-width: calc(100vw - 32px);
 }
 
+.control-config-modal .ant-modal-container,
 .control-config-modal .ant-modal-content {
   max-height: calc(100dvh - 48px);
   display: flex;
@@ -207,6 +208,7 @@
     margin: 8px auto;
   }
 
+  .control-config-modal .ant-modal-container,
   .control-config-modal .ant-modal-content {
     max-height: calc(100dvh - 16px);
   }

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Button,
   Card,
   Checkbox,
@@ -47,10 +48,15 @@ import { CONTROL_VIEW_QUERY_KEY, normalizeControlView } from '../../components/c
 import ControlGroupList from '../../components/control/ControlGroupList';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import ControlEmptyState from '../../components/control/ControlEmptyState';
+import ControlMappingsEditor from '../../components/control/ControlMappingsEditor';
+import ControlRouteRetry from '../../components/control/ControlRouteRetry';
+import ControlRuntimeStatus from '../../components/control/ControlRuntimeStatus';
+import useControlMappings from '../../components/control/useControlMappings';
+import usePendingControlRoutes from '../../components/control/usePendingControlRoutes';
+import type { ControlMappingField } from '../../utils/control-mapping-editor';
 import { PARAMETER_HELP } from '../../components/help/parameter-help';
 import {
   ControlGroupRoutesError,
-  buildControlDataBusRoutes,
   saveControlGroupWithOptionalRoutes,
 } from '../../utils/control-auto-routing';
 import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
@@ -467,6 +473,29 @@ const buildDataBusEndpointValue = (endpoint: DcEndpoint): string => JSON.stringi
   endpoint.tag,
 ]);
 
+const collectMappingFields = (config: Partial<AgcGroupConfig>): ControlMappingField[] => {
+  const fields: ControlMappingField[] = [];
+  const add = (label: string, tag: string | null | undefined, direction: 'input' | 'output') => {
+    if (tag?.trim()) fields.push({ label, tag: tag.trim(), direction });
+  };
+  add('总控输入（p_cmd）', config.p_cmd?.signal?.tag, 'input');
+  if (config.p_cmd?.mode === 2 && config.p_cmd.delta_base === 3) {
+    add('总控增量基准（p_cmd.base_tag）', config.p_cmd.base_tag, 'input');
+  }
+  add('总有功测量输出', config.outputs?.p_total_meas?.tag, 'output');
+  add('总有功目标输出', config.outputs?.p_total_target?.tag, 'output');
+  add('总有功偏差输出', config.outputs?.p_total_error?.tag, 'output');
+  config.members?.forEach((member) => {
+    add(`${member.member_name} 有功测量`, member.p_meas?.tag, 'input');
+    if (!member.controllable) return;
+    add(`${member.member_name} 有功设定`, member.p_set?.signal?.tag, 'output');
+    if (member.p_set?.mode === 2 && member.p_set.delta_base === 3) {
+      add(`${member.member_name} 增量基准`, member.p_set.base_tag, 'input');
+    }
+  });
+  return fields;
+};
+
 const AGC: React.FC = () => {
   const [groups, setGroups] = useState<AgcGroupInfo[]>([]);
   const [selectedGroupName, setSelectedGroupName] = useState<string | null>(null);
@@ -475,6 +504,8 @@ const AGC: React.FC = () => {
   const [runtimeAction, setRuntimeAction] = useState<'start' | 'stop' | 'delete' | null>(null);
   const runtimeActionRef = useRef<'start' | 'stop' | 'delete' | null>(null);
   const [runtimeUpdates, setRuntimeUpdates] = useState<Record<string, DcPointUpdate>>({});
+  const [runtimeOffline, setRuntimeOffline] = useState(false);
+  const runtimeRequestIdRef = useRef(0);
   const runtimeErrorToastRef = useRef<{ text: string; at: number } | null>(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
@@ -485,6 +516,9 @@ const AGC: React.FC = () => {
   const [tuningAction, setTuningAction] = useState<'start' | 'stop' | null>(null);
   const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [memberSubmitting, setMemberSubmitting] = useState(false);
+  const [groupDirty, setGroupDirty] = useState(false);
+  const [memberDirty, setMemberDirty] = useState(false);
+  const [pendingRouteError, setPendingRouteError] = usePendingControlRoutes('AGC');
   const [editingGroup, setEditingGroup] = useState<AgcGroupConfig | null>(null);
   const [editingMemberIndex, setEditingMemberIndex] = useState<number | null>(null);
   const [allocationMode, setAllocationMode] = useState<AllocationMode>('equal');
@@ -493,6 +527,7 @@ const AGC: React.FC = () => {
   const [dataBusConnectionOptions, setDataBusConnectionOptions] = useState<DataBusConnectionOption[]>([]);
   const [dataBusEndpointOptions, setDataBusEndpointOptions] = useState<DataBusEndpointOption[]>([]);
   const [dataBusEndpointLoading, setDataBusEndpointLoading] = useState(false);
+  const [dataBusEndpointError, setDataBusEndpointError] = useState<string | null>(null);
   const [memberConnectionPickerValue, setMemberConnectionPickerValue] = useState<string>();
   const [createMemberRoutes, setCreateMemberRoutes] = useState(false);
   const [memberRouteEndpoints, setMemberRouteEndpoints] = useState<
@@ -502,6 +537,8 @@ const AGC: React.FC = () => {
     Partial<Record<MemberTagPickerKey, string>>
   >({});
   const [messageApi, contextHolder] = message.useMessage();
+  const [modalApi, modalContextHolder] = Modal.useModal();
+  const mappings = useControlMappings('AGC');
   const [groupForm] = Form.useForm<AgcGroupConfig>();
   const [memberForm] = Form.useForm<AgcMemberConfig>();
   const [tuningForm] = Form.useForm<AgcTuningConfig>();
@@ -509,6 +546,8 @@ const AGC: React.FC = () => {
 
   const memberControllable = Form.useWatch('controllable', memberForm) ?? true;
   const controlMode = effectiveControlMode(Form.useWatch('control_mode', groupForm));
+  const watchedGroup = Form.useWatch([], groupForm);
+  const mappingFields = collectMappingFields({ ...watchedGroup, members: membersDraft });
   const currentView = normalizeControlView(searchParams.get(CONTROL_VIEW_QUERY_KEY));
 
   const selectedGroup = useMemo(
@@ -525,6 +564,7 @@ const AGC: React.FC = () => {
   ), [membersDraft]);
 
   const handleAllocationModeChange = useCallback((mode: AllocationMode) => {
+    setGroupDirty(true);
     setAllocationMode(mode);
     if (mode !== 'custom') {
       setMembersDraft((prev) => prev.map((member) => {
@@ -542,6 +582,7 @@ const AGC: React.FC = () => {
 
   const handleMemberWeightChange = useCallback((index: number, value: string | null) => {
     if (value === null || getDecimalTextError(value, '调节权重')) return;
+    setGroupDirty(true);
     setMembersDraft((prev) => prev.map((member, memberIndex) => (
       memberIndex === index
         ? { ...member, ...createAgcDecimalFields(value, 'weight', 'weight_decimal') }
@@ -603,6 +644,7 @@ const AGC: React.FC = () => {
   }, [refreshGroups]);
 
   const refreshRuntime = useCallback(async () => {
+    const requestId = ++runtimeRequestIdRef.current;
     if (!selectedGroup?.conn_id) {
       setRuntimeUpdates({});
       return;
@@ -621,10 +663,15 @@ const AGC: React.FC = () => {
         api.dcGetSourceLatest(selectedGroup.conn_id, tags),
       ]);
       const nextUpdates = mergeControlRuntimeUpdates(destinationUpdates, sourceUpdates);
+      if (requestId !== runtimeRequestIdRef.current) return;
       setRuntimeUpdates(nextUpdates);
+      setRuntimeOffline(false);
       runtimeErrorToastRef.current = null;
     } catch (e) {
+      if (requestId !== runtimeRequestIdRef.current) return;
+      setRuntimeOffline(true);
       const errorText = formatErrorText(e);
+      console.error('AGC 运行监视连接异常，保留最后点值', { 控制组: selectedGroup.config?.group_name, 错误: errorText });
       const now = Date.now();
       const previousToast = runtimeErrorToastRef.current;
       if (!previousToast || previousToast.text !== errorText || now - previousToast.at >= 30000) {
@@ -632,9 +679,17 @@ const AGC: React.FC = () => {
         runtimeErrorToastRef.current = { text: errorText, at: now };
       }
     } finally {
-      setRuntimeLoading(false);
+      if (requestId === runtimeRequestIdRef.current) setRuntimeLoading(false);
     }
   }, [messageApi, selectedGroup]);
+
+  useEffect(() => {
+    runtimeRequestIdRef.current += 1;
+    setRuntimeUpdates({});
+    setRuntimeOffline(false);
+    setRuntimeLoading(false);
+    runtimeErrorToastRef.current = null;
+  }, [selectedGroupName, selectedGroup?.conn_id]);
 
   useEffect(() => {
     if ((currentView !== 'strategy' && currentView !== 'default-points') || !selectedGroup?.conn_id) {
@@ -647,7 +702,10 @@ const AGC: React.FC = () => {
       void refreshRuntime();
     }, 2000);
 
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      runtimeRequestIdRef.current += 1;
+    };
   }, [currentView, refreshRuntime, selectedGroup?.conn_id]);
 
   useEffect(() => {
@@ -658,8 +716,13 @@ const AGC: React.FC = () => {
 
   const refreshDataBusEndpointOptions = useCallback(async () => {
     setDataBusEndpointLoading(true);
+    setDataBusEndpointError(null);
     try {
-      const connections = await api.dcListConnections();
+      const currentGroupName = String(groupForm.getFieldValue('group_name') ?? '').trim();
+      const connections = (await api.dcListConnections()).filter((connection) => (
+        !(connection.module_name === AGC_MODULE_NAME && connection.conn_name === currentGroupName)
+        && !(editingGroup && selectedGroup?.conn_id === connection.conn_id)
+      ));
       setDataBusConnectionOptions(
         connections
           .map((connection) => ({
@@ -671,22 +734,18 @@ const AGC: React.FC = () => {
       );
       const endpointGroups = await Promise.all(
         connections.map(async (connection) => {
-          try {
-            const connTags = await api.dcGetConnTags(connection.conn_id);
-            return connTags.tags.map((tag) => ({
-              value: buildDataBusEndpointValue({
-                module_name: connection.module_name,
-                conn_name: connection.conn_name,
-                tag,
-              }),
-              label: `${connection.module_name}/${connection.conn_name} : ${tag}`,
+          const connTags = await api.dcGetConnTags(connection.conn_id);
+          return connTags.tags.map((tag) => ({
+            value: buildDataBusEndpointValue({
+              module_name: connection.module_name,
+              conn_name: connection.conn_name,
               tag,
-              moduleName: connection.module_name,
-              connName: connection.conn_name,
-            }));
-          } catch {
-            return [];
-          }
+            }),
+            label: `${connection.module_name}/${connection.conn_name} : ${tag}`,
+            tag,
+            moduleName: connection.module_name,
+            connName: connection.conn_name,
+          }));
         }),
       );
 
@@ -695,16 +754,20 @@ const AGC: React.FC = () => {
           .flat()
           .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN')),
       );
-    } catch {
+    } catch (error) {
+      const errorText = formatErrorText(error);
+      setDataBusEndpointError(errorText);
+      console.error('AGC 成员快速选点读取失败', { 错误: errorText });
       setDataBusConnectionOptions([]);
       setDataBusEndpointOptions([]);
     } finally {
       setDataBusEndpointLoading(false);
     }
-  }, []);
+  }, [editingGroup, groupForm, selectedGroup?.conn_id]);
 
   const handleSelectMemberConnection = useCallback(
     (connectionValue: string | undefined) => {
+      setMemberDirty(true);
       setMemberConnectionPickerValue(connectionValue);
       if (!connectionValue) return;
 
@@ -728,6 +791,7 @@ const AGC: React.FC = () => {
 
   const handleSelectMemberEndpoint = useCallback(
     (picker: MemberTagPickerKey, endpointValue: string | undefined) => {
+      setMemberDirty(true);
       setMemberTagPickerValues((prev) => ({ ...prev, [picker]: endpointValue }));
       if (!endpointValue) {
         setMemberRouteEndpoints((prev) => {
@@ -769,6 +833,9 @@ const AGC: React.FC = () => {
   );
 
   const handleSelectGroup = useCallback((groupName: string) => {
+    runtimeRequestIdRef.current += 1;
+    setRuntimeUpdates({});
+    setRuntimeOffline(false);
     setSelectedGroupName(groupName);
   }, []);
 
@@ -779,6 +846,11 @@ const AGC: React.FC = () => {
   }, [selectedGroupName]);
 
   const openCreateGroup = useCallback(() => {
+    if (pendingRouteError) {
+      messageApi.warning('请先完成上次配置的映射重试，再新增或编辑控制组。');
+      return;
+    }
+    setGroupDirty(false);
     setEditingGroup(null);
     setAllocationMode('equal');
     setMembersDraft([]);
@@ -786,9 +858,14 @@ const AGC: React.FC = () => {
     groupForm.resetFields();
     groupForm.setFieldsValue(buildEmptyConfig());
     setGroupModalOpen(true);
-  }, [groupForm]);
+    void mappings.open('', undefined);
+  }, [groupForm, mappings, messageApi, pendingRouteError]);
 
   const openEditGroup = useCallback(() => {
+    if (pendingRouteError) {
+      messageApi.warning('请先完成上次配置的映射重试，再新增或编辑控制组。');
+      return;
+    }
     if (!selectedGroup?.config) return;
     const config = normalizeAgcGroupConfigDecimalFields({
       group_name: selectedGroup.config.group_name,
@@ -803,6 +880,7 @@ const AGC: React.FC = () => {
       outputs: cloneOutputs(selectedGroup.config.outputs),
     });
     setEditingGroup(config);
+    setGroupDirty(false);
     setAllocationMode(inferAllocationMode(config.members));
     setMembersDraft(config.members);
     setMemberRouteDrafts(config.members.map(() => ({ createRoutes: false, endpoints: {} })));
@@ -818,9 +896,50 @@ const AGC: React.FC = () => {
       outputs: config.outputs,
     });
     setGroupModalOpen(true);
-  }, [groupForm, selectedGroup]);
+    void mappings.open(config.group_name, selectedGroup.conn_id);
+  }, [groupForm, mappings, messageApi, pendingRouteError, selectedGroup]);
+
+  const closeGroupDraft = () => {
+    if (groupSubmitting) return;
+    if (!groupDirty && !mappings.changed) {
+      setGroupModalOpen(false);
+      return;
+    }
+    modalApi.confirm({
+      title: '放弃未保存的控制组草稿？',
+      content: '配置、暂存成员和外部映射的改动尚未保存。',
+      okText: '放弃草稿',
+      cancelText: '继续编辑',
+      onOk: () => {
+        console.info('AGC 用户放弃控制组草稿');
+        setGroupModalOpen(false);
+      },
+    });
+  };
+
+  const closeMemberDraft = () => {
+    if (memberSubmitting) return;
+    if (!memberDirty) {
+      setMemberModalOpen(false);
+      return;
+    }
+    modalApi.confirm({
+      title: '放弃未暂存的成员草稿？',
+      content: '当前成员的改动尚未暂存到控制组。',
+      okText: '放弃草稿',
+      cancelText: '继续编辑',
+      onOk: () => {
+        console.info('AGC 用户放弃成员草稿');
+        setMemberModalOpen(false);
+      },
+    });
+  };
 
   const handleDeleteGroup = useCallback(async (groupName: string) => {
+    if (pendingRouteError) {
+      messageApi.warning('请先完成外部映射重试，再删除控制组。');
+      return;
+    }
     if (runtimeActionRef.current) return;
     runtimeActionRef.current = 'delete';
     setRuntimeAction('delete');
@@ -838,7 +957,7 @@ const AGC: React.FC = () => {
       runtimeActionRef.current = null;
       setRuntimeAction(null);
     }
-  }, [messageApi, refreshGroups, selectedGroupName]);
+  }, [messageApi, pendingRouteError, refreshGroups, selectedGroupName]);
 
   const handleStartGroup = useCallback(async () => {
     if (!selectedGroupName || runtimeActionRef.current) return;
@@ -1046,6 +1165,14 @@ const AGC: React.FC = () => {
 
   const handleGroupSubmit = useCallback(async () => {
     if (groupSubmitting) return;
+    if (pendingRouteError) {
+      messageApi.warning('请先重试上次已保存配置的外部映射，再保存控制组。');
+      return;
+    }
+    if (mappings.loading || mappings.error) {
+      messageApi.warning('外部映射尚未成功读取，请刷新映射后再保存。');
+      return;
+    }
     setGroupSubmitting(true);
     let submittedConfig: AgcGroupConfig | null = null;
     try {
@@ -1123,19 +1250,17 @@ const AGC: React.FC = () => {
         }
         return bindings;
       });
-      const routes = buildControlDataBusRoutes({
-        moduleName: AGC_MODULE_NAME,
-        groupName: config.group_name,
-        bindings: routeBindings,
-      });
+      const plan = mappings.plan(collectMappingFields(config), routeBindings, config.group_name);
       const createOnly = !editingGroup;
       let routesSubmitted = 0;
       const saveGroup = async () => {
         const result = await saveControlGroupWithOptionalRoutes({
-          createRoutes: routes.length > 0,
-          routes,
+          createRoutes: plan.routes.length > 0 || plan.removedRoutes.length > 0,
+          routes: plan.routes,
+          removedRoutes: plan.removedRoutes,
           saveGroup: () => api.agcUpsertGroup(config, createOnly),
           saveRoutes: (nextRoutes) => api.dcUpsertRoutes(nextRoutes, false),
+          deleteRoutes: (oldRoutes) => api.dcDeleteRoutes(oldRoutes),
         });
         routesSubmitted = result.routesSubmitted;
       };
@@ -1182,6 +1307,7 @@ const AGC: React.FC = () => {
           ? e.operationError
           : null;
       if (routeSaveError) {
+        setPendingRouteError(routeSaveError);
         const restartError = e instanceof RuntimeRestartError ? e.restartError : null;
         const formConfig = groupForm.getFieldsValue(true);
         const groupName = submittedConfig?.group_name ?? String(formConfig.group_name ?? '').trim();
@@ -1190,7 +1316,7 @@ const AGC: React.FC = () => {
           error: routeSaveError.routeError,
           restartError,
         });
-        messageApi.error(`控制组已保存，路由创建失败: ${formatErrorText(routeSaveError.routeError)}`);
+        messageApi.error(`控制组已保存，路由创建失败或旧映射清理失败，请使用页面上的映射重试入口: ${formatErrorText(routeSaveError.routeError)}`);
         if (restartError) {
           messageApi.warning(`控制组恢复运行失败: ${formatErrorText(restartError)}`);
         }
@@ -1217,13 +1343,17 @@ const AGC: React.FC = () => {
     groupSubmitting,
     groupForm,
     memberRouteDrafts,
+    mappings,
     membersDraft,
     messageApi,
+    pendingRouteError,
+    setPendingRouteError,
     refreshGroups,
     runSelectedGroupStopped,
   ]);
 
   const openCreateMember = useCallback(() => {
+    setMemberDirty(false);
     setEditingMemberIndex(null);
     setMemberConnectionPickerValue(undefined);
     setMemberTagPickerValues({});
@@ -1238,6 +1368,7 @@ const AGC: React.FC = () => {
   const openEditMember = useCallback((index: number) => {
     const member = membersDraft[index];
     if (!member) return;
+    setMemberDirty(false);
     const routeDraft = memberRouteDrafts[index];
     const routeEndpoints = routeDraft?.endpoints ?? {};
     setEditingMemberIndex(index);
@@ -1298,9 +1429,12 @@ const AGC: React.FC = () => {
         next[editingMemberIndex] = nextRouteDraft;
         return next;
       });
+      setGroupDirty(true);
+      console.info('AGC 成员已暂存到控制组草稿', { 成员: nextMember.member_name, 自动路由: createMemberRoutes });
+      messageApi.success('成员已暂存，仍需保存控制组才会下发配置和映射。');
       setMemberModalOpen(false);
     } catch (e) {
-      messageApi.error(`成员保存失败: ${e instanceof Error ? e.message : String(e)}`);
+      messageApi.error(`成员暂存失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setMemberSubmitting(false);
     }
@@ -1315,6 +1449,7 @@ const AGC: React.FC = () => {
   ]);
 
   const handleDeleteMember = useCallback((index: number) => {
+    setGroupDirty(true);
     setMembersDraft((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
     setMemberRouteDrafts((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
   }, []);
@@ -1569,6 +1704,8 @@ const AGC: React.FC = () => {
   return (
     <div className="protocol-page">
       {contextHolder}
+      {modalContextHolder}
+      <ControlRouteRetry error={pendingRouteError} onComplete={() => setPendingRouteError(null)} onFailure={setPendingRouteError} />
 
       {currentView === 'strategy' ? (
         <ResizableSplit
@@ -1624,7 +1761,7 @@ const AGC: React.FC = () => {
                           danger
                           icon={<DeleteOutlined />}
                           loading={runtimeAction === 'delete'}
-                          disabled={runtimeAction !== null}
+                          disabled={runtimeAction !== null || !!pendingRouteError}
                         >
                           {selectedGroup?.state === 3 ? '重试删除' : '删除'}
                         </Button>
@@ -1706,6 +1843,12 @@ const AGC: React.FC = () => {
               >
                 <div className="protocol-log-scroll">
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <ControlRuntimeStatus
+                      updates={runtimeUpdates}
+                      tags={collectObservedTags(selectedGroup)}
+                      maxAgeMs={Math.max(30000, (selectedConfig.calculation_execution_period_seconds || 1) * 3000, (selectedConfig.command_control_period_seconds || 4) * 3000)}
+                      offline={runtimeOffline}
+                    />
                     <div>
                       <Text type="secondary" style={{ marginRight: 12 }}>当前状态</Text>
                       <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
@@ -1824,6 +1967,12 @@ const AGC: React.FC = () => {
             className="protocol-point-card"
             style={{ flex: 1, minWidth: 0, minHeight: 0 }}
           >
+            <ControlRuntimeStatus
+              updates={runtimeUpdates}
+              tags={selectedGroup?.default_points.map((point) => point.tag) ?? []}
+              maxAgeMs={Math.max(30000, (selectedConfig?.calculation_execution_period_seconds || 1) * 3000, (selectedConfig?.command_control_period_seconds || 4) * 3000)}
+              offline={runtimeOffline}
+            />
             <div className="protocol-table-scroll">
               <Table
                 rowKey={(record) => `${record.kind}-${record.tag}`}
@@ -2015,12 +2164,11 @@ const AGC: React.FC = () => {
         title={editingGroup ? '编辑 AGC 控制组' : '新增 AGC 控制组'}
         open={groupModalOpen}
         onOk={() => void handleGroupSubmit()}
-        onCancel={() => {
-          if (!groupSubmitting) setGroupModalOpen(false);
-        }}
+        onCancel={closeGroupDraft}
         okText="保存配置"
         cancelText="取消"
         confirmLoading={groupSubmitting}
+        okButtonProps={{ disabled: mappings.loading || !!mappings.error || !!pendingRouteError }}
         maskClosable={!groupSubmitting}
         closable={!groupSubmitting}
         keyboard={!groupSubmitting}
@@ -2029,7 +2177,13 @@ const AGC: React.FC = () => {
         className="control-config-modal control-group-modal"
         destroyOnClose
       >
-        <Form form={groupForm} layout="vertical" size="small">
+        <Form form={groupForm} layout="vertical" size="small" onValuesChange={() => setGroupDirty(true)}>
+          {editingGroup && selectedGroup?.state === 2 ? (
+            <Alert type="warning" showIcon message="控制组正在运行：保存时会先停止控制组，保存后恢复运行。" style={{ marginBottom: 12 }} />
+          ) : null}
+          {pendingRouteError ? (
+            <Alert type="warning" showIcon message="上次配置已保存，请先完成页面上的映射重试，再保存新的配置。" style={{ marginBottom: 12 }} />
+          ) : null}
           <div className="control-config-intro">
             <span className="control-config-intro__mark">AGC</span>
             <span className="control-config-intro__text">控制组配置</span>
@@ -2266,6 +2420,7 @@ const AGC: React.FC = () => {
               locale={{ emptyText: '暂无成员，请添加' }}
             />
           </Card>
+          <ControlMappingsEditor mapping={mappings} fields={mappingFields} groupName={watchedGroup?.group_name ?? ''} />
         </Form>
       </Modal>
 
@@ -2273,10 +2428,8 @@ const AGC: React.FC = () => {
         title={editingMemberIndex === null ? '添加成员' : '编辑成员'}
         open={memberModalOpen}
         onOk={() => void handleMemberSubmit()}
-        onCancel={() => {
-          if (!memberSubmitting) setMemberModalOpen(false);
-        }}
-        okText="保存成员"
+        onCancel={closeMemberDraft}
+        okText="暂存成员"
         cancelText="取消"
         confirmLoading={memberSubmitting}
         maskClosable={!memberSubmitting}
@@ -2287,14 +2440,26 @@ const AGC: React.FC = () => {
         className="control-config-modal control-member-modal"
         destroyOnClose
       >
-        <Form form={memberForm} layout="vertical" size="small">
+        <Form form={memberForm} layout="vertical" size="small" onValuesChange={() => setMemberDirty(true)}>
           <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-            可从数据总线快速选择成员点位来回填 tag；未开启自动路由时，仍需在数据总线中手动设置最终映射。
+            暂存成员仅更新控制组草稿，仍需保存控制组才会下发。可从数据总线快速选择点位回填 tag，或在控制组的统一外部映射区设置来源与目标。
           </Text>
+          {dataBusEndpointError ? (
+            <Alert
+              type="error"
+              showIcon
+              message={`快速选点读取失败：${dataBusEndpointError}`}
+              action={<Button size="small" loading={dataBusEndpointLoading} onClick={() => void refreshDataBusEndpointOptions()}>刷新选点</Button>}
+              style={{ marginBottom: 12 }}
+            />
+          ) : null}
           <div style={{ marginBottom: 16 }}>
             <Checkbox
               checked={createMemberRoutes}
-              onChange={(event) => setCreateMemberRoutes(event.target.checked)}
+              onChange={(event) => {
+                setMemberDirty(true);
+                setCreateMemberRoutes(event.target.checked);
+              }}
             >
               保存控制组时自动创建 DataCenter 路由
             </Checkbox>
@@ -2320,7 +2485,7 @@ const AGC: React.FC = () => {
                   options={dataBusConnectionOptions}
                   value={memberConnectionPickerValue}
                   loading={dataBusEndpointLoading}
-                  notFoundContent="暂无可选连接，可继续手动输入"
+                  notFoundContent={dataBusEndpointError ? '读取失败，请刷新选点' : '暂无可选连接，可继续手动输入'}
                   onChange={handleSelectMemberConnection}
                   filterOption={(input, option) =>
                     String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
@@ -2451,7 +2616,7 @@ const AGC: React.FC = () => {
                     options={dataBusEndpointOptions}
                     value={memberTagPickerValues.p_meas}
                     loading={dataBusEndpointLoading}
-                    notFoundContent="暂无可选点位，可继续手动输入"
+                    notFoundContent={dataBusEndpointError ? '读取失败，请刷新选点' : '暂无可选点位，可继续手动输入'}
                     onChange={(value) => handleSelectMemberEndpoint('p_meas', value)}
                     filterOption={(input, option) =>
                       String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
@@ -2507,7 +2672,7 @@ const AGC: React.FC = () => {
                     options={dataBusEndpointOptions}
                     value={memberTagPickerValues.p_set}
                     loading={dataBusEndpointLoading}
-                    notFoundContent="暂无可选点位，可继续手动输入"
+                    notFoundContent={dataBusEndpointError ? '读取失败，请刷新选点' : '暂无可选点位，可继续手动输入'}
                     onChange={(value) => handleSelectMemberEndpoint('p_set', value)}
                     filterOption={(input, option) =>
                       String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
@@ -2598,7 +2763,7 @@ const AGC: React.FC = () => {
                               options={dataBusEndpointOptions}
                               value={memberTagPickerValues.base_tag}
                               loading={dataBusEndpointLoading}
-                              notFoundContent="暂无可选点位，可继续手动输入"
+                              notFoundContent={dataBusEndpointError ? '读取失败，请刷新选点' : '暂无可选点位，可继续手动输入'}
                               onChange={(value) => handleSelectMemberEndpoint('base_tag', value)}
                               filterOption={(input, option) =>
                                 String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
