@@ -6,6 +6,7 @@ export type {
   AppSettingsMap,
   CacheClearResult,
   LowerUpdateChannel,
+  LowerUpdatePlatform,
   LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
   LowerUpdateDownloadResult,

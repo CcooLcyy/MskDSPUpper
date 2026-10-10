@@ -6,18 +6,19 @@ import type {
   LowerUpdateChannel,
   LowerUpdateDownloadResult,
   LowerUpdateManifest,
+  LowerUpdatePlatform,
 } from '../../adapters';
 import {
   initialLowerUpdateAutoStatus,
   LowerUpdateAutoContext,
 } from './lower-update-auto-context';
+import { assertLowerUpdateManifest, getLowerUpdateChannels } from '../../utils/lower-update-platform';
 import type {
   LowerUpdateAutoContextValue,
   LowerUpdateAutoStatus,
 } from './lower-update-auto-context';
 
 const LOWER_UPDATE_CHECK_INTERVAL_MS = 30_000;
-const LOWER_UPDATE_CHANNELS: LowerUpdateChannel[] = ['stable', 'beta', 'ci'];
 
 function cacheKey(manifest: LowerUpdateManifest): string {
   return [
@@ -65,23 +66,36 @@ function cachedPackageFromResult(
 }
 
 export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<LowerUpdateAutoStatus>(initialLowerUpdateAutoStatus);
+  const [platform, updatePlatform] = useState<LowerUpdatePlatform>('linux-arm64');
+  const [statuses, setStatuses] = useState<Record<LowerUpdatePlatform, LowerUpdateAutoStatus>>({
+    'linux-arm64': initialLowerUpdateAutoStatus,
+    'linux-x64': initialLowerUpdateAutoStatus,
+  });
   const mountedRef = useRef(true);
-  const runningPromiseRef = useRef<Partial<Record<LowerUpdateChannel, Promise<void>>>>({});
+  const runningPromiseRef = useRef<Partial<Record<string, Promise<void>>>>({});
   const downloadTasksRef = useRef(new Map<string, Promise<LowerUpdateDownloadResult>>());
-  const activeChannelDownloadRef = useRef<Partial<Record<LowerUpdateChannel, Promise<LowerUpdateDownloadResult>>>>({});
+  const activeChannelDownloadRef = useRef<Partial<Record<string, Promise<LowerUpdateDownloadResult>>>>({});
+
+  const setPlatform = useCallback((next: LowerUpdatePlatform) => {
+    getLowerUpdateChannels(next);
+    console.info('切换下位机自动更新架构', { platform: next });
+    updatePlatform(next);
+  }, []);
 
   const updateChannelStatus = useCallback(
-    (channel: LowerUpdateChannel, next: Partial<LowerUpdateAutoStatus['channels'][LowerUpdateChannel]>) => {
+    (platform: LowerUpdatePlatform, channel: LowerUpdateChannel, next: Partial<LowerUpdateAutoStatus['channels'][LowerUpdateChannel]>) => {
       if (!mountedRef.current) {
         return;
       }
-      setStatus((previous) => ({
-        channels: {
-          ...previous.channels,
-          [channel]: {
-            ...previous.channels[channel],
-            ...next,
+      setStatuses((previous) => ({
+        ...previous,
+        [platform]: {
+          channels: {
+            ...previous[platform].channels,
+            [channel]: {
+              ...previous[platform].channels[channel],
+              ...next,
+            },
           },
         },
       }));
@@ -90,6 +104,8 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
   );
 
   const ensureDownloaded = useCallback((manifest: LowerUpdateManifest): Promise<LowerUpdateDownloadResult> => {
+    const platform = manifest.platform as LowerUpdatePlatform;
+    assertLowerUpdateManifest(manifest, platform, manifest.channel);
     const manifestKey = cacheKey(manifest);
     const runningTask = downloadTasksRef.current.get(manifestKey);
     if (runningTask) {
@@ -97,14 +113,15 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
     }
 
     const channel = manifest.channel;
-    const activeChannelTask = activeChannelDownloadRef.current[channel];
+    const channelKey = `${platform}:${channel}`;
+    const activeChannelTask = activeChannelDownloadRef.current[channelKey];
     if (activeChannelTask) {
       return activeChannelTask
         .catch(() => undefined)
         .then(() => ensureDownloaded(manifest));
     }
     const checkedAt = Date.now();
-    updateChannelStatus(channel, {
+    updateChannelStatus(platform, channel, {
       kind: 'downloading',
       message: `正在准备下位机 ${channel} 通道 ${manifest.version} 下载`,
       manifest,
@@ -113,15 +130,15 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
       progress: null,
       lastCheckedAt: checkedAt,
     });
-    // Keep an identity holder so stale tasks cannot delete a newer task.
+    // 保留任务标识，防止旧下载结束时删除后续任务。
     const taskRef: { promise?: Promise<LowerUpdateDownloadResult> } = {};
     const taskPromise = (async () => {
       try {
-        const cachedPackages = await api.listCachedLowerUpdates(channel);
+        const cachedPackages = await api.listCachedLowerUpdates(channel, platform);
         const cachedPackage = cachedPackages.find((item) => matchesManifest(manifest, item)) ?? null;
         if (cachedPackage) {
           const result = resultFromCachedPackage(cachedPackage);
-          updateChannelStatus(channel, {
+          updateChannelStatus(platform, channel, {
             kind: 'cached',
             message: `下位机 ${channel} 通道 ${manifest.version} 已缓存到上位机，可手动下发`,
             manifest,
@@ -134,7 +151,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
         }
 
         const result = await api.downloadLowerUpdate(manifest, (progress) => {
-          updateChannelStatus(channel, {
+          updateChannelStatus(platform, channel, {
             kind: 'downloading',
             message: `正在下载下位机 ${channel} 通道 ${manifest.version}`,
             manifest,
@@ -143,7 +160,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
           });
         });
         const downloadedPackage = cachedPackageFromResult(manifest, result);
-        updateChannelStatus(channel, {
+        updateChannelStatus(platform, channel, {
           kind: 'cached',
           message: `下位机 ${channel} 通道 ${manifest.version} 已缓存到上位机，可手动下发`,
           manifest,
@@ -154,7 +171,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
         });
         return result;
       } catch (error) {
-        updateChannelStatus(channel, {
+        updateChannelStatus(platform, channel, {
           kind: 'error',
           message: `下位机 ${channel} 通道下载失败: ${String(error)}`,
           manifest,
@@ -166,47 +183,49 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
         if (downloadTasksRef.current.get(manifestKey) === taskRef.promise) {
           downloadTasksRef.current.delete(manifestKey);
         }
-        if (activeChannelDownloadRef.current[channel] === taskRef.promise) {
-          delete activeChannelDownloadRef.current[channel];
+        if (activeChannelDownloadRef.current[channelKey] === taskRef.promise) {
+          delete activeChannelDownloadRef.current[channelKey];
         }
       }
     })();
     taskRef.promise = taskPromise;
 
-    // Register before returning so automatic and manual callers share this task.
+    // 返回前注册任务，让自动与手动下载复用同一请求。
     downloadTasksRef.current.set(manifestKey, taskPromise);
-    activeChannelDownloadRef.current[channel] = taskPromise;
+    activeChannelDownloadRef.current[channelKey] = taskPromise;
     return taskPromise;
   }, [updateChannelStatus]);
 
-  const runChannelCheckAndDownload = useCallback(async (channel: LowerUpdateChannel): Promise<void> => {
-    const activeDownload = activeChannelDownloadRef.current[channel];
+  const runChannelCheckAndDownload = useCallback(async (platform: LowerUpdatePlatform, channel: LowerUpdateChannel): Promise<void> => {
+    const channelKey = `${platform}:${channel}`;
+    const activeDownload = activeChannelDownloadRef.current[channelKey];
     if (activeDownload) {
       await activeDownload.catch(() => undefined);
       return;
     }
-    const runningPromise = runningPromiseRef.current[channel];
+    const runningPromise = runningPromiseRef.current[channelKey];
     if (runningPromise) {
       return runningPromise;
     }
 
-    // Keep an identity holder so stale checks cannot delete a newer check.
+    // 保留检查标识，防止旧检查结束时删除后续任务。
     const promiseRef: { promise?: Promise<void> } = {};
     const promise = (async () => {
       const checkedAt = Date.now();
-      updateChannelStatus(channel, {
+      updateChannelStatus(platform, channel, {
         kind: 'checking',
         message: `正在检查下位机 ${channel} 通道更新...`,
         progress: null,
       });
 
       try {
-        const manifest = await api.checkLowerUpdate(channel);
-        const cachedPackages = await api.listCachedLowerUpdates(channel);
+        const manifest = await api.checkLowerUpdate(channel, platform);
+        assertLowerUpdateManifest(manifest, platform, channel);
+        const cachedPackages = await api.listCachedLowerUpdates(channel, platform);
         const cachedPackage = cachedPackages.find((item) => matchesManifest(manifest, item)) ?? null;
         if (cachedPackage) {
           const result = resultFromCachedPackage(cachedPackage);
-          updateChannelStatus(channel, {
+          updateChannelStatus(platform, channel, {
             kind: 'cached',
             message: `下位机 ${channel} 通道 ${manifest.version} 已缓存到上位机，可手动下发`,
             manifest,
@@ -218,13 +237,13 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        const newlyActiveDownload = activeChannelDownloadRef.current[channel];
+        const newlyActiveDownload = activeChannelDownloadRef.current[channelKey];
         if (newlyActiveDownload) {
           await newlyActiveDownload;
           return;
         }
 
-        updateChannelStatus(channel, {
+        updateChannelStatus(platform, channel, {
           kind: 'available',
           message: `发现下位机 ${channel} 通道新版本 ${manifest.version}，准备自动下载`,
           manifest,
@@ -235,27 +254,27 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
         });
         await ensureDownloaded(manifest);
       } catch (error) {
-        updateChannelStatus(channel, {
+        updateChannelStatus(platform, channel, {
           kind: 'error',
           message: `下位机 ${channel} 通道自动更新失败: ${String(error)}`,
           progress: null,
           lastCheckedAt: checkedAt,
         });
       } finally {
-        if (runningPromiseRef.current[channel] === promiseRef.promise) {
-          delete runningPromiseRef.current[channel];
+        if (runningPromiseRef.current[channelKey] === promiseRef.promise) {
+          delete runningPromiseRef.current[channelKey];
         }
       }
     })();
     promiseRef.promise = promise;
 
-    runningPromiseRef.current[channel] = promise;
+    runningPromiseRef.current[channelKey] = promise;
     return promise;
   }, [ensureDownloaded, updateChannelStatus]);
 
   const runAllChannels = useCallback(async (): Promise<void> => {
-    await Promise.all(LOWER_UPDATE_CHANNELS.map((channel) => runChannelCheckAndDownload(channel)));
-  }, [runChannelCheckAndDownload]);
+    await Promise.all(getLowerUpdateChannels(platform).map((channel) => runChannelCheckAndDownload(platform, channel)));
+  }, [platform, runChannelCheckAndDownload]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -272,8 +291,8 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
   }, [runAllChannels]);
 
   const contextValue = useMemo<LowerUpdateAutoContextValue>(
-    () => ({ ...status, ensureDownloaded }),
-    [ensureDownloaded, status],
+    () => ({ ...statuses[platform], platform, setPlatform, ensureDownloaded }),
+    [ensureDownloaded, statuses, platform, setPlatform],
   );
   return (
     <LowerUpdateAutoContext.Provider value={contextValue}>

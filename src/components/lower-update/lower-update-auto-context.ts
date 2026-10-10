@@ -5,6 +5,7 @@ import type {
   LowerUpdateDownloadProgress,
   LowerUpdateManifest,
   LowerUpdateChannel,
+  LowerUpdatePlatform,
 } from '../../adapters';
 
 export type LowerUpdateAutoStatusKind =
@@ -31,6 +32,8 @@ export interface LowerUpdateAutoStatus {
 }
 
 export interface LowerUpdateAutoContextValue extends LowerUpdateAutoStatus {
+  platform: LowerUpdatePlatform;
+  setPlatform(platform: LowerUpdatePlatform): void;
   ensureDownloaded(manifest: LowerUpdateManifest): Promise<LowerUpdateDownloadResult>;
 }
 
@@ -61,6 +64,8 @@ const unavailableEnsureDownloaded = async (): Promise<LowerUpdateDownloadResult>
 
 export const LowerUpdateAutoContext = createContext<LowerUpdateAutoContextValue>({
   ...initialLowerUpdateAutoStatus,
+  platform: 'linux-arm64',
+  setPlatform: () => { throw new Error('下位机更新架构选择服务尚未初始化'); },
   ensureDownloaded: unavailableEnsureDownloaded,
 });
 

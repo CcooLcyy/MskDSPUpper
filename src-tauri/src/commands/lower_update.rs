@@ -29,7 +29,10 @@ pub enum LowerUpdateSshAuthDto {
 
 const DEFAULT_LOWER_UPDATE_BASE_URL: &str =
     "https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-lower";
+const DEFAULT_LOWER_UPDATE_X64_BASE_URL: &str =
+    "https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-lower-x64";
 const LOWER_UPDATE_PLATFORM: &str = "linux-arm64";
+const LOWER_UPDATE_X64_PLATFORM: &str = "linux-x64";
 const LOWER_UPDATE_PRODUCT: &str = "mskdsp-lower";
 const LOWER_UPDATE_SCHEMA_VERSION: u32 = 1;
 const LOWER_UPDATE_CACHE_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -687,12 +690,40 @@ fn normalize_channel(channel: &str) -> Result<String, String> {
     }
 }
 
-fn normalize_base_url(base_url: Option<String>) -> Result<String, String> {
+fn normalize_platform(platform: Option<&str>) -> Result<&str, String> {
+    match platform {
+        None | Some(LOWER_UPDATE_PLATFORM) => Ok(LOWER_UPDATE_PLATFORM),
+        Some(LOWER_UPDATE_X64_PLATFORM) => Ok(LOWER_UPDATE_X64_PLATFORM),
+        Some(value) => Err(format!(
+            "下位机更新平台不支持: {value}，只能是 linux-arm64 或 linux-x64"
+        )),
+    }
+}
+
+fn validate_platform_channel(platform: &str, channel: &str) -> Result<(), String> {
+    normalize_platform(Some(platform))?;
+    normalize_channel(channel)?;
+    if platform == LOWER_UPDATE_X64_PLATFORM && channel != "ci" {
+        return Err("下位机 x64 更新仅支持 ci 通道".into());
+    }
+    Ok(())
+}
+
+fn default_base_url(platform: &str) -> &'static str {
+    if platform == LOWER_UPDATE_X64_PLATFORM {
+        DEFAULT_LOWER_UPDATE_X64_BASE_URL
+    } else {
+        DEFAULT_LOWER_UPDATE_BASE_URL
+    }
+}
+
+fn normalize_base_url(base_url: Option<String>, platform: &str) -> Result<String, String> {
+    normalize_platform(Some(platform))?;
     let raw = base_url
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_LOWER_UPDATE_BASE_URL);
+        .unwrap_or_else(|| default_base_url(platform));
     let parsed = reqwest::Url::parse(raw).map_err(|e| format!("下位机更新源地址不合法: {e}"))?;
     match parsed.scheme() {
         "http" | "https" => Ok(raw.trim_end_matches('/').to_string()),
@@ -1209,7 +1240,10 @@ fn build_install_command(install_dir: &str, package_name: &str) -> String {
 fn validate_manifest(
     manifest: &LowerUpdateManifestDto,
     requested_channel: &str,
+    requested_platform: &str,
 ) -> Result<(), String> {
+    normalize_platform(Some(requested_platform))?;
+    normalize_platform(Some(&manifest.platform))?;
     if manifest.schema_version != LOWER_UPDATE_SCHEMA_VERSION {
         return Err(format!(
             "下位机更新清单版本不支持: {}",
@@ -1225,9 +1259,13 @@ fn validate_manifest(
             manifest.channel
         ));
     }
-    if manifest.platform != LOWER_UPDATE_PLATFORM {
-        return Err(format!("下位机更新清单平台不支持: {}", manifest.platform));
+    if manifest.platform != requested_platform {
+        return Err(format!(
+            "下位机更新清单平台不匹配: 期望 {requested_platform}，实际 {}",
+            manifest.platform
+        ));
     }
+    validate_platform_channel(requested_platform, requested_channel)?;
     if manifest.version.trim().is_empty() {
         return Err("下位机更新清单缺少版本号".into());
     }
@@ -1387,6 +1425,7 @@ fn replace_downloaded_package(source: &Path, destination: &Path) -> io::Result<(
 async fn load_cached_package(
     directory: &Path,
     requested_channel: Option<&str>,
+    requested_platform: &str,
 ) -> Result<Option<LowerUpdateCachedPackageDto>, String> {
     let metadata_path = cache_metadata_path(directory);
     let metadata_bytes = match fs::read(&metadata_path).await {
@@ -1406,7 +1445,7 @@ async fn load_cached_package(
     if requested_channel.is_some_and(|requested| requested != channel) {
         return Ok(None);
     }
-    validate_manifest(&metadata.manifest, &channel)?;
+    validate_manifest(&metadata.manifest, &channel, requested_platform)?;
     if metadata
         .manifest
         .image_id
@@ -1677,10 +1716,24 @@ pub async fn clear_lower_update_cache(
 pub async fn list_cached_lower_updates(
     state: State<'_, AppState>,
     channel: Option<String>,
+    platform: Option<String>,
 ) -> Result<Vec<LowerUpdateCachedPackageDto>, String> {
     let requested_channel = channel.as_deref().map(normalize_channel).transpose()?;
+    let platform = normalize_platform(platform.as_deref())?;
     let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
     let cache_root = state.runtime_paths.lower_update_dir();
+    list_cached_lower_updates_in(&cache_root, requested_channel.as_deref(), platform).await
+}
+
+async fn list_cached_lower_updates_in(
+    cache_root: &Path,
+    requested_channel: Option<&str>,
+    platform: &str,
+) -> Result<Vec<LowerUpdateCachedPackageDto>, String> {
+    normalize_platform(Some(platform))?;
+    if let Some(channel) = requested_channel {
+        validate_platform_channel(platform, channel)?;
+    }
     let mut cached = Vec::new();
 
     for candidate_channel in ["stable", "beta", "ci"] {
@@ -1690,18 +1743,20 @@ pub async fn list_cached_lower_updates(
         {
             continue;
         }
-        let directory = cache_root
-            .join(candidate_channel)
-            .join(LOWER_UPDATE_PLATFORM);
+        if validate_platform_channel(platform, candidate_channel).is_err() {
+            continue;
+        }
+        let directory = cache_root.join(candidate_channel).join(platform);
         if !directory.is_dir() {
             continue;
         }
-        match load_cached_package(&directory, requested_channel.as_deref()).await {
+        match load_cached_package(&directory, Some(candidate_channel), platform).await {
             Ok(Some(package)) => cached.push(package),
             Ok(None) => {}
             Err(error) => tracing::warn!(
                 operation = "cache_list",
                 channel = candidate_channel,
+                platform,
                 error = %log_detail(&error),
                 "忽略无效的下位机更新缓存"
             ),
@@ -1713,6 +1768,7 @@ pub async fn list_cached_lower_updates(
         operation = "cache_list",
         count = cached.len(),
         channel = ?requested_channel,
+        platform,
         "下位机更新缓存查询完成"
     );
     Ok(cached)
@@ -1805,22 +1861,25 @@ fn emit_upload_progress(
 pub async fn check_lower_update(
     channel: String,
     base_url: Option<String>,
+    platform: Option<String>,
 ) -> Result<LowerUpdateManifestDto, String> {
     let started_at = Instant::now();
-    let log_base_url = base_url
-        .as_deref()
-        .map(log_url)
-        .unwrap_or_else(|| DEFAULT_LOWER_UPDATE_BASE_URL.to_string());
+    let log_base_url = base_url.as_deref().map(log_url).unwrap_or_else(|| {
+        default_base_url(platform.as_deref().unwrap_or(LOWER_UPDATE_PLATFORM)).to_string()
+    });
     tracing::info!(
         operation = "check",
         channel = %log_detail(&channel),
+        platform = %log_detail(platform.as_deref().unwrap_or(LOWER_UPDATE_PLATFORM)),
         base_url = %log_base_url,
         "开始获取下位机更新清单"
     );
 
     let result = async {
         let channel = normalize_channel(&channel)?;
-        let base_url = normalize_base_url(base_url)?;
+        let platform = normalize_platform(platform.as_deref())?;
+        validate_platform_channel(platform, &channel)?;
+        let base_url = normalize_base_url(base_url, platform)?;
         let latest_url = build_latest_url(&base_url, &channel);
 
         let client = reqwest::Client::builder()
@@ -1842,7 +1901,7 @@ pub async fn check_lower_update(
             .json::<LowerUpdateManifestDto>()
             .await
             .map_err(|e| format!("解析下位机更新清单失败: {e}"))?;
-        validate_manifest(&manifest, &channel)?;
+        validate_manifest(&manifest, &channel, platform)?;
         Ok(manifest)
     }
     .await;
@@ -1852,6 +1911,7 @@ pub async fn check_lower_update(
             tracing::info!(
                 operation = "check",
                 channel = %manifest.channel,
+                platform = %manifest.platform,
                 version = %manifest.version,
                 package = %manifest.asset.name,
                 image_id = ?manifest.image_id,
@@ -1936,13 +1996,14 @@ pub async fn download_lower_update(
     tracing::info!(
         operation = "download",
         package = %package_name,
+        platform = %log_detail(&manifest.platform),
         task_id = %task_id,
         url = %log_url(&manifest.asset.url),
         "收到下位机更新包下载请求"
     );
     let result = async {
         let channel = normalize_channel(&manifest.channel)?;
-        validate_manifest(&manifest, &channel)?;
+        validate_manifest(&manifest, &channel, &manifest.platform)?;
         let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
 
         let output_dir = cache_dir(&state.runtime_paths.lower_update_dir(), &manifest);
@@ -2817,6 +2878,144 @@ mod tests {
         }
     }
 
+    // 验证旧调用默认 ARM64，并拒绝未知或可穿越目录的平台参数。
+    #[test]
+    fn defaults_to_arm64_and_accepts_only_supported_platforms() {
+        assert_eq!(super::normalize_platform(None).unwrap(), "linux-arm64");
+        assert_eq!(
+            super::normalize_platform(Some("linux-arm64")).unwrap(),
+            "linux-arm64"
+        );
+        assert_eq!(
+            super::normalize_platform(Some("linux-x64")).unwrap(),
+            "linux-x64"
+        );
+        for platform in ["", "linux-amd64", "linux-arm", "../linux-x64"] {
+            assert!(super::normalize_platform(Some(platform))
+                .unwrap_err()
+                .contains("平台"));
+        }
+    }
+
+    // 验证 ARM64 支持三个通道，x64 仅允许已有发布链的 CI 通道。
+    #[test]
+    fn allows_all_arm64_channels_and_only_x64_ci() {
+        for channel in ["stable", "beta", "ci"] {
+            assert!(super::validate_platform_channel("linux-arm64", channel).is_ok());
+        }
+        assert!(super::validate_platform_channel("linux-x64", "ci").is_ok());
+        for channel in ["stable", "beta"] {
+            assert!(super::validate_platform_channel("linux-x64", channel)
+                .unwrap_err()
+                .contains("仅支持 ci"));
+        }
+        assert!(super::validate_platform_channel("linux-amd64", "ci").is_err());
+    }
+
+    // 验证两种架构的默认更新源独立，同时保留显式覆盖更新源的能力。
+    #[test]
+    fn uses_separate_platform_sources_and_preserves_explicit_override() {
+        assert!(super::normalize_base_url(None, "linux-arm64")
+            .unwrap()
+            .ends_with("/mskdsp-lower"));
+        assert!(super::normalize_base_url(None, "linux-x64")
+            .unwrap()
+            .ends_with("/mskdsp-lower-x64"));
+        assert!(super::normalize_base_url(Some("  ".into()), "linux-x64")
+            .unwrap()
+            .ends_with("/mskdsp-lower-x64"));
+        assert_eq!(
+            super::normalize_base_url(Some(" https://example.com/custom/ ".into()), "linux-x64")
+                .unwrap(),
+            "https://example.com/custom"
+        );
+    }
+
+    // 验证清单必须匹配所请求的架构和通道，并拒绝不支持的组合。
+    #[test]
+    fn validates_manifest_against_requested_platform_and_channel() {
+        let mut manifest = test_manifest("package", 16, "a".repeat(64));
+        assert!(super::validate_manifest(&manifest, "stable", "linux-arm64").is_ok());
+        assert!(super::validate_manifest(&manifest, "stable", "linux-x64").is_err());
+        manifest.platform = "linux-x64".into();
+        manifest.channel = "ci".into();
+        assert!(super::validate_manifest(&manifest, "ci", "linux-x64").is_ok());
+        assert!(super::validate_manifest(&manifest, "ci", "linux-arm64")
+            .unwrap_err()
+            .contains("平台不匹配"));
+        manifest.channel = "stable".into();
+        assert!(super::validate_manifest(&manifest, "stable", "linux-x64")
+            .unwrap_err()
+            .contains("仅支持 ci"));
+        manifest.platform = "../linux-arm64".into();
+        assert!(super::validate_manifest(&manifest, "stable", "../linux-arm64").is_err());
+    }
+
+    // 验证两种架构即使包名相同，也只返回所选架构的校验通过缓存。
+    #[tokio::test]
+    async fn lists_only_selected_platform_even_when_package_names_match() {
+        let temp = TestDirectory::new();
+        for platform in ["linux-arm64", "linux-x64"] {
+            let directory = temp.path().join("ci").join(platform);
+            fs::create_dir_all(&directory).unwrap();
+            let package_path = directory.join("same-package");
+            fs::write(&package_path, platform.as_bytes()).unwrap();
+            let sha256 = compute_sha256(&package_path).await.unwrap();
+            let mut manifest = test_manifest("same-package", platform.len() as u64, sha256);
+            manifest.channel = "ci".into();
+            manifest.platform = platform.into();
+            persist_cache_metadata(&directory, &manifest).await.unwrap();
+        }
+        for platform in ["linux-arm64", "linux-x64"] {
+            let cached = super::list_cached_lower_updates_in(temp.path(), None, platform)
+                .await
+                .unwrap();
+            assert_eq!(cached.len(), 1);
+            assert_eq!(cached[0].manifest.platform, platform);
+            assert!(cached[0].package_path.contains(platform));
+        }
+        assert!(
+            super::list_cached_lower_updates_in(temp.path(), Some("stable"), "linux-x64")
+                .await
+                .unwrap_err()
+                .contains("仅支持 ci")
+        );
+    }
+
+    // 验证缓存清单架构或通道与目录不符时，不得恢复成可下发缓存。
+    #[tokio::test]
+    async fn refuses_cached_metadata_for_another_platform_or_directory_channel() {
+        let temp = TestDirectory::new();
+        let directory = temp.path().join("ci/linux-x64");
+        fs::create_dir_all(&directory).unwrap();
+        let package_path = directory.join("package");
+        fs::write(&package_path, b"verified-package").unwrap();
+        let sha256 = compute_sha256(&package_path).await.unwrap();
+        let mut manifest = test_manifest("package", 16, sha256);
+        manifest.channel = "ci".into();
+        persist_cache_metadata(&directory, &manifest).await.unwrap();
+        assert!(load_cached_package(&directory, Some("ci"), "linux-x64")
+            .await
+            .unwrap_err()
+            .contains("平台不匹配"));
+        assert!(
+            super::list_cached_lower_updates_in(temp.path(), None, "linux-x64")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        manifest.platform = "linux-x64".into();
+        manifest.channel = "beta".into();
+        persist_cache_metadata(&directory, &manifest).await.unwrap();
+        assert!(
+            super::list_cached_lower_updates_in(temp.path(), None, "linux-x64")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn accepts_regular_ssh_account_for_lower_update() {
         let target = parse_upload_account("megsky@192.168.1.219:10022")
@@ -3082,7 +3281,7 @@ mod tests {
         assert_eq!(metadata.schema_version, 1);
         assert_eq!(metadata.manifest.asset.name, "mskdsp-lower.tar");
 
-        let cached = load_cached_package(&platform_dir, Some("stable"))
+        let cached = load_cached_package(&platform_dir, Some("stable"), "linux-arm64")
             .await
             .expect("读取缓存包不应失败")
             .expect("应恢复已下载缓存包");
@@ -3112,7 +3311,7 @@ mod tests {
             .expect("应能写入缓存元数据");
         fs::write(&package_path, b"tampered-package").expect("应能篡改测试缓存包");
 
-        let error = load_cached_package(&platform_dir, Some("stable"))
+        let error = load_cached_package(&platform_dir, Some("stable"), "linux-arm64")
             .await
             .expect_err("篡改缓存包不应恢复");
         assert!(error.contains("大小不匹配") || error.contains("校验失败"));
@@ -3135,7 +3334,7 @@ mod tests {
             .await
             .expect("应能写入缓存元数据");
 
-        let error = load_cached_package(&platform_dir, Some("stable"))
+        let error = load_cached_package(&platform_dir, Some("stable"), "linux-arm64")
             .await
             .expect_err("缺少镜像 ID 的缓存不应恢复");
         assert!(error.contains("镜像 ID"));

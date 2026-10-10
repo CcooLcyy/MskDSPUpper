@@ -26,6 +26,7 @@ import {
   api,
   type AppUpdateStatusKind,
   type LowerUpdateChannel,
+  type LowerUpdatePlatform,
   type LowerUpdateCachedPackage,
   type LowerUpdateDownloadProgress,
   type LowerUpdateDownloadResult,
@@ -47,8 +48,10 @@ import { resolveLowerUpdateSudoPassword } from '../../utils/lower-update-auth';
 import {
   assessLowerUpdateCacheFreshness,
   compareLowerUpdateImages,
+  matchesLowerUpdateSelection,
   type LowerUpdateCacheFreshness,
 } from '../../utils/lower-update-deploy';
+import { getLowerUpdateChannel, getLowerUpdateChannels } from '../../utils/lower-update-platform';
 import { useSearchParams } from 'react-router-dom';
 import './index.css';
 
@@ -607,7 +610,14 @@ const AdvancedConfigPage: React.FC = () => {
   const [uploadResult, setUploadResult] = useState<LowerUpdateUploadResult | null>(null);
   const [installResult, setInstallResult] = useState<LowerUpdateInstallResult | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
-  const { channels: lowerUpdateAutoChannels, ensureDownloaded } = useLowerUpdateAuto();
+  const { platform, setPlatform, channels: lowerUpdateAutoChannels, ensureDownloaded } = useLowerUpdateAuto();
+  const cacheReadRequestRef = React.useRef(0);
+  const lowerUpdateSelectionRef = React.useRef({ platform, channel });
+  const deploymentPageMountedRef = React.useRef(true);
+  React.useEffect(() => {
+    deploymentPageMountedRef.current = true;
+    return () => { deploymentPageMountedRef.current = false; };
+  }, []);
   const lowerUpdateAutoChannelStatus = lowerUpdateAutoChannels[channel];
   const isDownloadTaskActive = isDownloadingLowerUpdate || lowerUpdateAutoChannelStatus.kind === 'downloading';
   const autoDownloadProgress = lowerUpdateAutoChannelStatus.progress;
@@ -646,8 +656,8 @@ const AdvancedConfigPage: React.FC = () => {
   const hasRuntimeQueryValidationError =
     !targetUploadAccountValidation.ok || hasSshPasswordValidationError || hasSudoPasswordValidationError;
   const hasDeployTargetValidationError = hasRuntimeQueryValidationError || !targetInstallDirValidation.ok;
-  const hasCheckedPackage = activeManifest !== null;
-  const hasVerifiableManifest = Boolean(activeManifest?.image_id?.trim());
+  const hasCheckedPackage = matchesLowerUpdateSelection(activeManifest, platform, channel);
+  const hasVerifiableManifest = hasCheckedPackage && Boolean(activeManifest?.image_id?.trim());
   const hasDownloadedPackage = effectiveDownloadResult !== null;
   const isDeployingLowerUpdate = isUploadingLowerUpdate || isInstallingLowerUpdate || isVerifyingLowerUpdate;
   const deployTaskProgress = getDeployTaskProgress(deployTaskStep, uploadModalProgress);
@@ -662,25 +672,29 @@ const AdvancedConfigPage: React.FC = () => {
     appTotalBytes && appTotalBytes > 0 ? Math.min(100, Math.round((appDownloadedBytes / appTotalBytes) * 100)) : 0;
 
   const refreshCachedLowerUpdates = React.useCallback(async (): Promise<void> => {
+    const requestId = ++cacheReadRequestRef.current;
     setIsLoadingCachedPackages(true);
     try {
-      const packages = await api.listCachedLowerUpdates(channel);
-      setCachedPackages(packages);
+      const packages = await api.listCachedLowerUpdates(channel, platform);
+      if (requestId !== cacheReadRequestRef.current) return;
+      setCachedPackages(packages.filter((item) => matchesLowerUpdateSelection(item.manifest, platform, channel)));
     } catch (error) {
+      if (requestId !== cacheReadRequestRef.current) return;
       setCachedPackages([]);
       messageApi.warning(`读取已缓存下位机更新包失败: ${formatErrorMessage(error)}`);
     } finally {
-      setIsLoadingCachedPackages(false);
+      if (requestId === cacheReadRequestRef.current) setIsLoadingCachedPackages(false);
     }
-  }, [channel, messageApi]);
+  }, [channel, platform, messageApi]);
 
   React.useEffect(() => {
     void refreshCachedLowerUpdates();
+    return () => { cacheReadRequestRef.current += 1; };
   }, [refreshCachedLowerUpdates]);
 
   React.useEffect(() => {
     const autoManifest = lowerUpdateAutoChannelStatus.manifest;
-    if (!autoManifest) {
+    if (!autoManifest || !matchesLowerUpdateSelection(autoManifest, platform, channel)) {
       return;
     }
     if (activeManifest
@@ -714,7 +728,7 @@ const AdvancedConfigPage: React.FC = () => {
       setDownloadStage('finished');
       setDeliveryStatus('已缓存');
     }
-  }, [activeManifest, downloadedPackagePath, lowerUpdateAutoChannelStatus]);
+  }, [activeManifest, downloadedPackagePath, lowerUpdateAutoChannelStatus, platform, channel]);
 
   React.useEffect(() => {
     setCacheFreshness(summarizeCachedPackageFreshness(onlineLowerUpdateManifest, cachedPackages));
@@ -932,7 +946,10 @@ const AdvancedConfigPage: React.FC = () => {
     setOnlineLowerUpdateManifest(null);
     setOnlineLowerUpdateCheckedAt(null);
     try {
-      const manifest = await api.checkLowerUpdate(channel);
+      const manifest = await api.checkLowerUpdate(channel, platform);
+      if (!matchesLowerUpdateSelection(manifest, platform, channel)) {
+        throw new Error('更新清单与所选架构或通道不一致');
+      }
       applyLowerUpdateManifest(manifest);
       setActiveManifest(manifest);
       setOnlineLowerUpdateManifest(manifest);
@@ -1032,6 +1049,10 @@ const AdvancedConfigPage: React.FC = () => {
   const handleDownload = async (): Promise<void> => {
     if (!activeManifest) {
       messageApi.warning('请先检查更新');
+      return;
+    }
+    if (!matchesLowerUpdateSelection(activeManifest, platform, channel)) {
+      messageApi.warning('更新包与所选架构或通道不一致，请重新检查更新');
       return;
     }
     const downloadingManifest = activeManifest;
@@ -1135,6 +1156,7 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const runUploadStep = async (packageResult: LowerUpdateDownloadResult): Promise<LowerUpdateUploadResult | null> => {
+    if (!deploymentPageMountedRef.current) return null;
     setDeployTaskStep('uploading');
     setIsUploadingLowerUpdate(true);
     setUploadStage('started');
@@ -1194,6 +1216,12 @@ const AdvancedConfigPage: React.FC = () => {
     packageResult: LowerUpdateDownloadResult,
     manifest: LowerUpdateManifest,
   ): Promise<LowerUpdateInstallResult | null> => {
+    if (!deploymentPageMountedRef.current) return null;
+    const selection = lowerUpdateSelectionRef.current;
+    if (!matchesLowerUpdateSelection(manifest, selection.platform, selection.channel)) {
+      messageApi.error('更新包与所选架构或通道不一致，已停止安装');
+      return null;
+    }
     setCurrentLowerImageId('-');
     resetInstallState();
     setDeployTaskStep('installing');
@@ -1302,6 +1330,7 @@ const AdvancedConfigPage: React.FC = () => {
     forceUpload = false,
     cachedPackage,
   }: { forceUpload?: boolean; cachedPackage?: LowerUpdateCachedPackage } = {}): Promise<void> => {
+    if (!deploymentPageMountedRef.current) return;
     const selectedManifest = cachedPackage?.manifest ?? activeManifest;
     const selectedDownloadResult = cachedPackage
       ? {
@@ -1320,12 +1349,18 @@ const AdvancedConfigPage: React.FC = () => {
       messageApi.warning('当前更新清单未包含镜像 ID，不能执行无法验证结果的安装');
       return;
     }
+    const selection = lowerUpdateSelectionRef.current;
+    if (!matchesLowerUpdateSelection(selectedManifest, selection.platform, selection.channel)) {
+      messageApi.error('更新包与所选架构或通道不一致，已停止下发');
+      return;
+    }
 
     if (cachedPackage) {
       applyCachedPackage(cachedPackage);
     }
 
     const shouldContinueLowerUpdateDeploy = await checkLowerUpdateTargetBeforeDeploy(selectedManifest.image_id);
+    if (!deploymentPageMountedRef.current) return;
     if (!shouldContinueLowerUpdateDeploy) {
       return;
     }
@@ -1632,12 +1667,34 @@ const AdvancedConfigPage: React.FC = () => {
             <div className="advanced-config-section">
               <div className="advanced-config-section-title">发布来源</div>
               <Form layout="vertical" size="small">
+                <Form.Item label="目标架构">
+                  <Select<LowerUpdatePlatform>
+                    value={platform}
+                    options={[
+                      { label: 'ARM64（默认）', value: 'linux-arm64' },
+                      { label: 'x64', value: 'linux-x64' },
+                    ]}
+                    disabled={isCheckingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
+                    onChange={(value) => {
+                      cacheReadRequestRef.current += 1;
+                      const nextChannel = getLowerUpdateChannel(value, channel);
+                      lowerUpdateSelectionRef.current = { platform: value, channel: nextChannel };
+                      setChannel(nextChannel);
+                      setPlatform(value);
+                      setCachedPackages([]);
+                      resetUpdateState();
+                      console.info('已切换下位机更新目标架构', { platform: value });
+                    }}
+                  />
+                </Form.Item>
                 <Form.Item label="发布通道">
                   <Select<LowerUpdateChannel>
                     value={channel}
-                    options={UPDATE_CHANNEL_OPTIONS}
+                    options={UPDATE_CHANNEL_OPTIONS.filter((option) => getLowerUpdateChannels(platform).includes(option.value))}
                     disabled={isCheckingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
                     onChange={(value) => {
+                      cacheReadRequestRef.current += 1;
+                      lowerUpdateSelectionRef.current = { platform, channel: value };
                       setChannel(value);
                       setCachedPackages([]);
                       resetUpdateState();
@@ -1646,7 +1703,10 @@ const AdvancedConfigPage: React.FC = () => {
                 </Form.Item>
               </Form>
               <Text type="secondary">
-                上位机从静态源获取更新包，再下发到下位机执行安装。
+                {platform === 'linux-x64'
+                  ? 'x64 目前仅提供 CI 通道安装包，适用于 x64 服务器。'
+                  : 'ARM64 适用于 ARM 下位机设备。'}
+                上位机从所选架构的静态源获取更新包，再下发到下位机执行安装。
               </Text>
               <div className="advanced-config-cached-package">
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>

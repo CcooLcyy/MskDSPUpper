@@ -3,6 +3,15 @@ import type { LowerUpdateCachedPackage, LowerUpdateManifest } from '../adapters/
 export type LowerUpdateImageComparison = 'same' | 'different' | 'unknown';
 export type LowerUpdateCacheFreshness = 'unknown' | 'current' | 'stale' | 'unavailable';
 
+// 只允许使用当前选择的架构和通道，阻止切换后误用另一份更新包。
+export function matchesLowerUpdateSelection(
+  manifest: Pick<LowerUpdateManifest, 'platform' | 'channel'> | null | undefined,
+  platform: string,
+  channel: string,
+): boolean {
+  return manifest?.platform === platform && manifest.channel === channel;
+}
+
 function normalizeImageId(value: string | null | undefined): string | null {
   const normalized = value?.trim().toLowerCase() ?? '';
   if (!normalized || normalized === '-') {

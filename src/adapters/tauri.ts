@@ -45,6 +45,7 @@ import type {
   Iec61850PointMappings,
   Iec61850RuntimeStatistics,
   LowerUpdateChannel,
+  LowerUpdatePlatform,
   LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
   LowerUpdateDownloadResult,
@@ -232,8 +233,8 @@ export const api = {
   openRuntimeDirectory: (kind: RuntimeDirectoryKind) =>
     invoke<void>('open_runtime_directory', { kind }),
   clearLowerUpdateCache: () => invoke<CacheClearResult>('clear_lower_update_cache'),
-  listCachedLowerUpdates: (channel?: LowerUpdateChannel) =>
-    invoke<LowerUpdateCachedPackage[]>('list_cached_lower_updates', { channel: channel ?? null }),
+  listCachedLowerUpdates: (channel?: LowerUpdateChannel, platform: LowerUpdatePlatform = 'linux-arm64') =>
+    invoke<LowerUpdateCachedPackage[]>('list_cached_lower_updates', { channel: channel ?? null, platform }),
 
   setManagerAddr: (addr: string, forceReconnect = false) =>
     invoke<void>('set_manager_addr', { addr, forceReconnect }),
@@ -259,10 +260,11 @@ export const api = {
   downloadAndInstallAppUpdate,
   relaunchApp: () => relaunch(),
   disposePendingAppUpdate,
-  checkLowerUpdate: (channel: LowerUpdateChannel) =>
+  checkLowerUpdate: (channel: LowerUpdateChannel, platform: LowerUpdatePlatform = 'linux-arm64') =>
     invoke<LowerUpdateManifest>('check_lower_update', {
       channel,
-      baseUrl: getLowerUpdateStaticBaseUrl(),
+      platform,
+      baseUrl: getLowerUpdateStaticBaseUrl(platform),
     }),
   downloadLowerUpdate: async (
     manifest: LowerUpdateManifest,

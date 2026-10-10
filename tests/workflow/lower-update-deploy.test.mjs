@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import {
   assessLowerUpdateCacheFreshness,
   compareLowerUpdateImages,
+  matchesLowerUpdateSelection,
 } from '../../src/utils/lower-update-deploy.ts';
 
 const readSource = (url) => readFileSync(url, 'utf8').replace(/\r\n?/g, '\n');
@@ -64,6 +65,24 @@ function makeCachedPackage(manifest = makeManifest(), overrides = {}) {
     ...overrides,
   };
 }
+
+// 验证切换架构或通道后不能继续下发旧选择对应的清单。
+test('lower update only deploys manifests for the selected architecture and channel', () => {
+  assert.equal(matchesLowerUpdateSelection(makeManifest(), 'linux-arm64', 'ci'), true);
+  assert.equal(matchesLowerUpdateSelection(makeManifest(), 'linux-x64', 'ci'), false);
+  assert.equal(matchesLowerUpdateSelection(makeManifest(), 'linux-arm64', 'stable'), false);
+  assert.equal(matchesLowerUpdateSelection(null, 'linux-arm64', 'ci'), false);
+  assert.equal(matchesLowerUpdateSelection(makeManifest({ platform: 'linux-x64' }), 'linux-x64', 'ci'), true);
+});
+
+// 验证离开页面后残留的异步预检或确认回调不能继续上传、安装旧架构包。
+test('lower update stops deployment after the page has unmounted', () => {
+  assert.match(pageSource, /return \(\) => \{ deploymentPageMountedRef\.current = false; \}/);
+  assert.match(pageSource, /const runDeployFlow[\s\S]*?if \(!deploymentPageMountedRef\.current\) return;/);
+  assert.match(pageSource, /const shouldContinueLowerUpdateDeploy = await checkLowerUpdateTargetBeforeDeploy\(selectedManifest\.image_id\);\s*if \(!deploymentPageMountedRef\.current\) return;/);
+  assert.match(pageSource, /const runUploadStep[^\n]*\{\s*if \(!deploymentPageMountedRef\.current\) return null;/);
+  assert.match(pageSource, /const runInstallStep[\s\S]*?if \(!deploymentPageMountedRef\.current\) return null;/);
+});
 
 // 验证缓存新鲜度在未检查、无缓存、匹配和落后场景下保持明确语义。
 test('lower update assesses cached package freshness against the online manifest', () => {
@@ -131,7 +150,7 @@ test('lower update backend checks the expected image before running the package'
 test('lower update restores verified cached packages when the page opens', () => {
   assert.match(backendSource, /pub async fn list_cached_lower_updates\(/);
   assert.match(tauriAdapterSource, /listCachedLowerUpdates[\s\S]*?invoke<[^>]+>\('list_cached_lower_updates'/);
-  assert.match(pageSource, /api\.listCachedLowerUpdates\(channel\)/);
+  assert.match(pageSource, /api\.listCachedLowerUpdates\(channel, platform\)/);
   assert.match(pageSource, /cachedPackages\.map/);
   assert.match(pageSource, /handleDeployCachedPackage\(cachedPackage\)/);
   assert.match(pageSource, /downloaded_at/);

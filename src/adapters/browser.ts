@@ -54,6 +54,7 @@ import type {
   Iec61850PointMappings,
   Iec61850RuntimeStatistics,
   LowerUpdateChannel,
+  LowerUpdatePlatform,
   LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
   LowerUpdateDownloadResult,
@@ -81,6 +82,7 @@ import type {
   RuntimePaths,
 } from './types';
 import { buildLowerUpdateLatestUrl } from './lower-update-source';
+import { assertLowerUpdateManifest, getLowerUpdateChannels } from '../utils/lower-update-platform';
 import {
   normalizeAgcControlProfileDecimalFields,
   normalizeAgcGroupConfigDecimalFields,
@@ -257,9 +259,8 @@ const dataCenterExtraTags = new Map<number, string[]>();
 let routes: DcRoute[] = [];
 let modbusMqtt: ModbusMqttConfig | null = null;
 let dlt645Mqtt: Dlt645MqttConfig | null = null;
-let browserLatestLowerManifest: LowerUpdateManifest | null = null;
 let browserRunningLowerImageId = `sha256:${'0'.repeat(64)}`;
-const browserCachedLowerPackages = new Map<LowerUpdateChannel, LowerUpdateCachedPackage>();
+const browserCachedLowerPackages = new Map<string, LowerUpdateCachedPackage>();
 const exportSnapshots = new Map<string, FullConfigExportSnapshot>();
 
 const IEC104_BUSINESS_TYPE_TELEINDICATION = 1;
@@ -1140,9 +1141,11 @@ export const browserApi: typeof tauriApi = {
     browserCachedLowerPackages.clear();
     return { removed_files: removedFiles, reclaimed_bytes: 0 };
   },
-  listCachedLowerUpdates: async (channel?: LowerUpdateChannel): Promise<LowerUpdateCachedPackage[]> => {
+  listCachedLowerUpdates: async (channel?: LowerUpdateChannel, platform: LowerUpdatePlatform = 'linux-arm64'): Promise<LowerUpdateCachedPackage[]> => {
+    const channels = getLowerUpdateChannels(platform);
+    if (channel && !channels.includes(channel)) throw new Error('所选架构不支持该下位机更新通道');
     const values = [...browserCachedLowerPackages.values()]
-      .filter((item) => Boolean(item.manifest.image_id?.trim()));
+      .filter((item) => item.manifest.platform === platform && channels.includes(item.manifest.channel) && Boolean(item.manifest.image_id?.trim()));
     return clone(channel ? values.filter((item) => item.manifest.channel === channel) : values);
   },
 
@@ -1175,13 +1178,13 @@ export const browserApi: typeof tauriApi = {
   },
   relaunchApp: async () => {},
   disposePendingAppUpdate: async () => {},
-  checkLowerUpdate: async (channel: LowerUpdateChannel): Promise<LowerUpdateManifest> => {
-    const response = await fetch(buildLowerUpdateLatestUrl(channel), { cache: 'no-store' });
+  checkLowerUpdate: async (channel: LowerUpdateChannel, platform: LowerUpdatePlatform = 'linux-arm64'): Promise<LowerUpdateManifest> => {
+    const response = await fetch(buildLowerUpdateLatestUrl(channel, platform), { cache: 'no-store' });
     if (!response.ok) {
       throw new Error(`获取下位机更新清单失败: HTTP ${response.status}`);
     }
     const manifest = await response.json() as LowerUpdateManifest;
-    browserLatestLowerManifest = manifest;
+    assertLowerUpdateManifest(manifest, platform, channel);
     return manifest;
   },
   getLowerUpdateRuntimeInfo: async (): Promise<LowerUpdateRuntimeInfo> => ({
@@ -1194,6 +1197,7 @@ export const browserApi: typeof tauriApi = {
     manifest: LowerUpdateManifest,
     onProgress?: (progress: LowerUpdateDownloadProgress) => void,
   ): Promise<LowerUpdateDownloadResult> => {
+    assertLowerUpdateManifest(manifest, manifest.platform as LowerUpdatePlatform, manifest.channel);
     const taskId = crypto.randomUUID();
     onProgress?.({
       task_id: taskId,
@@ -1229,8 +1233,7 @@ export const browserApi: typeof tauriApi = {
       throw new Error(`下位机更新包校验失败: 期望 ${manifest.asset.sha256}，实际 ${digest}`);
     }
 
-    browserLatestLowerManifest = clone(manifest);
-    browserCachedLowerPackages.set(manifest.channel, {
+    browserCachedLowerPackages.set(`${manifest.platform}:${manifest.channel}`, {
       downloaded_at: Math.floor(Date.now() / 1000),
       manifest: clone(manifest),
       package_path: `browser-cache://${manifest.asset.name}`,
@@ -1303,9 +1306,8 @@ export const browserApi: typeof tauriApi = {
         stderr: '',
       };
     }
-    if (browserLatestLowerManifest?.image_id) {
-      browserRunningLowerImageId = browserLatestLowerManifest.image_id;
-    }
+    // 模拟安装当前请求的构建，避免另一架构的后台下载改变目标镜像。
+    browserRunningLowerImageId = request.expected_image_id;
     return {
       package_name: request.package_name,
       remote_path: remotePath,

@@ -75,6 +75,7 @@ export interface CacheClearResult {
 }
 
 export type LowerUpdateChannel = 'stable' | 'beta' | 'ci';
+export type LowerUpdatePlatform = 'linux-arm64' | 'linux-x64';
 
 export interface LowerUpdateSource {
   repository: string;
