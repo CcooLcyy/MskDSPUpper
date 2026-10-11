@@ -2,7 +2,7 @@
 
 ## Current Baseline
 
-- App version: `0.6.0`
+- App version: `0.7.0`
 - CI updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/ci/latest.json`
 - Stable updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/stable/latest.json`
 - Beta updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/beta/latest.json`
@@ -17,9 +17,9 @@
 1. Push the release-prep workflow changes to the default branch first.
    If the GitHub repository is still empty, this first push should create `main` and establish it as the default branch.
 2. Keep `package.json` and `src-tauri/tauri.conf.json` at the same stable version.
-   The current expected stable tag is `v0.6.0`.
+   The current expected stable tag is `v0.7.0`.
 3. Use a beta branch name that matches the current version line.
-   For `0.6.0`, use `beta/0.6` or `beta/0.6.0`.
+   For `0.7.0`, use `beta/0.7` or `beta/0.7.0`.
 4. Do not create the stable tag from `main` only.
    `release.yml` verifies that the tagged commit belongs to at least one `beta/*` branch.
 
@@ -77,24 +77,24 @@ The workflows create or update releases and upload release assets, so `contents:
 ### 1. First Beta
 
 1. Create the beta branch from the same commit you want to validate:
-   `git switch -c beta/0.6`
+   `git switch -c beta/0.7.0`
 2. Push the branch:
-   `git push -u origin beta/0.6`
-3. Wait for the automatic `Beta` workflow, or run `Actions -> Beta -> Run workflow` with `beta_ref=beta/0.6`.
+   `git push -u origin beta/0.7.0`
+3. Wait for the automatic `Beta` workflow, or run `Actions -> Beta -> Run workflow` with `beta_ref=beta/0.7.0`.
 4. Confirm `verify-beta` and `publish-beta` both succeed.
 5. Open the rolling release `beta-latest` and confirm its assets were refreshed.
-6. Confirm there is also a timestamped beta prerelease whose tag starts with `beta-0-6-`.
+6. Confirm there is also a timestamped beta prerelease whose tag starts with `beta-0-7-0-`.
 7. Open the R2 Beta URL listed in the baseline and confirm it downloads.
 
 ### 2. First Stable
 
 1. Pick the commit that already passed beta.
 2. Create the stable tag locally on that exact commit:
-   `git tag -a v0.6.0 <commit-sha> -m "Release v0.6.0"`
+   `git tag -a v0.7.0 <commit-sha> -m "Release v0.7.0"`
 3. Push only the tag:
-   `git push origin v0.6.0`
+   `git push origin v0.7.0`
 4. Wait for `Actions -> Release` to finish successfully.
-5. Open the `v0.6.0` release and confirm it is marked as the latest release.
+5. Open the `v0.7.0` release and confirm it is marked as the latest release.
 6. Open the R2 Stable URL listed in the baseline and confirm it downloads.
 
 ### 3. Client Updater Validation
