@@ -189,6 +189,7 @@ pub fn run() {
             commands::lower_update::download_lower_update,
             commands::lower_update::upload_lower_update_package,
             commands::lower_update::install_lower_update_package,
+            commands::lower_update::cleanup_lower_update_packages,
             commands::lower_update::deploy_vertical_security_script,
             commands::lower_update::get_vertical_security_status,
             commands::lower_update::get_lower_update_password,

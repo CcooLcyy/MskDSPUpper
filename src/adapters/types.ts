@@ -188,6 +188,12 @@ export interface LowerUpdateInstallResult {
   stderr: string;
 }
 
+export interface LowerUpdatePackageCleanupResult {
+  remote_path: string;
+  removed_files: number;
+  reclaimed_bytes: number;
+}
+
 export interface LowerUpdateRuntimeInfoRequest {
   upload_account: string;
   auth: LowerUpdateSshAuth;

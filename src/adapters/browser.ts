@@ -60,6 +60,7 @@ import type {
   LowerUpdateDownloadResult,
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
+  LowerUpdatePackageCleanupResult,
   LowerUpdateManifest,
   LowerUpdateRuntimeInfo,
   LowerUpdateUploadProgress,
@@ -1317,6 +1318,17 @@ export const browserApi: typeof tauriApi = {
       exit_code: 0,
       stdout: 'browser-dev: install command simulated\n',
       stderr: '',
+    };
+  },
+  cleanupLowerUpdatePackages: async (request: LowerUpdateInstallRequest): Promise<LowerUpdatePackageCleanupResult> => {
+    if (browserRunningLowerImageId.trim().toLowerCase() !== request.expected_image_id.trim().toLowerCase()) {
+      throw new Error('目标机运行镜像与期望构建不一致，已停止清理历史安装包');
+    }
+    // 浏览器开发模式不删除文件，只返回与桌面接口一致的清理结果。
+    return {
+      remote_path: buildRemotePackagePath(request.install_dir, request.package_name),
+      removed_files: 0,
+      reclaimed_bytes: 0,
     };
   },
   getLowerUpdatePassword: async (): Promise<string | null> => null,

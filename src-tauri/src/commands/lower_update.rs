@@ -45,6 +45,8 @@ const LOWER_UPDATE_SSH_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(5 * 60
 const LOWER_UPDATE_UPLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 const LOWER_UPDATE_UPLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const LOWER_UPDATE_INSTALL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const LOWER_UPDATE_PACKAGE_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+const LOWER_UPDATE_PACKAGE_CLEANUP_SCRIPT: &str = include_str!("lower_update_cleanup.py");
 const VERTICAL_SECURITY_SCRIPT_NAME: &str = "mskdsp-vertical-security.sh";
 const VERTICAL_SECURITY_INSTALL_PATH: &str = "/usr/local/libexec/mskdsp-vertical-security";
 const VERTICAL_SECURITY_SERVICE_NAME: &str = "mskdsp-vertical-security.service";
@@ -185,6 +187,20 @@ pub struct LowerUpdateInstallResultDto {
     pub stderr: String,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct LowerUpdatePackageCleanupResultDto {
+    pub remote_path: String,
+    pub removed_files: u64,
+    pub reclaimed_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LowerUpdatePackageCleanupStats {
+    removed_files: u64,
+    reclaimed_bytes: u64,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct LowerUpdateRuntimeInfoRequestDto {
     pub upload_account: String,
@@ -198,6 +214,9 @@ pub struct LowerUpdateRuntimeInfoDto {
     pub exists: bool,
     pub running: bool,
     pub image_id: Option<String>,
+    // 保留同次查询对应的不可变原始引用，供清理脚本再次核对，不进入公开 JSON。
+    #[serde(skip_serializing)]
+    pub raw_image_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -803,6 +822,7 @@ fn parse_runtime_query_output(stdout: &str) -> Result<LowerUpdateRuntimeInfoDto,
             exists: false,
             running: false,
             image_id: None,
+            raw_image_id: None,
         });
     }
 
@@ -824,7 +844,8 @@ fn parse_runtime_query_output(stdout: &str) -> Result<LowerUpdateRuntimeInfoDto,
         container_name: LOWER_UPDATE_CONTAINER_NAME.to_string(),
         exists: true,
         running,
-        image_id: Some(image_id),
+        image_id: Some(image_id.clone()),
+        raw_image_id: Some(image_id),
     })
 }
 
@@ -2838,6 +2859,141 @@ pub async fn install_lower_update_package(
     }
 }
 
+fn normalize_package_cleanup_dir(
+    install_dir: &str,
+    package_name: &str,
+) -> Result<String, String> {
+    if !is_safe_file_name(package_name) {
+        return Err("当前安装包名称不能包含路径分隔符".into());
+    }
+    let install_dir = normalize_install_dir(install_dir)?;
+    if install_dir
+        .split('/')
+        .all(|part| part.is_empty() || part == ".")
+    {
+        return Err("禁止清理根目录中的安装包".into());
+    }
+    Ok(install_dir)
+}
+
+fn build_package_cleanup_command(
+    install_dir: &str,
+    package_name: &str,
+    expected_image_id: &str,
+) -> Result<String, String> {
+    let install_dir = normalize_package_cleanup_dir(install_dir, package_name)?;
+    let image_id = normalize_image_id(expected_image_id)
+        .ok_or_else(|| "清理请求缺少有效的期望镜像 ID".to_string())?;
+    Ok(format!(
+        "python3 -c {} {} {} {}",
+        shell_quote(LOWER_UPDATE_PACKAGE_CLEANUP_SCRIPT),
+        shell_quote(&install_dir),
+        shell_quote(package_name),
+        shell_quote(&image_id),
+    ))
+}
+
+fn parse_package_cleanup_output(
+    stdout: &str,
+    remote_path: String,
+) -> Result<LowerUpdatePackageCleanupResultDto, String> {
+    let stats: LowerUpdatePackageCleanupStats = serde_json::from_str(stdout.trim())
+        .map_err(|_| "解析下位机历史安装包清理统计失败".to_string())?;
+    Ok(LowerUpdatePackageCleanupResultDto {
+        remote_path,
+        removed_files: stats.removed_files,
+        reclaimed_bytes: stats.reclaimed_bytes,
+    })
+}
+
+fn verified_package_cleanup_raw_image(
+    expected_image_id: &str,
+    runtime: &LowerUpdateRuntimeInfoDto,
+) -> Result<String, String> {
+    if !should_skip_install(expected_image_id, runtime)? {
+        return Err("下位机未运行期望镜像，禁止清理历史安装包".into());
+    }
+    runtime
+        .raw_image_id
+        .as_deref()
+        .and_then(normalize_image_id)
+        .ok_or_else(|| "下位机未返回有效的原始镜像引用，禁止清理历史安装包".to_string())
+}
+
+async fn cleanup_lower_update_packages_inner(
+    request: LowerUpdateInstallRequestDto,
+) -> Result<LowerUpdatePackageCleanupResultDto, String> {
+    let target = parse_upload_account(&request.upload_account)?;
+    let install_dir = normalize_package_cleanup_dir(&request.install_dir, &request.package_name)?;
+    let expected_image_id = normalize_image_id(&request.expected_image_id)
+        .ok_or_else(|| "清理请求缺少有效的期望镜像 ID".to_string())?;
+    let remote_path = remote_package_path(&install_dir, &request.package_name);
+    tokio::time::timeout(LOWER_UPDATE_PACKAGE_CLEANUP_TIMEOUT, async {
+        let runtime =
+            query_lower_update_runtime_info(&target, &request.auth, &request.sudo_password).await?;
+        let raw_image_id = verified_package_cleanup_raw_image(&expected_image_id, &runtime)?;
+        let cleanup_command =
+            build_package_cleanup_command(&install_dir, &request.package_name, &raw_image_id)?;
+        let output = execute_root_ssh_command(
+            &target,
+            &request.auth,
+            &request.sudo_password,
+            &cleanup_command,
+        )
+        .await?;
+        if output.exit_code != Some(0) {
+            return Err(format_remote_command_error(
+                "清理下位机历史安装包失败",
+                &output,
+            ));
+        }
+        parse_package_cleanup_output(&output.stdout, remote_path)
+    })
+    .await
+    .map_err(|_| "清理下位机历史安装包超时".to_string())?
+}
+
+#[tauri::command]
+pub async fn cleanup_lower_update_packages(
+    request: LowerUpdateInstallRequestDto,
+) -> Result<LowerUpdatePackageCleanupResultDto, String> {
+    let started_at = Instant::now();
+    let target = log_detail(&request.upload_account);
+    let package = log_detail(&request.package_name);
+    let auth_method = auth_method(&request.auth);
+    tracing::info!(
+        operation = "package_cleanup",
+        auth_method,
+        target = %target,
+        package = %package,
+        "开始校验运行镜像并清理下位机历史安装包"
+    );
+    let result = cleanup_lower_update_packages_inner(request).await;
+    match &result {
+        Ok(result) => tracing::info!(
+            operation = "package_cleanup",
+            auth_method,
+            target = %target,
+            package = %package,
+            remote_path = %log_detail(&result.remote_path),
+            removed_files = result.removed_files,
+            reclaimed_bytes = result.reclaimed_bytes,
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            "下位机历史安装包清理完成，已保留当前安装包"
+        ),
+        Err(error) => tracing::warn!(
+            operation = "package_cleanup",
+            auth_method,
+            target = %target,
+            package = %package,
+            error = %log_detail(error),
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            "下位机历史安装包清理失败"
+        ),
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -3086,6 +3242,147 @@ mod tests {
         assert!(error.contains("换行"));
     }
 
+    // 验证清理命令拒绝根目录、路径穿越包名和无效镜像 ID。
+    #[test]
+    fn rejects_unsafe_package_cleanup_request() {
+        let image_id = format!("sha256:{}", "a".repeat(64));
+        for directory in ["/", "////", "/./", "/././"] {
+            let error = super::build_package_cleanup_command(
+                directory,
+                "mskdsp-v0.3.0-linux-arm64",
+                &image_id,
+            )
+            .expect_err("应拒绝根目录及其等价写法");
+            assert!(error.contains("根目录"));
+        }
+        assert!(super::build_package_cleanup_command(
+            "/home/megsky",
+            "../mskdsp-v0.3.0-linux-arm64",
+            &image_id,
+        )
+        .is_err());
+        assert!(super::build_package_cleanup_command(
+            "/home/megsky",
+            "mskdsp-v0.3.0-linux-arm64",
+            "sha256:bad",
+        )
+        .is_err());
+    }
+
+    // 验证清理脚本与参数正确引用，运行镜像校验留在远端删除脚本内执行。
+    #[test]
+    fn builds_cleanup_command_with_quoted_script_and_arguments() {
+        let command = super::build_package_cleanup_command(
+            "/home/megsky'folder/",
+            "mskdsp-v0.3.0-linux-arm64",
+            &format!("sha256:{}", "A".repeat(64)),
+        )
+        .expect("应正确引用安装目录");
+        assert!(command.starts_with("python3 -c '"));
+        assert!(command.contains("'/home/megsky'\\''folder'"));
+        assert!(command.ends_with(&format!("'sha256:{}'", "a".repeat(64))));
+        assert!(command.contains("--type=container"));
+        assert!(command.contains("_assert_current_unchanged"));
+    }
+
+    // 验证 containerd 原始引用不同于配置摘要时，已验证配置匹配仍可清理并锁定原始引用。
+    #[test]
+    fn accepts_cleanup_with_verified_config_and_distinct_raw_reference() {
+        let expected = format!("sha256:{}", "a".repeat(64));
+        let mut verified = parse_runtime_query_output(&format!("true sha256:{}", "B".repeat(64)))
+            .expect("应保留查询的原始镜像引用");
+        verified.image_id = Some(expected.clone());
+        assert_eq!(
+            super::verified_package_cleanup_raw_image(&expected, &verified)
+                .expect("应接受已验证的 containerd 镜像配置摘要"),
+            format!("sha256:{}", "b".repeat(64)),
+        );
+    }
+
+    // 验证经典 Docker 的原始引用就是配置摘要时，继续允许清理。
+    #[test]
+    fn accepts_cleanup_with_classic_docker_config_reference() {
+        let expected = format!("sha256:{}", "a".repeat(64));
+        let runtime = LowerUpdateRuntimeInfoDto {
+            container_name: LOWER_UPDATE_CONTAINER_NAME.to_string(),
+            exists: true,
+            running: true,
+            image_id: Some(expected.clone()),
+            raw_image_id: Some(expected.clone()),
+        };
+        assert_eq!(
+            super::verified_package_cleanup_raw_image(&expected, &runtime)
+                .expect("应接受经典 Docker 的运行镜像引用"),
+            expected,
+        );
+    }
+
+    // 验证原始快照缺失、停止或无有效摘要，以及配置确认不匹配时均拒绝清理。
+    #[test]
+    fn rejects_cleanup_without_running_raw_snapshot_and_verified_config() {
+        let expected = format!("sha256:{}", "a".repeat(64));
+        let runtime = LowerUpdateRuntimeInfoDto {
+            container_name: LOWER_UPDATE_CONTAINER_NAME.to_string(),
+            exists: true,
+            running: true,
+            image_id: Some(expected.clone()),
+            raw_image_id: Some(expected.clone()),
+        };
+        let invalid = [
+            LowerUpdateRuntimeInfoDto { exists: false, ..runtime.clone() },
+            LowerUpdateRuntimeInfoDto { running: false, ..runtime.clone() },
+            LowerUpdateRuntimeInfoDto { image_id: None, ..runtime.clone() },
+            LowerUpdateRuntimeInfoDto { image_id: Some("sha256:bad".into()), ..runtime.clone() },
+            LowerUpdateRuntimeInfoDto { raw_image_id: None, ..runtime.clone() },
+            LowerUpdateRuntimeInfoDto { raw_image_id: Some("sha256:bad".into()), ..runtime.clone() },
+        ];
+        for verified in invalid.iter().chain(std::iter::once(&LowerUpdateRuntimeInfoDto {
+            image_id: Some(format!("sha256:{}", "b".repeat(64))),
+            ..runtime.clone()
+        })) {
+            assert!(super::verified_package_cleanup_raw_image(&expected, verified).is_err());
+        }
+    }
+
+    // 验证原始运行引用仅用于内部清理校验，不改变公开运行状态 JSON。
+    #[test]
+    fn keeps_cleanup_raw_runtime_reference_out_of_public_json() {
+        let runtime = parse_runtime_query_output(&format!("true sha256:{}", "a".repeat(64)))
+            .expect("应能解析运行镜像");
+        assert_eq!(runtime.raw_image_id, runtime.image_id);
+        let serialized = serde_json::to_value(&runtime).expect("应能序列化公开运行状态");
+        assert!(serialized.get("raw_image_id").is_none());
+        assert!(serialized.get("image_id").is_some());
+        let missing = parse_runtime_query_output("__MSKDSP_CONTAINER_MISSING__")
+            .expect("应能解析容器缺失");
+        assert!(missing.raw_image_id.is_none());
+    }
+
+    // 验证清理返回零数量也是成功，并拒绝缺字段、负数、非 JSON 或多余输出。
+    #[test]
+    fn parses_package_cleanup_stats_and_rejects_malformed_output() {
+        let remote_path = "/home/megsky/mskdsp-v0.3.0-linux-arm64".to_string();
+        for (stdout, count, bytes) in [
+            ("{\"removed_files\":2,\"reclaimed_bytes\":4096}\n", 2, 4096),
+            ("{\"removed_files\":0,\"reclaimed_bytes\":0}", 0, 0),
+        ] {
+            let result = super::parse_package_cleanup_output(stdout, remote_path.clone())
+                .expect("应接受合法的清理统计");
+            assert_eq!(result.remote_path, remote_path);
+            assert_eq!(result.removed_files, count);
+            assert_eq!(result.reclaimed_bytes, bytes);
+        }
+        for stdout in [
+            "",
+            "{\"removed_files\":1}",
+            "{\"removed_files\":-1,\"reclaimed_bytes\":1}",
+            "{\"removed_files\":1,\"reclaimed_bytes\":1,\"other\":true}",
+            "warning\n{\"removed_files\":1,\"reclaimed_bytes\":1}",
+        ] {
+            assert!(super::parse_package_cleanup_output(stdout, remote_path.clone()).is_err());
+        }
+    }
+
     #[test]
     fn builds_user_upload_command_without_sudo_and_cleans_partial_file() {
         let command = build_user_upload_command("/home/megsky", "mskdsp-package");
@@ -3248,6 +3545,7 @@ mod tests {
             exists: true,
             running: true,
             image_id: Some(format!("sha256:{}", "A".repeat(64))),
+            raw_image_id: Some(format!("sha256:{}", "A".repeat(64))),
         };
 
         assert!(
@@ -3264,6 +3562,7 @@ mod tests {
             exists: true,
             running: true,
             image_id: Some(format!("sha256:{}", "b".repeat(64))),
+            raw_image_id: Some(format!("sha256:{}", "b".repeat(64))),
         };
 
         assert!(
@@ -3280,6 +3579,7 @@ mod tests {
             exists: true,
             running: true,
             image_id: Some(format!("sha256:{}", "a".repeat(64))),
+            raw_image_id: Some(format!("sha256:{}", "a".repeat(64))),
         };
 
         let error = should_skip_install("-", &runtime).expect_err("无效期望镜像应被拒绝");

@@ -30,6 +30,7 @@ import {
   type LowerUpdateCachedPackage,
   type LowerUpdateDownloadProgress,
   type LowerUpdateDownloadResult,
+  type LowerUpdateInstallRequest,
   type LowerUpdateInstallResult,
   type LowerUpdateManifest,
   type LowerUpdateRuntimeInfo,
@@ -52,6 +53,7 @@ import {
   type LowerUpdateCacheFreshness,
 } from '../../utils/lower-update-deploy';
 import { getLowerUpdateChannel, getLowerUpdateChannels } from '../../utils/lower-update-platform';
+import { confirmLowerUpdateDeployment } from '../../utils/lower-update-package-cleanup';
 import { useSearchParams } from 'react-router-dom';
 import './index.css';
 
@@ -587,6 +589,7 @@ const AdvancedConfigPage: React.FC = () => {
   const [expectedImageId, setExpectedImageId] = useState('-');
   const [actualImageId, setActualImageId] = useState('-');
   const [imageVerifyMessage, setImageVerifyMessage] = useState('-');
+  const [packageCleanupMessage, setPackageCleanupMessage] = useState('未执行');
   const [targetUploadAccount, setTargetUploadAccount] = useState(LOWER_UPDATE_MOCK_TARGET.uploadAccount);
   const [targetInstallDir, setTargetInstallDir] = useState(LOWER_UPDATE_MOCK_TARGET.installDir);
   const [targetSshPassword, setTargetSshPassword] = useState(DEFAULT_LOWER_UPDATE_SSH_PASSWORD);
@@ -614,6 +617,7 @@ const AdvancedConfigPage: React.FC = () => {
   const cacheReadRequestRef = React.useRef(0);
   const lowerUpdateSelectionRef = React.useRef({ platform, channel });
   const deploymentPageMountedRef = React.useRef(true);
+  const successfulInstallRequestRef = React.useRef<LowerUpdateInstallRequest | null>(null);
   React.useEffect(() => {
     deploymentPageMountedRef.current = true;
     return () => { deploymentPageMountedRef.current = false; };
@@ -821,6 +825,8 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const resetInstallState = (): void => {
+    successfulInstallRequestRef.current = null;
+    setPackageCleanupMessage('未执行');
     setInstallStage('idle');
     setInstallCommand('-');
     setInstallExitCode(null);
@@ -1103,7 +1109,10 @@ const AdvancedConfigPage: React.FC = () => {
     setIsDownloadModalOpen(false);
   };
 
-  const verifyRunningImage = async (expectedImageId: string): Promise<'succeeded' | 'mismatch' | 'failed'> => {
+  const verifyRunningImage = async (
+    expectedImageId: string,
+    request: LowerUpdateInstallRequest,
+  ): Promise<'succeeded' | 'mismatch' | 'failed'> => {
     setCurrentLowerImageId('-');
     setExpectedImageId(expectedImageId);
     setActualImageId('-');
@@ -1118,7 +1127,7 @@ const AdvancedConfigPage: React.FC = () => {
       setImageVerifyMessage(`查询运行镜像中 (${attempt}/6)`);
 
       try {
-        const runtime = await queryLowerUpdateRuntimeInfo();
+        const runtime = await api.getLowerUpdateRuntimeInfo(request);
         const runtimeImageId = runtime.image_id?.trim() || '-';
         setActualImageId(runtimeImageId);
 
@@ -1234,7 +1243,7 @@ const AdvancedConfigPage: React.FC = () => {
       if (!expectedImageId) {
         throw new Error('当前更新清单未包含有效的期望镜像 ID');
       }
-      const result = await api.installLowerUpdatePackage({
+      const request: LowerUpdateInstallRequest = {
         package_name: packageResult.package_name,
         expected_image_id: expectedImageId,
         upload_account: targetUploadAccount.trim(),
@@ -1243,7 +1252,8 @@ const AdvancedConfigPage: React.FC = () => {
           ? { method: 'password', password: targetSshPassword }
           : { method: 'certificate' },
         sudo_password: resolvedSudoPassword,
-      });
+      };
+      const result = await api.installLowerUpdatePackage(request);
 
       setInstallResult(result);
       setInstallCommand(result.command);
@@ -1260,6 +1270,7 @@ const AdvancedConfigPage: React.FC = () => {
         return null;
       }
 
+      successfulInstallRequestRef.current = request;
       setInstallStage('succeeded');
       setDeployTaskStep('installed');
       if (result.already_current) {
@@ -1284,24 +1295,43 @@ const AdvancedConfigPage: React.FC = () => {
     }
   };
 
-  const runImageVerifyStep = async (manifest: LowerUpdateManifest): Promise<boolean> => {
+  const runImageVerifyStep = async (): Promise<boolean> => {
+    if (!successfulInstallRequestRef.current) {
+      messageApi.warning('没有成功安装记录，不能确认镜像或清理历史安装包');
+      return false;
+    }
     setDeployTaskStep('verifying');
     setDeliveryStatus('镜像确认中');
     setIsVerifyingLowerUpdate(true);
+    setPackageCleanupMessage('等待运行镜像确认');
 
     try {
-      const expectedImageId = manifest.image_id?.trim();
-      if (!expectedImageId) {
-        throw new Error('当前更新清单未包含镜像 ID，无法确认安装结果');
-      }
-      const verifyResult = await verifyRunningImage(expectedImageId);
+      const completion = await confirmLowerUpdateDeployment(successfulInstallRequestRef.current, {
+        verifyImage: (request) => verifyRunningImage(request.expected_image_id, request),
+        cleanupPackages: (request) => {
+          setPackageCleanupMessage('正在清理历史安装包');
+          return api.cleanupLowerUpdatePackages(request);
+        },
+      });
+      const verifyResult = completion.verification;
       if (verifyResult === 'succeeded') {
         setDeployTaskStep('succeeded');
         setDeliveryStatus('升级完成');
-        messageApi.success('下位机运行镜像已确认，升级完成');
+        if (completion.cleanupError !== null) {
+          const detail = formatErrorMessage(completion.cleanupError);
+          setPackageCleanupMessage(`清理失败，可重新确认镜像后重试：${detail}`);
+          console.warn('升级已完成，历史安装包清理失败', detail);
+          messageApi.warning(`升级已完成，历史安装包清理失败：${detail}`);
+        } else if (completion.cleanupResult) {
+          const { removed_files, reclaimed_bytes } = completion.cleanupResult;
+          setPackageCleanupMessage(`已删除 ${removed_files} 个旧包，释放 ${formatPackageSize(reclaimed_bytes)}，保留本次安装包`);
+          console.info('下位机历史安装包清理完成', { removed_files, reclaimed_bytes });
+          messageApi.success('下位机运行镜像已确认，升级完成，历史安装包已清理');
+        }
         return true;
       }
 
+      setPackageCleanupMessage('未清理，运行镜像尚未确认，保留所有安装包');
       if (verifyResult === 'mismatch') {
         setDeployTaskStep('image_mismatch');
         setDeliveryStatus('构建不一致');
@@ -1314,6 +1344,7 @@ const AdvancedConfigPage: React.FC = () => {
       messageApi.error('安装命令已执行，但运行镜像确认失败');
       return false;
     } catch (error) {
+      setPackageCleanupMessage('未清理，运行镜像尚未确认，保留所有安装包');
       setCurrentLowerImageId('-');
       setImageVerifyStage('failed');
       setImageVerifyMessage(formatErrorMessage(error));
@@ -1391,11 +1422,11 @@ const AdvancedConfigPage: React.FC = () => {
     }
 
     const installResult = await runInstallStep(selectedDownloadResult, selectedManifest);
-    if (!installResult || installResult.already_current) {
+    if (!installResult) {
       return;
     }
 
-    await runImageVerifyStep(selectedManifest);
+    await runImageVerifyStep();
   };
 
   const handleDeployPackage = async (): Promise<void> => {
@@ -1452,8 +1483,8 @@ const AdvancedConfigPage: React.FC = () => {
     }
 
     const installResult = await runInstallStep(downloadResult, activeManifest);
-    if (installResult && !installResult.already_current) {
-      await runImageVerifyStep(activeManifest);
+    if (installResult) {
+      await runImageVerifyStep();
     }
   };
 
@@ -1464,9 +1495,7 @@ const AdvancedConfigPage: React.FC = () => {
     }
 
     setIsUploadModalOpen(true);
-    if (activeManifest) {
-      await runImageVerifyStep(activeManifest);
-    }
+    await runImageVerifyStep();
   };
 
   const renderAppUpdateCard = (): React.ReactNode => (
@@ -1939,6 +1968,7 @@ const AdvancedConfigPage: React.FC = () => {
                 </Tag>
               </Descriptions.Item>
               <Descriptions.Item label="确认说明">{imageVerifyMessage}</Descriptions.Item>
+              <Descriptions.Item label="历史包清理">{packageCleanupMessage}</Descriptions.Item>
               <Descriptions.Item label="退出码">{installExitCode ?? '-'}</Descriptions.Item>
               <Descriptions.Item label="执行命令">
                 <Text code>{installCommand}</Text>
@@ -2000,7 +2030,7 @@ const AdvancedConfigPage: React.FC = () => {
               autoSize={{ minRows: 2, maxRows: 4 }}
               placeholder="stderr"
             />
-            <Text type="secondary">安装命令执行成功后，会自动查询 mskdsp 容器的运行镜像 ID 确认升级结果。</Text>
+            <Text type="secondary">安装命令成功并确认运行镜像后，会清理设备上的历史安装包，保留本次安装包；安装或镜像确认失败时保留所有包。</Text>
           </Space>
         </Modal>
           </>

@@ -13,6 +13,7 @@ export type {
   LowerUpdateDownloadStage,
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
+  LowerUpdatePackageCleanupResult,
   LowerUpdateManifest,
   LowerUpdateRuntimeInfo,
   LowerUpdateRuntimeInfoRequest,
