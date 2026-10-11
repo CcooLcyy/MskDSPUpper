@@ -28,6 +28,36 @@ pub enum LowerUpdateSshAuthDto {
     Certificate,
 }
 
+/// 普通设置只包含连接选项；严格拒绝密码或其他未允许的字段。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct LowerUpdateConnectionSettingsDto {
+    pub upload_account: String,
+    pub install_dir: String,
+    pub auth_method: String,
+    pub reuse_ssh_password_for_sudo: bool,
+    pub remember_password: bool,
+}
+
+impl LowerUpdateConnectionSettingsDto {
+    pub(crate) fn normalize(mut self) -> Result<Self, String> {
+        self.upload_account = credential_target(&parse_upload_account(&self.upload_account)?);
+        self.install_dir = normalize_install_dir(&self.install_dir)?;
+        match self.auth_method.as_str() {
+            "password" => {}
+            "certificate" => self.reuse_ssh_password_for_sudo = false,
+            _ => return Err("下位机更新 SSH 认证方式不合法".into()),
+        }
+        Ok(self)
+    }
+}
+
+#[derive(Serialize)]
+pub struct LowerUpdateCredentialsDto {
+    pub ssh_password: Option<String>,
+    pub sudo_password: Option<String>,
+}
+
 const DEFAULT_LOWER_UPDATE_BASE_URL: &str =
     "https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-lower";
 const DEFAULT_LOWER_UPDATE_X64_BASE_URL: &str =
@@ -333,9 +363,6 @@ async fn connect_password_ssh(
         .map_err(|e| format!("SSH 密码认证失败: {e}"))?;
     if !auth.success() {
         return Err("SSH 用户名或密码错误，或下位机未启用密码认证".into());
-    }
-    if let Err(error) = save_password(target, password) {
-        tracing::warn!(%error, "保存下位机 SSH 密码失败，将继续本次更新");
     }
     Ok(session)
 }
@@ -929,6 +956,250 @@ fn ssh_credential_entry(target_name: &str) -> Result<keyring::Entry, String> {
         .map_err(|e| format!("创建 SSH 凭据项失败: {e}"))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum CredentialKind {
+    Ssh,
+    Sudo,
+}
+
+impl CredentialKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ssh => "SSH",
+            Self::Sudo => "sudo",
+        }
+    }
+}
+
+trait LowerUpdateCredentialStore {
+    fn load(&mut self, kind: CredentialKind, target: &str) -> Result<Option<String>, String>;
+    fn save(&mut self, kind: CredentialKind, target: &str, password: &str) -> Result<(), String>;
+    fn delete(&mut self, kind: CredentialKind, target: &str) -> Result<(), String>;
+    fn migrate_legacy(&mut self, target: &str) -> Result<Option<String>, String>;
+    fn delete_legacy(&mut self, target: &str) -> Result<(), String>;
+}
+
+struct WindowsLowerUpdateCredentialStore;
+static LOWER_UPDATE_CREDENTIAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lower_update_credential_entry(
+    kind: CredentialKind,
+    target: &str,
+) -> Result<keyring::Entry, String> {
+    match kind {
+        CredentialKind::Ssh => ssh_credential_entry(target),
+        CredentialKind::Sudo => keyring::Entry::new("mskdsp-lower-update:sudo", target)
+            .map_err(|error| format!("创建 sudo 凭据项失败: {error}")),
+    }
+}
+
+impl LowerUpdateCredentialStore for WindowsLowerUpdateCredentialStore {
+    fn load(&mut self, kind: CredentialKind, target: &str) -> Result<Option<String>, String> {
+        match lower_update_credential_entry(kind, target)?.get_password() {
+            Ok(password) => Ok(Some(password)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(format!("读取已保存 {} 密码失败: {error}", kind.label())),
+        }
+    }
+
+    fn save(&mut self, kind: CredentialKind, target: &str, password: &str) -> Result<(), String> {
+        lower_update_credential_entry(kind, target)?
+            .set_password(password)
+            .map_err(|error| format!("保存 {} 密码失败: {error}", kind.label()))
+    }
+
+    fn delete(&mut self, kind: CredentialKind, target: &str) -> Result<(), String> {
+        match lower_update_credential_entry(kind, target)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(format!("清除已保存 {} 密码失败: {error}", kind.label())),
+        }
+    }
+
+    fn migrate_legacy(&mut self, target: &str) -> Result<Option<String>, String> {
+        migrate_legacy_ssh_password(target)
+    }
+
+    fn delete_legacy(&mut self, target: &str) -> Result<(), String> {
+        delete_legacy_ssh_password_if_matching(target)
+    }
+}
+
+fn load_ssh_password_with_store(
+    store: &mut impl LowerUpdateCredentialStore,
+    target: &str,
+) -> Result<Option<String>, String> {
+    match store.load(CredentialKind::Ssh, target)? {
+        Some(password) => Ok(Some(password)),
+        None => store.migrate_legacy(target),
+    }
+}
+
+fn get_lower_update_credentials_with_store(
+    store: &mut impl LowerUpdateCredentialStore,
+    upload_account: &str,
+) -> Result<LowerUpdateCredentialsDto, String> {
+    let target = credential_target(&parse_upload_account(upload_account)?);
+    Ok(LowerUpdateCredentialsDto {
+        ssh_password: load_ssh_password_with_store(store, &target)?,
+        sudo_password: store.load(CredentialKind::Sudo, &target)?,
+    })
+}
+
+fn clear_lower_update_credentials_with_store(
+    store: &mut impl LowerUpdateCredentialStore,
+    target: &str,
+) -> Result<(), String> {
+    // 一项清除失败时仍尝试清除其余项，避免旧凭据在下次读取时迁移回来。
+    let results = [
+        store.delete(CredentialKind::Ssh, target),
+        store.delete(CredentialKind::Sudo, target),
+        store.delete_legacy(target),
+    ];
+    let errors: Vec<_> = results.into_iter().filter_map(Result::err).collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
+    }
+}
+
+fn clear_lower_update_connection_with_store(
+    settings_store: &super::app_storage::AppSettingsStore,
+    store: &mut impl LowerUpdateCredentialStore,
+    upload_account: &str,
+) -> Result<(), String> {
+    let target = credential_target(&parse_upload_account(upload_account)?);
+    clear_lower_update_credentials_with_store(store, &target)?;
+    let saved = settings_store.load()?;
+    let Some(value) = saved.get(super::app_storage::LOWER_UPDATE_CONNECTION_KEY) else {
+        return Ok(());
+    };
+    let settings: LowerUpdateConnectionSettingsDto = serde_json::from_value(value.clone())
+        .map_err(|_| "已保存的下位机更新连接设置格式不合法".to_string())?;
+    let mut settings = settings.normalize()?;
+    if settings.upload_account.eq_ignore_ascii_case(&target) && settings.remember_password {
+        settings.remember_password = false;
+        settings_store.save_setting(
+            super::app_storage::LOWER_UPDATE_CONNECTION_KEY.into(),
+            serde_json::to_value(settings)
+                .map_err(|_| "序列化下位机更新连接设置失败".to_string())?,
+        )?;
+    }
+    Ok(())
+}
+
+fn save_lower_update_connection_with_store(
+    settings_store: &super::app_storage::AppSettingsStore,
+    store: &mut impl LowerUpdateCredentialStore,
+    settings: LowerUpdateConnectionSettingsDto,
+    auth: &LowerUpdateSshAuthDto,
+    sudo_password: &str,
+) -> Result<(), String> {
+    let settings = settings.normalize()?;
+    if settings.auth_method != auth_method(auth) {
+        return Err("下位机更新连接设置与实际 SSH 认证方式不匹配".into());
+    }
+    if settings.remember_password {
+        if matches!(auth, LowerUpdateSshAuthDto::Password { password } if password.is_empty()) {
+            return Err("SSH 密码不能为空".into());
+        }
+        match auth {
+            LowerUpdateSshAuthDto::Password { password } => {
+                store.save(CredentialKind::Ssh, &settings.upload_account, password)?;
+            }
+            LowerUpdateSshAuthDto::Certificate => {
+                store.delete(CredentialKind::Ssh, &settings.upload_account)?;
+            }
+        }
+        store.delete_legacy(&settings.upload_account)?;
+        if settings.reuse_ssh_password_for_sudo || sudo_password.is_empty() {
+            store.delete(CredentialKind::Sudo, &settings.upload_account)?;
+        } else {
+            store.save(
+                CredentialKind::Sudo,
+                &settings.upload_account,
+                sudo_password,
+            )?;
+        }
+    } else {
+        clear_lower_update_credentials_with_store(store, &settings.upload_account)?;
+    }
+    settings_store.save_setting(
+        super::app_storage::LOWER_UPDATE_CONNECTION_KEY.into(),
+        serde_json::to_value(&settings).map_err(|_| "序列化下位机更新连接设置失败".to_string())?,
+    )
+}
+
+#[tauri::command]
+pub fn get_lower_update_credentials(
+    upload_account: String,
+) -> Result<LowerUpdateCredentialsDto, String> {
+    let _guard = LOWER_UPDATE_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "下位机更新凭据锁已损坏".to_string())?;
+    let result = get_lower_update_credentials_with_store(
+        &mut WindowsLowerUpdateCredentialStore,
+        &upload_account,
+    );
+    if result.is_err() {
+        tracing::warn!(target = %log_detail(&upload_account), "读取下位机更新凭据失败");
+    }
+    result
+}
+
+#[tauri::command]
+pub fn save_lower_update_connection(
+    settings: LowerUpdateConnectionSettingsDto,
+    auth: LowerUpdateSshAuthDto,
+    sudo_password: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let _guard = LOWER_UPDATE_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "下位机更新凭据锁已损坏".to_string())?;
+    let target = log_detail(&settings.upload_account);
+    let result = save_lower_update_connection_with_store(
+        &state.settings_store,
+        &mut WindowsLowerUpdateCredentialStore,
+        settings,
+        &auth,
+        &sudo_password,
+    );
+    if result.is_ok() {
+        tracing::info!(target = %target, "已保存下位机更新连接信息");
+    } else {
+        tracing::warn!(target = %target, "保存下位机更新连接信息失败");
+    }
+    result
+}
+
+#[tauri::command]
+pub fn clear_lower_update_credentials(
+    upload_account: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let _guard = LOWER_UPDATE_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "下位机更新凭据锁已损坏".to_string())?;
+    let target = credential_target(&parse_upload_account(&upload_account)?);
+    let result = clear_lower_update_connection_with_store(
+        &state.settings_store,
+        &mut WindowsLowerUpdateCredentialStore,
+        &target,
+    );
+    if result.is_ok() {
+        tracing::info!(target = %log_detail(&target), "已清除下位机更新保存的密码");
+    } else {
+        tracing::warn!(target = %log_detail(&target), "清除下位机更新保存的密码失败");
+    }
+    result
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn legacy_ssh_target_matches(username: Option<&str>, target_name: &str) -> bool {
+    username.is_some_and(|username| username.eq_ignore_ascii_case(target_name))
+}
+
 #[cfg(target_os = "windows")]
 fn migrate_legacy_ssh_password(target_name: &str) -> Result<Option<String>, String> {
     let legacy = keyring::Entry::new_with_target("mskdsp-lower-update", "ssh", target_name)
@@ -941,7 +1212,7 @@ fn migrate_legacy_ssh_password(target_name: &str) -> Result<Option<String>, Stri
     let attributes = legacy
         .get_attributes()
         .map_err(|error| format!("读取旧版 SSH 凭据属性失败: {error}"))?;
-    if attributes.get("username").map(String::as_str) != Some(target_name) {
+    if !legacy_ssh_target_matches(attributes.get("username").map(String::as_str), target_name) {
         return Ok(None);
     }
     ssh_credential_entry(target_name)?
@@ -960,7 +1231,7 @@ fn delete_legacy_ssh_password_if_matching(target_name: &str) -> Result<(), Strin
         Err(keyring::Error::NoEntry) => return Ok(()),
         Err(error) => return Err(format!("读取旧版 SSH 凭据属性失败: {error}")),
     };
-    if attributes.get("username").map(String::as_str) == Some(target_name) {
+    if legacy_ssh_target_matches(attributes.get("username").map(String::as_str), target_name) {
         match legacy.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => {}
             Err(error) => return Err(format!("清除旧版 SSH 密码失败: {error}")),
@@ -1017,15 +1288,11 @@ fn log_detail(value: &str) -> String {
     detail
 }
 
-fn save_password(target: &LowerUpdateUploadTarget, password: &str) -> Result<(), String> {
-    let target_name = credential_target(target);
-    ssh_credential_entry(&target_name)?
-        .set_password(password)
-        .map_err(|e| format!("保存 SSH 密码失败: {e}"))
-}
-
 #[tauri::command]
 pub fn get_lower_update_password(upload_account: String) -> Result<Option<String>, String> {
+    let _guard = LOWER_UPDATE_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "下位机更新凭据锁已损坏".to_string())?;
     let target = parse_upload_account(&upload_account)?;
     let target_name = credential_target(&target);
     match ssh_credential_entry(&target_name)?.get_password() {
@@ -1045,6 +1312,9 @@ pub fn get_lower_update_password(upload_account: String) -> Result<Option<String
 
 #[tauri::command]
 pub fn clear_lower_update_password(upload_account: String) -> Result<(), String> {
+    let _guard = LOWER_UPDATE_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "下位机更新凭据锁已损坏".to_string())?;
     let target = parse_upload_account(&upload_account)?;
     let target_name = credential_target(&target);
     match ssh_credential_entry(&target_name)?.delete_credential() {
@@ -2996,6 +3266,7 @@ pub async fn cleanup_lower_update_packages(
 
 #[cfg(test)]
 mod tests {
+    use super::LowerUpdateCredentialStore;
     use super::{
         build_password_root_shell_command, build_user_upload_command,
         build_vertical_security_install_command, build_vertical_security_upload_command,
@@ -3014,6 +3285,321 @@ mod tests {
     };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    // 旧凭据归属沿用 Windows 目标匹配规则，缺少归属或其他目标不能迁移、删除。
+    #[test]
+    fn legacy_ssh_ownership_matches_case_variants_but_rejects_other_targets() {
+        let target = "megsky@device:10022";
+        assert!(super::legacy_ssh_target_matches(
+            Some("megsky@DEVICE:10022"),
+            target
+        ));
+        for username in [
+            None,
+            Some(""),
+            Some("megsky@other:10022"),
+            Some("megsky@device:22"),
+            Some("other@device:10022"),
+        ] {
+            assert!(!super::legacy_ssh_target_matches(username, target));
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeCredentials {
+        // Windows 凭据目标不区分大小写；保持与实际存储的索引语义一致。
+        values: std::collections::BTreeMap<(super::CredentialKind, String), String>,
+        legacy: std::collections::BTreeMap<String, String>,
+        fail_save: bool,
+        fail_ssh_delete: bool,
+    }
+
+    impl super::LowerUpdateCredentialStore for FakeCredentials {
+        fn load(
+            &mut self,
+            kind: super::CredentialKind,
+            target: &str,
+        ) -> Result<Option<String>, String> {
+            Ok(self.values.get(&(kind, target.to_ascii_lowercase())).cloned())
+        }
+        fn save(
+            &mut self,
+            kind: super::CredentialKind,
+            target: &str,
+            password: &str,
+        ) -> Result<(), String> {
+            if self.fail_save {
+                return Err("模拟凭据存储失败".into());
+            }
+            self.values
+                .insert((kind, target.to_ascii_lowercase()), password.into());
+            Ok(())
+        }
+        fn delete(&mut self, kind: super::CredentialKind, target: &str) -> Result<(), String> {
+            if self.fail_ssh_delete && kind == super::CredentialKind::Ssh {
+                return Err("模拟 SSH 清除失败".into());
+            }
+            self.values.remove(&(kind, target.to_ascii_lowercase()));
+            Ok(())
+        }
+        fn migrate_legacy(&mut self, target: &str) -> Result<Option<String>, String> {
+            let password = self.legacy.remove(&target.to_ascii_lowercase());
+            if let Some(password) = &password {
+                self.save(super::CredentialKind::Ssh, target, password)?;
+            }
+            Ok(password)
+        }
+        fn delete_legacy(&mut self, target: &str) -> Result<(), String> {
+            self.legacy.remove(&target.to_ascii_lowercase());
+            Ok(())
+        }
+    }
+
+    fn connection_settings() -> super::LowerUpdateConnectionSettingsDto {
+        super::LowerUpdateConnectionSettingsDto {
+            upload_account: "megsky@device:10022".into(),
+            install_dir: "/home/megsky/".into(),
+            auth_method: "password".into(),
+            reuse_ssh_password_for_sudo: false,
+            remember_password: true,
+        }
+    }
+
+    // 凭据按目标和用途隔离，证书和复用模式不保留多余密码。
+    #[test]
+    fn saves_credentials_separately_and_clears_only_matching_target() {
+        use super::{CredentialKind, LowerUpdateSshAuthDto};
+        let temp = TestDirectory::new();
+        let settings_store =
+            crate::commands::app_storage::AppSettingsStore::new(temp.path().join("settings.json"));
+        let mut credentials = FakeCredentials::default();
+        let mut settings = connection_settings();
+        let auth = LowerUpdateSshAuthDto::Password {
+            password: "ssh-secret".into(),
+        };
+        super::save_lower_update_connection_with_store(
+            &settings_store,
+            &mut credentials,
+            settings.clone(),
+            &auth,
+            "sudo-secret",
+        )
+        .unwrap();
+        let loaded =
+            super::get_lower_update_credentials_with_store(&mut credentials, "megsky@device:10022")
+                .unwrap();
+        assert_eq!(loaded.ssh_password.as_deref(), Some("ssh-secret"));
+        assert_eq!(loaded.sudo_password.as_deref(), Some("sudo-secret"));
+        credentials
+            .save(CredentialKind::Ssh, "megsky@other:10022", "other-secret")
+            .unwrap();
+        settings.reuse_ssh_password_for_sudo = true;
+        super::save_lower_update_connection_with_store(
+            &settings_store,
+            &mut credentials,
+            settings.clone(),
+            &auth,
+            "ssh-secret",
+        )
+        .unwrap();
+        assert!(credentials
+            .load(CredentialKind::Sudo, "megsky@device:10022")
+            .unwrap()
+            .is_none());
+        settings.auth_method = "certificate".into();
+        settings.reuse_ssh_password_for_sudo = true;
+        super::save_lower_update_connection_with_store(
+            &settings_store,
+            &mut credentials,
+            settings.clone(),
+            &LowerUpdateSshAuthDto::Certificate,
+            "sudo-secret",
+        )
+        .unwrap();
+        assert!(credentials
+            .load(CredentialKind::Ssh, "megsky@device:10022")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            credentials
+                .load(CredentialKind::Sudo, "megsky@device:10022")
+                .unwrap()
+                .as_deref(),
+            Some("sudo-secret")
+        );
+        assert_eq!(
+            settings_store.load().unwrap()[super::super::app_storage::LOWER_UPDATE_CONNECTION_KEY]
+                ["reuse_ssh_password_for_sudo"],
+            false
+        );
+        credentials
+            .legacy
+            .insert("megsky@device:10022".into(), "old-secret".into());
+        settings.remember_password = false;
+        super::save_lower_update_connection_with_store(
+            &settings_store,
+            &mut credentials,
+            settings,
+            &LowerUpdateSshAuthDto::Certificate,
+            "sudo-secret",
+        )
+        .unwrap();
+        let loaded =
+            super::get_lower_update_credentials_with_store(&mut credentials, "megsky@device:10022")
+                .unwrap();
+        assert!(loaded.ssh_password.is_none() && loaded.sudo_password.is_none());
+        assert_eq!(
+            credentials
+                .load(CredentialKind::Ssh, "megsky@other:10022")
+                .unwrap()
+                .as_deref(),
+            Some("other-secret")
+        );
+        let disk = fs::read_to_string(temp.path().join("settings.json")).unwrap();
+        assert!(!disk.contains("secret"));
+    }
+
+    // 验证设置或存储失败不能覆盖已成功的连接配置。
+    #[test]
+    fn rejects_auth_mismatch_and_preserves_settings_on_credential_failure() {
+        use super::LowerUpdateSshAuthDto;
+        let temp = TestDirectory::new();
+        let store =
+            crate::commands::app_storage::AppSettingsStore::new(temp.path().join("settings.json"));
+        let mut credentials = FakeCredentials::default();
+        assert!(super::save_lower_update_connection_with_store(
+            &store,
+            &mut credentials,
+            connection_settings(),
+            &LowerUpdateSshAuthDto::Certificate,
+            ""
+        )
+        .is_err());
+        assert!(credentials.values.is_empty());
+        assert!(store.load().unwrap().is_empty());
+        let auth = LowerUpdateSshAuthDto::Password {
+            password: "secret".into(),
+        };
+        super::save_lower_update_connection_with_store(
+            &store,
+            &mut credentials,
+            connection_settings(),
+            &auth,
+            "",
+        )
+        .unwrap();
+        let previous = store.load().unwrap();
+        credentials.fail_save = true;
+        let mut changed = connection_settings();
+        changed.install_dir = "/home/changed".into();
+        assert!(super::save_lower_update_connection_with_store(
+            &store,
+            &mut credentials,
+            changed,
+            &auth,
+            ""
+        )
+        .is_err());
+        assert_eq!(store.load().unwrap(), previous);
+    }
+
+    // 清除入口只关闭已成功且匹配目标的记住密码开关。
+    #[test]
+    fn clears_matching_credentials_and_disables_remember_without_creating_settings() {
+        use super::{CredentialKind, LowerUpdateSshAuthDto};
+        let temp = TestDirectory::new();
+        let store =
+            crate::commands::app_storage::AppSettingsStore::new(temp.path().join("settings.json"));
+        let mut credentials = FakeCredentials::default();
+        super::clear_lower_update_connection_with_store(
+            &store,
+            &mut credentials,
+            "megsky@other:10022",
+        )
+        .unwrap();
+        assert!(store.load().unwrap().is_empty());
+        let auth = LowerUpdateSshAuthDto::Password {
+            password: "ssh-secret".into(),
+        };
+        super::save_lower_update_connection_with_store(
+            &store,
+            &mut credentials,
+            connection_settings(),
+            &auth,
+            "sudo-secret",
+        )
+        .unwrap();
+        super::clear_lower_update_connection_with_store(
+            &store,
+            &mut credentials,
+            "megsky@other:10022",
+        )
+        .unwrap();
+        assert_eq!(
+            store.load().unwrap()[super::super::app_storage::LOWER_UPDATE_CONNECTION_KEY]
+                ["remember_password"],
+            true
+        );
+        credentials
+            .legacy
+            .insert("megsky@device:10022".into(), "legacy-secret".into());
+        credentials
+            .legacy
+            .insert("megsky@other:10022".into(), "other-legacy-secret".into());
+        super::clear_lower_update_connection_with_store(
+            &store,
+            &mut credentials,
+            " megsky@DEVICE:010022 ",
+        )
+        .unwrap();
+        assert_eq!(
+            store.load().unwrap()[super::super::app_storage::LOWER_UPDATE_CONNECTION_KEY]
+                ["remember_password"],
+            false
+        );
+        assert!(credentials
+            .load(CredentialKind::Ssh, "megsky@device:10022")
+            .unwrap()
+            .is_none());
+        assert!(credentials
+            .load(CredentialKind::Sudo, "megsky@device:10022")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            credentials
+                .legacy
+                .get("megsky@other:10022")
+                .map(String::as_str),
+            Some("other-legacy-secret")
+        );
+    }
+
+    // 一项清除失败仍尝试另外两项，错误必须传回界面。
+    #[test]
+    fn attempts_all_credential_deletions_even_when_one_fails() {
+        use super::CredentialKind;
+        let mut credentials = FakeCredentials::default();
+        credentials
+            .save(CredentialKind::Ssh, "megsky@device:10022", "ssh-secret")
+            .unwrap();
+        credentials
+            .save(CredentialKind::Sudo, "megsky@device:10022", "sudo-secret")
+            .unwrap();
+        credentials
+            .legacy
+            .insert("megsky@device:10022".into(), "legacy-secret".into());
+        credentials.fail_ssh_delete = true;
+        assert!(super::clear_lower_update_credentials_with_store(
+            &mut credentials,
+            "megsky@device:10022"
+        )
+        .is_err());
+        assert!(credentials
+            .load(CredentialKind::Sudo, "megsky@device:10022")
+            .unwrap()
+            .is_none());
+        assert!(credentials.legacy.is_empty());
+    }
 
     struct TestDirectory(PathBuf);
 

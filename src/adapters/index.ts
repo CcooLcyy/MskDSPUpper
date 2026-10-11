@@ -1,3 +1,4 @@
+export type { LowerUpdateConnectionSettings, LowerUpdateCredentials } from '../utils/lower-update-connection';
 export type {
   AppUpdateDownloadEvent,
   AppUpdateInfo,

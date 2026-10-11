@@ -5,6 +5,8 @@ export const DLT645_MQTT_SETTING_KEY = 'protocol.dlt645.mqtt';
 export const APP_MODE_SETTING_KEY = 'mskdsp_app_mode';
 /** 离线工作区：上次打开的工作区文件路径。 */
 export const LAST_WORKSPACE_SETTING_KEY = 'mskdsp_last_workspace';
+/** 下位机更新：最近一次成功下发的连接配置，禁止包含密码。 */
+export const LOWER_UPDATE_CONNECTION_SETTING_KEY = 'mskdsp_lower_update_connection';
 
 export const LEGACY_SETTING_KEYS = [
   MANAGER_ADDR_SETTING_KEY,

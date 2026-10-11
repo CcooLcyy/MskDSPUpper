@@ -21,6 +21,7 @@ pub const DLT645_MQTT_KEY: &str = "protocol.dlt645.mqtt";
 pub const APP_MODE_KEY: &str = "mskdsp_app_mode";
 /// 离线工作区：上次打开的工作区文件路径。
 pub const LAST_WORKSPACE_KEY: &str = "mskdsp_last_workspace";
+pub const LOWER_UPDATE_CONNECTION_KEY: &str = "mskdsp_lower_update_connection";
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SettingsDocument {
@@ -101,7 +102,12 @@ impl AppSettingsStore {
 
 fn validate_setting_key(key: &str) -> Result<(), String> {
     match key {
-        MANAGER_ADDR_KEY | MODBUS_MQTT_KEY | DLT645_MQTT_KEY | APP_MODE_KEY | LAST_WORKSPACE_KEY => Ok(()),
+        MANAGER_ADDR_KEY
+        | MODBUS_MQTT_KEY
+        | DLT645_MQTT_KEY
+        | APP_MODE_KEY
+        | LAST_WORKSPACE_KEY
+        | LOWER_UPDATE_CONNECTION_KEY => Ok(()),
         _ => Err(format!("不支持的上位机设置项: {key}")),
     }
 }
@@ -224,6 +230,13 @@ fn backup_path(path: &Path) -> PathBuf {
 }
 
 fn sanitize_setting_for_disk(key: &str, mut value: Value) -> Result<Value, String> {
+    if key == LOWER_UPDATE_CONNECTION_KEY {
+        let settings: super::lower_update::LowerUpdateConnectionSettingsDto =
+            serde_json::from_value(value)
+                .map_err(|_| "下位机更新连接设置格式不合法或包含未允许的字段".to_string())?;
+        return serde_json::to_value(settings.normalize()?)
+            .map_err(|_| "序列化下位机更新连接设置失败".to_string());
+    }
     if !matches!(key, MODBUS_MQTT_KEY | DLT645_MQTT_KEY) {
         return Ok(value);
     }
@@ -363,6 +376,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root.join("settings.json")
+    }
+
+    // 普通设置仅允许经过校验的非密码连接字段。
+    #[test]
+    fn persists_only_validated_lower_update_connection_fields() {
+        let path = temp_settings_path("lower-update");
+        let store = AppSettingsStore::new(path.clone());
+        let value = json!({
+            "upload_account": " megsky@DEVICE:010022 ",
+            "install_dir": " /home/megsky/ ",
+            "auth_method": "password",
+            "reuse_ssh_password_for_sudo": true,
+            "remember_password": true
+        });
+        store
+            .save_setting(super::LOWER_UPDATE_CONNECTION_KEY.into(), value.clone())
+            .unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(
+            loaded[super::LOWER_UPDATE_CONNECTION_KEY]["upload_account"],
+            "megsky@DEVICE:10022"
+        );
+        assert_eq!(
+            loaded[super::LOWER_UPDATE_CONNECTION_KEY]["install_dir"],
+            "/home/megsky"
+        );
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!disk.contains("\"ssh_password\""));
+        for field in ["password", "ssh_password", "sudo_password", "auth"] {
+            let mut invalid = value.clone();
+            invalid[field] = json!("sensitive-secret");
+            assert!(store
+                .save_setting(super::LOWER_UPDATE_CONNECTION_KEY.into(), invalid)
+                .is_err());
+        }
+        for (field, replacement) in [
+            ("upload_account", json!("root@host:0")),
+            ("install_dir", json!("relative/path")),
+            ("auth_method", json!("invalid")),
+        ] {
+            let mut invalid = value.clone();
+            invalid[field] = replacement;
+            assert!(store
+                .save_setting(super::LOWER_UPDATE_CONNECTION_KEY.into(), invalid)
+                .is_err());
+        }
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("sensitive-secret"));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]

@@ -34,6 +34,11 @@ export function getAppSetting<T>(key: string): T | null {
 
 export async function saveAppSetting<T>(key: string, value: T): Promise<void> {
   await api.saveAppSetting(key, value);
+  cacheAppSetting(key, value);
+}
+
+/** 仅刷新已由专用后端命令保存的普通设置快照。 */
+export function cacheAppSetting<T>(key: string, value: T): void {
   settingsSnapshot = { ...settingsSnapshot, [key]: value };
 }
 

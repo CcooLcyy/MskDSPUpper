@@ -83,6 +83,8 @@ import type {
   RuntimePaths,
 } from './types';
 import { buildLowerUpdateLatestUrl } from './lower-update-source';
+import { lowerUpdateCredentialAccountKey, readLowerUpdateConnectionSettings, type LowerUpdateConnectionSettings, type LowerUpdateCredentials } from '../utils/lower-update-connection';
+import { LOWER_UPDATE_CONNECTION_SETTING_KEY } from '../utils/app-settings-core';
 import { assertLowerUpdateManifest, getLowerUpdateChannels } from '../utils/lower-update-platform';
 import {
   normalizeAgcControlProfileDecimalFields,
@@ -1333,6 +1335,23 @@ export const browserApi: typeof tauriApi = {
   },
   getLowerUpdatePassword: async (): Promise<string | null> => null,
   clearLowerUpdatePassword: async (): Promise<void> => {},
+  getLowerUpdateCredentials: async (): Promise<LowerUpdateCredentials> => ({ ssh_password: null, sudo_password: null }),
+  saveLowerUpdateConnection: async (connection: LowerUpdateConnectionSettings): Promise<void> => {
+    const safe = readLowerUpdateConnectionSettings(connection);
+    if (!safe) throw new Error('下位机连接配置无效');
+    const settings = loadBrowserSettings();
+    // 浏览器开发模式只保存普通设置，不提供加密密码存储。
+    settings[LOWER_UPDATE_CONNECTION_SETTING_KEY] = safe;
+    saveBrowserSettings(settings);
+  },
+  clearLowerUpdateCredentials: async (uploadAccount: string): Promise<void> => {
+    const settings = loadBrowserSettings();
+    const previous = readLowerUpdateConnectionSettings(settings[LOWER_UPDATE_CONNECTION_SETTING_KEY]);
+    if (previous && lowerUpdateCredentialAccountKey(previous.upload_account) === lowerUpdateCredentialAccountKey(uploadAccount)) {
+      settings[LOWER_UPDATE_CONNECTION_SETTING_KEY] = { ...previous, remember_password: false };
+      saveBrowserSettings(settings);
+    }
+  },
 
   iec104UpsertLink: async (config: Iec104LinkConfig, createOnly: boolean) =>
     upsertByName(iec104Links, config.conn_name, createOnly, (connId, previous) => ({

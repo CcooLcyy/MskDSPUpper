@@ -84,6 +84,8 @@ import type {
   ControlOrchestratorExecuteResponse,
 } from './types';
 import { getLowerUpdateStaticBaseUrl } from './lower-update-source';
+import type { LowerUpdateConnectionSettings, LowerUpdateCredentials } from '../utils/lower-update-connection';
+import type { LowerUpdateSshAuth } from './types';
 
 type PendingAppUpdate = Awaited<ReturnType<typeof check>>;
 
@@ -313,6 +315,12 @@ export const api = {
     invoke<string | null>('get_lower_update_password', { uploadAccount }),
   clearLowerUpdatePassword: (uploadAccount: string) =>
     invoke<void>('clear_lower_update_password', { uploadAccount }),
+  getLowerUpdateCredentials: (uploadAccount: string) =>
+    invoke<LowerUpdateCredentials>('get_lower_update_credentials', { uploadAccount }),
+  saveLowerUpdateConnection: (settings: LowerUpdateConnectionSettings, auth: LowerUpdateSshAuth, sudoPassword: string) =>
+    invoke<void>('save_lower_update_connection', { settings, auth, sudoPassword }),
+  clearLowerUpdateCredentials: (uploadAccount: string) =>
+    invoke<void>('clear_lower_update_credentials', { uploadAccount }),
   deployVerticalSecurityScript: (request: VerticalSecurityDeployRequest) =>
     invoke<VerticalSecurityDeployResult>('deploy_vertical_security_script', { request }),
   getVerticalSecurityStatus: (request: VerticalSecurityStatusRequest) =>

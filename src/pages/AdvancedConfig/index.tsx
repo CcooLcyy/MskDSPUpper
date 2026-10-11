@@ -36,6 +36,7 @@ import {
   type LowerUpdateRuntimeInfo,
   type LowerUpdateSshAuth,
   type LowerUpdateUploadProgress,
+  type LowerUpdateUploadRequest,
   type LowerUpdateUploadResult,
 } from '../../adapters';
 import { useAppUpdate, type AppUpdateInstallResult } from '../../components/app-update/app-update-context';
@@ -46,6 +47,16 @@ import {
 } from '../../components/app-update/update-view';
 import { validateManagerAddress } from '../../utils/network';
 import { resolveLowerUpdateSudoPassword } from '../../utils/lower-update-auth';
+import { cacheAppSetting, getAppSetting } from '../../utils/app-settings';
+import { LOWER_UPDATE_CONNECTION_SETTING_KEY } from '../../utils/app-settings-core';
+import {
+  createLowerUpdateCredentialReadGuard,
+  lowerUpdateCredentialCoordinator,
+  lowerUpdateCredentialAccountKey,
+  persistSuccessfulLowerUpdateConnection,
+  readLowerUpdateConnectionSettings,
+  snapshotLowerUpdateConnection,
+} from '../../utils/lower-update-connection';
 import {
   assessLowerUpdateCacheFreshness,
   compareLowerUpdateImages,
@@ -110,7 +121,6 @@ const UPDATE_CHANNEL_OPTIONS: Array<{ label: string; value: LowerUpdateChannel }
 
 const DEFAULT_LOWER_UPDATE_CHANNEL: LowerUpdateChannel = 'ci';
 const DEFAULT_LOWER_UPDATE_AUTH_METHOD: LowerUpdateAuthMethod = 'password';
-const DEFAULT_LOWER_UPDATE_SSH_PASSWORD = 'Meg@admin123';
 const UPDATE_CHANNEL_LABELS: Record<LowerUpdateChannel, string> = UPDATE_CHANNEL_OPTIONS.reduce(
   (labels, option) => ({
     ...labels,
@@ -556,6 +566,7 @@ function formatLowerUpdateCheckError(channel: LowerUpdateChannel, error: unknown
 }
 
 const AdvancedConfigPage: React.FC = () => {
+  const [savedConnection] = useState(() => readLowerUpdateConnectionSettings(getAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY)));
   const [searchParams] = useSearchParams();
   const activeUpdateTab = normalizeSoftwareUpdateView(searchParams.get(SOFTWARE_UPDATE_VIEW_QUERY_KEY));
   const [channel, setChannel] = useState<LowerUpdateChannel>(DEFAULT_LOWER_UPDATE_CHANNEL);
@@ -590,13 +601,16 @@ const AdvancedConfigPage: React.FC = () => {
   const [actualImageId, setActualImageId] = useState('-');
   const [imageVerifyMessage, setImageVerifyMessage] = useState('-');
   const [packageCleanupMessage, setPackageCleanupMessage] = useState('未执行');
-  const [targetUploadAccount, setTargetUploadAccount] = useState(LOWER_UPDATE_MOCK_TARGET.uploadAccount);
-  const [targetInstallDir, setTargetInstallDir] = useState(LOWER_UPDATE_MOCK_TARGET.installDir);
-  const [targetSshPassword, setTargetSshPassword] = useState(DEFAULT_LOWER_UPDATE_SSH_PASSWORD);
-  const [reuseSshPasswordForSudo, setReuseSshPasswordForSudo] = useState(true);
+  const [targetUploadAccount, setTargetUploadAccount] = useState(savedConnection?.upload_account ?? LOWER_UPDATE_MOCK_TARGET.uploadAccount);
+  const [targetInstallDir, setTargetInstallDir] = useState(savedConnection?.install_dir ?? LOWER_UPDATE_MOCK_TARGET.installDir);
+  const [targetSshPassword, setTargetSshPassword] = useState('');
+  const [reuseSshPasswordForSudo, setReuseSshPasswordForSudo] = useState(savedConnection?.reuse_ssh_password_for_sudo ?? true);
+  const [rememberPassword, setRememberPassword] = useState(savedConnection?.remember_password ?? true);
+  const [isClearingSavedCredentials, setIsClearingSavedCredentials] = useState(false);
+  const credentialReadGuardRef = React.useRef(createLowerUpdateCredentialReadGuard());
   const [targetSudoPassword, setTargetSudoPassword] = useState('');
   const [lowerUpdateAuthMethod, setLowerUpdateAuthMethod] = useState<LowerUpdateAuthMethod>(
-    DEFAULT_LOWER_UPDATE_AUTH_METHOD,
+    savedConnection?.auth_method ?? DEFAULT_LOWER_UPDATE_AUTH_METHOD,
   );
   const [isCheckingLowerUpdate, setIsCheckingLowerUpdate] = useState(false);
   const [isDownloadingLowerUpdate, setIsDownloadingLowerUpdate] = useState(false);
@@ -745,18 +759,28 @@ const AdvancedConfigPage: React.FC = () => {
   }, [lowerUpdateAutoChannelStatus.downloadResult, refreshCachedLowerUpdates]);
 
   React.useEffect(() => {
-    if (lowerUpdateAuthMethod !== 'password' || !targetUploadAccount.trim()) {
+    if (!rememberPassword || !targetUploadAccountValidation.ok) {
+      setIsLoadingSavedSshPassword(false);
       return;
     }
     let cancelled = false;
+    const guard = credentialReadGuardRef.current;
+    const token = guard.begin();
     setIsLoadingSavedSshPassword(true);
-    void api.getLowerUpdatePassword(targetUploadAccount.trim())
-      .then((password) => {
-        if (!cancelled && password !== null) {
-          setTargetSshPassword(password);
+    void api.getLowerUpdateCredentials(targetUploadAccount.trim())
+      .then((credentials) => {
+        if (cancelled) return;
+        if (lowerUpdateAuthMethod === 'password' && credentials.ssh_password !== null && guard.canApply(token, 'ssh')) {
+          setTargetSshPassword((current) => current || credentials.ssh_password || '');
+        }
+        if ((lowerUpdateAuthMethod === 'certificate' || !reuseSshPasswordForSudo)
+          && credentials.sudo_password !== null && guard.canApply(token, 'sudo')) {
+          setTargetSudoPassword((current) => current || credentials.sudo_password || '');
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) messageApi.warning('读取已保存密码失败，请手动输入');
+      })
       .finally(() => {
         if (!cancelled) {
           setIsLoadingSavedSshPassword(false);
@@ -765,7 +789,48 @@ const AdvancedConfigPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [lowerUpdateAuthMethod, targetUploadAccount]);
+  }, [lowerUpdateAuthMethod, targetUploadAccount, rememberPassword, reuseSshPasswordForSudo, targetUploadAccountValidation.ok, messageApi]);
+
+  const saveSuccessfulConnection = async (
+    snapshot: ReturnType<typeof snapshotLowerUpdateConnection>,
+    credentialRevision: number,
+  ): Promise<void> => {
+    await lowerUpdateCredentialCoordinator.run(snapshot.settings.upload_account, () => persistSuccessfulLowerUpdateConnection(snapshot, {
+      save: api.saveLowerUpdateConnection,
+      cache: (settings) => cacheAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY, settings),
+      canRemember: () => credentialRevision === lowerUpdateCredentialCoordinator.revision(snapshot.settings.upload_account),
+      warn: (text) => {
+        if (deploymentPageMountedRef.current) messageApi.warning(text);
+        else void message.warning(text);
+      },
+    }));
+  };
+
+  const handleClearSavedCredentials = async (): Promise<void> => {
+    if (isDeployingLowerUpdate || isCheckingLowerUpdate || isClearingSavedCredentials) return;
+    const account = targetUploadAccount.trim();
+    credentialReadGuardRef.current.invalidate();
+    lowerUpdateCredentialCoordinator.revoke(account);
+    setRememberPassword(false);
+    setTargetSshPassword('');
+    setTargetSudoPassword('');
+    invalidateRuntimeCheck();
+    setIsClearingSavedCredentials(true);
+    try {
+      await lowerUpdateCredentialCoordinator.run(account, async () => {
+        await api.clearLowerUpdateCredentials(account);
+        const previous = readLowerUpdateConnectionSettings(getAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY));
+        if (previous && lowerUpdateCredentialAccountKey(previous.upload_account) === lowerUpdateCredentialAccountKey(account)) {
+          cacheAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY, { ...previous, remember_password: false });
+        }
+      });
+      messageApi.success('已清除当前目标保存的密码，并关闭记住密码');
+    } catch {
+      messageApi.warning('清除已保存密码失败，请重试；记住密码已关闭');
+    } finally {
+      setIsClearingSavedCredentials(false);
+    }
+  };
 
   const handleCheckAppUpdate = async (): Promise<void> => {
     try {
@@ -1164,7 +1229,7 @@ const AdvancedConfigPage: React.FC = () => {
     return 'failed';
   };
 
-  const runUploadStep = async (packageResult: LowerUpdateDownloadResult): Promise<LowerUpdateUploadResult | null> => {
+  const runUploadStep = async (packageResult: LowerUpdateDownloadResult, credentialRevision: number): Promise<LowerUpdateUploadResult | null> => {
     if (!deploymentPageMountedRef.current) return null;
     setDeployTaskStep('uploading');
     setIsUploadingLowerUpdate(true);
@@ -1178,19 +1243,21 @@ const AdvancedConfigPage: React.FC = () => {
     setDeliveryStatus('上传中');
 
     try {
+      const request: LowerUpdateUploadRequest = {
+        package_name: packageResult.package_name,
+        package_path: packageResult.package_path,
+        package_size: packageResult.downloaded_bytes,
+        package_sha256: packageResult.sha256,
+        upload_account: targetUploadAccount.trim(),
+        install_dir: targetInstallDir.trim(),
+        auth: lowerUpdateAuthMethod === 'password'
+          ? { method: 'password', password: targetSshPassword }
+          : { method: 'certificate' },
+        sudo_password: resolvedSudoPassword,
+      };
+      const connectionSnapshot = snapshotLowerUpdateConnection(request, reuseSshPasswordForSudo, rememberPassword);
       const result = await api.uploadLowerUpdatePackage(
-        {
-          package_name: packageResult.package_name,
-          package_path: packageResult.package_path,
-          package_size: packageResult.downloaded_bytes,
-          package_sha256: packageResult.sha256,
-          upload_account: targetUploadAccount.trim(),
-          install_dir: targetInstallDir.trim(),
-          auth: lowerUpdateAuthMethod === 'password'
-            ? { method: 'password', password: targetSshPassword }
-            : { method: 'certificate' },
-          sudo_password: resolvedSudoPassword,
-        },
+        request,
         (progress) => {
           setUploadStage(progress.stage);
           setUploadModalProgress(progress.percent);
@@ -1200,7 +1267,8 @@ const AdvancedConfigPage: React.FC = () => {
           setDeliveryStatus('上传中');
         },
       );
-
+      await saveSuccessfulConnection(connectionSnapshot, credentialRevision);
+      if (!deploymentPageMountedRef.current) return result;
       setUploadResult(result);
       setUploadedRemotePath(result.remote_path);
       setUploadedBytes(result.uploaded_bytes);
@@ -1224,6 +1292,7 @@ const AdvancedConfigPage: React.FC = () => {
   const runInstallStep = async (
     packageResult: LowerUpdateDownloadResult,
     manifest: LowerUpdateManifest,
+    credentialRevision: number,
   ): Promise<LowerUpdateInstallResult | null> => {
     if (!deploymentPageMountedRef.current) return null;
     const selection = lowerUpdateSelectionRef.current;
@@ -1253,7 +1322,10 @@ const AdvancedConfigPage: React.FC = () => {
           : { method: 'certificate' },
         sudo_password: resolvedSudoPassword,
       };
+      const connectionSnapshot = snapshotLowerUpdateConnection(request, reuseSshPasswordForSudo, rememberPassword);
       const result = await api.installLowerUpdatePackage(request);
+      if (result.success) await saveSuccessfulConnection(connectionSnapshot, credentialRevision);
+      if (!deploymentPageMountedRef.current) return result.success ? result : null;
 
       setInstallResult(result);
       setInstallCommand(result.command);
@@ -1362,6 +1434,7 @@ const AdvancedConfigPage: React.FC = () => {
     cachedPackage,
   }: { forceUpload?: boolean; cachedPackage?: LowerUpdateCachedPackage } = {}): Promise<void> => {
     if (!deploymentPageMountedRef.current) return;
+    const credentialRevision = lowerUpdateCredentialCoordinator.revision(targetUploadAccount);
     const selectedManifest = cachedPackage?.manifest ?? activeManifest;
     const selectedDownloadResult = cachedPackage
       ? {
@@ -1408,7 +1481,7 @@ const AdvancedConfigPage: React.FC = () => {
     }
 
     if (!activeUploadResult) {
-      activeUploadResult = await runUploadStep(selectedDownloadResult);
+      activeUploadResult = await runUploadStep(selectedDownloadResult, credentialRevision);
       if (!activeUploadResult) {
         return;
       }
@@ -1421,7 +1494,7 @@ const AdvancedConfigPage: React.FC = () => {
       setDeployTaskStep('uploaded');
     }
 
-    const installResult = await runInstallStep(selectedDownloadResult, selectedManifest);
+    const installResult = await runInstallStep(selectedDownloadResult, selectedManifest, credentialRevision);
     if (!installResult) {
       return;
     }
@@ -1460,6 +1533,7 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const handleReinstall = async (): Promise<void> => {
+    const credentialRevision = lowerUpdateCredentialCoordinator.revision(targetUploadAccount);
     if (!downloadResult || !uploadResult || !activeManifest) {
       messageApi.warning('请先完成上传');
       return;
@@ -1482,7 +1556,7 @@ const AdvancedConfigPage: React.FC = () => {
       return;
     }
 
-    const installResult = await runInstallStep(downloadResult, activeManifest);
+    const installResult = await runInstallStep(downloadResult, activeManifest, credentialRevision);
     if (installResult) {
       await runImageVerifyStep();
     }
@@ -1592,8 +1666,10 @@ const AdvancedConfigPage: React.FC = () => {
                 >
                   <Input
                     value={targetUploadAccount}
-                    disabled={isCheckingLowerUpdate || isDeployingLowerUpdate}
+                    disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
                     onChange={(event) => {
+                      credentialReadGuardRef.current.invalidate();
+                      lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
                       setTargetUploadAccount(event.target.value);
                       setTargetSshPassword('');
                       setTargetSudoPassword('');
@@ -1610,8 +1686,12 @@ const AdvancedConfigPage: React.FC = () => {
                       value: value as LowerUpdateAuthMethod,
                       label,
                     }))}
-                    disabled={isCheckingLowerUpdate || isDeployingLowerUpdate}
+                    disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
                     onChange={(value) => {
+                      credentialReadGuardRef.current.invalidate();
+                      lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
+                      setTargetSshPassword('');
+                      setTargetSudoPassword('');
                       setLowerUpdateAuthMethod(value);
                       invalidateRuntimeCheck();
                     }}
@@ -1626,9 +1706,10 @@ const AdvancedConfigPage: React.FC = () => {
                   >
                     <Input.Password
                       value={targetSshPassword}
-                      disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isLoadingSavedSshPassword}
-                      autoComplete="current-password"
+                      disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
+                      autoComplete="off"
                       onChange={(event) => {
+                        credentialReadGuardRef.current.markEdited('ssh');
                         setTargetSshPassword(event.target.value);
                         invalidateRuntimeCheck();
                       }}
@@ -1644,8 +1725,12 @@ const AdvancedConfigPage: React.FC = () => {
                         lowerUpdateAuthMethod === 'certificate'
                         || isCheckingLowerUpdate
                         || isDeployingLowerUpdate
+                        || isClearingSavedCredentials
                       }
                       onChange={(checked) => {
+                        credentialReadGuardRef.current.markEdited('sudo');
+                        lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
+                        setTargetSudoPassword('');
                         setReuseSshPasswordForSudo(checked);
                         invalidateRuntimeCheck();
                       }}
@@ -1662,9 +1747,10 @@ const AdvancedConfigPage: React.FC = () => {
                   >
                     <Input.Password
                       value={targetSudoPassword}
-                      disabled={isCheckingLowerUpdate || isDeployingLowerUpdate}
-                      autoComplete="new-password"
+                      disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
+                      autoComplete="off"
                       onChange={(event) => {
+                        credentialReadGuardRef.current.markEdited('sudo');
                         setTargetSudoPassword(event.target.value);
                         invalidateRuntimeCheck();
                       }}
@@ -1672,6 +1758,30 @@ const AdvancedConfigPage: React.FC = () => {
                     />
                   </Form.Item>
                 ) : null}
+                <Form.Item label="记住密码" extra="成功下发后保存连接信息。密码由 Windows 凭据管理器加密保存，仅供当前 Windows 用户使用。">
+                  <Space wrap>
+                    <Switch
+                      checked={rememberPassword}
+                      disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
+                      onChange={(checked) => {
+                        credentialReadGuardRef.current.invalidate();
+                        lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
+                        setRememberPassword(checked);
+                        setTargetSshPassword('');
+                        setTargetSudoPassword('');
+                        invalidateRuntimeCheck();
+                      }}
+                    />
+                    <Text>记住 SSH 和独立 sudo 密码</Text>
+                    <Button
+                      size="small"
+                      loading={isClearingSavedCredentials}
+                      disabled={!targetUploadAccountValidation.ok || isCheckingLowerUpdate || isDeployingLowerUpdate}
+                      onClick={() => void handleClearSavedCredentials()}
+                    >清除已保存密码</Button>
+                    {isLoadingSavedSshPassword ? <Text type="secondary">正在读取已保存密码…</Text> : null}
+                  </Space>
+                </Form.Item>
                 <Form.Item
                   label="安装目录"
                   validateStatus={targetInstallDirValidation.ok ? undefined : 'error'}
