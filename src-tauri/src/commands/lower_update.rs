@@ -52,6 +52,56 @@ impl LowerUpdateConnectionSettingsDto {
     }
 }
 
+pub(crate) const LOWER_UPDATE_CONNECTION_HISTORY_LIMIT: usize = 20;
+
+/// 输入历史必须有界；按原顺序保留首次出现的目标，凭据目标忽略 ASCII 大小写。
+pub(crate) fn normalize_connection_history(
+    history: Vec<LowerUpdateConnectionSettingsDto>,
+) -> Result<Vec<LowerUpdateConnectionSettingsDto>, String> {
+    if history.len() > LOWER_UPDATE_CONNECTION_HISTORY_LIMIT {
+        return Err("下位机更新连接历史最多保存 20 条".into());
+    }
+    let mut normalized: Vec<LowerUpdateConnectionSettingsDto> = Vec::new();
+    for settings in history {
+        let settings = settings.normalize()?;
+        if !normalized.iter().any(|item| {
+            item.upload_account
+                .eq_ignore_ascii_case(&settings.upload_account)
+        }) {
+            normalized.push(settings);
+        }
+    }
+    Ok(normalized)
+}
+
+fn saved_connection_history(
+    saved: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Result<Vec<LowerUpdateConnectionSettingsDto>, String> {
+    use super::app_storage::{LOWER_UPDATE_CONNECTION_HISTORY_KEY, LOWER_UPDATE_CONNECTION_KEY};
+    let mut history = if let Some(value) = saved.get(LOWER_UPDATE_CONNECTION_HISTORY_KEY) {
+        let history = serde_json::from_value(value.clone())
+            .map_err(|_| "已保存的下位机更新连接历史格式不合法".to_string())?;
+        normalize_connection_history(history)?
+    } else {
+        Vec::new()
+    };
+    // 旧版本仅保存最近一次成功目标，首次保存历史时将其纳入。
+    if let Some(value) = saved.get(LOWER_UPDATE_CONNECTION_KEY) {
+        let previous: LowerUpdateConnectionSettingsDto = serde_json::from_value(value.clone())
+            .map_err(|_| "已保存的下位机更新连接设置格式不合法".to_string())?;
+        let previous = previous.normalize()?;
+        if history.len() < LOWER_UPDATE_CONNECTION_HISTORY_LIMIT
+            && !history.iter().any(|item| {
+                item.upload_account
+                    .eq_ignore_ascii_case(&previous.upload_account)
+            })
+        {
+            history.push(previous);
+        }
+    }
+    Ok(history)
+}
+
 #[derive(Serialize)]
 pub struct LowerUpdateCredentialsDto {
     pub ssh_password: Option<String>,
@@ -1070,22 +1120,45 @@ fn clear_lower_update_connection_with_store(
 ) -> Result<(), String> {
     let target = credential_target(&parse_upload_account(upload_account)?);
     clear_lower_update_credentials_with_store(store, &target)?;
-    let saved = settings_store.load()?;
-    let Some(value) = saved.get(super::app_storage::LOWER_UPDATE_CONNECTION_KEY) else {
-        return Ok(());
-    };
-    let settings: LowerUpdateConnectionSettingsDto = serde_json::from_value(value.clone())
-        .map_err(|_| "已保存的下位机更新连接设置格式不合法".to_string())?;
-    let mut settings = settings.normalize()?;
-    if settings.upload_account.eq_ignore_ascii_case(&target) && settings.remember_password {
-        settings.remember_password = false;
-        settings_store.save_setting(
-            super::app_storage::LOWER_UPDATE_CONNECTION_KEY.into(),
-            serde_json::to_value(settings)
-                .map_err(|_| "序列化下位机更新连接设置失败".to_string())?,
-        )?;
-    }
-    Ok(())
+    settings_store.update_settings(|saved| {
+        use super::app_storage::{
+            LOWER_UPDATE_CONNECTION_HISTORY_KEY, LOWER_UPDATE_CONNECTION_KEY,
+        };
+        let mut changes = std::collections::BTreeMap::new();
+        if let Some(value) = saved.get(LOWER_UPDATE_CONNECTION_KEY) {
+            let settings: LowerUpdateConnectionSettingsDto = serde_json::from_value(value.clone())
+                .map_err(|_| "已保存的下位机更新连接设置格式不合法".to_string())?;
+            let mut settings = settings.normalize()?;
+            if settings.upload_account.eq_ignore_ascii_case(&target) && settings.remember_password {
+                settings.remember_password = false;
+                changes.insert(
+                    LOWER_UPDATE_CONNECTION_KEY.into(),
+                    serde_json::to_value(settings)
+                        .map_err(|_| "序列化下位机更新连接设置失败".to_string())?,
+                );
+            }
+        }
+        if saved.contains_key(LOWER_UPDATE_CONNECTION_HISTORY_KEY) {
+            let mut history = saved_connection_history(saved)?;
+            let mut changed = false;
+            for settings in &mut history {
+                if settings.upload_account.eq_ignore_ascii_case(&target)
+                    && settings.remember_password
+                {
+                    settings.remember_password = false;
+                    changed = true;
+                }
+            }
+            if changed {
+                changes.insert(
+                    LOWER_UPDATE_CONNECTION_HISTORY_KEY.into(),
+                    serde_json::to_value(history)
+                        .map_err(|_| "序列化下位机更新连接历史失败".to_string())?,
+                );
+            }
+        }
+        Ok(changes)
+    })
 }
 
 fn save_lower_update_connection_with_store(
@@ -1124,10 +1197,31 @@ fn save_lower_update_connection_with_store(
     } else {
         clear_lower_update_credentials_with_store(store, &settings.upload_account)?;
     }
-    settings_store.save_setting(
-        super::app_storage::LOWER_UPDATE_CONNECTION_KEY.into(),
-        serde_json::to_value(&settings).map_err(|_| "序列化下位机更新连接设置失败".to_string())?,
-    )
+    settings_store.update_settings(|saved| {
+        use super::app_storage::{
+            LOWER_UPDATE_CONNECTION_HISTORY_KEY, LOWER_UPDATE_CONNECTION_KEY,
+        };
+        let mut history = saved_connection_history(saved)?;
+        history.retain(|item| {
+            !item
+                .upload_account
+                .eq_ignore_ascii_case(&settings.upload_account)
+        });
+        history.insert(0, settings.clone());
+        history.truncate(LOWER_UPDATE_CONNECTION_HISTORY_LIMIT);
+        Ok(std::collections::BTreeMap::from([
+            (
+                LOWER_UPDATE_CONNECTION_KEY.into(),
+                serde_json::to_value(&settings)
+                    .map_err(|_| "序列化下位机更新连接设置失败".to_string())?,
+            ),
+            (
+                LOWER_UPDATE_CONNECTION_HISTORY_KEY.into(),
+                serde_json::to_value(history)
+                    .map_err(|_| "序列化下位机更新连接历史失败".to_string())?,
+            ),
+        ]))
+    })
 }
 
 #[tauri::command]
@@ -3363,6 +3457,168 @@ mod tests {
             reuse_ssh_password_for_sudo: false,
             remember_password: true,
         }
+    }
+
+    // 旧最近设置在已有空历史或缺失对应历史时仍补入末尾，已满 20 条时保持容量。
+    #[test]
+    fn history_merges_missing_legacy_connection_without_exceeding_capacity() {
+        use super::super::app_storage::{
+            LOWER_UPDATE_CONNECTION_HISTORY_KEY, LOWER_UPDATE_CONNECTION_KEY,
+        };
+        let legacy = connection_settings();
+        let mut saved = std::collections::BTreeMap::from([
+            (
+                LOWER_UPDATE_CONNECTION_KEY.into(),
+                serde_json::to_value(&legacy).unwrap(),
+            ),
+            (
+                LOWER_UPDATE_CONNECTION_HISTORY_KEY.into(),
+                serde_json::json!([]),
+            ),
+        ]);
+        assert_eq!(
+            super::saved_connection_history(&saved).unwrap()[0].upload_account,
+            legacy.upload_account
+        );
+        let mut other = connection_settings();
+        other.upload_account = "user@other:22".into();
+        saved.insert(
+            LOWER_UPDATE_CONNECTION_HISTORY_KEY.into(),
+            serde_json::to_value(vec![other]).unwrap(),
+        );
+        let history = super::saved_connection_history(&saved).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].upload_account, legacy.upload_account);
+        let full: Vec<_> = (0..20)
+            .map(|index| {
+                let mut settings = connection_settings();
+                settings.upload_account = format!("user@device{index}:22");
+                settings
+            })
+            .collect();
+        saved.insert(
+            LOWER_UPDATE_CONNECTION_HISTORY_KEY.into(),
+            serde_json::to_value(full).unwrap(),
+        );
+        assert_eq!(super::saved_connection_history(&saved).unwrap().len(), 20);
+    }
+
+    // 成功目标置顶，忽略凭据目标大小写去重，历史最多保留 20 条。
+    #[test]
+    fn keeps_recent_connection_history_and_migrates_previous_success() {
+        use super::super::app_storage::LOWER_UPDATE_CONNECTION_KEY;
+        use super::LowerUpdateSshAuthDto;
+        let temp = TestDirectory::new();
+        let store =
+            crate::commands::app_storage::AppSettingsStore::new(temp.path().join("settings.json"));
+        let mut credentials = FakeCredentials::default();
+        let auth = LowerUpdateSshAuthDto::Password {
+            password: "ssh-secret".into(),
+        };
+        let key = "mskdsp_lower_update_connection_history";
+        store
+            .save_setting(
+                LOWER_UPDATE_CONNECTION_KEY.into(),
+                serde_json::to_value(connection_settings()).unwrap(),
+            )
+            .unwrap();
+        for index in 0..21 {
+            let mut settings = connection_settings();
+            settings.upload_account = format!("user@device{index}:22");
+            super::save_lower_update_connection_with_store(
+                &store,
+                &mut credentials,
+                settings,
+                &auth,
+                "",
+            )
+            .unwrap();
+            if index == 0 {
+                assert_eq!(
+                    store.load().unwrap()[key][1]["upload_account"],
+                    "megsky@device:10022"
+                );
+            }
+        }
+        let saved = store.load().unwrap();
+        assert_eq!(saved[key].as_array().unwrap().len(), 20);
+        assert_eq!(saved[key][0]["upload_account"], "user@device20:22");
+        assert_eq!(saved[key][19]["upload_account"], "user@device1:22");
+        let mut revisited = connection_settings();
+        revisited.upload_account = " user@DEVICE5:022 ".into();
+        revisited.install_dir = "/home/revisited".into();
+        super::save_lower_update_connection_with_store(
+            &store,
+            &mut credentials,
+            revisited,
+            &auth,
+            "",
+        )
+        .unwrap();
+        let saved = store.load().unwrap();
+        let history = saved[key].as_array().unwrap();
+        assert_eq!(history.len(), 20);
+        assert_eq!(history[0]["upload_account"], "user@DEVICE5:22");
+        assert_eq!(history[0]["install_dir"], "/home/revisited");
+        assert_eq!(history[0], saved[LOWER_UPDATE_CONNECTION_KEY]);
+        assert_eq!(
+            history
+                .iter()
+                .filter(|item| item["upload_account"]
+                    .as_str()
+                    .unwrap()
+                    .eq_ignore_ascii_case("user@device5:22"))
+                .count(),
+            1
+        );
+        assert!(!fs::read_to_string(temp.path().join("settings.json"))
+            .unwrap()
+            .contains("ssh-secret"));
+    }
+
+    // 清除非最近目标只关闭该历史项记住密码，不改变历史顺序及最近目标。
+    #[test]
+    fn clearing_history_target_preserves_order_and_other_recent_settings() {
+        use super::super::app_storage::LOWER_UPDATE_CONNECTION_KEY;
+        use super::LowerUpdateSshAuthDto;
+        let temp = TestDirectory::new();
+        let store =
+            crate::commands::app_storage::AppSettingsStore::new(temp.path().join("settings.json"));
+        let mut credentials = FakeCredentials::default();
+        let auth = LowerUpdateSshAuthDto::Password {
+            password: "ssh-secret".into(),
+        };
+        let key = "mskdsp_lower_update_connection_history";
+        super::save_lower_update_connection_with_store(
+            &store,
+            &mut credentials,
+            connection_settings(),
+            &auth,
+            "",
+        )
+        .unwrap();
+        let mut other = connection_settings();
+        other.upload_account = "user@other:22".into();
+        super::save_lower_update_connection_with_store(&store, &mut credentials, other, &auth, "")
+            .unwrap();
+        let before = store.load().unwrap();
+        super::clear_lower_update_connection_with_store(
+            &store,
+            &mut credentials,
+            "megsky@DEVICE:010022",
+        )
+        .unwrap();
+        let saved = store.load().unwrap();
+        assert_eq!(
+            saved[LOWER_UPDATE_CONNECTION_KEY],
+            before[LOWER_UPDATE_CONNECTION_KEY]
+        );
+        assert_eq!(saved[key][0], before[key][0]);
+        assert_eq!(
+            saved[key][1]["upload_account"],
+            before[key][1]["upload_account"]
+        );
+        assert_eq!(saved[key][1]["remember_password"], false);
     }
 
     // 凭据按目标和用途隔离，证书和复用模式不保留多余密码。

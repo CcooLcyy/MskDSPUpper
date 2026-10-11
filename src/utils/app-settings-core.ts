@@ -7,6 +7,8 @@ export const APP_MODE_SETTING_KEY = 'mskdsp_app_mode';
 export const LAST_WORKSPACE_SETTING_KEY = 'mskdsp_last_workspace';
 /** 下位机更新：最近一次成功下发的连接配置，禁止包含密码。 */
 export const LOWER_UPDATE_CONNECTION_SETTING_KEY = 'mskdsp_lower_update_connection';
+/** 下位机更新：最近成功使用的连接历史，不包含密码。 */
+export const LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY = 'mskdsp_lower_update_connection_history';
 
 export const LEGACY_SETTING_KEYS = [
   MANAGER_ADDR_SETTING_KEY,

@@ -22,6 +22,7 @@ pub const APP_MODE_KEY: &str = "mskdsp_app_mode";
 /// 离线工作区：上次打开的工作区文件路径。
 pub const LAST_WORKSPACE_KEY: &str = "mskdsp_last_workspace";
 pub const LOWER_UPDATE_CONNECTION_KEY: &str = "mskdsp_lower_update_connection";
+pub const LOWER_UPDATE_CONNECTION_HISTORY_KEY: &str = "mskdsp_lower_update_connection_history";
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SettingsDocument {
@@ -73,6 +74,28 @@ impl AppSettingsStore {
         write_settings_document(&self.path, &document)
     }
 
+    /// 在同一文件锁内读取并更新关联设置，全部校验成功后仅替换一次文件。
+    pub(crate) fn update_settings(
+        &self,
+        update: impl FnOnce(&BTreeMap<String, Value>) -> Result<BTreeMap<String, Value>, String>,
+    ) -> Result<(), String> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| "上位机设置文件锁已损坏".to_string())?;
+        let mut document = read_settings_document(&self.path)?;
+        let changes = update(&document.settings)?;
+        if changes.is_empty() {
+            return Ok(());
+        }
+        for (key, value) in changes {
+            validate_setting_key(&key)?;
+            let value = sanitize_setting_for_disk(&key, value)?;
+            document.settings.insert(key, value);
+        }
+        write_settings_document(&self.path, &document)
+    }
+
     pub fn migrate_legacy(
         &self,
         legacy: BTreeMap<String, Value>,
@@ -107,7 +130,8 @@ fn validate_setting_key(key: &str) -> Result<(), String> {
         | DLT645_MQTT_KEY
         | APP_MODE_KEY
         | LAST_WORKSPACE_KEY
-        | LOWER_UPDATE_CONNECTION_KEY => Ok(()),
+        | LOWER_UPDATE_CONNECTION_KEY
+        | LOWER_UPDATE_CONNECTION_HISTORY_KEY => Ok(()),
         _ => Err(format!("不支持的上位机设置项: {key}")),
     }
 }
@@ -230,6 +254,13 @@ fn backup_path(path: &Path) -> PathBuf {
 }
 
 fn sanitize_setting_for_disk(key: &str, mut value: Value) -> Result<Value, String> {
+    if key == LOWER_UPDATE_CONNECTION_HISTORY_KEY {
+        let history: Vec<super::lower_update::LowerUpdateConnectionSettingsDto> =
+            serde_json::from_value(value)
+                .map_err(|_| "下位机更新连接历史格式不合法或包含未允许的字段".to_string())?;
+        return serde_json::to_value(super::lower_update::normalize_connection_history(history)?)
+            .map_err(|_| "序列化下位机更新连接历史失败".to_string());
+    }
     if key == LOWER_UPDATE_CONNECTION_KEY {
         let settings: super::lower_update::LowerUpdateConnectionSettingsDto =
             serde_json::from_value(value)
@@ -376,6 +407,69 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root.join("settings.json")
+    }
+
+    // 批量更新中任一项校验失败时，整个设置文件保持原有内容。
+    #[test]
+    fn atomic_settings_update_preserves_all_fields_when_one_change_is_invalid() {
+        let path = temp_settings_path("atomic-lower-update-history");
+        let store = AppSettingsStore::new(path.clone());
+        store
+            .save_setting(MANAGER_ADDR_KEY.into(), json!("192.0.2.1:17000"))
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(store
+            .update_settings(|saved| {
+                assert_eq!(saved[MANAGER_ADDR_KEY], "192.0.2.1:17000");
+                Ok(std::collections::BTreeMap::from([
+                    (MANAGER_ADDR_KEY.into(), json!("192.0.2.2:17000")),
+                    (
+                        super::LOWER_UPDATE_CONNECTION_HISTORY_KEY.into(),
+                        json!([{"password": "sensitive-secret"}]),
+                    ),
+                ]))
+            })
+            .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    // 历史逐项规范化，禁止密码等额外字段，输入超过 20 条时拒绝落盘。
+    #[test]
+    fn validates_connection_history_without_persisting_secrets_or_oversized_lists() {
+        let path = temp_settings_path("lower-update-history");
+        let store = AppSettingsStore::new(path.clone());
+        let key = "mskdsp_lower_update_connection_history";
+        let settings = json!({
+            "upload_account": " megsky@DEVICE:010022 ",
+            "install_dir": " /home/megsky/ ",
+            "auth_method": "certificate",
+            "reuse_ssh_password_for_sudo": true,
+            "remember_password": true
+        });
+        store
+            .save_setting(key.into(), json!([settings.clone()]))
+            .unwrap();
+        let before = store.load().unwrap();
+        assert_eq!(before[key][0]["upload_account"], "megsky@DEVICE:10022");
+        assert_eq!(before[key][0]["install_dir"], "/home/megsky");
+        assert_eq!(before[key][0]["reuse_ssh_password_for_sudo"], false);
+        for field in ["password", "ssh_password", "sudo_password", "auth"] {
+            let mut invalid = settings.clone();
+            invalid[field] = json!("sensitive-secret");
+            assert!(store.save_setting(key.into(), json!([invalid])).is_err());
+        }
+        let mut invalid = settings.clone();
+        invalid["upload_account"] = json!("root@host:0");
+        assert!(store.save_setting(key.into(), json!([invalid])).is_err());
+        assert!(store
+            .save_setting(key.into(), json!(vec![settings.clone(); 21]))
+            .is_err());
+        assert_eq!(store.load().unwrap(), before);
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("sensitive-secret"));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     // 普通设置仅允许经过校验的非密码连接字段。

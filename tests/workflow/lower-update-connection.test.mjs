@@ -7,6 +7,9 @@ import {
   createLowerUpdateCredentialCoordinator,
   lowerUpdateCredentialAccountKey,
   persistSuccessfulLowerUpdateConnection,
+  readLowerUpdateConnectionHistory,
+  upsertLowerUpdateConnectionHistory,
+  clearLowerUpdateConnectionHistoryRememberPassword,
 } from '../../src/utils/lower-update-connection.ts';
 
 const settings = {
@@ -16,6 +19,45 @@ const settings = {
   reuse_ssh_password_for_sudo: true,
   remember_password: true,
 };
+
+// 旧版单条成功记录可直接成为历史首条，损坏条目与敏感字段不能进入普通历史。
+test('connection history migrates legacy metadata and sanitizes restored entries', () => {
+  assert.deepEqual(readLowerUpdateConnectionHistory(null, settings), [settings]);
+  assert.deepEqual(readLowerUpdateConnectionHistory([{ ...settings, password: 'secret' }, {}, null]), [settings]);
+  assert.deepEqual(readLowerUpdateConnectionHistory([], settings), [settings]);
+  assert.deepEqual(readLowerUpdateConnectionHistory([{ ...settings, upload_account: 'other@host:22' }], settings).map((item) => item.upload_account), ['other@host:22', settings.upload_account]);
+});
+
+// 重复成功地址移到前面并更新其选项；端口规范化与凭据大小写规则保持一致。
+test('successful history upsert deduplicates accounts and keeps newest options', () => {
+  const first = { ...settings, upload_account: 'MegSky@HOST:00022' };
+  const second = { ...settings, upload_account: 'other@host:22', install_dir: '/srv/other' };
+  const history = upsertLowerUpdateConnectionHistory([first], second);
+  const updated = { ...settings, upload_account: 'megsky@host:22', install_dir: '/srv/new', remember_password: false };
+  assert.deepEqual(upsertLowerUpdateConnectionHistory(history, updated), [updated, second]);
+  assert.deepEqual(history.map((item) => item.install_dir), ['/srv/other', '/home/megsky']);
+});
+
+// 最近使用列表限制为20条，溢出只淘汰最旧记录，不保留输入中的密码字段。
+test('history keeps only twenty recent non-sensitive configurations', () => {
+  let history = [];
+  for (let index = 0; index < 25; index += 1) {
+    history = upsertLowerUpdateConnectionHistory(history, { ...settings, upload_account: `user@host${index}:22`, sudo_password: 'secret' });
+  }
+  assert.equal(history.length, 20);
+  assert.equal(history[0].upload_account, 'user@host24:22');
+  assert.equal(history[19].upload_account, 'user@host5:22');
+  assert.equal(JSON.stringify(history).includes('secret'), false);
+});
+
+// 清除非最近地址只关闭该记录的记住密码，不创建地址、不改变顺序或其他记录。
+test('clearing credentials updates only matching history metadata', () => {
+  const other = { ...settings, upload_account: 'other@host:22' };
+  const history = [other, settings];
+  assert.deepEqual(clearLowerUpdateConnectionHistoryRememberPassword(history, 'MEGSKY@192.168.1.219:10022'), [other, { ...settings, remember_password: false }]);
+  assert.deepEqual(clearLowerUpdateConnectionHistoryRememberPassword(history, 'new@host:22'), history);
+  assert.equal(history[1].remember_password, true);
+});
 
 // 恢复普通配置时丢弃敏感字段，并拒绝无效字段值。
 test('connection settings restore only valid, non-sensitive whitelisted fields', () => {

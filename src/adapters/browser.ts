@@ -83,8 +83,8 @@ import type {
   RuntimePaths,
 } from './types';
 import { buildLowerUpdateLatestUrl } from './lower-update-source';
-import { lowerUpdateCredentialAccountKey, readLowerUpdateConnectionSettings, type LowerUpdateConnectionSettings, type LowerUpdateCredentials } from '../utils/lower-update-connection';
-import { LOWER_UPDATE_CONNECTION_SETTING_KEY } from '../utils/app-settings-core';
+import { clearLowerUpdateConnectionHistoryRememberPassword, lowerUpdateCredentialAccountKey, readLowerUpdateConnectionHistory, readLowerUpdateConnectionSettings, upsertLowerUpdateConnectionHistory, type LowerUpdateConnectionSettings, type LowerUpdateCredentials } from '../utils/lower-update-connection';
+import { LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY, LOWER_UPDATE_CONNECTION_SETTING_KEY } from '../utils/app-settings-core';
 import { assertLowerUpdateManifest, getLowerUpdateChannels } from '../utils/lower-update-platform';
 import {
   normalizeAgcControlProfileDecimalFields,
@@ -1341,16 +1341,20 @@ export const browserApi: typeof tauriApi = {
     if (!safe) throw new Error('下位机连接配置无效');
     const settings = loadBrowserSettings();
     // 浏览器开发模式只保存普通设置，不提供加密密码存储。
+    const history = readLowerUpdateConnectionHistory(settings[LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY], settings[LOWER_UPDATE_CONNECTION_SETTING_KEY]);
+    settings[LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY] = upsertLowerUpdateConnectionHistory(history, safe);
     settings[LOWER_UPDATE_CONNECTION_SETTING_KEY] = safe;
     saveBrowserSettings(settings);
   },
   clearLowerUpdateCredentials: async (uploadAccount: string): Promise<void> => {
     const settings = loadBrowserSettings();
     const previous = readLowerUpdateConnectionSettings(settings[LOWER_UPDATE_CONNECTION_SETTING_KEY]);
+    const history = readLowerUpdateConnectionHistory(settings[LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY], previous);
+    settings[LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY] = clearLowerUpdateConnectionHistoryRememberPassword(history, uploadAccount);
     if (previous && lowerUpdateCredentialAccountKey(previous.upload_account) === lowerUpdateCredentialAccountKey(uploadAccount)) {
       settings[LOWER_UPDATE_CONNECTION_SETTING_KEY] = { ...previous, remember_password: false };
-      saveBrowserSettings(settings);
     }
+    saveBrowserSettings(settings);
   },
 
   iec104UpsertLink: async (config: Iec104LinkConfig, createOnly: boolean) =>

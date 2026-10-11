@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  AutoComplete,
   Button,
   Card,
   Descriptions,
@@ -47,15 +48,22 @@ import {
 } from '../../components/app-update/update-view';
 import { validateManagerAddress } from '../../utils/network';
 import { resolveLowerUpdateSudoPassword } from '../../utils/lower-update-auth';
-import { cacheAppSetting, getAppSetting } from '../../utils/app-settings';
+import {
+  cacheAppSetting,
+  getAppSetting,
+  LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY,
+} from '../../utils/app-settings';
 import { LOWER_UPDATE_CONNECTION_SETTING_KEY } from '../../utils/app-settings-core';
 import {
+  clearLowerUpdateConnectionHistoryRememberPassword,
   createLowerUpdateCredentialReadGuard,
   lowerUpdateCredentialCoordinator,
   lowerUpdateCredentialAccountKey,
   persistSuccessfulLowerUpdateConnection,
+  readLowerUpdateConnectionHistory,
   readLowerUpdateConnectionSettings,
   snapshotLowerUpdateConnection,
+  upsertLowerUpdateConnectionHistory,
 } from '../../utils/lower-update-connection';
 import {
   assessLowerUpdateCacheFreshness,
@@ -566,7 +574,14 @@ function formatLowerUpdateCheckError(channel: LowerUpdateChannel, error: unknown
 }
 
 const AdvancedConfigPage: React.FC = () => {
-  const [savedConnection] = useState(() => readLowerUpdateConnectionSettings(getAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY)));
+  const [connectionHistory, setConnectionHistory] = useState(() => readLowerUpdateConnectionHistory(
+    getAppSetting(LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY),
+    getAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY),
+  ));
+  const [savedConnection] = useState(() => connectionHistory[0]
+    ?? readLowerUpdateConnectionSettings(getAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY)));
+  const [connectionHistorySearch, setConnectionHistorySearch] = useState('');
+  const [credentialReadRevision, setCredentialReadRevision] = useState(0);
   const [searchParams] = useSearchParams();
   const activeUpdateTab = normalizeSoftwareUpdateView(searchParams.get(SOFTWARE_UPDATE_VIEW_QUERY_KEY));
   const [channel, setChannel] = useState<LowerUpdateChannel>(DEFAULT_LOWER_UPDATE_CHANNEL);
@@ -789,7 +804,7 @@ const AdvancedConfigPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [lowerUpdateAuthMethod, targetUploadAccount, rememberPassword, reuseSshPasswordForSudo, targetUploadAccountValidation.ok, messageApi]);
+  }, [credentialReadRevision, lowerUpdateAuthMethod, targetUploadAccount, rememberPassword, reuseSshPasswordForSudo, targetUploadAccountValidation.ok, messageApi]);
 
   const saveSuccessfulConnection = async (
     snapshot: ReturnType<typeof snapshotLowerUpdateConnection>,
@@ -797,7 +812,15 @@ const AdvancedConfigPage: React.FC = () => {
   ): Promise<void> => {
     await lowerUpdateCredentialCoordinator.run(snapshot.settings.upload_account, () => persistSuccessfulLowerUpdateConnection(snapshot, {
       save: api.saveLowerUpdateConnection,
-      cache: (settings) => cacheAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY, settings),
+      cache: (settings) => {
+        const history = upsertLowerUpdateConnectionHistory(readLowerUpdateConnectionHistory(
+          getAppSetting(LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY),
+          getAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY),
+        ), settings);
+        cacheAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY, settings);
+        cacheAppSetting(LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY, history);
+        if (deploymentPageMountedRef.current) setConnectionHistory(history);
+      },
       canRemember: () => credentialRevision === lowerUpdateCredentialCoordinator.revision(snapshot.settings.upload_account),
       warn: (text) => {
         if (deploymentPageMountedRef.current) messageApi.warning(text);
@@ -819,6 +842,12 @@ const AdvancedConfigPage: React.FC = () => {
     try {
       await lowerUpdateCredentialCoordinator.run(account, async () => {
         await api.clearLowerUpdateCredentials(account);
+        const history = clearLowerUpdateConnectionHistoryRememberPassword(readLowerUpdateConnectionHistory(
+          getAppSetting(LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY),
+          getAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY),
+        ), account);
+        cacheAppSetting(LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY, history);
+        if (deploymentPageMountedRef.current) setConnectionHistory(history);
         const previous = readLowerUpdateConnectionSettings(getAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY));
         if (previous && lowerUpdateCredentialAccountKey(previous.upload_account) === lowerUpdateCredentialAccountKey(account)) {
           cacheAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY, { ...previous, remember_password: false });
@@ -830,6 +859,23 @@ const AdvancedConfigPage: React.FC = () => {
     } finally {
       setIsClearingSavedCredentials(false);
     }
+  };
+
+  const handleSelectConnectionHistory = (account: string): void => {
+    const connection = connectionHistory.find((item) => item.upload_account === account);
+    if (!connection) return;
+    credentialReadGuardRef.current.invalidate();
+    lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
+    setTargetSshPassword('');
+    setTargetSudoPassword('');
+    setTargetUploadAccount(connection.upload_account);
+    setTargetInstallDir(connection.install_dir);
+    setLowerUpdateAuthMethod(connection.auth_method);
+    setReuseSshPasswordForSudo(connection.reuse_ssh_password_for_sudo);
+    setRememberPassword(connection.remember_password);
+    setCredentialReadRevision((revision) => revision + 1);
+    setConnectionHistorySearch('');
+    invalidateRuntimeCheck();
   };
 
   const handleCheckAppUpdate = async (): Promise<void> => {
@@ -1663,14 +1709,29 @@ const AdvancedConfigPage: React.FC = () => {
                   label="上传账号"
                   validateStatus={targetUploadAccountValidation.ok ? undefined : 'error'}
                   help={targetUploadAccountValidation.ok ? undefined : targetUploadAccountValidation.error}
+                  extra="可输入新账号，或从下拉列表选择最近成功下发的地址"
                 >
-                  <Input
+                  <AutoComplete
                     value={targetUploadAccount}
+                    style={{ width: '100%' }}
+                    options={connectionHistory
+                      .filter((item) => item.upload_account.toLowerCase().includes(connectionHistorySearch.toLowerCase()))
+                      .map((item) => ({ value: item.upload_account }))}
+                    filterOption={false}
+                    onFocus={() => {
+                      setConnectionHistorySearch('');
+                      setConnectionHistory(readLowerUpdateConnectionHistory(
+                        getAppSetting(LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY),
+                        getAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY),
+                      ));
+                    }}
+                    onSearch={setConnectionHistorySearch}
+                    onSelect={handleSelectConnectionHistory}
                     disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
-                    onChange={(event) => {
+                    onChange={(value) => {
                       credentialReadGuardRef.current.invalidate();
                       lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
-                      setTargetUploadAccount(event.target.value);
+                      setTargetUploadAccount(value);
                       setTargetSshPassword('');
                       setTargetSudoPassword('');
                       invalidateRuntimeCheck();

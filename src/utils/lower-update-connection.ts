@@ -42,6 +42,39 @@ export function readLowerUpdateConnectionSettings(value: unknown): LowerUpdateCo
   };
 }
 
+export const LOWER_UPDATE_CONNECTION_HISTORY_LIMIT = 20;
+
+/** 恢复历史白名单并兼容旧单条设置，保持最近成功使用的顺序。 */
+export function readLowerUpdateConnectionHistory(value: unknown, legacy?: unknown): LowerUpdateConnectionSettings[] {
+  const entries = Array.isArray(value) ? [...value] : [];
+  if (legacy) entries.push(legacy);
+  const history: LowerUpdateConnectionSettings[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const settings = readLowerUpdateConnectionSettings(entry);
+    if (!settings) continue;
+    const key = lowerUpdateCredentialAccountKey(settings.upload_account);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    history.push(settings);
+    if (history.length === LOWER_UPDATE_CONNECTION_HISTORY_LIMIT) break;
+  }
+  return history;
+}
+
+/** 仅成功保存后调用，将实际成功的目标配置移至首位。 */
+export function upsertLowerUpdateConnectionHistory(history: unknown, settings: LowerUpdateConnectionSettings): LowerUpdateConnectionSettings[] {
+  return readLowerUpdateConnectionHistory([settings, ...readLowerUpdateConnectionHistory(history)]);
+}
+
+/** 清除密码不删除历史地址，也不改变最近使用顺序。 */
+export function clearLowerUpdateConnectionHistoryRememberPassword(history: unknown, account: string): LowerUpdateConnectionSettings[] {
+  const key = lowerUpdateCredentialAccountKey(account);
+  return readLowerUpdateConnectionHistory(history).map((entry) => lowerUpdateCredentialAccountKey(entry.upload_account) === key
+    ? { ...entry, remember_password: false }
+    : entry);
+}
+
 interface ConnectionRequest {
   upload_account: string;
   install_dir: string;
