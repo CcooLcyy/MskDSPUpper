@@ -1151,6 +1151,9 @@ export const browserApi: typeof tauriApi = {
       .filter((item) => item.manifest.platform === platform && channels.includes(item.manifest.channel) && Boolean(item.manifest.image_id?.trim()));
     return clone(channel ? values.filter((item) => item.manifest.channel === channel) : values);
   },
+  importLocalLowerUpdate: async (): Promise<LowerUpdateCachedPackage | null> => {
+    throw new Error('导入本地下位机安装包仅桌面版可用');
+  },
 
   setManagerAddr: async (addr: string) => {
     managerAddr = addr;

@@ -200,6 +200,7 @@ pub fn run() {
             commands::lower_update::clear_lower_update_credentials,
             commands::lower_update::clear_lower_update_cache,
             commands::lower_update::list_cached_lower_updates,
+            commands::lower_update::import_local_lower_update,
             commands::workspace::list_workspaces,
             commands::workspace::load_workspace,
             commands::workspace::save_workspace,

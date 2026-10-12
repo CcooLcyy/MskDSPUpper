@@ -1,4 +1,28 @@
-import type { LowerUpdateCachedPackage, LowerUpdateManifest } from '../adapters/types';
+import type { LowerUpdateCachedPackage, LowerUpdateDownloadResult, LowerUpdateManifest } from '../adapters/types';
+
+// 选定本地版本后，只使用该版本自己的文件，避免后台最新包污染安装目标。
+export function resolveLowerUpdateDownloadResult(
+  selected: LowerUpdateManifest | null,
+  selectedResult: LowerUpdateDownloadResult | null,
+  autoManifest: LowerUpdateManifest | null,
+  autoResult: LowerUpdateDownloadResult | null,
+): LowerUpdateDownloadResult | null {
+  if (!selected) return null;
+  const matches = (result: LowerUpdateDownloadResult | null): boolean => Boolean(result
+    && result.package_name === selected.asset.name
+    && result.downloaded_bytes === selected.asset.size
+    && result.sha256.toLowerCase() === selected.asset.sha256.toLowerCase());
+  if (matches(selectedResult)) return selectedResult;
+  if (selected.local_import || !autoManifest) return null;
+  return selected.platform === autoManifest.platform
+    && selected.channel === autoManifest.channel
+    && selected.version === autoManifest.version
+    && selected.image_id === autoManifest.image_id
+    && selected.asset.name === autoManifest.asset.name
+    && selected.asset.size === autoManifest.asset.size
+    && selected.asset.sha256.toLowerCase() === autoManifest.asset.sha256.toLowerCase()
+    && matches(autoResult) ? autoResult : null;
+}
 
 export type LowerUpdateImageComparison = 'same' | 'different' | 'unknown';
 export type LowerUpdateCacheFreshness = 'unknown' | 'current' | 'stale' | 'unavailable';

@@ -209,6 +209,7 @@ export const DELEGATED_API_METHODS = [
   'openRuntimeDirectory',
   'clearLowerUpdateCache',
   'listCachedLowerUpdates',
+  'importLocalLowerUpdate',
   'getAppVersion',
   'checkAppUpdate',
   'downloadAppUpdate',

@@ -69,6 +69,7 @@ import {
   assessLowerUpdateCacheFreshness,
   compareLowerUpdateImages,
   matchesLowerUpdateSelection,
+  resolveLowerUpdateDownloadResult,
   type LowerUpdateCacheFreshness,
 } from '../../utils/lower-update-deploy';
 import { getLowerUpdateChannel, getLowerUpdateChannels } from '../../utils/lower-update-platform';
@@ -628,6 +629,7 @@ const AdvancedConfigPage: React.FC = () => {
     savedConnection?.auth_method ?? DEFAULT_LOWER_UPDATE_AUTH_METHOD,
   );
   const [isCheckingLowerUpdate, setIsCheckingLowerUpdate] = useState(false);
+  const [isImportingLocalUpdate, setIsImportingLocalUpdate] = useState(false);
   const [isDownloadingLowerUpdate, setIsDownloadingLowerUpdate] = useState(false);
   const [isUploadingLowerUpdate, setIsUploadingLowerUpdate] = useState(false);
   const [isInstallingLowerUpdate, setIsInstallingLowerUpdate] = useState(false);
@@ -652,11 +654,15 @@ const AdvancedConfigPage: React.FC = () => {
     return () => { deploymentPageMountedRef.current = false; };
   }, []);
   const lowerUpdateAutoChannelStatus = lowerUpdateAutoChannels[channel];
-  const isDownloadTaskActive = isDownloadingLowerUpdate || lowerUpdateAutoChannelStatus.kind === 'downloading';
-  const autoDownloadProgress = lowerUpdateAutoChannelStatus.progress;
+  const isSelectingLowerUpdate = isCheckingLowerUpdate || isImportingLocalUpdate;
+  const isLocalPackageSelected = activeManifest?.local_import === true;
+  const isDownloadTaskActive = isDownloadingLowerUpdate || (!isLocalPackageSelected && lowerUpdateAutoChannelStatus.kind === 'downloading');
+  const autoDownloadProgress = !isLocalPackageSelected ? lowerUpdateAutoChannelStatus.progress : null;
   const effectiveDownloadedBytes = autoDownloadProgress?.downloaded_bytes ?? downloadedBytes;
   const effectiveDownloadTotalBytes = autoDownloadProgress?.total_bytes || downloadTotalBytes;
-  const effectiveDownloadResult = lowerUpdateAutoChannelStatus.downloadResult ?? downloadResult;
+  const effectiveDownloadResult = resolveLowerUpdateDownloadResult(
+    activeManifest, downloadResult, lowerUpdateAutoChannelStatus.manifest, lowerUpdateAutoChannelStatus.downloadResult,
+  );
   const [isLoadingSavedSshPassword, setIsLoadingSavedSshPassword] = useState(false);
   const {
     appVersion,
@@ -726,6 +732,7 @@ const AdvancedConfigPage: React.FC = () => {
   }, [refreshCachedLowerUpdates]);
 
   React.useEffect(() => {
+    if (activeManifest?.local_import || isImportingLocalUpdate) return;
     const autoManifest = lowerUpdateAutoChannelStatus.manifest;
     if (!autoManifest || !matchesLowerUpdateSelection(autoManifest, platform, channel)) {
       return;
@@ -761,7 +768,7 @@ const AdvancedConfigPage: React.FC = () => {
       setDownloadStage('finished');
       setDeliveryStatus('已缓存');
     }
-  }, [activeManifest, downloadedPackagePath, lowerUpdateAutoChannelStatus, platform, channel]);
+  }, [activeManifest, downloadedPackagePath, lowerUpdateAutoChannelStatus, platform, channel, isImportingLocalUpdate]);
 
   React.useEffect(() => {
     setCacheFreshness(summarizeCachedPackageFreshness(onlineLowerUpdateManifest, cachedPackages));
@@ -1017,6 +1024,36 @@ const AdvancedConfigPage: React.FC = () => {
     return restoredDownloadResult;
   };
 
+  const handleImportLocalUpdate = async (): Promise<void> => {
+    setIsImportingLocalUpdate(true);
+    try {
+      const imported = await api.importLocalLowerUpdate();
+      if (!imported || !deploymentPageMountedRef.current) return;
+      const importedPlatform = imported.manifest.platform as LowerUpdatePlatform;
+      if (!imported.manifest.local_import || !getLowerUpdateChannels(importedPlatform).includes(imported.manifest.channel)) {
+        throw new Error('导入结果缺少本地来源或有效架构');
+      }
+      cacheReadRequestRef.current += 1;
+      setIsLoadingCachedPackages(false);
+      lowerUpdateSelectionRef.current = { platform: importedPlatform, channel: imported.manifest.channel };
+      setPlatform(importedPlatform);
+      setChannel(imported.manifest.channel);
+      resetUpdateState();
+      setCachedPackages((previous) => [imported, ...previous.filter((item) =>
+        item.package_path !== imported.package_path
+        && matchesLowerUpdateSelection(item.manifest, importedPlatform, imported.manifest.channel))]);
+      applyCachedPackage(imported);
+      console.info('已选择本地下位机安装包', { version: imported.manifest.version, platform: importedPlatform, sha256: imported.sha256 });
+      messageApi.success(`已导入本地版本 ${imported.manifest.version}，可点击下发并安装`);
+    } catch (error) {
+      if (!deploymentPageMountedRef.current) return;
+      console.warn('导入本地下位机安装包失败', formatErrorMessage(error));
+      messageApi.error(`导入失败: ${formatErrorMessage(error)}`);
+    } finally {
+      if (deploymentPageMountedRef.current) setIsImportingLocalUpdate(false);
+    }
+  };
+
   const queryLowerUpdateRuntimeInfo = async (): Promise<LowerUpdateRuntimeInfo> => api.getLowerUpdateRuntimeInfo({
     upload_account: targetUploadAccount.trim(),
     auth: lowerUpdateAuthMethod === 'password'
@@ -1164,6 +1201,10 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const handleDownload = async (): Promise<void> => {
+    if (activeManifest?.local_import) {
+      messageApi.info('本地安装包已导入，无需下载');
+      return;
+    }
     if (!activeManifest) {
       messageApi.warning('请先检查更新');
       return;
@@ -1553,10 +1594,10 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const handleDeployCachedPackage = async (cachedPackage: LowerUpdateCachedPackage): Promise<void> => {
-    const cachedFreshness = onlineLowerUpdateManifest
+    const cachedFreshness = !cachedPackage.manifest.local_import && onlineLowerUpdateManifest
       ? assessLowerUpdateCacheFreshness(onlineLowerUpdateManifest, cachedPackage)
       : 'unknown';
-    const freshnessMessage = getCacheFreshnessMessage(
+    const freshnessMessage = cachedPackage.manifest.local_import ? '将安装指定的本地导入版本' : getCacheFreshnessMessage(
       cachedFreshness,
       onlineLowerUpdateManifest?.version ?? null,
       onlineLowerUpdateCheckedAt,
@@ -1727,7 +1768,7 @@ const AdvancedConfigPage: React.FC = () => {
                     }}
                     onSearch={setConnectionHistorySearch}
                     onSelect={handleSelectConnectionHistory}
-                    disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
+                    disabled={isSelectingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
                     onChange={(value) => {
                       credentialReadGuardRef.current.invalidate();
                       lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
@@ -1747,7 +1788,7 @@ const AdvancedConfigPage: React.FC = () => {
                       value: value as LowerUpdateAuthMethod,
                       label,
                     }))}
-                    disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
+                    disabled={isSelectingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
                     onChange={(value) => {
                       credentialReadGuardRef.current.invalidate();
                       lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
@@ -1767,7 +1808,7 @@ const AdvancedConfigPage: React.FC = () => {
                   >
                     <Input.Password
                       value={targetSshPassword}
-                      disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
+                      disabled={isSelectingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
                       autoComplete="off"
                       onChange={(event) => {
                         credentialReadGuardRef.current.markEdited('ssh');
@@ -1784,7 +1825,7 @@ const AdvancedConfigPage: React.FC = () => {
                       checked={lowerUpdateAuthMethod === 'password' && reuseSshPasswordForSudo}
                       disabled={
                         lowerUpdateAuthMethod === 'certificate'
-                        || isCheckingLowerUpdate
+                        || isSelectingLowerUpdate
                         || isDeployingLowerUpdate
                         || isClearingSavedCredentials
                       }
@@ -1808,7 +1849,7 @@ const AdvancedConfigPage: React.FC = () => {
                   >
                     <Input.Password
                       value={targetSudoPassword}
-                      disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
+                      disabled={isSelectingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
                       autoComplete="off"
                       onChange={(event) => {
                         credentialReadGuardRef.current.markEdited('sudo');
@@ -1823,7 +1864,7 @@ const AdvancedConfigPage: React.FC = () => {
                   <Space wrap>
                     <Switch
                       checked={rememberPassword}
-                      disabled={isCheckingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
+                      disabled={isSelectingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
                       onChange={(checked) => {
                         credentialReadGuardRef.current.invalidate();
                         lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
@@ -1837,7 +1878,7 @@ const AdvancedConfigPage: React.FC = () => {
                     <Button
                       size="small"
                       loading={isClearingSavedCredentials}
-                      disabled={!targetUploadAccountValidation.ok || isCheckingLowerUpdate || isDeployingLowerUpdate}
+                      disabled={!targetUploadAccountValidation.ok || isSelectingLowerUpdate || isDeployingLowerUpdate}
                       onClick={() => void handleClearSavedCredentials()}
                     >清除已保存密码</Button>
                     {isLoadingSavedSshPassword ? <Text type="secondary">正在读取已保存密码…</Text> : null}
@@ -1874,7 +1915,7 @@ const AdvancedConfigPage: React.FC = () => {
                       { label: 'ARM64（默认）', value: 'linux-arm64' },
                       { label: 'x64', value: 'linux-x64' },
                     ]}
-                    disabled={isCheckingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
+                    disabled={isSelectingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
                     onChange={(value) => {
                       cacheReadRequestRef.current += 1;
                       const nextChannel = getLowerUpdateChannel(value, channel);
@@ -1887,17 +1928,22 @@ const AdvancedConfigPage: React.FC = () => {
                     }}
                   />
                 </Form.Item>
-                <Form.Item label="发布通道">
-                  <Select<LowerUpdateChannel>
-                    value={channel}
-                    options={UPDATE_CHANNEL_OPTIONS.filter((option) => getLowerUpdateChannels(platform).includes(option.value))}
-                    disabled={isCheckingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
+                <Form.Item label="版本来源">
+                  <Select<LowerUpdateChannel | 'local'>
+                    value={isLocalPackageSelected ? 'local' : channel}
+                    options={[
+                      ...(isLocalPackageSelected ? [{ label: '本地安装包', value: 'local' as const }] : []),
+                      ...UPDATE_CHANNEL_OPTIONS.filter((option) => getLowerUpdateChannels(platform).includes(option.value)),
+                    ]}
+                    disabled={isSelectingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
                     onChange={(value) => {
+                      if (value === 'local') return;
                       cacheReadRequestRef.current += 1;
                       lowerUpdateSelectionRef.current = { platform, channel: value };
                       setChannel(value);
                       setCachedPackages([]);
                       resetUpdateState();
+                      if (value === channel) void refreshCachedLowerUpdates();
                     }}
                   />
                 </Form.Item>
@@ -1906,7 +1952,7 @@ const AdvancedConfigPage: React.FC = () => {
                 {platform === 'linux-x64'
                   ? 'x64 目前仅提供 CI 通道安装包，适用于 x64 服务器。'
                   : 'ARM64 适用于 ARM 下位机设备。'}
-                上位机从所选架构的静态源获取更新包，再下发到下位机执行安装。
+                可从所选架构的静态源下载，也可导入本地 mskdsp-版本 安装包，再手动下发到下位机。
               </Text>
               <div className="advanced-config-cached-package">
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -1928,14 +1974,14 @@ const AdvancedConfigPage: React.FC = () => {
                     ) : null}
                   </Space>
                   {cachedPackages.map((cachedPackage) => {
-                    const cachedFreshness = onlineLowerUpdateManifest
+                    const cachedFreshness = !cachedPackage.manifest.local_import && onlineLowerUpdateManifest
                       ? assessLowerUpdateCacheFreshness(onlineLowerUpdateManifest, cachedPackage)
                       : 'unknown';
                     return (
                       <div className="advanced-config-cached-package-item" key={cachedPackage.package_path}>
                         <Descriptions size="small" column={2}>
                           <Descriptions.Item label="版本">{cachedPackage.manifest.version}</Descriptions.Item>
-                          <Descriptions.Item label="渠道">{UPDATE_CHANNEL_LABELS[cachedPackage.manifest.channel]}</Descriptions.Item>
+                          <Descriptions.Item label="来源">{cachedPackage.manifest.local_import ? '本地导入' : UPDATE_CHANNEL_LABELS[cachedPackage.manifest.channel]}</Descriptions.Item>
                           <Descriptions.Item label="安装包">{cachedPackage.manifest.asset.name}</Descriptions.Item>
                           <Descriptions.Item label="下载时间">{formatDownloadedAt(cachedPackage.downloaded_at)}</Descriptions.Item>
                           <Descriptions.Item label="镜像 ID" span={2}>
@@ -1952,15 +1998,15 @@ const AdvancedConfigPage: React.FC = () => {
                             onClick={() => void handleDeployCachedPackage(cachedPackage)}
                             disabled={
                               hasDeployTargetValidationError
-                              || isCheckingLowerUpdate
+                              || isSelectingLowerUpdate
                               || isDownloadTaskActive
                               || isDeployingLowerUpdate
                             }
                           >
                             下发此缓存版本
                           </Button>
-                          <Text type={cachedFreshness === 'current' ? 'success' : 'warning'}>
-                            {getCacheFreshnessMessage(
+                          <Text type={cachedPackage.manifest.local_import || cachedFreshness === 'current' ? 'success' : 'warning'}>
+                            {cachedPackage.manifest.local_import ? '本地导入，按指定版本下发' : getCacheFreshnessMessage(
                               cachedFreshness,
                               onlineLowerUpdateManifest?.version ?? null,
                               onlineLowerUpdateCheckedAt,
@@ -1975,18 +2021,27 @@ const AdvancedConfigPage: React.FC = () => {
               <Space wrap className="advanced-config-action-row">
                 <Button
                   icon={<FileSearchOutlined />}
+                  onClick={() => void handleImportLocalUpdate()}
+                  disabled={isSelectingLowerUpdate || isDownloadingLowerUpdate || isDeployingLowerUpdate}
+                  loading={isImportingLocalUpdate}
+                >
+                  导入本地安装包
+                </Button>
+                <Button
+                  icon={<FileSearchOutlined />}
                   onClick={() => void handleCheckUpdate()}
-                  disabled={hasRuntimeQueryValidationError || isDownloadTaskActive}
+                  disabled={hasRuntimeQueryValidationError || isSelectingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
                   loading={isCheckingLowerUpdate}
                 >
-                  检查更新
+                  检查线上最新版本
                 </Button>
                 <Button
                   icon={<DownloadOutlined />}
                   onClick={() => void handleDownload()}
                   disabled={
                     !hasCheckedPackage
-                    || isCheckingLowerUpdate
+                    || isLocalPackageSelected
+                    || isSelectingLowerUpdate
                     || isDownloadTaskActive
                     || isDeployingLowerUpdate
                   }
@@ -2002,7 +2057,7 @@ const AdvancedConfigPage: React.FC = () => {
                     hasDeployTargetValidationError
                     || !hasDownloadedPackage
                     || !hasVerifiableManifest
-                    || isCheckingLowerUpdate
+                    || isSelectingLowerUpdate
                     || isDownloadTaskActive
                     || isDeployingLowerUpdate
                   }
@@ -2044,6 +2099,8 @@ const AdvancedConfigPage: React.FC = () => {
           }
         >
           <Descriptions size="small" column={2}>
+            <Descriptions.Item label="所选版本">{activeManifest?.version || '-'}</Descriptions.Item>
+            <Descriptions.Item label="安装来源">{isLocalPackageSelected ? '本地导入' : UPDATE_CHANNEL_LABELS[channel]}</Descriptions.Item>
             <Descriptions.Item label="当前运行镜像 ID">
               <Text code className="advanced-config-hash">{currentLowerImageId}</Text>
             </Descriptions.Item>

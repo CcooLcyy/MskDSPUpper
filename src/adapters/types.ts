@@ -96,6 +96,8 @@ export interface LowerUpdateChecksum {
 }
 
 export interface LowerUpdateManifest {
+  /** 本地导入来源；通道字段仅用于缓存槽位。 */
+  local_import?: boolean;
   schema_version: number;
   product: string;
   channel: LowerUpdateChannel;

@@ -161,6 +161,8 @@ pub struct LowerUpdateChecksumDto {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LowerUpdateManifestDto {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local_import: bool,
     pub schema_version: u32,
     pub product: String,
     pub channel: String,
@@ -1689,6 +1691,18 @@ fn validate_manifest(
         ));
     }
     validate_platform_channel(requested_platform, requested_channel)?;
+    if manifest.local_import
+        && (manifest.channel != "ci"
+            || manifest
+                .image_id
+                .as_deref()
+                .and_then(normalize_image_id)
+                .is_none()
+            || !manifest.asset.url.is_empty()
+            || !manifest.checksum.url.is_empty())
+    {
+        return Err("本地安装包清单必须包含有效镜像摘要、CI 存储槽及空下载地址".into());
+    }
     if manifest.version.trim().is_empty() {
         return Err("下位机更新清单缺少版本号".into());
     }
@@ -1711,7 +1725,7 @@ fn validate_manifest(
     {
         return Err("下位机更新清单安装包名称与缓存元数据保留名称冲突".into());
     }
-    if !is_http_url(&manifest.asset.url) {
+    if !manifest.local_import && !is_http_url(&manifest.asset.url) {
         return Err("下位机更新清单安装包地址不合法".into());
     }
     if !is_sha256(&manifest.asset.sha256) {
@@ -1726,7 +1740,7 @@ fn validate_manifest(
     if !is_safe_file_name(&manifest.checksum.name) {
         return Err("下位机更新清单校验文件名称不能包含路径分隔符".into());
     }
-    if !is_http_url(&manifest.checksum.url) {
+    if !manifest.local_import && !is_http_url(&manifest.checksum.url) {
         return Err("下位机更新清单校验文件地址不合法".into());
     }
     Ok(())
@@ -2089,6 +2103,9 @@ fn cleanup_cache_startup_in(cache_root: &Path) -> io::Result<LowerUpdateCacheCle
         if !channel_entry.file_type()?.is_dir() {
             continue;
         }
+        if channel_entry.file_name() == "local" {
+            continue;
+        }
         for platform_entry in std_fs::read_dir(channel_entry.path())? {
             let platform_entry = platform_entry?;
             if platform_entry.file_type()?.is_dir() {
@@ -2186,6 +2203,41 @@ async fn list_cached_lower_updates_in(
         }
     }
 
+    if requested_channel.is_none_or(|channel| channel == "ci") {
+        let local_root = cache_root.join("local");
+        if local_root.is_dir() {
+            let mut directories = fs::read_dir(&local_root)
+                .await
+                .map_err(|e| format!("读取本地安装包缓存失败: {e}"))?;
+            while let Some(entry) = directories
+                .next_entry()
+                .await
+                .map_err(|e| format!("读取本地安装包缓存失败: {e}"))?
+            {
+                if !entry
+                    .file_type()
+                    .await
+                    .map_err(|e| format!("读取本地缓存目录类型失败: {e}"))?
+                    .is_dir()
+                    || !entry.file_name().to_str().is_some_and(is_sha256)
+                {
+                    continue;
+                }
+                match load_cached_package(&entry.path(), Some("ci"), platform).await {
+                    Ok(Some(package))
+                        if package.manifest.local_import
+                            && entry.file_name().to_str() == Some(package.sha256.as_str()) =>
+                    {
+                        cached.push(package)
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(operation = "cache_list", error = %log_detail(&error), "忽略无效的本地安装包缓存")
+                    }
+                }
+            }
+        }
+    }
     cached.sort_by(|left, right| right.downloaded_at.cmp(&left.downloaded_at));
     tracing::info!(
         operation = "cache_list",
@@ -2195,6 +2247,138 @@ async fn list_cached_lower_updates_in(
         "下位机更新缓存查询完成"
     );
     Ok(cached)
+}
+
+#[tauri::command]
+pub async fn import_local_lower_update(
+    state: State<'_, AppState>,
+    package_path: String,
+) -> Result<LowerUpdateCachedPackageDto, String> {
+    let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
+    tracing::info!(operation = "local_import", "开始导入本地下位机安装包");
+    let result = import_local_lower_update_in(
+        &state.runtime_paths.lower_update_dir(),
+        Path::new(&package_path),
+    )
+    .await;
+    match &result {
+        Ok(package) => {
+            tracing::info!(operation = "local_import", version = %package.manifest.version, platform = %package.manifest.platform, image_id = ?package.manifest.image_id, "本地下位机安装包导入完成")
+        }
+        Err(error) => {
+            tracing::warn!(operation = "local_import", error = %log_detail(error), "本地下位机安装包导入失败")
+        }
+    }
+    result
+}
+
+async fn import_local_lower_update_in(
+    cache_root: &Path,
+    source: &Path,
+) -> Result<LowerUpdateCachedPackageDto, String> {
+    let metadata = fs::symlink_metadata(source)
+        .await
+        .map_err(|e| format!("读取本地安装包文件信息失败: {e}"))?;
+    if !metadata.file_type().is_file() || metadata.len() == 0 {
+        return Err("本地安装包必须为非空普通文件".into());
+    }
+    ensure_cache_root(cache_root).map_err(|e| format!("准备更新缓存失败: {e}"))?;
+    let local_root = cache_root.join("local");
+    ensure_cache_subdirectory(&local_root).map_err(|e| format!("准备本地安装包缓存失败: {e}"))?;
+    let nonce = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = local_root.join(format!(".import-{}-{nonce}.download", std::process::id()));
+    let result = async {
+        let mut input = fs::File::open(source)
+            .await
+            .map_err(|e| format!("读取本地安装包失败: {e}"))?;
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await
+            .map_err(|e| format!("创建本地安装包缓存失败: {e}"))?;
+        tokio::io::copy(&mut input, &mut output)
+            .await
+            .map_err(|e| format!("复制本地安装包失败: {e}"))?;
+        output
+            .sync_all()
+            .await
+            .map_err(|e| format!("保存本地安装包缓存失败: {e}"))?;
+        drop(output);
+        let inspect_path = temporary.clone();
+        let info = tokio::task::spawn_blocking(move || {
+            super::lower_update_local::inspect_package(&inspect_path)
+        })
+        .await
+        .map_err(|e| format!("解析本地安装包任务失败: {e}"))??;
+        let sha256 = compute_sha256(&temporary).await?;
+        let size = fs::metadata(&temporary)
+            .await
+            .map_err(|e| format!("读取已复制安装包信息失败: {e}"))?
+            .len();
+        let directory = local_root.join(&sha256);
+        if directory.exists() {
+            ensure_cache_subdirectory(&directory)
+                .map_err(|e| format!("本地安装包缓存目录不合法: {e}"))?;
+            let existing = load_cached_package(&directory, Some("ci"), &info.platform)
+                .await?
+                .filter(|package| package.manifest.local_import && package.sha256 == sha256)
+                .ok_or("已有本地安装包缓存无效，请清理更新缓存后重新导入")?;
+            return Ok(existing);
+        }
+        let manifest = LowerUpdateManifestDto {
+            local_import: true,
+            schema_version: LOWER_UPDATE_SCHEMA_VERSION,
+            product: LOWER_UPDATE_PRODUCT.into(),
+            channel: "ci".into(),
+            platform: info.platform,
+            version: info.version,
+            package_version: info.package_version.clone(),
+            image_id: Some(info.image_id),
+            published_at: String::new(),
+            source: LowerUpdateSourceDto {
+                repository: String::new(),
+                source_ref: String::new(),
+                sha: String::new(),
+            },
+            asset: LowerUpdateAssetDto {
+                name: format!("mskdsp-{}.run", info.package_version),
+                url: String::new(),
+                sha256,
+                size,
+            },
+            checksum: LowerUpdateChecksumDto {
+                name: "SHA256SUMS".into(),
+                url: String::new(),
+            },
+        };
+        validate_manifest(&manifest, "ci", &manifest.platform)?;
+        ensure_download_cache_dir(&directory)
+            .map_err(|e| format!("创建本地安装包缓存目录失败: {e}"))?;
+        let cached_path = directory.join(&manifest.asset.name);
+        let save = async {
+            fs::rename(&temporary, &cached_path)
+                .await
+                .map_err(|e| format!("保存本地安装包失败: {e}"))?;
+            persist_cache_metadata(&directory, &manifest).await?;
+            load_cached_package(&directory, Some("ci"), &manifest.platform)
+                .await?
+                .ok_or_else(|| "本地安装包缓存保存后无法读取".into())
+        }
+        .await;
+        if save.is_err() {
+            let _ = fs::remove_file(&cached_path).await;
+            let _ = fs::remove_file(cache_metadata_path(&directory)).await;
+            let _ = fs::remove_dir(&directory).await;
+        }
+        save
+    }
+    .await;
+    let _ = fs::remove_file(&temporary).await;
+    result
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -2324,6 +2508,9 @@ pub async fn check_lower_update(
             .json::<LowerUpdateManifestDto>()
             .await
             .map_err(|e| format!("解析下位机更新清单失败: {e}"))?;
+        if manifest.local_import {
+            return Err("在线更新源不能返回本地导入清单".into());
+        }
         validate_manifest(&manifest, &channel, platform)?;
         Ok(manifest)
     }
@@ -2425,6 +2612,9 @@ pub async fn download_lower_update(
         "收到下位机更新包下载请求"
     );
     let result = async {
+        if manifest.local_import {
+            return Err("本地导入安装包无需下载，请使用已导入缓存".into());
+        }
         let channel = normalize_channel(&manifest.channel)?;
         validate_manifest(&manifest, &channel, &manifest.platform)?;
         let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
@@ -3363,15 +3553,16 @@ mod tests {
     use super::LowerUpdateCredentialStore;
     use super::{
         build_password_root_shell_command, build_user_upload_command,
-        build_vertical_security_install_command, build_vertical_security_upload_command,
-        build_vertical_security_status_command, parse_vertical_security_status_output,
-        cache_metadata_path, cleanup_cache_startup_in, clear_cache_root_contents, compute_sha256,
-        format_upload_remote_error, load_cached_package, parse_available_bytes,
-        parse_runtime_query_output, parse_upload_account, persist_cache_metadata,
-        should_skip_install, sudo_password_stdin, LowerUpdateAssetDto, LowerUpdateChecksumDto,
-        LowerUpdateManifestDto, LowerUpdateRuntimeInfoDto, LowerUpdateSourceDto,
-        LOWER_UPDATE_CONTAINER_NAME, VERTICAL_SECURITY_SCRIPT_NAME,
+        build_vertical_security_install_command, build_vertical_security_status_command,
+        build_vertical_security_upload_command, cache_metadata_path, cleanup_cache_startup_in,
+        clear_cache_root_contents, compute_sha256, format_upload_remote_error, load_cached_package,
+        parse_available_bytes, parse_runtime_query_output, parse_upload_account,
+        parse_vertical_security_status_output, persist_cache_metadata, should_skip_install,
+        sudo_password_stdin, LowerUpdateAssetDto, LowerUpdateChecksumDto, LowerUpdateManifestDto,
+        LowerUpdateRuntimeInfoDto, LowerUpdateSourceDto, LOWER_UPDATE_CONTAINER_NAME,
+        VERTICAL_SECURITY_SCRIPT_NAME,
     };
+    use sha2::Digest;
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -3888,6 +4079,7 @@ mod tests {
         sha256: String,
     ) -> LowerUpdateManifestDto {
         LowerUpdateManifestDto {
+            local_import: false,
             schema_version: 1,
             product: "mskdsp-lower".to_string(),
             channel: "stable".to_string(),
@@ -3912,6 +4104,104 @@ mod tests {
                 url: "https://example.com/SHA256SUMS".to_string(),
             },
         }
+    }
+
+    // 验证本地缓存跨启动保留，按架构和通道过滤，设置清理仍可完整清除。
+    #[tokio::test]
+    async fn local_cache_survives_startup_and_is_filtered_and_clearable() {
+        let temp = TestDirectory::new();
+        let sha256 = format!("{:x}", sha2::Sha256::digest(b"local-package"));
+        let directory = temp.path().join("local").join(&sha256);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("package.run"), b"local-package").unwrap();
+        let mut manifest = test_manifest("package.run", 13, sha256);
+        manifest.local_import = true;
+        manifest.channel = "ci".into();
+        manifest.asset.url.clear();
+        manifest.checksum.url.clear();
+        persist_cache_metadata(&directory, &manifest).await.unwrap();
+        assert_eq!(
+            cleanup_cache_startup_in(temp.path()).unwrap().removed_files,
+            0
+        );
+        assert_eq!(
+            super::list_cached_lower_updates_in(temp.path(), Some("ci"), "linux-arm64")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            super::list_cached_lower_updates_in(temp.path(), Some("stable"), "linux-arm64")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            super::list_cached_lower_updates_in(temp.path(), Some("ci"), "linux-x64")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            clear_cache_root_contents(temp.path())
+                .unwrap()
+                .removed_files,
+            2
+        );
+        assert!(!directory.exists());
+    }
+
+    // 验证复制后导入、内容寻址复用，以及坏包失败不影响已导入包和源文件。
+    #[tokio::test]
+    async fn local_import_copies_verifies_and_preserves_existing_package_on_failure() {
+        let temp = TestDirectory::new();
+        let config = b"{\"architecture\":\"arm64\",\"os\":\"linux\"}";
+        let hash = format!("{:x}", sha2::Sha256::digest(config));
+        let manifest = serde_json::to_vec(&serde_json::json!([{"Config":format!("{hash}.json"),"RepoTags":["mskdsp:v1.2.3-linux-arm64"],"Layers":[]}])).unwrap();
+        let mut builder = tar::Builder::new(Vec::new());
+        for (name, data) in [
+            ("manifest.json".to_string(), manifest.as_slice()),
+            (format!("{hash}.json"), config.as_slice()),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, name, data).unwrap();
+        }
+        let mut bytes = b"#!/usr/bin/env bash\nexit 0\n__ARCHIVE_BELOW__\n".to_vec();
+        bytes.extend(builder.into_inner().unwrap());
+        let source = temp.path().join("original-package");
+        fs::write(&source, &bytes).unwrap();
+        let cache = temp.path().join("cache");
+        let imported = super::import_local_lower_update_in(&cache, &source)
+            .await
+            .unwrap();
+        assert!(imported.manifest.local_import);
+        assert_eq!(imported.manifest.version, "1.2.3");
+        assert_eq!(fs::read(&imported.package_path).unwrap(), bytes);
+        assert_eq!(
+            super::import_local_lower_update_in(&cache, &source)
+                .await
+                .unwrap()
+                .package_path,
+            imported.package_path
+        );
+        let bad = temp.path().join("bad-package");
+        fs::write(&bad, b"bad package").unwrap();
+        assert!(super::import_local_lower_update_in(&cache, &bad)
+            .await
+            .is_err());
+        assert_eq!(
+            super::list_cached_lower_updates_in(&cache, None, "linux-arm64")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(fs::read(&source).unwrap(), bytes);
+        assert_eq!(fs::read_dir(cache.join("local")).unwrap().count(), 1);
     }
 
     // 验证旧调用默认 ARM64，并拒绝未知或可穿越目录的平台参数。

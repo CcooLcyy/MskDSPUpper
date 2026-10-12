@@ -1,5 +1,6 @@
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
@@ -238,6 +239,11 @@ export const api = {
   clearLowerUpdateCache: () => invoke<CacheClearResult>('clear_lower_update_cache'),
   listCachedLowerUpdates: (channel?: LowerUpdateChannel, platform: LowerUpdatePlatform = 'linux-arm64') =>
     invoke<LowerUpdateCachedPackage[]>('list_cached_lower_updates', { channel: channel ?? null, platform }),
+  importLocalLowerUpdate: async (): Promise<LowerUpdateCachedPackage | null> => {
+    const packagePath = await open({ title: '选择下位机自解压安装包（mskdsp-版本）', multiple: false, directory: false });
+    if (!packagePath) return null;
+    return invoke<LowerUpdateCachedPackage>('import_local_lower_update', { packagePath });
+  },
 
   setManagerAddr: (addr: string, forceReconnect = false) =>
     invoke<void>('set_manager_addr', { addr, forceReconnect }),
