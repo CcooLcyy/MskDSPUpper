@@ -11,11 +11,12 @@ const directory = new URL('../../src/features/modbus-templates/builtin/', import
 // 验证随软件发布的所有正式模板均能加载、ID唯一并携带可追溯文档信息。
 test('正式模板库校验及默认采集点的协议枚举转换', () => {
   const files = readdirSync(directory).filter((file) => file.endsWith('.json'));
-  assert.deepEqual(files, ['huawei-sun2000-three-v3-02.json', 'sungrow-pv-v1-1-78.json'], '内置模板仅包含用户确认的华为与阳光模板');
+  assert.deepEqual(files, ['aiswei-inverter-v2-1-5.json', 'huawei-sun2000-three-v3-02.json', 'sungrow-pv-v1-1-78.json'], '内置模板仅包含用户确认的爱士惟、华为与阳光模板');
   const ids = new Set();
   for (const file of files) {
     const template = validateModbusTemplate(JSON.parse(readFileSync(new URL(file, directory), 'utf8')));
-    const expected = file.startsWith('huawei-') ? ['华为', '华为 SUN2000 三相 · V3.0', 101]
+    const expected = file.startsWith('aiswei-') ? ['爱士惟', '爱士惟逆变器 · V2.1.5', 35]
+      : file.startsWith('huawei-') ? ['华为', '华为 SUN2000 三相 · V3.0', 101]
       : ['阳光电源', '阳光电源光伏逆变器 · V1.1.78', 73];
     assert.deepEqual([template.manufacturer, template.name, template.points.length], expected);
     assert.ok(!ids.has(template.id), file); ids.add(template.id);
