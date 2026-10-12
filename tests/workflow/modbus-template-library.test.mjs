@@ -8,10 +8,13 @@ const directory = new URL('../../src/features/modbus-templates/builtin/', import
 // 验证随软件发布的所有正式模板均能加载、ID唯一并携带可追溯文档信息。
 test('正式模板库校验及默认采集点的协议枚举转换', () => {
   const files = readdirSync(directory).filter((file) => file.endsWith('.json'));
-  assert.ok(files.length >= 10, '应收录多个厂家及不同型号版本');
+  assert.deepEqual(files, ['huawei-sun2000-three-v3-02.json'], '内置模板仅保留用户指定的华为三相 V3.0');
   const ids = new Set();
   for (const file of files) {
     const template = validateModbusTemplate(JSON.parse(readFileSync(new URL(file, directory), 'utf8')));
+    assert.equal(template.manufacturer, '华为');
+    assert.equal(template.name, '华为 SUN2000 三相 · V3.0');
+    assert.equal(template.points.length, 104);
     assert.ok(!ids.has(template.id), file); ids.add(template.id);
     assert.ok(template.sources.length > 0, `${file} 缺少来源`);
     for (const source of template.sources) assert.match(source.sha256, /^[a-f0-9]{64}$/i);
