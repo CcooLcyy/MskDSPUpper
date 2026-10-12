@@ -166,7 +166,7 @@ export default function TemplateModal({ open, connectionName, protocol, addressB
     { title: '分组', width: 120, render: (_, row) => row.source.group },
     { title: '功能码', width: 85, render: (_, row) => <Text type={isTemplateWritePoint(row.source) ? 'warning' : undefined}>{functionLabels[row.source.function_code]}</Text> },
     { title: '地址', width: 90, render: (_, row) => <Tooltip title={`模板地址 ${row.source.address}，${template?.address_base === 0 ? '0' : '1'} 基`}>{row.point.address}</Tooltip> },
-    { title: '类型 / 寄存器数', width: 145, render: (_, row) => `${row.source.data_type} / ${row.point.reg_count}${row.point.bit_index === null ? '' : ` · 位${row.point.bit_index}`}` },
+    { title: '类型 / 寄存器数', width: 145, render: (_, row) => `${row.source.data_type} / ${row.point.reg_count}${row.point.enum_value != null ? ` · 等于${row.point.enum_value}` : row.point.bit_index === null ? '' : ` · 位${row.point.bit_index}`}` },
     { title: '倍率', width: 85, render: (_, row) => row.source.scale },
     { title: '单位', width: 70, render: (_, row) => row.source.unit || '—' },
     { title: '状态 / 条件', width: 165, render: (_, row) => row.conflict ? <Tooltip title={row.conflict}><Tag color="orange">冲突，跳过</Tag></Tooltip>

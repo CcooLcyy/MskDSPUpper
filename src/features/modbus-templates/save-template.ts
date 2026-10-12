@@ -3,6 +3,7 @@ import { normalizeModbusPointEngineeringFields } from '../../pages/ModbusRTU/mod
 
 const signature = (points: ModbusPoint[]): string => JSON.stringify(points
   .map(normalizeModbusPointEngineeringFields)
+  .map((point) => ({ ...point, enum_value: point.enum_value ?? null }))
   .map((point) => Object.fromEntries(Object.entries(point).sort(([left], [right]) => left.localeCompare(right))))
   .sort((left, right) => String(left.tag).localeCompare(String(right.tag))));
 

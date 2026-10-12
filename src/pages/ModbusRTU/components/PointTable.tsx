@@ -41,6 +41,7 @@ import {
   buildReadPlanBlocks,
   getCoveredReadPlanTags,
   getMinimumAddress,
+  formatModbusBoolSource,
   isExplicitReadFunction,
 } from '../modbus-form-rules';
 import { resolveModbusPointDecimalText } from '../modbus-decimal';
@@ -390,11 +391,11 @@ const PointTable: React.FC<Props> = ({
     };
     const registerCountColumn = { title: '寄存器数', dataIndex: 'reg_count', key: 'reg_count', width: 90 };
     const bitIndexColumn = {
-      title: '位索引',
+      title: 'BOOL 解析',
       dataIndex: 'bit_index',
       key: 'bit_index',
-      width: 90,
-      render: (value: number | null | undefined) => value ?? '-',
+      width: 140,
+      render: (_value: unknown, record: ModbusPoint) => formatModbusBoolSource(record),
     };
     const dataTypeColumn = {
       title: '数据类型',

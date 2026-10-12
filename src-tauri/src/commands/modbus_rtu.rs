@@ -87,6 +87,8 @@ pub struct ModbusPointDto {
     pub word_order: i32,
     pub byte_order: i32,
     pub bit_index: Option<u32>,
+    #[serde(default)]
+    pub enum_value: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -203,6 +205,7 @@ impl From<Point> for ModbusPointDto {
             word_order: point.word_order,
             byte_order: point.byte_order,
             bit_index: point.bit_index,
+            enum_value: point.enum_value,
         }
     }
 }
@@ -318,6 +321,7 @@ impl ModbusPointDto {
             word_order: self.word_order,
             byte_order: self.byte_order,
             bit_index: self.bit_index,
+            enum_value: self.enum_value,
         }
     }
 }
@@ -519,4 +523,32 @@ pub async fn modbus_rtu_get_point_table(
         })?;
     tracing::info!(protocol = "ModbusRTU", conn_name = %conn_name, point_count = table.points.len(), "获取协议点表完成");
     Ok(table.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 旧JSON缺省等值字段仍能读取；枚举0通过桌面DTO与protobuf往返不丢存在性。
+    #[test]
+    fn enum_zero_roundtrips_and_old_json_remains_compatible() {
+        let point = Point {
+            tag: "工作状态1-运行".into(),
+            function: 3,
+            address: 5038,
+            r#type: 1,
+            reg_count: 1,
+            enum_value: Some(0),
+            ..Default::default()
+        };
+        let dto: ModbusPointDto = point.into();
+        assert_eq!(dto.enum_value, Some(0));
+        assert_eq!(dto.to_proto().enum_value, Some(0));
+        assert_eq!(dto.to_proto().bit_index, None);
+        let mut json = serde_json::to_value(dto).unwrap();
+        json.as_object_mut().unwrap().remove("enum_value");
+        let old: ModbusPointDto = serde_json::from_value(json).unwrap();
+        assert_eq!(old.enum_value, None);
+        assert_eq!(old.to_proto().enum_value, None);
+    }
 }

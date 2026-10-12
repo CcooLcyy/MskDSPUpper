@@ -14,7 +14,7 @@ export interface ModbusTemplatePoint {
   address: number; data_type: TemplateDataType; reg_count: number;
   scale: string; offset: string; deadband: string; word_order: 'HL' | 'LH'; byte_order: 'AB' | 'BA';
   bit_index: number | null; source_page: number; description: string;
-  default_selected?: boolean; condition?: string;
+  default_selected?: boolean; condition?: string; enum_value?: number | null;
 }
 export interface ModbusTemplate {
   schema_version: 1; id: string; name: string; manufacturer: string; models: string[];
@@ -67,7 +67,7 @@ export function validateModbusTemplate(input: unknown): ModbusTemplate {
   const ids = new Set<string>();
   const tags = new Set<string>();
   const points = array(data.points, '模板点位', MAX_TEMPLATE_POINTS).map((raw, index): ModbusTemplatePoint => {
-    const item = object(raw, POINT_FIELDS, `第 ${index + 1} 个点位`, ['default_selected', 'condition']);
+    const item = object(raw, POINT_FIELDS, `第 ${index + 1} 个点位`, ['default_selected', 'condition', 'enum_value']);
     const pointId = text(item.id, '点位 ID', false, 128);
     const tag = text(item.tag, '点位标签');
     if (tag !== tag.trim()) throw new Error('点位标签首尾不能包含空白');
@@ -84,6 +84,8 @@ export function validateModbusTemplate(input: unknown): ModbusTemplate {
     if (item.bit_index !== null) bitIndex = integer(item.bit_index, 0, regCount * 16 - 1, '位索引');
     if (type !== 'BOOL' && bitIndex !== null) throw new Error('仅 BOOL 点位允许位索引');
     if ((fc === 1 || fc === 5) && bitIndex !== null) throw new Error('线圈点位不使用寄存器位索引');
+    const enumValue = item.enum_value == null ? null : integer(item.enum_value, 0, regCount === 1 ? 65535 : 4294967295, '枚举相等值');
+    if (enumValue !== null && (type !== 'BOOL' || (fc !== 3 && fc !== 4) || bitIndex !== null)) throw new Error('枚举相等值仅支持只读寄存器 BOOL，且不能同时配置位索引');
     if ((item.word_order !== 'HL' && item.word_order !== 'LH') || (item.byte_order !== 'AB' && item.byte_order !== 'BA')) throw new Error('字序或字节序不合法');
     if (Object.hasOwn(item, 'default_selected') && typeof item.default_selected !== 'boolean') throw new Error('默认选择标记必须为布尔值');
     const condition = Object.hasOwn(item, 'condition') ? text(item.condition, '适用条件', true, 4096) : undefined;
@@ -91,6 +93,7 @@ export function validateModbusTemplate(input: unknown): ModbusTemplate {
       address, data_type: type, reg_count: regCount, scale: decimal(item.scale, '倍率'), offset: decimal(item.offset, '偏移'), deadband: decimal(item.deadband, '死区'),
       word_order: item.word_order, byte_order: item.byte_order, bit_index: bitIndex,
       source_page: integer(item.source_page, 0, 100000, '来源页码'), description: text(item.description, '点位说明', true, 4096),
+      ...(Object.hasOwn(item, 'enum_value') ? { enum_value: enumValue } : {}),
       ...(typeof item.default_selected === 'boolean' ? { default_selected: item.default_selected } : {}), ...(condition !== undefined ? { condition } : {}) };
   });
   if (!points.length) throw new Error('模板至少需要一个点位');
@@ -118,6 +121,10 @@ function overlaps(a: ModbusPoint, b: ModbusPoint): boolean {
   if (a.function !== b.function || a.address > b.address + b.reg_count - 1 || b.address > a.address + a.reg_count - 1) return false;
   if (a.data_type === MODBUS_DATA_TYPE.BOOL && b.data_type === MODBUS_DATA_TYPE.BOOL
     && a.bit_index !== null && b.bit_index !== null && a.address === b.address && a.reg_count === b.reg_count && a.bit_index !== b.bit_index) return false;
+  if (a.data_type === MODBUS_DATA_TYPE.BOOL && b.data_type === MODBUS_DATA_TYPE.BOOL
+    && a.enum_value != null && b.enum_value != null && a.address === b.address && a.reg_count === b.reg_count
+    && (a.word_order === 2) === (b.word_order === 2) && (a.byte_order === 2) === (b.byte_order === 2)
+    && a.enum_value !== b.enum_value) return false;
   return true;
 }
 export function planTemplateApplication(template: ModbusTemplate, options: TemplateApplicationOptions): { rows: TemplateApplicationRow[]; points: ModbusPoint[] } {
@@ -134,7 +141,8 @@ export function planTemplateApplication(template: ModbusTemplate, options: Templ
     const point: ModbusPoint = { tag: finalTag, function: FUNCTION_TO_NATIVE[source.function_code],
       address: source.address - data.address_base + (options.addressBase === 2 ? 1 : 0), data_type: MODBUS_DATA_TYPE[source.data_type],
       reg_count: source.reg_count, ...createModbusEngineeringFields(source), word_order: source.word_order === 'HL' ? 1 : 2,
-      byte_order: source.byte_order === 'AB' ? 1 : 2, bit_index: source.bit_index };
+      byte_order: source.byte_order === 'AB' ? 1 : 2, bit_index: source.bit_index,
+      ...(source.enum_value != null ? { enum_value: source.enum_value } : {}) };
     let conflict: string | null = null;
     if (prefixError) conflict = prefixError;
     else if (finalTag.length > 256 || finalTag !== finalTag.trim()) conflict = '最终标签过长或首尾包含空白';
@@ -160,5 +168,5 @@ export function createTemplateFromPoints(input: { id: string; name: string; manu
       data_type: Object.entries(MODBUS_DATA_TYPE).find(([, value]) => value === point.data_type)?.[0] ?? '', reg_count: point.reg_count,
       scale: resolveModbusPointDecimalText(point, 'scale'), offset: resolveModbusPointDecimalText(point, 'offset'), deadband: resolveModbusPointDecimalText(point, 'deadband'),
       word_order: point.word_order === 0 || point.word_order === 1 ? 'HL' : point.word_order === 2 ? 'LH' : '', byte_order: point.byte_order === 0 || point.byte_order === 1 ? 'AB' : point.byte_order === 2 ? 'BA' : '',
-      bit_index: point.bit_index, source_page: 0, description: '' })) });
+      bit_index: point.bit_index, ...(point.enum_value != null ? { enum_value: point.enum_value } : {}), source_page: 0, description: '' })) });
 }

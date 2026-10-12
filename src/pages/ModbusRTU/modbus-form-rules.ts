@@ -148,6 +148,48 @@ export interface ModbusPointFormValues {
   word_order: number;
   byte_order: number;
   bit_index: number | null;
+  enum_value?: number | null;
+  bool_mode?: 'bit' | 'enum';
+}
+
+interface ModbusBoolFields {
+  bit_index?: number | null;
+  enum_value?: number | null;
+}
+
+export function getModbusBoolMode(point: ModbusBoolFields): 'bit' | 'enum' {
+  return point.enum_value != null ? 'enum' : 'bit';
+}
+
+/** 将表单解析模式转换成互斥的协议字段；零值是有效相等值。 */
+export function createModbusBoolFields(
+  values: Pick<ModbusPointFormValues, 'function' | 'data_type' | 'reg_count' | 'bit_index' | 'enum_value' | 'bool_mode'>,
+): { bit_index: number | null; enum_value: number | null } {
+  if (values.data_type !== MODBUS_DATA_TYPE.BOOL || !isExplicitReadFunction(values.function)) {
+    return { bit_index: null, enum_value: null };
+  }
+  if ((values.bool_mode ?? getModbusBoolMode(values)) === 'enum') {
+    return { bit_index: null, enum_value: values.enum_value ?? null };
+  }
+  return { bit_index: values.bit_index ?? null, enum_value: null };
+}
+
+export function getModbusBoolFieldError(
+  values: Pick<ModbusPointFormValues, 'function' | 'data_type' | 'reg_count' | 'bit_index' | 'enum_value' | 'bool_mode'>,
+): string | null {
+  if (values.data_type !== MODBUS_DATA_TYPE.BOOL || !isExplicitReadFunction(values.function)) return null;
+  const mode = values.bool_mode ?? getModbusBoolMode(values);
+  const value = mode === 'enum' ? values.enum_value : values.bit_index;
+  const maximum = mode === 'enum' ? (values.reg_count === 2 ? 4294967295 : 65535) : values.reg_count * 16 - 1;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > maximum) {
+    return `${mode === 'enum' ? '相等值' : '位索引'}必须是 0 到 ${maximum} 的整数`;
+  }
+  return null;
+}
+
+export function formatModbusBoolSource(point: ModbusBoolFields): string {
+  if (point.enum_value != null) return `相等值 ${point.enum_value}`;
+  return point.bit_index != null ? `位 ${point.bit_index}` : '-';
 }
 
 export function createDefaultModbusPoint(addressBase?: number): ModbusPointFormValues {

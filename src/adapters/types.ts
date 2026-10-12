@@ -594,6 +594,8 @@ export interface ModbusPoint {
   word_order: number;
   byte_order: number;
   bit_index: number | null;
+  /** 寄存器 BOOL 的整字相等值；与 bit_index 互斥，省略时兼容旧位解析配置。 */
+  enum_value?: number | null;
 }
 
 export interface ModbusPointTable {

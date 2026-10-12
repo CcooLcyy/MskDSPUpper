@@ -48,6 +48,7 @@ struct Point {
     word_order: String,
     byte_order: String,
     bit_index: Option<u32>,
+    enum_value: Option<u32>,
     source_page: u32,
     description: String,
     default_selected: Option<bool>,
@@ -176,6 +177,15 @@ pub(crate) fn validate_template(value: &Value) -> Result<(), String> {
         };
         if !type_count
             || !function_type
+            || point
+                .enum_value
+                .map(|value| {
+                    point.data_type != "BOOL"
+                        || !matches!(point.function_code, 3 | 4)
+                        || point.bit_index.is_some()
+                        || (point.reg_count == 1 && value > 65535)
+                })
+                .unwrap_or(false)
             || point.address < item.address_base
             || point.address as u64 + point.reg_count as u64 > 65536 + item.address_base as u64
             || point
@@ -346,6 +356,33 @@ mod tests {
             count += 1;
         }
         assert!(count > 0);
+    }
+
+    // 枚举0是有效配置；仅只读寄存器BOOL允许等值选择器，不能同时配置bit。
+    #[test]
+    fn validates_enum_selector_and_boundaries() {
+        let mut good = template();
+        good["points"][0]["data_type"] = json!("BOOL");
+        good["points"][0]["function_code"] = json!(4);
+        good["points"][0]["enum_value"] = json!(0);
+        validate_template(&good).unwrap();
+        for (field, value) in [
+            ("bit_index", json!(0)),
+            ("data_type", json!("UINT16")),
+            ("function_code", json!(6)),
+            ("enum_value", json!(65536)),
+            ("enum_value", json!(-1)),
+            ("enum_value", json!(0.5)),
+        ] {
+            let mut invalid = good.clone();
+            invalid["points"][0][field] = value;
+            assert!(validate_template(&invalid).is_err(), "{field}");
+        }
+        good["points"][0]["reg_count"] = json!(2);
+        good["points"][0]["enum_value"] = json!(u32::MAX);
+        validate_template(&good).unwrap();
+        good["points"][0]["enum_value"] = json!(4294967296_u64);
+        assert!(validate_template(&good).is_err());
     }
 
     // 导出损坏内容时保持旧文件，正确导出保留十进制原文。

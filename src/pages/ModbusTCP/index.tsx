@@ -26,6 +26,9 @@ import {
   MODBUS_DATA_TYPE,
   MODBUS_FUNCTION,
   createDefaultModbusPoint,
+  createModbusBoolFields,
+  getModbusBoolFieldError,
+  getModbusBoolMode,
   getAllowedDataTypes,
   getAllowedRegCountsForFunction,
   getDefaultRegCount,
@@ -141,6 +144,7 @@ const ModbusTCP: React.FC = () => {
   const pointTag = Form.useWatch('tag', pointForm);
   const pointDataType = Form.useWatch('data_type', pointForm);
   const pointRegCount = Form.useWatch('reg_count', pointForm);
+  const pointBoolMode = Form.useWatch('bool_mode', pointForm) ?? 'bit';
   const pointAddressBase = Form.useWatch('address_base', pointForm);
   const isRegisterBoolPoint = pointDataType === MODBUS_DATA_TYPE.BOOL
     && (pointFunction === MODBUS_FUNCTION.READ_HOLDING_REGISTERS
@@ -530,6 +534,8 @@ const ModbusTCP: React.FC = () => {
     pointForm.resetFields();
     pointForm.setFieldsValue({
       ...createDefaultModbusPoint(selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO),
+      bool_mode: 'bit',
+      enum_value: null,
       address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
     });
     setPointModalOpen(true);
@@ -546,6 +552,8 @@ const ModbusTCP: React.FC = () => {
       offset: resolveModbusPointDecimalText(point, 'offset'),
       deadband: resolveModbusPointDecimalText(point, 'deadband'),
       bit_index: point.bit_index ?? null,
+      enum_value: point.enum_value ?? null,
+      bool_mode: getModbusBoolMode(point),
       address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
     });
     setPointModalOpen(true);
@@ -567,6 +575,8 @@ const ModbusTCP: React.FC = () => {
       offset: resolveModbusPointDecimalText(point, 'offset'),
       deadband: resolveModbusPointDecimalText(point, 'deadband'),
       bit_index: point.bit_index ?? null,
+      enum_value: point.enum_value ?? null,
+      bool_mode: getModbusBoolMode(point),
       address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
     });
     setPointModalOpen(true);
@@ -590,6 +600,11 @@ const ModbusTCP: React.FC = () => {
     try {
       values = await pointForm.validateFields();
     } catch {
+      return;
+    }
+    const boolError = getModbusBoolFieldError(values);
+    if (boolError) {
+      messageApi.error(boolError);
       return;
     }
     if (!getAllowedDataTypes(values.function).includes(values.data_type)
@@ -617,11 +632,7 @@ const ModbusTCP: React.FC = () => {
       reg_count: values.reg_count ?? getDefaultRegCount(values.data_type) ?? 1,
       word_order: values.word_order ?? 0,
       byte_order: values.byte_order ?? 0,
-      bit_index: values.data_type === MODBUS_DATA_TYPE.BOOL
-        && (values.function === MODBUS_FUNCTION.READ_HOLDING_REGISTERS
-          || values.function === MODBUS_FUNCTION.READ_INPUT_REGISTERS)
-        ? (values.bit_index ?? null)
-        : null,
+      ...createModbusBoolFields(values),
     };
     const nextPoints = editingPointIndex === null
       ? [...points, nextPoint]
@@ -930,7 +941,11 @@ const ModbusTCP: React.FC = () => {
                     reg_count: getAllowedRegCountsForFunction(value, nextType)[0]
                       ?? getDefaultRegCount(nextType)
                       ?? 1,
-                    bit_index: registerBool ? (pointForm.getFieldValue('bit_index') ?? 0) : null,
+                    bit_index: registerBool && pointForm.getFieldValue('bool_mode') !== 'enum'
+                      ? (pointForm.getFieldValue('bit_index') ?? 0) : null,
+                    enum_value: registerBool && pointForm.getFieldValue('bool_mode') === 'enum'
+                      ? (pointForm.getFieldValue('enum_value') ?? 0) : null,
+                    bool_mode: registerBool ? (pointForm.getFieldValue('bool_mode') ?? 'bit') : 'bit',
                   });
                 }}
               />
@@ -961,6 +976,8 @@ const ModbusTCP: React.FC = () => {
                       ?? getDefaultRegCount(value)
                       ?? 1,
                     bit_index: registerBool ? 0 : null,
+                    enum_value: null,
+                    bool_mode: 'bit',
                   });
                 }}
               />
@@ -972,11 +989,42 @@ const ModbusTCP: React.FC = () => {
             </Form.Item>
           </Col>
           {isRegisterBoolPoint ? (
-            <Col xs={24} sm={12} lg={8}>
-              <Form.Item label="位索引" tooltip={PARAMETER_HELP.modbus.bitIndex} name="bit_index" rules={[{ required: true, message: '请输入位索引' }]}>
-                <InputNumber min={0} max={pointBitMax} precision={0} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
+            <>
+              <Col xs={24} sm={12} lg={8}>
+                <Form.Item label="BOOL 解析" name="bool_mode">
+                  <Select
+                    options={[{ value: 'bit', label: '位索引' }, { value: 'enum', label: '整字相等值' }]}
+                    onChange={(mode: 'bit' | 'enum') => pointForm.setFieldsValue({
+                      bit_index: mode === 'bit' ? 0 : null,
+                      enum_value: mode === 'enum' ? 0 : null,
+                    })}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12} lg={8}>
+                {pointBoolMode === 'enum' ? (
+                  <Form.Item label="相等值" tooltip="寄存器整字与此值相等时为 true，否则为 false。" name="enum_value" rules={[{ required: true, message: '请输入相等值' }]}>
+                    <InputNumber min={0} max={pointRegCount === 2 ? 4294967295 : 65535} precision={0} style={{ width: '100%' }} />
+                  </Form.Item>
+                ) : (
+                  <Form.Item label="位索引" tooltip={PARAMETER_HELP.modbus.bitIndex} name="bit_index" rules={[{ required: true, message: '请输入位索引' }]}>
+                    <InputNumber min={0} max={pointBitMax} precision={0} style={{ width: '100%' }} />
+                  </Form.Item>
+                )}
+              </Col>
+              {pointRegCount === 2 ? (
+                <Col xs={24} sm={12} lg={8}>
+                  <Form.Item label="字序" tooltip={PARAMETER_HELP.modbus.wordOrder} name="word_order">
+                    <Select options={WORD_ORDER_OPTIONS} />
+                  </Form.Item>
+                </Col>
+              ) : null}
+              <Col xs={24} sm={12} lg={8}>
+                <Form.Item label="字节序" tooltip={PARAMETER_HELP.modbus.byteOrder} name="byte_order">
+                  <Select options={BYTE_ORDER_OPTIONS} />
+                </Form.Item>
+              </Col>
+            </>
           ) : null}
         </Row>
         {pointDataType !== MODBUS_DATA_TYPE.BOOL ? (
