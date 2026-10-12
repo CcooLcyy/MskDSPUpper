@@ -153,10 +153,15 @@ test('control group save reports route failure after the group was saved', async
   );
 });
 
-// 验证 AGC 采用组内成员编辑，选点自动绑定，并继续提供总控输入和派生输出映射。
-test('AGC integrates inline members and automatic routing with unified group mappings', () => {
+// 验证 AGC 使用独立成员弹窗确认草稿，选点自动绑定，并继续提供总控与派生输出映射。
+test('AGC integrates member dialog drafts and automatic routing with unified group mappings', () => {
   assert.match(agcSource, /<AgcMemberEditor\b/);
-  assert.doesNotMatch(agcSource, /createMemberRoutes|control-member-modal/);
+  assert.match(agcSource, /className="control-config-modal control-member-modal agc-member-modal"/);
+  assert.match(agcSource, /<\/Form>\s*<\/Modal>\s*<Modal\s+title=\{editingMemberIndex/);
+  assert.match(agcSource, /open=\{memberEditorOpen && groupModalOpen\}/);
+  assert.match(agcSource, /okText="确认成员"/);
+  assert.match(agcSource, /cancelText="取消编辑"/);
+  assert.doesNotMatch(agcSource, /createMemberRoutes/);
   assert.match(agcSource, /保存控制组并建立路由/);
   assert.doesNotMatch(agcSource, /从数据总线点位回填 p_cmd/);
   assert.match(agcSource, /useControlMappings\('AGC', memberEditorOpen\)/);
@@ -184,7 +189,7 @@ test('AGC preserves drafts and route retry plans and shows runtime freshness', (
 });
 
 // 验证 AGC 使用经纯逻辑回归覆盖的信号与绑定规则，组配置保存后增量提交路由。
-test('AGC saves inline member bindings through the tested mapping plan', () => {
+test('AGC saves confirmed member bindings through the tested mapping plan', () => {
   assert.match(agcSource, /buildAgcMemberSignals\(/);
   assert.match(agcSource, /buildAgcMemberBindingEdits\(/);
   assert.match(agcSource, /mappings\.plan\(/);
@@ -196,12 +201,12 @@ test('AGC saves inline member bindings through the tested mapping plan', () => {
   assert.match(agcSource, /控制组已保存，路由创建失败/);
 });
 
-// 验证组内成员编辑只暴露选点与业务参数，移除第二次工程量换算和手填内部点名。
-test('AGC inline editor selects existing points without signal conversion inputs', () => {
+// 验证成员弹窗内容只暴露选点与业务参数，确认与取消统一由弹窗提供。
+test('AGC member dialog content selects existing points without signal conversion inputs', () => {
   const source = readFileSync(new URL('../../src/components/control/AgcMemberEditor.tsx', import.meta.url), 'utf8');
   assert.match(source, /className="agc-member-editor"/);
-  assert.match(source, /完成成员编辑/);
-  assert.match(source, /取消编辑/);
+  assert.match(agcSource, /确认后返回成员列表，保存控制组时下发成员与路由/);
+  assert.doesNotMatch(source, /完成成员编辑|取消编辑|scrollIntoView/);
   assert.doesNotMatch(source, /<Modal\b|<Checkbox\b/);
   assert.doesNotMatch(source, /name=\{\[['"]p_(?:meas|set)['"][^}]*['"](?:tag|unit|scale(?:_decimal)?|offset(?:_decimal)?)['"]/);
 });

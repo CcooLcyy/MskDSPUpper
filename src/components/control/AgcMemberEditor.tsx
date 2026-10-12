@@ -1,6 +1,5 @@
-import { Alert, Button, Form, Input, InputNumber, Select, Space, Typography } from 'antd';
+import { Alert, Button, Form, Input, InputNumber, Select, Typography } from 'antd';
 import type { FormInstance } from 'antd';
-import { useEffect, useRef } from 'react';
 import type { AgcMemberConfig, DcEndpoint } from '../../adapters';
 import { PARAMETER_HELP } from '../help/parameter-help';
 import { controlEndpointKey } from '../../utils/control-mapping-editor';
@@ -9,13 +8,12 @@ import type { ControlAllocationMode } from '../../utils/control-allocation';
 
 type PointOption = { value: string; label: string; endpoint: DcEndpoint };
 
-/** 在控制组内选择成员的已有点位，协议点表负责工程量和读写配置。 */
+/** 在成员弹窗中选择已有点位，协议点表负责工程量和读写配置。 */
 export default function AgcMemberEditor({
-  form, editing, allocationMode, options, endpoints, loading, error, warning, submitting,
-  validateDecimal, onDirty, onSelect, onCancel, onSubmit, onRefresh,
+  form, allocationMode, options, endpoints, loading, error, warning, submitting,
+  validateDecimal, onDirty, onSelect, onRefresh,
 }: {
   form: FormInstance<AgcMemberConfig>;
-  editing: boolean;
   allocationMode: ControlAllocationMode;
   options: PointOption[];
   endpoints: AgcMemberEndpoints;
@@ -26,14 +24,8 @@ export default function AgcMemberEditor({
   validateDecimal: (value: unknown, label: string, range?: 'any' | 'nonnegative' | 'positive') => void;
   onDirty: () => void;
   onSelect: (kind: AgcMemberPointKind, endpoints: DcEndpoint[]) => void;
-  onCancel: () => void;
-  onSubmit: () => void;
   onRefresh: () => void;
 }) {
-  const editorRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    editorRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  }, []);
   const controllable = Form.useWatch('controllable', form) ?? true;
   const name = Form.useWatch('member_name', form) || '成员';
   const mode = Form.useWatch(['p_set', 'mode'], form) ?? 1;
@@ -66,9 +58,9 @@ export default function AgcMemberEditor({
         : `${name} 控制输出 → ${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag}`}
     </div>
   ));
-  return <div className="agc-member-editor" ref={editorRef}>
+  return <div className="agc-member-editor">
     <div className="agc-member-editor__heading">
-      <Typography.Text strong>{editing ? '编辑成员' : '添加成员'}</Typography.Text>
+      <Typography.Text strong>成员信息</Typography.Text>
       <Button size="small" loading={loading} onClick={onRefresh} disabled={submitting}>刷新已有点位</Button>
     </div>
     {error && <Alert type="error" showIcon title={error} description="点位与映射读取失败，请刷新后再保存。" />}
@@ -127,11 +119,6 @@ export default function AgcMemberEditor({
         {routeLine('p_meas', true)}
         {controllable && routeLine('p_set', false)}
         {controllable && mode === 2 && deltaBase === 3 && routeLine('base_tag', true)}
-      </div>
-      <div className="agc-member-editor__footer">
-        <Typography.Text type="secondary">最终保存时会一并保存当前编辑的成员</Typography.Text>
-        <Space><Button onClick={onCancel} disabled={submitting}>取消编辑</Button>
-          <Button type="primary" onClick={onSubmit} loading={submitting} disabled={loading || Boolean(error)}>完成成员编辑</Button></Space>
       </div>
     </Form>
   </div>;

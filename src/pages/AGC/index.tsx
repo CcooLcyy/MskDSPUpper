@@ -760,7 +760,7 @@ const AGC: React.FC = () => {
   }, [groupForm, mappings, messageApi, pendingRouteError, selectedGroup]);
 
   const closeGroupDraft = () => {
-    if (groupSubmitting) return;
+    if (groupSubmitting || memberEditorOpen) return;
     if (!groupDirty && !memberDirty && !mappings.changed) {
       setGroupModalOpen(false);
       return;
@@ -778,7 +778,7 @@ const AGC: React.FC = () => {
   };
 
   const closeMemberDraft = () => {
-    if (memberSubmitting) return;
+    if (memberSubmitting || groupSubmitting) return;
     if (!memberDirty) {
       setMemberEditorOpen(false);
       return;
@@ -1046,7 +1046,7 @@ const AGC: React.FC = () => {
     memberForm.resetFields();
     memberForm.setFieldsValue(cloneMember(DEFAULT_MEMBER));
     setMemberEditorOpen(true);
-    console.info('AGC 组内新增成员编辑已打开');
+    console.info('AGC 添加成员弹窗已打开');
   });
 
   const openEditMember = (index: number) => switchMemberEditor(() => {
@@ -1067,7 +1067,7 @@ const AGC: React.FC = () => {
     memberForm.resetFields();
     memberForm.setFieldsValue(cloneMember(member));
     setMemberEditorOpen(true);
-    console.info('AGC 组内成员编辑已打开', { 成员: member.member_name });
+    console.info('AGC 编辑成员弹窗已打开', { 成员: member.member_name });
   });
 
   const handleMemberSubmit = async (): Promise<{ members: AgcMemberConfig[]; fields: ControlMappingField[] } | null> => {
@@ -1141,10 +1141,10 @@ const AGC: React.FC = () => {
       setGroupDirty(true);
       setMemberDirty(false);
       setMemberEditorOpen(false);
-      console.info('AGC 成员组内编辑已完成', { 成员: name, 明确修改绑定数量: Object.keys(edits).length });
+      console.info('AGC 成员弹窗确认完成，已加入控制组草稿', { 成员: name, 明确修改绑定数量: Object.keys(edits).length });
       return { members: nextMembers, fields };
     } catch (error) {
-      console.error('AGC 成员组内编辑保存失败', { 错误: error });
+      console.error('AGC 成员弹窗确认失败', { 错误: error });
       messageApi.error(`成员编辑失败: ${error instanceof Error ? error.message : '请检查成员必填项'}`);
       return null;
     } finally {
@@ -2034,10 +2034,10 @@ const AGC: React.FC = () => {
         okText="保存控制组并建立路由"
         cancelText="取消"
         confirmLoading={groupSubmitting}
-        okButtonProps={{ disabled: memberSubmitting || mappings.loading || !!mappings.error || !!pendingRouteError }}
-        maskClosable={!groupSubmitting}
-        closable={!groupSubmitting}
-        keyboard={!groupSubmitting}
+        okButtonProps={{ disabled: memberEditorOpen || memberSubmitting || mappings.loading || !!mappings.error || !!pendingRouteError }}
+        maskClosable={!groupSubmitting && !memberEditorOpen}
+        closable={!groupSubmitting && !memberEditorOpen}
+        keyboard={!groupSubmitting && !memberEditorOpen}
         width={1100}
         centered
         className="control-config-modal control-group-modal"
@@ -2285,19 +2285,42 @@ const AGC: React.FC = () => {
               scroll={{ x: 1345, y: 280 }}
               locale={{ emptyText: '暂无成员，请添加' }}
             />
-            {memberEditorOpen && <AgcMemberEditor
-              key={editingMemberIndex ?? 'new'}
-              form={memberForm} editing={editingMemberIndex !== null} allocationMode={allocationMode}
-              options={memberPointOptions} endpoints={memberEndpoints}
-              loading={mappings.loading} error={mappings.error} warning={mappings.warning}
-              submitting={memberSubmitting || groupSubmitting}
-              validateDecimal={validateAgcDecimal} onDirty={() => setMemberDirty(true)}
-              onSelect={handleSelectMemberEndpoint} onCancel={closeMemberDraft}
-              onSubmit={() => void handleMemberSubmit()} onRefresh={() => void mappings.refresh()}
-            />}
           </Card>
           <ControlMappingsEditor mapping={mappings} fields={mappingFields} groupName={watchedGroup?.group_name ?? ''} />
         </Form>
+      </Modal>
+
+      <Modal
+        title={editingMemberIndex === null ? '添加成员' : '编辑成员'}
+        open={memberEditorOpen && groupModalOpen}
+        onOk={() => void handleMemberSubmit()}
+        onCancel={closeMemberDraft}
+        okText="确认成员"
+        cancelText="取消编辑"
+        confirmLoading={memberSubmitting}
+        okButtonProps={{ disabled: groupSubmitting || mappings.loading || !!mappings.error }}
+        cancelButtonProps={{ disabled: memberSubmitting || groupSubmitting }}
+        mask={{ closable: false }}
+        closable={!memberSubmitting && !groupSubmitting}
+        keyboard={!memberSubmitting && !groupSubmitting}
+        width={820}
+        centered
+        className="control-config-modal control-member-modal agc-member-modal"
+        destroyOnHidden
+        footer={(_origin, { OkBtn, CancelBtn }) => <div className="agc-member-modal__footer">
+          <Typography.Text type="secondary">确认后返回成员列表，保存控制组时下发成员与路由</Typography.Text>
+          <Space><CancelBtn /><OkBtn /></Space>
+        </div>}
+      >
+        <AgcMemberEditor
+          key={editingMemberIndex ?? 'new'}
+          form={memberForm} allocationMode={allocationMode}
+          options={memberPointOptions} endpoints={memberEndpoints}
+          loading={mappings.loading} error={mappings.error} warning={mappings.warning}
+          submitting={memberSubmitting || groupSubmitting}
+          validateDecimal={validateAgcDecimal} onDirty={() => setMemberDirty(true)}
+          onSelect={handleSelectMemberEndpoint} onRefresh={() => void mappings.refresh()}
+        />
       </Modal>
 
     </div>

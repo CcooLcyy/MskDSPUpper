@@ -201,13 +201,8 @@
   overflow-x: auto;
 }
 
-.control-config-modal .agc-member-editor {
-  padding: 18px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-
 .agc-member-editor__heading,
-.agc-member-editor__footer {
+.agc-member-modal__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -264,9 +259,8 @@
   overflow-wrap: anywhere;
 }
 
-.agc-member-editor__footer {
-  padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+.agc-member-modal__footer {
+  text-align: left;
 }
 
 @media (max-width: 760px) {
@@ -331,13 +325,9 @@
   }
 
   .agc-member-editor__heading,
-  .agc-member-editor__footer {
+  .agc-member-modal__footer {
     align-items: flex-start;
     flex-wrap: wrap;
-  }
-
-  .control-config-modal .agc-member-editor {
-    padding: 12px;
   }
 
   .control-config-modal .ant-form > div[style*="display: flex"] > div,
