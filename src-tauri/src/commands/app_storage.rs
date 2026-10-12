@@ -16,6 +16,7 @@ use crate::{runtime_paths::RuntimePathsDto, state::AppState};
 const SETTINGS_SCHEMA_VERSION: u32 = 1;
 pub const MANAGER_ADDR_KEY: &str = "mskdsp_manager_addr";
 pub const MODBUS_MQTT_KEY: &str = "protocol.modbus_rtu.mqtt";
+pub const MODBUS_TEMPLATES_KEY: &str = "protocol.modbus.templates.personal";
 pub const DLT645_MQTT_KEY: &str = "protocol.dlt645.mqtt";
 /// 离线工作区：上次使用的运行模式（online / offline）。
 pub const APP_MODE_KEY: &str = "mskdsp_app_mode";
@@ -127,6 +128,7 @@ fn validate_setting_key(key: &str) -> Result<(), String> {
     match key {
         MANAGER_ADDR_KEY
         | MODBUS_MQTT_KEY
+        | MODBUS_TEMPLATES_KEY
         | DLT645_MQTT_KEY
         | APP_MODE_KEY
         | LAST_WORKSPACE_KEY
@@ -218,12 +220,12 @@ fn write_settings_document(path: &Path, document: &SettingsDocument) -> Result<(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+pub(super) fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::rename(source, destination)
 }
 
 #[cfg(target_os = "windows")]
-fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+pub(super) fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -254,6 +256,10 @@ fn backup_path(path: &Path) -> PathBuf {
 }
 
 fn sanitize_setting_for_disk(key: &str, mut value: Value) -> Result<Value, String> {
+    if key == MODBUS_TEMPLATES_KEY {
+        super::modbus_templates::validate_personal_templates(&value)?;
+        return Ok(value);
+    }
     if key == LOWER_UPDATE_CONNECTION_HISTORY_KEY {
         let history: Vec<super::lower_update::LowerUpdateConnectionSettingsDto> =
             serde_json::from_value(value)
@@ -407,6 +413,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root.join("settings.json")
+    }
+
+    // 个人点表模板经设置白名单持久化，损坏目录不覆盖原文件。
+    #[test]
+    fn persists_personal_templates_and_rejects_invalid_directory_atomically() {
+        let path = temp_settings_path("modbus-templates");
+        let store = AppSettingsStore::new(path.clone());
+        store.save_setting(super::MODBUS_TEMPLATES_KEY.into(), json!([])).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(store.save_setting(super::MODBUS_TEMPLATES_KEY.into(), json!({"points": []})).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(store.load().unwrap()[super::MODBUS_TEMPLATES_KEY], json!([]));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     // 批量更新中任一项校验失败时，整个设置文件保持原有内容。

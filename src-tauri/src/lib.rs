@@ -73,6 +73,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_storage::load_app_settings,
             commands::app_storage::save_app_setting,
+            commands::modbus_templates::save_modbus_template_export,
             commands::app_storage::migrate_legacy_app_settings,
             commands::app_storage::get_runtime_paths,
             commands::app_storage::open_runtime_directory,

@@ -23,6 +23,7 @@ import {
   EyeInvisibleOutlined,
   EyeOutlined,
   FilterOutlined,
+  FolderOpenOutlined,
   PlusOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
@@ -95,6 +96,7 @@ interface Props {
   onReadPlanSave: (readPlan: ModbusReadPlan) => Promise<boolean>;
   onReadPlanDirtyChange?: (dirty: boolean) => void;
   onAdd: () => void;
+  onApplyTemplate?: () => void;
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
   onDelete: (index: number) => void;
@@ -117,6 +119,7 @@ const PointTable: React.FC<Props> = ({
   onReadPlanSave,
   onReadPlanDirtyChange,
   onAdd,
+  onApplyTemplate,
   onEdit,
   onCopy,
   onDelete,
@@ -563,6 +566,7 @@ const PointTable: React.FC<Props> = ({
     ) : (
       <Space direction="vertical" size={6}>
         <Text type="secondary">暂无点位</Text>
+        {onApplyTemplate && <Button type="primary" size="small" icon={<FolderOpenOutlined />} disabled={actionsDisabled} onClick={onApplyTemplate}>从模板添加点位</Button>}
         <Button type="primary" size="small" icon={<PlusOutlined />} disabled={actionsDisabled} onClick={onAdd}>
           添加第一点位
         </Button>
@@ -645,6 +649,7 @@ const PointTable: React.FC<Props> = ({
               删除全部点位
             </Button>
           </Popconfirm>
+          {onApplyTemplate && <Button size="small" icon={<FolderOpenOutlined />} disabled={!selectedConn || actionsDisabled} onClick={onApplyTemplate}>应用模板</Button>}
           <Button
             type="primary"
             size="small"

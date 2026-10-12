@@ -19,6 +19,8 @@ import {
   type RuntimeOperationResult,
 } from '../../utils/runtime-restart';
 import PointTable from '../ModbusRTU/components/PointTable';
+import TemplateModal from '../../features/modbus-templates/TemplateModal';
+import { saveTemplatePoints } from '../../features/modbus-templates/save-template';
 import {
   MODBUS_ADDRESS_BASE,
   MODBUS_DATA_TYPE,
@@ -112,6 +114,7 @@ const ModbusTCP: React.FC = () => {
   const [editingLink, setEditingLink] = useState<ModbusTcpLinkConfig | null>(null);
   const [linkSubmitting, setLinkSubmitting] = useState(false);
   const [pointModalOpen, setPointModalOpen] = useState(false);
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [editingPointIndex, setEditingPointIndex] = useState<number | null>(null);
   const [pointSubmitting, setPointSubmitting] = useState(false);
   const [runtimeAction, setRuntimeAction] = useState<'start' | 'stop' | null>(null);
@@ -160,7 +163,8 @@ const ModbusTCP: React.FC = () => {
     || runtimeAction !== null
     || linkMutation !== null
     || linkModalOpen
-    || pointModalOpen;
+    || pointModalOpen
+    || templateModalOpen;
 
   const refreshLinks = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -232,7 +236,7 @@ const ModbusTCP: React.FC = () => {
 
   const runSelectedLinkStopped = useCallback(async (
     operation: () => Promise<void>,
-    options?: { originalConnName?: string; restartConnName?: string; restartAfterRun?: boolean },
+    options?: { originalConnName?: string; restartConnName?: string; restartAfterRun?: boolean; initialState?: number | null },
   ): Promise<RuntimeOperationResult> => {
     if (!selectedConn) {
       await operation();
@@ -246,7 +250,7 @@ const ModbusTCP: React.FC = () => {
     const originalConnName = options?.originalConnName ?? selectedConn;
     const restartConnName = options?.restartConnName ?? originalConnName;
     return runWithRuntimeRestart({
-      initialState: selectedLink?.state ?? null,
+      initialState: options?.initialState ?? selectedLink?.state ?? null,
       loadState: () => getLinkState(originalConnName),
       stop: () => api.modbusTcpStopLink(originalConnName),
       run: operation,
@@ -269,10 +273,12 @@ const ModbusTCP: React.FC = () => {
         restartError: null,
       };
     }
-    const originallyRunning = selectedLink?.state === 2;
+    // 保存时复读真实状态，避免旧页面状态将外部已启动的连接错误保持停止。
+    const initialState = await getLinkState(selectedConn);
+    const originallyRunning = initialState === 2;
     const result = await runSelectedLinkStopped(
       () => api.modbusTcpUpsertPointTable(selectedConn, nextPoints, true),
-      { restartAfterRun: originallyRunning && restartAfterRun && nextPoints.length > 0 },
+      { initialState, restartAfterRun: originallyRunning && restartAfterRun && nextPoints.length > 0 },
     );
 
     if (!originallyRunning) {
@@ -285,7 +291,7 @@ const ModbusTCP: React.FC = () => {
       }
     }
     return result;
-  }, [getLinkState, messageApi, runSelectedLinkStopped, selectedConn, selectedLink?.state]);
+  }, [getLinkState, messageApi, runSelectedLinkStopped, selectedConn]);
 
   const openCreateLink = useCallback(() => {
     setEditingLink(null);
@@ -655,6 +661,30 @@ const ModbusTCP: React.FC = () => {
       setPointSubmitting(false);
     }
   }, [messageApi, pointSubmitting, points, refreshLinks, savePointTablePreservingRuntime, selectedConn]);
+
+  const handleTemplateApply = async (additions: ModbusPoint[]): Promise<boolean> => {
+    if (!selectedConn || pointSubmitting) return false;
+    setPointSubmitting(true);
+    try {
+      const saved = await saveTemplatePoints({ expected: points, additions,
+        verifyConnection: async () => {
+          const latest = await api.modbusTcpGetLink(selectedConn);
+          if (latest.config?.address_base !== selectedLink?.config?.address_base) {
+            await refreshLinks({ silent: true });
+            throw new Error('连接地址基准已变化，请重新核对模板地址后添加');
+          }
+        },
+        read: async () => (await api.modbusTcpGetPointTable(selectedConn)).points,
+        save: (nextPoints) => savePointTablePreservingRuntime(nextPoints), onChanged: setPoints,
+      });
+      setPoints(saved.points);
+      messageApi.success(`模板已应用，添加 ${additions.length} 个点位`);
+      if (saved.result.restartError) messageApi.warning(`点表已保存，但重新启动连接失败：${formatErrorText(saved.result.restartError)}`);
+      await refreshLinks({ silent: true });
+      return true;
+    } catch (error) { console.error('Modbus TCP 应用模板失败', error); messageApi.error(`应用模板失败：${String(error)}`); return false; }
+    finally { setPointSubmitting(false); }
+  };
 
   const handleDeleteAllPoints = useCallback(async () => {
     if (!selectedConn || pointSubmitting) {
@@ -1077,6 +1107,7 @@ const ModbusTCP: React.FC = () => {
             showReadPlan={false}
             onReadPlanSave={async () => false}
             onAdd={openCreatePoint}
+            onApplyTemplate={() => setTemplateModalOpen(true)}
             onEdit={openEditPoint}
             onCopy={openCopyPoint}
             onDelete={(index) => void handleDeletePoint(index)}
@@ -1096,6 +1127,9 @@ const ModbusTCP: React.FC = () => {
 
       {renderLinkModal()}
       {renderPointModal()}
+      {selectedConn && <TemplateModal key={selectedConn} open={templateModalOpen} connectionName={selectedConn} protocol="TCP"
+        addressBase={selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO} existingPoints={points} busy={pointSubmitting}
+        onClose={() => setTemplateModalOpen(false)} onApply={handleTemplateApply} />}
     </div>
   );
 };

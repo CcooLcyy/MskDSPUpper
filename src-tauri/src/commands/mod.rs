@@ -12,5 +12,6 @@ pub mod lower_update;
 mod lower_update_runtime;
 pub mod modbus_rtu;
 pub mod modbus_tcp;
+pub mod modbus_templates;
 pub mod module_ops;
 pub mod workspace;
