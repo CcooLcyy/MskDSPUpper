@@ -153,13 +153,13 @@ test('control group save reports route failure after the group was saved', async
   );
 });
 
-// 验证 AGC 保留成员快速选点，并提供总控输入和派生输出统一映射编辑。
-test('AGC exposes unified group mappings and retains opt-in member routing', () => {
-  assert.match(agcSource, /const \[createMemberRoutes, setCreateMemberRoutes\] = useState\(false\)/);
-  assert.match(agcSource, /保存控制组时自动创建 DataCenter 路由/);
+// 验证 AGC 采用组内成员编辑，选点自动绑定，并继续提供总控输入和派生输出映射。
+test('AGC integrates inline members and automatic routing with unified group mappings', () => {
+  assert.match(agcSource, /<AgcMemberEditor\b/);
+  assert.doesNotMatch(agcSource, /createMemberRoutes|control-member-modal/);
+  assert.match(agcSource, /保存控制组并建立路由/);
   assert.doesNotMatch(agcSource, /从数据总线点位回填 p_cmd/);
-  assert.match(agcSource, /moduleName: connection\.module_name/);
-  assert.match(agcSource, /useControlMappings\('AGC'\)/);
+  assert.match(agcSource, /useControlMappings\('AGC', memberEditorOpen\)/);
   assert.match(agcSource, /<ControlMappingsEditor mapping=\{mappings\} fields=\{mappingFields\}/);
   assert.match(agcSource, /p_cmd\.base_tag/);
   assert.match(agcSource, /config\.outputs\?\.p_total_meas\?\.tag, 'output'/);
@@ -169,11 +169,10 @@ test('AGC exposes unified group mappings and retains opt-in member routing', () 
 
 // 验证 AGC 的草稿保护、端点读取错误和路由部分成功重试入口接入。
 test('AGC preserves drafts and route retry plans and shows runtime freshness', () => {
-  assert.match(agcSource, /okText="暂存成员"/);
   assert.match(agcSource, /modalApi\.confirm\(/);
-  assert.match(agcSource, /仍需保存控制组/);
+  assert.match(agcSource, /未[暂保]存的成员改动|未完成的成员编辑/);
   assert.match(agcSource, /保存时会先停止控制组，保存后恢复运行/);
-  assert.match(agcSource, /setDataBusEndpointError\(errorText\)/);
+  assert.match(agcSource, /error=\{mappings\.error\}/);
   assert.match(agcSource, /setPendingRouteError\(routeSaveError\)/);
   assert.match(agcSource, /<ControlRouteRetry error=\{pendingRouteError\}/);
   assert.match(agcSource, /<ControlRuntimeStatus/);
@@ -184,17 +183,27 @@ test('AGC preserves drafts and route retry plans and shows runtime freshness', (
   assert.match(agcSource, /const handleDeleteGroup[\s\S]*if \(pendingRouteError\)/);
 });
 
-// 验证 AGC 成员量测/base_tag 为输入路由，p_set 为输出路由，并在组保存后增量提交。
-test('AGC auto routing maps member fields to the correct directions', () => {
-  assert.match(agcSource, /direction: 'input',[\s\S]*groupTag: member\.p_meas\.tag/);
-  assert.match(agcSource, /direction: 'output',[\s\S]*groupTag: member\.p_set\.signal\.tag/);
-  assert.match(agcSource, /direction: 'input',[\s\S]*groupTag: member\.p_set\.base_tag/);
-  assert.match(agcSource, /member\.controllable && routeDraft\.endpoints\.p_set/);
+// 验证 AGC 使用经纯逻辑回归覆盖的信号与绑定规则，组配置保存后增量提交路由。
+test('AGC saves inline member bindings through the tested mapping plan', () => {
+  assert.match(agcSource, /buildAgcMemberSignals\(/);
+  assert.match(agcSource, /buildAgcMemberBindingEdits\(/);
+  assert.match(agcSource, /mappings\.plan\(/);
+  assert.match(agcSource, /saveControlGroupWithOptionalRoutes\(/);
   assert.match(
     agcSource,
     /saveGroup: \(\) => api\.agcUpsertGroup\(config, createOnly\)[\s\S]*saveRoutes: \(nextRoutes\) => api\.dcUpsertRoutes\(nextRoutes, false\)/,
   );
   assert.match(agcSource, /控制组已保存，路由创建失败/);
+});
+
+// 验证组内成员编辑只暴露选点与业务参数，移除第二次工程量换算和手填内部点名。
+test('AGC inline editor selects existing points without signal conversion inputs', () => {
+  const source = readFileSync(new URL('../../src/components/control/AgcMemberEditor.tsx', import.meta.url), 'utf8');
+  assert.match(source, /className="agc-member-editor"/);
+  assert.match(source, /完成成员编辑/);
+  assert.match(source, /取消编辑/);
+  assert.doesNotMatch(source, /<Modal\b|<Checkbox\b/);
+  assert.doesNotMatch(source, /name=\{\[['"]p_(?:meas|set)['"][^}]*['"](?:tag|unit|scale(?:_decimal)?|offset(?:_decimal)?)['"]/);
 });
 
 // 验证 AVC 组级与成员级自动路由开关均默认关闭，并保留完整外部端点。

@@ -28,12 +28,12 @@ test('核心协议配置页接入参数提示', () => {
     ['../../src/pages/IEC104/index.tsx', 12],
     ['../../src/pages/ModbusRTU/components/MqttConfigPanel.tsx', 3],
     ['../../src/pages/DLT645/components/MqttConfigPanel.tsx', 3],
-    ['../../src/pages/AGC/index.tsx', 20],
+    [['../../src/pages/AGC/index.tsx', '../../src/components/control/AgcMemberEditor.tsx'], 20],
     ['../../src/pages/AVC/index.tsx', 20],
   ];
 
   for (const [path, minimumCount] of sourceExpectations) {
-    const source = read(path);
+    const source = Array.isArray(path) ? path.map(read).join('\n') : read(path);
     assert.match(source, /PARAMETER_HELP/);
     assert.ok(
       (source.match(/tooltip=\{PARAMETER_HELP\./g) ?? []).length >= minimumCount,

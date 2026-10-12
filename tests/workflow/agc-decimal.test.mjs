@@ -18,6 +18,7 @@ import {
 import { getDecimalTextError } from '../../src/utils/decimal-input.ts';
 
 const agcPageSource = readFileSync(new URL('../../src/pages/AGC/index.tsx', import.meta.url), 'utf8');
+const agcMemberEditorSource = readFileSync(new URL('../../src/components/control/AgcMemberEditor.tsx', import.meta.url), 'utf8');
 const agcRustSource = readFileSync(new URL('../../src-tauri/src/commands/agc.rs', import.meta.url), 'utf8');
 
 // 验证 AGC 工程量读取优先使用 decimal 原文，旧配置才回退 number 字段。
@@ -169,6 +170,7 @@ test('AGC decimal 输入严格拒绝空白和非有限文本', () => {
 
 // 验证 AGC 页面所有工程量输入使用字符串模式，而周期和时间字段继续使用 number。
 test('AGC 页面工程量表单使用 InputNumber stringMode', () => {
+  const formSource = `${agcPageSource}\n${agcMemberEditorSource}`;
   for (const field of [
     'scale_decimal',
     'offset_decimal',
@@ -180,10 +182,10 @@ test('AGC 页面工程量表单使用 InputNumber stringMode', () => {
     'target_upper_kw_decimal',
     'total_tolerance_kw_decimal',
   ]) {
-    assert.match(agcPageSource, new RegExp(`['\"]${field}['\"]`));
+    assert.match(formSource, new RegExp(`['\"]${field}['\"]`));
   }
-  assert.match(agcPageSource, /<InputNumber<string>[\s\S]{0,240}?stringMode/);
-  assert.ok((agcPageSource.match(/stringMode/g) ?? []).length >= 10);
+  assert.match(formSource, /<InputNumber<string>[\s\S]{0,240}?stringMode/);
+  assert.ok((formSource.match(/stringMode/g) ?? []).length >= 10);
   assert.match(agcPageSource, /name="total_time_minutes"[\s\S]{0,240}?<InputNumber min=\{1\}/);
 });
 

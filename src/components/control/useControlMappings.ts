@@ -6,7 +6,7 @@ import { buildControlMappingPlan, controlEndpointKey, controlMappingFieldKey, ge
 import type { ControlMappingField } from '../../utils/control-mapping-editor';
 import { formatErrorText } from '../../utils/runtime-restart';
 
-export default function useControlMappings(moduleName: 'AGC' | 'AVC') {
+export default function useControlMappings(moduleName: 'AGC' | 'AVC', preserveBaseline = false) {
   const [groupName, setGroupName] = useState('');
   const [routes, setRoutes] = useState<DcRoute[]>([]);
   const [options, setOptions] = useState<Array<{ value: string; label: string; endpoint: DcEndpoint }>>([]);
@@ -55,7 +55,7 @@ export default function useControlMappings(moduleName: 'AGC' | 'AVC') {
         console.warn('控制组部分外部点位加载失败', { 模块: moduleName, 控制组: nextGroupName, 失败数量: failures.length });
       }
       // 编辑期间刷新选项不扩大待删除基线，避免清理用户尚未看过的新路由。
-      if (reset || Object.keys(editedRef.current).length === 0) setRoutes(existingRoutes);
+      if (reset || (!preserveBaseline && Object.keys(editedRef.current).length === 0)) setRoutes(existingRoutes);
       initializedRef.current = true;
       console.info('控制组已有映射加载完成', { 模块: moduleName, 控制组: nextGroupName, 路由数量: existingRoutes.length });
     } catch (loadError) {
@@ -66,7 +66,7 @@ export default function useControlMappings(moduleName: 'AGC' | 'AVC') {
     } finally {
       if (request === requestRef.current) setLoading(false);
     }
-  }, [moduleName]);
+  }, [moduleName, preserveBaseline]);
 
   const open = useCallback(async (nextGroupName: string, connId?: number) => {
     console.info('打开控制组映射编辑', { 模块: moduleName, 控制组: nextGroupName, 连接编号: connId });
@@ -84,7 +84,8 @@ export default function useControlMappings(moduleName: 'AGC' | 'AVC') {
   };
   const plan = (fields: ControlMappingField[], bindings: ControlDataBusBinding[] = [], actualGroupName = groupName) => {
     if (loading || error || !initializedRef.current) throw new Error('请先完成已有映射加载，再保存控制组');
-    return buildControlMappingPlan({ moduleName, groupName: actualGroupName, fields, baselineRoutes: routes, edited, bindings });
+    // 最终保存可能刚完成组内成员编辑，使用最新草稿避免 React 状态更新前遗漏绑定。
+    return buildControlMappingPlan({ moduleName, groupName: actualGroupName, fields, baselineRoutes: routes, edited: editedRef.current, bindings });
   };
   return { moduleName, groupName, options, routes, loading, error, warning, changed: Object.keys(edited).length > 0, open, refresh, getEndpoints, setEndpoints, plan };
 }
