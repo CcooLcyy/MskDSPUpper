@@ -108,10 +108,8 @@ pub struct LowerUpdateCredentialsDto {
     pub sudo_password: Option<String>,
 }
 
-const DEFAULT_LOWER_UPDATE_BASE_URL: &str =
-    "https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-lower";
-const DEFAULT_LOWER_UPDATE_X64_BASE_URL: &str =
-    "https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-lower-x64";
+const DEFAULT_LOWER_UPDATE_BASE_URL: &str = "https://update.clsclear.top/mskdsp-lower";
+const DEFAULT_LOWER_UPDATE_X64_BASE_URL: &str = "https://update.clsclear.top/mskdsp-lower-x64";
 const LOWER_UPDATE_PLATFORM: &str = "linux-arm64";
 const LOWER_UPDATE_X64_PLATFORM: &str = "linux-x64";
 const LOWER_UPDATE_PRODUCT: &str = "mskdsp-lower";

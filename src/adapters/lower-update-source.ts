@@ -2,9 +2,9 @@ import type { LowerUpdateChannel, LowerUpdatePlatform } from './types';
 import { getLowerUpdateChannels } from '../utils/lower-update-platform';
 
 const DEFAULT_LOWER_UPDATE_STATIC_BASE_URL =
-  'https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-lower';
+  'https://update.clsclear.top/mskdsp-lower';
 const DEFAULT_LOWER_UPDATE_X64_STATIC_BASE_URL =
-  'https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-lower-x64';
+  'https://update.clsclear.top/mskdsp-lower-x64';
 
 export function getLowerUpdateStaticBaseUrl(platform: LowerUpdatePlatform = 'linux-arm64'): string {
   getLowerUpdateChannels(platform);

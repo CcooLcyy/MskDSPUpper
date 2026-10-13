@@ -3,10 +3,10 @@
 ## Current Baseline
 
 - App version: `0.7.1`
-- CI updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/ci/latest.json`
-- Stable updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/stable/latest.json`
-- Beta updater URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper/beta/latest.json`
-- Static updater base URL: `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev/mskdsp-upper`
+- CI updater URL: `https://update.clsclear.top/mskdsp-upper/ci/latest.json`
+- Stable updater URL: `https://update.clsclear.top/mskdsp-upper/stable/latest.json`
+- Beta updater URL: `https://update.clsclear.top/mskdsp-upper/beta/latest.json`
+- Static updater base URL: `https://update.clsclear.top/mskdsp-upper`
 - Stable workflow trigger: push tag `v*`
 - Beta workflow trigger: push branch `beta/**`, or manual `workflow_dispatch`
 - Static source backfill trigger: manual `workflow_dispatch`
@@ -56,7 +56,7 @@ Notes:
 - R2 defaults are configured through repository variables `R2_BUCKET`,
   `R2_PREFIX` and `R2_PUBLIC_BASE_URL`.
   If unset, workflows use bucket `mskdsp-update`, prefix `mskdsp-upper`, and
-  the public `r2.dev` address listed above. The workflow appends the
+  the R2 custom domain `https://update.clsclear.top` listed above. The workflow appends the
   `mskdsp-upper` path automatically; legacy static-server variables are ignored.
 - `Sync Static Updater Source` can backfill the static source from an existing
   GitHub Release without building or publishing a new version. Leave `release_tag`

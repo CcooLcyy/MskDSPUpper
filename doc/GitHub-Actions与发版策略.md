@@ -65,7 +65,7 @@
 | `R2_SECRET_ACCESS_KEY` | R2 访问密钥（secret） | 必填 |
 | `R2_BUCKET` | R2 桶名（variable，可留空走默认） | `mskdsp-update` |
 | `R2_PREFIX` | R2 对象前缀（variable，可留空走默认） | `mskdsp-upper` |
-| `R2_PUBLIC_BASE_URL` | R2 公网基地址（variable，可留空走默认） | `https://pub-19f3d71852b04011b120b1b814141c12.r2.dev` |
+| `R2_PUBLIC_BASE_URL` | R2 公网基地址（variable，可留空走默认） | `https://update.clsclear.top` |
 | `MSKDSP_UPPER_SOURCEMAP` | 是否产出前端 sourcemap | `false` |
 | `beta_ref` | Beta workflow 手动指定版本线 | 空 |
 
