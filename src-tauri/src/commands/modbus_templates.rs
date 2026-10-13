@@ -8,8 +8,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const FILE_LIMIT: usize = 2 * 1024 * 1024;
-const DIRECTORY_LIMIT: usize = 10 * 1024 * 1024;
+const FILE_LIMIT: usize = 10 * 1024 * 1024;
+const DIRECTORY_LIMIT: usize = 50 * 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,7 +100,7 @@ pub(crate) fn validate_template(value: &Value) -> Result<(), String> {
         .len()
         > FILE_LIMIT
     {
-        return Err("模板文件不能超过 2 MiB".into());
+        return Err("模板文件不能超过 10 MiB".into());
     }
     let item: Template = serde_json::from_value(value.clone())
         .map_err(|_| "Modbus 模板格式不合法或包含未允许的字段".to_string())?;
@@ -136,8 +136,8 @@ pub(crate) fn validate_template(value: &Value) -> Result<(), String> {
             return Err("Modbus 模板来源不合法".into());
         }
     }
-    if item.points.is_empty() || item.points.len() > 2000 {
-        return Err("Modbus 模板点位数量必须在 1 到 2000 之间".into());
+    if item.points.is_empty() || item.points.len() > 10000 {
+        return Err("Modbus 模板点位数量必须在 1 到 10000 之间".into());
     }
     let mut ids = BTreeSet::new();
     let mut tags = BTreeSet::new();
@@ -250,7 +250,7 @@ fn save_export(path: &Path, contents: &str) -> Result<(), String> {
         return Err("模板导出路径必须是绝对路径且使用 .json 扩展名".into());
     }
     if contents.len() > FILE_LIMIT {
-        return Err("模板文件不能超过 2 MiB".into());
+        return Err("模板文件不能超过 10 MiB".into());
     }
     let value: Value =
         serde_json::from_str(contents).map_err(|_| "模板导出内容不是合法 JSON".to_string())?;
@@ -300,6 +300,97 @@ mod tests {
             "address_base":0,"notes":[],"sources":[],"points":[{"id":"p1","tag":"电压","group":"","unit":"V","function_code":3,
             "address":1,"data_type":"UINT16","reg_count":1,"scale":"0.12345678901234567890","offset":"0","deadband":"0",
             "word_order":"HL","byte_order":"AB","bit_index":null,"source_page":1,"description":""}]})
+    }
+
+    fn many_points(count: usize) -> Value {
+        let mut value = template();
+        let point = value["points"][0].clone();
+        value["points"] = Value::Array(
+            (0..count)
+                .map(|index| {
+                    let mut item = point.clone();
+                    item["id"] = json!(format!("p{index}"));
+                    item["tag"] = json!(format!("点位{index}"));
+                    item["address"] = json!(index);
+                    item
+                })
+                .collect(),
+        );
+        value
+    }
+
+    // 平台点表下载后应能保存到桌面端，10000 点边界可用而 10001 点拒绝。
+    #[test]
+    fn accepts_large_platform_point_tables() {
+        for count in [2001, 10000] {
+            validate_template(&many_points(count)).unwrap();
+        }
+        assert!(validate_template(&many_points(10001))
+            .unwrap_err()
+            .contains("10000"));
+    }
+
+    // 桌面对象校验按 UTF-8 字节计算，10 MiB 边界允许，超一字节拒绝。
+    #[test]
+    fn validates_ten_mib_template_boundary() {
+        let limit = 10 * 1024 * 1024;
+        let mut value = many_points(3000);
+        let mut remaining = limit - serde_json::to_vec(&value).unwrap().len();
+        for point in value["points"].as_array_mut().unwrap() {
+            let length = remaining.min(4095);
+            point["description"] = json!("x".repeat(length));
+            remaining -= length;
+        }
+        assert_eq!(remaining, 0);
+        assert_eq!(serde_json::to_vec(&value).unwrap().len(), limit);
+        validate_template(&value).unwrap();
+        let description = value["points"][0]["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        value["points"][0]["description"] = json!(description + "x");
+        assert!(validate_template(&value).unwrap_err().contains("10 MiB"));
+    }
+
+    // 桌面目录允许超过旧 10 MiB 总量，但仍拒绝超过 50 MiB 的目录。
+    #[test]
+    fn validates_fifty_mib_personal_directory_limit() {
+        let mut large = many_points(1600);
+        for point in large["points"].as_array_mut().unwrap() {
+            point["description"] = json!("x".repeat(4096));
+        }
+        let mut items = Vec::new();
+        for index in 0..7 {
+            let mut item = large.clone();
+            item["id"] = json!(format!("large{index}"));
+            items.push(item);
+        }
+        let directory = Value::Array(items.clone());
+        assert!(serde_json::to_vec(&directory).unwrap().len() > 10 * 1024 * 1024);
+        validate_personal_templates(&directory).unwrap();
+        large["id"] = json!("large7");
+        items.push(large);
+        assert!(validate_personal_templates(&Value::Array(items)).is_err());
+    }
+
+    // 导出允许含空白的 10 MiB JSON，超一字节拒绝且保持已写出的文件。
+    #[test]
+    fn export_validates_ten_mib_file_boundary() {
+        let limit = 10 * 1024 * 1024;
+        let mut contents = serde_json::to_string(&template()).unwrap();
+        contents.push_str(&" ".repeat(limit - contents.len()));
+        let path = std::env::temp_dir().join(format!(
+            "mskdsp-template-limit-export-{}.json",
+            std::process::id()
+        ));
+        save_export(&path, &contents).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), limit as u64);
+        contents.push(' ');
+        assert!(save_export(&path, &contents)
+            .unwrap_err()
+            .contains("10 MiB"));
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), limit as u64);
+        std::fs::remove_file(path).unwrap();
     }
 
     // 模板校验拒绝重复标签、错误长度与倍率，条件元信息允许保存。

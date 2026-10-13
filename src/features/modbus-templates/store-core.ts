@@ -7,7 +7,7 @@ export function createPersonalTemplateStore(builtins: readonly ModbusTemplate[],
   function validateList(raw: unknown): ModbusTemplate[] {
     if (raw === null || raw === undefined) return [];
     if (!Array.isArray(raw) || raw.length > MAX_PERSONAL_TEMPLATES) throw new Error(`个人模板目录必须是数组且最多 ${MAX_PERSONAL_TEMPLATES} 项`);
-    if (new TextEncoder().encode(JSON.stringify(raw)).length > MAX_PERSONAL_TEMPLATE_BYTES) throw new Error('个人模板目录不能超过 10 MiB');
+    if (new TextEncoder().encode(JSON.stringify(raw)).length > MAX_PERSONAL_TEMPLATE_BYTES) throw new Error('个人模板目录不能超过 50 MiB');
     const ids = new Set<string>();
     return raw.map(item => {
       const template = validateModbusTemplate(item);

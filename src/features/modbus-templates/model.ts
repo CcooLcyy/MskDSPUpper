@@ -3,10 +3,10 @@ import { getAllowedRegCountsForFunction, MODBUS_DATA_TYPE } from '../../pages/Mo
 import { createModbusEngineeringFields, resolveModbusPointDecimalText } from '../../pages/ModbusRTU/modbus-decimal.ts';
 import { getDecimalTextError } from '../../utils/decimal-input.ts';
 
-export const MAX_TEMPLATE_POINTS = 2000;
-export const MAX_TEMPLATE_FILE_BYTES = 2 * 1024 * 1024;
+export const MAX_TEMPLATE_POINTS = 10000;
+export const MAX_TEMPLATE_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_PERSONAL_TEMPLATES = 100;
-export const MAX_PERSONAL_TEMPLATE_BYTES = 10 * 1024 * 1024;
+export const MAX_PERSONAL_TEMPLATE_BYTES = 50 * 1024 * 1024;
 export type TemplateDataType = keyof typeof MODBUS_DATA_TYPE;
 export type TemplateFunctionCode = 1 | 3 | 4 | 5 | 6 | 16;
 export interface ModbusTemplatePoint {
@@ -58,7 +58,7 @@ function decimal(value: unknown, label: string): string {
   return value as string;
 }
 export function validateModbusTemplate(input: unknown): ModbusTemplate {
-  if (new TextEncoder().encode(JSON.stringify(input)).length > MAX_TEMPLATE_FILE_BYTES) throw new Error('模板文件不能超过 2 MiB');
+  if (new TextEncoder().encode(JSON.stringify(input)).length > MAX_TEMPLATE_FILE_BYTES) throw new Error('模板文件不能超过 10 MiB');
   const data = object(input, TEMPLATE_FIELDS, '模板');
   if (data.schema_version !== 1) throw new Error('不支持的模板版本');
   const id = text(data.id, '模板 ID', false, 128);
@@ -109,7 +109,7 @@ export function validateModbusTemplate(input: unknown): ModbusTemplate {
     }), points };
 }
 export function parseModbusTemplateJson(value: string): ModbusTemplate {
-  if (new TextEncoder().encode(value).length > MAX_TEMPLATE_FILE_BYTES) throw new Error('模板文件不能超过 2 MiB');
+  if (new TextEncoder().encode(value).length > MAX_TEMPLATE_FILE_BYTES) throw new Error('模板文件不能超过 10 MiB');
   let parsed: unknown;
   try { parsed = JSON.parse(value.replace(/^\uFEFF/, '')); } catch { throw new Error('模板文件不是合法 JSON'); }
   return validateModbusTemplate(parsed);

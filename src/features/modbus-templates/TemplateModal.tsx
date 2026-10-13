@@ -4,7 +4,7 @@ import { DeleteOutlined, DownloadOutlined, FolderOpenOutlined, SaveOutlined, Sea
 import type { ColumnsType } from 'antd/es/table';
 import type { ModbusPoint } from '../../adapters/types';
 import {
-  createTemplateFromPoints, isTemplateWritePoint, planTemplateApplication,
+  createTemplateFromPoints, isTemplateWritePoint, MAX_TEMPLATE_FILE_BYTES, planTemplateApplication,
 } from './model';
 import type { ModbusTemplate, TemplateApplicationRow } from './model';
 import {
@@ -104,7 +104,7 @@ export default function TemplateModal({ open, connectionName, protocol, addressB
     if (next) choose(next); else { setSelectedTemplateId(''); setSelectedIds([]); }
   };
   const importFile = async (file: File) => {
-    if (file.size > 2 * 1024 * 1024) { void message.error('模板文件不能超过 2 MiB'); return; }
+    if (file.size > MAX_TEMPLATE_FILE_BYTES) { void message.error('模板文件不能超过 10 MiB'); return; }
     setWorking(true);
     try {
       const imported = await importPersonalTemplate(await file.text());

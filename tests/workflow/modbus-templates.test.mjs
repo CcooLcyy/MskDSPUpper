@@ -14,6 +14,45 @@ const template = (points = [point()], extra = {}) => ({ schema_version: 1, id: '
   name: '测试', manufacturer: '测试厂家', models: ['型号'], protocol_version: '1',
   address_base: 0, notes: [], sources: [{ file: '来源.pdf', sha256: 'a'.repeat(64) }], points, ...extra });
 
+const manyPoints = (count) => Array.from({ length: count }, (_, index) =>
+  point({ id: `p${index}`, tag: `点位${index}`, address: index }));
+
+// 平台大点表应能导入，边界必须按真实数量判断，不能只验证重复点的拒绝路径。
+test('允许 2001 和 10000 个独立点位，拒绝 10001 个点位', () => {
+  for (const count of [2001, 10000]) {
+    assert.equal(validateModbusTemplate(template(manyPoints(count))).points.length, count);
+    assert.equal(parseModbusTemplateJson(JSON.stringify(template(manyPoints(count)))).points.length, count);
+  }
+  assert.throws(() => validateModbusTemplate(template(manyPoints(10001))), /最多 10000/);
+});
+
+// 原始 JSON 的空白也占 UTF-8 文件容量，10 MiB 边界可导入，超一字节拒绝。
+test('JSON 文件接受 10 MiB 边界并按 UTF-8 字节拒绝超限', () => {
+  const limit = 10 * 1024 * 1024;
+  const json = JSON.stringify(template());
+  const boundary = json + ' '.repeat(limit - Buffer.byteLength(json, 'utf8'));
+  assert.equal(Buffer.byteLength(boundary, 'utf8'), limit);
+  assert.equal(parseModbusTemplateJson(boundary).id, 'test');
+  assert.throws(() => parseModbusTemplateJson(boundary + ' '), /10 MiB/);
+});
+
+// 对象校验同样保护序列化容量，中文字段按 UTF-8 实际字节计数。
+test('模板对象接受 10 MiB 边界，超一字节拒绝', () => {
+  const limit = 10 * 1024 * 1024;
+  const data = template(manyPoints(3000));
+  let remaining = limit - Buffer.byteLength(JSON.stringify(data), 'utf8');
+  for (const item of data.points) {
+    const length = Math.min(4095, remaining);
+    item.description = 'x'.repeat(length);
+    remaining -= length;
+  }
+  assert.equal(remaining, 0);
+  assert.equal(Buffer.byteLength(JSON.stringify(data), 'utf8'), limit);
+  assert.equal(validateModbusTemplate(data).points.length, 3000);
+  data.points[0].description += 'x';
+  assert.throws(() => validateModbusTemplate(data), /10 MiB/);
+});
+
 test('实际功能码和地址基准转换，保留精确倍率，默认不选择写点', () => {
   const data = validateModbusTemplate(template([point(), point({ id: 'write', tag: '设置', address: 101, function_code: 6 })]));
   const plan = planTemplateApplication(data, { existingPoints: [], addressBase: 2 });

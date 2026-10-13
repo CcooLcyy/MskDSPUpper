@@ -29,7 +29,7 @@ export async function removePersonalTemplate(id: string): Promise<void> {
 }
 export function exportModbusTemplate(template: ModbusTemplate): string {
   const json = JSON.stringify(validateModbusTemplate(template), null, 2) + '\n';
-  if (new TextEncoder().encode(json).length > MAX_TEMPLATE_FILE_BYTES) throw new Error('模板导出文件不能超过 2 MiB');
+  if (new TextEncoder().encode(json).length > MAX_TEMPLATE_FILE_BYTES) throw new Error('模板导出文件不能超过 10 MiB');
   return json;
 }
 export async function importPersonalTemplate(json: string): Promise<ModbusTemplate> {
