@@ -114,7 +114,7 @@ const LOWER_UPDATE_PLATFORM: &str = "linux-arm64";
 const LOWER_UPDATE_X64_PLATFORM: &str = "linux-x64";
 const LOWER_UPDATE_PRODUCT: &str = "mskdsp-lower";
 const LOWER_UPDATE_SCHEMA_VERSION: u32 = 1;
-const LOWER_UPDATE_CACHE_METADATA_SCHEMA_VERSION: u32 = 1;
+const LOWER_UPDATE_CACHE_METADATA_SCHEMA_VERSION: u32 = 2;
 const LOWER_UPDATE_CACHE_METADATA_FILE_NAME: &str = ".mskdsp-cache.json";
 const LOWER_UPDATE_CONTAINER_NAME: &str = "mskdsp";
 const LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1857,6 +1857,18 @@ fn replace_downloaded_package(source: &Path, destination: &Path) -> io::Result<(
     }
 }
 
+// 只读取脚本头与压缩标记；网络和缓存始终保存原始 gzip 封装字节。
+async fn validate_compressed_package_format(package_path: &Path) -> Result<(), String> {
+    let package_path = package_path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        super::lower_update_local::validate_package_format(&package_path)?;
+        tracing::debug!(operation = "package_format", path = %package_path.display(), "下位机 gzip 安装包格式检查通过");
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("检查下位机压缩包格式任务失败: {error}"))?
+}
+
 async fn load_cached_package(
     directory: &Path,
     requested_channel: Option<&str>,
@@ -1872,7 +1884,7 @@ async fn load_cached_package(
         .map_err(|error| format!("解析下位机更新缓存清单失败: {error}"))?;
     if metadata.schema_version != LOWER_UPDATE_CACHE_METADATA_SCHEMA_VERSION {
         return Err(format!(
-            "下位机更新缓存清单版本不支持: {}",
+            "下位机更新缓存格式已过期，请重新下载新版安装包（缓存版本 {}）",
             metadata.schema_version
         ));
     }
@@ -1913,6 +1925,7 @@ async fn load_cached_package(
         ));
     }
 
+    validate_compressed_package_format(&package_path).await?;
     Ok(Some(LowerUpdateCachedPackageDto {
         downloaded_at: metadata.downloaded_at,
         manifest: metadata.manifest,
@@ -2068,10 +2081,14 @@ fn retain_latest_regular_file(
     result: &mut LowerUpdateCacheCleanupResultDto,
 ) -> io::Result<()> {
     let files = regular_files(directory)?;
+    // 仅保留当前格式元数据指向的 gzip 包，不能用修改时间选中旧包或孤立文件。
     let latest = files
         .iter()
-        .filter(|(path, _, _)| !is_cache_metadata_file(path))
-        .max_by(|left, right| left.1.cmp(&right.1).then_with(|| left.2.cmp(&right.2)))
+        .find(|(path, _, _)| {
+            !is_cache_metadata_file(path)
+                && metadata_matches_package(directory, path)
+                && super::lower_update_local::validate_package_format(path).is_ok()
+        })
         .map(|(path, _, _)| path.clone());
     if let Some(latest) = latest {
         let keep_metadata = metadata_matches_package(directory, &latest);
@@ -2083,6 +2100,9 @@ fn retain_latest_regular_file(
             record_removed_file(&path, &metadata, result)?;
         }
     } else {
+        if !files.is_empty() {
+            tracing::info!(operation = "cache_format_upgrade", directory = %directory.display(), "清理旧格式或无有效元数据的下位机安装包缓存");
+        }
         for (path, _, _) in files {
             let metadata = std_fs::symlink_metadata(&path)?;
             record_removed_file(&path, &metadata, result)?;
@@ -2101,9 +2121,7 @@ fn cleanup_cache_startup_in(cache_root: &Path) -> io::Result<LowerUpdateCacheCle
         if !channel_entry.file_type()?.is_dir() {
             continue;
         }
-        if channel_entry.file_name() == "local" {
-            continue;
-        }
+        // 本地导入目录同样按“元数据 + gzip 包”清理，旧格式不能跨启动复用。
         for platform_entry in std_fs::read_dir(channel_entry.path())? {
             let platform_entry = platform_entry?;
             if platform_entry.file_type()?.is_dir() {
@@ -2638,6 +2656,7 @@ pub async fn download_lower_update(
             if existing_size == manifest.asset.size
                 && existing_sha256.eq_ignore_ascii_case(&manifest.asset.sha256)
             {
+                validate_compressed_package_format(&output_path).await?;
                 tracing::info!(
                     operation = "download",
                     package = %manifest.asset.name,
@@ -2758,6 +2777,10 @@ pub async fn download_lower_update(
             ));
         }
 
+        if let Err(error) = validate_compressed_package_format(&partial_path).await {
+            let _ = fs::remove_file(&partial_path).await;
+            return Err(error);
+        }
         let package_source = partial_path.clone();
         let package_destination = output_path.clone();
         tokio::task::spawn_blocking(move || {
@@ -2856,6 +2879,7 @@ async fn upload_lower_update_package_inner(
             request.package_sha256, actual_sha256
         ));
     }
+    validate_compressed_package_format(&package_path).await?;
     let mut file = fs::File::open(&package_path)
         .await
         .map_err(|e| format!("打开上位机更新包失败: {e}"))?;
@@ -3563,6 +3587,7 @@ mod tests {
     use sha2::Digest;
     use std::{
         fs,
+        io::Write,
         path::{Path, PathBuf},
         sync::atomic::{AtomicU64, Ordering},
     };
@@ -4071,6 +4096,16 @@ mod tests {
         }
     }
 
+    // 缓存与上传仅检查不透明传输封装，测试载荷为完整的单成员 gzip。
+    fn test_compressed_package(label: &str) -> Vec<u8> {
+        let mut bytes = format!("#!/usr/bin/env bash\n# {label}\n__ARCHIVE_BELOW__\n").into_bytes();
+        bytes.extend_from_slice(&[
+            31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 75, 78, 76, 206, 72, 213, 45, 72, 76, 206, 78, 76,
+            79, 5, 0, 79, 111, 63, 51, 13, 0, 0, 0,
+        ]);
+        bytes
+    }
+
     fn test_manifest(
         package_name: &str,
         package_size: u64,
@@ -4108,11 +4143,12 @@ mod tests {
     #[tokio::test]
     async fn local_cache_survives_startup_and_is_filtered_and_clearable() {
         let temp = TestDirectory::new();
-        let sha256 = format!("{:x}", sha2::Sha256::digest(b"local-package"));
+        let package = test_compressed_package("local-package");
+        let sha256 = format!("{:x}", sha2::Sha256::digest(&package));
         let directory = temp.path().join("local").join(&sha256);
         fs::create_dir_all(&directory).unwrap();
-        fs::write(directory.join("package.run"), b"local-package").unwrap();
-        let mut manifest = test_manifest("package.run", 13, sha256);
+        fs::write(directory.join("package.run"), &package).unwrap();
+        let mut manifest = test_manifest("package.run", package.len() as u64, sha256);
         manifest.local_import = true;
         manifest.channel = "ci".into();
         manifest.asset.url.clear();
@@ -4169,7 +4205,11 @@ mod tests {
             builder.append_data(&mut header, name, data).unwrap();
         }
         let mut bytes = b"#!/usr/bin/env bash\nexit 0\n__ARCHIVE_BELOW__\n".to_vec();
-        bytes.extend(builder.into_inner().unwrap());
+        let mut compressed = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
+        compressed
+            .write_all(&builder.into_inner().unwrap())
+            .unwrap();
+        bytes.extend(compressed.finish().unwrap());
         let source = temp.path().join("original-package");
         fs::write(&source, &bytes).unwrap();
         let cache = temp.path().join("cache");
@@ -4283,9 +4323,10 @@ mod tests {
             let directory = temp.path().join("ci").join(platform);
             fs::create_dir_all(&directory).unwrap();
             let package_path = directory.join("same-package");
-            fs::write(&package_path, platform.as_bytes()).unwrap();
+            let package = test_compressed_package(platform);
+            fs::write(&package_path, &package).unwrap();
             let sha256 = compute_sha256(&package_path).await.unwrap();
-            let mut manifest = test_manifest("same-package", platform.len() as u64, sha256);
+            let mut manifest = test_manifest("same-package", package.len() as u64, sha256);
             manifest.channel = "ci".into();
             manifest.platform = platform.into();
             persist_cache_metadata(&directory, &manifest).await.unwrap();
@@ -4732,11 +4773,12 @@ mod tests {
         let platform_dir = temp.path().join("stable/linux-arm64");
         fs::create_dir_all(&platform_dir).expect("应能创建缓存目录");
         let package_path = platform_dir.join("mskdsp-lower.tar");
-        fs::write(&package_path, b"verified-package").expect("应能写入缓存包");
+        let package = test_compressed_package("verified-package");
+        fs::write(&package_path, &package).expect("应能写入缓存包");
         let sha256 = compute_sha256(&package_path)
             .await
             .expect("应能计算缓存包 SHA256");
-        let manifest = test_manifest("mskdsp-lower.tar", 16, sha256.clone());
+        let manifest = test_manifest("mskdsp-lower.tar", package.len() as u64, sha256.clone());
 
         persist_cache_metadata(&platform_dir, &manifest)
             .await
@@ -4746,7 +4788,7 @@ mod tests {
             fs::read(cache_metadata_path(&platform_dir)).expect("应能读取缓存元数据");
         let metadata: super::LowerUpdateCacheMetadataDto =
             serde_json::from_slice(&metadata_bytes).expect("缓存元数据应为有效 JSON");
-        assert_eq!(metadata.schema_version, 1);
+        assert_eq!(metadata.schema_version, 2);
         assert_eq!(metadata.manifest.asset.name, "mskdsp-lower.tar");
 
         let cached = load_cached_package(&platform_dir, Some("stable"), "linux-arm64")
@@ -4758,7 +4800,7 @@ mod tests {
             cached.package_path,
             package_path.to_string_lossy().into_owned()
         );
-        assert_eq!(cached.package_size, 16);
+        assert_eq!(cached.package_size, package.len() as u64);
         assert_eq!(cached.sha256, sha256);
     }
 
@@ -4808,8 +4850,9 @@ mod tests {
         assert!(error.contains("镜像 ID"));
     }
 
+    // 验证旧的无元数据包与未完成下载在切换 gzip 时全部清理。
     #[test]
-    fn startup_cleanup_removes_partial_files_and_keeps_latest_package() {
+    fn startup_cleanup_removes_partial_files_and_legacy_packages() {
         let temp = TestDirectory::new();
         let platform_dir = temp.path().join("stable/linux-arm64");
         let nested_dir = platform_dir.join("nested");
@@ -4822,11 +4865,39 @@ mod tests {
         let result = cleanup_cache_startup_in(temp.path()).expect("启动清理应成功");
 
         assert!(!platform_dir.join("a-old-package").exists());
-        assert!(platform_dir.join("z-latest-package").is_file());
+        assert!(!platform_dir.join("z-latest-package").exists());
         assert!(!platform_dir.join("package.download").exists());
         assert!(!nested_dir.join("nested.download").exists());
-        assert_eq!(result.removed_files, 3);
-        assert_eq!(result.reclaimed_bytes, 3 + 7 + 6);
+        assert_eq!(result.removed_files, 4);
+        assert_eq!(result.reclaimed_bytes, 3 + 6 + 7 + 6);
+    }
+
+    // 验证启动切换同样清理旧版本的本地导入缓存，不触碰缓存根目录外文件。
+    #[test]
+    fn startup_cleanup_removes_legacy_local_cache_units() {
+        let temp = TestDirectory::new();
+        let cache_root = temp.path().join("lower-update");
+        let directory = cache_root.join("local").join("a".repeat(64));
+        fs::create_dir_all(&directory).unwrap();
+        let package_path = directory.join("legacy-package");
+        fs::write(&package_path, b"old-tar").unwrap();
+        let metadata = super::LowerUpdateCacheMetadataDto {
+            schema_version: 1,
+            downloaded_at: 1,
+            manifest: test_manifest("legacy-package", 7, "a".repeat(64)),
+        };
+        fs::write(
+            cache_metadata_path(&directory),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        let outside = temp.path().join("keep.txt");
+        fs::write(&outside, b"keep").unwrap();
+        let result = cleanup_cache_startup_in(&cache_root).unwrap();
+        assert!(!package_path.exists());
+        assert!(!cache_metadata_path(&directory).exists());
+        assert_eq!(result.removed_files, 2);
+        assert_eq!(fs::read(&outside).unwrap(), b"keep");
     }
 
     // 验证启动清理以“安装包 + 元数据”为整体保留最新缓存单元。
@@ -4837,11 +4908,12 @@ mod tests {
         fs::create_dir_all(&platform_dir).expect("应能创建缓存目录");
         fs::write(platform_dir.join("a-old-package"), b"old").expect("应能写入旧包");
         let latest_path = platform_dir.join("z-latest-package");
-        fs::write(&latest_path, b"latest").expect("应能写入新包");
+        let package = test_compressed_package("latest");
+        fs::write(&latest_path, &package).expect("应能写入新包");
         let metadata = super::LowerUpdateCacheMetadataDto {
-            schema_version: 1,
+            schema_version: 2,
             downloaded_at: 1,
-            manifest: test_manifest("z-latest-package", 6, "a".repeat(64)),
+            manifest: test_manifest("z-latest-package", package.len() as u64, "a".repeat(64)),
         };
         fs::write(
             cache_metadata_path(&platform_dir),
@@ -4855,6 +4927,46 @@ mod tests {
         assert!(latest_path.is_file());
         assert!(cache_metadata_path(&platform_dir).is_file());
         assert_eq!(result.removed_files, 1);
+    }
+
+    // 验证有效大小与 SHA256 不能让旧裸 tar 绕过单一 gzip 格式限制。
+    #[tokio::test]
+    async fn rejects_legacy_payload_even_with_current_cache_metadata_and_checksum() {
+        let temp = TestDirectory::new();
+        let directory = temp.path().join("stable/linux-arm64");
+        fs::create_dir_all(&directory).unwrap();
+        let package_path = directory.join("legacy-package");
+        let bytes = b"#!/bin/bash\n__ARCHIVE_BELOW__\nlegacy-tar";
+        fs::write(&package_path, bytes).unwrap();
+        let checksum = compute_sha256(&package_path).await.unwrap();
+        let manifest = test_manifest("legacy-package", bytes.len() as u64, checksum);
+        persist_cache_metadata(&directory, &manifest).await.unwrap();
+        let error = load_cached_package(&directory, Some("stable"), "linux-arm64")
+            .await
+            .unwrap_err();
+        assert!(error.contains("旧安装包格式不再支持"));
+        assert_eq!(
+            cleanup_cache_startup_in(temp.path()).unwrap().removed_files,
+            2
+        );
+    }
+
+    // 验证上传与下载共用的格式检查只读取封装，不改写缓存或网络传输字节。
+    #[tokio::test]
+    async fn compressed_transport_format_validation_preserves_package_bytes() {
+        let temp = TestDirectory::new();
+        let package_path = temp.path().join("package");
+        let package = test_compressed_package("transport");
+        fs::write(&package_path, &package).unwrap();
+        super::validate_compressed_package_format(&package_path)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&package_path).unwrap(), package);
+        fs::write(&package_path, b"#!/bin/bash\n__ARCHIVE_BELOW__\nold-tar").unwrap();
+        assert!(super::validate_compressed_package_format(&package_path)
+            .await
+            .unwrap_err()
+            .contains("gzip"));
     }
 
     #[test]

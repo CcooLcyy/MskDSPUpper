@@ -2837,6 +2837,7 @@ version = "0.7.1"
 dependencies = [
  "anyhow",
  "dirs",
+ "flate2",
  "keyring",
  "parking_lot",
  "prost",

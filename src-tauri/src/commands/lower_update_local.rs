@@ -8,35 +8,28 @@ use std::{
 };
 
 const MAX_METADATA_BYTES: usize = 1024 * 1024;
+const MAX_ARCHIVE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
-// tar 的 Seek 坐标必须从归档开始计算，不能包含前面的安装脚本字节。
-struct ArchiveReader<'a, R> {
-    reader: &'a mut R,
-    offset: u64,
-    end: u64,
+// 解压总量有界；到达上限后仍探测 EOF，不能把超过上限伪装成正常结束。
+struct BoundedReader<R> {
+    reader: R,
+    remaining: u64,
 }
-impl<R: Read> Read for ArchiveReader<'_, R> {
+impl<R: Read> Read for BoundedReader<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.reader.read(buffer)
-    }
-}
-impl<R: Seek> Seek for ArchiveReader<'_, R> {
-    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
-        let position = match position {
-            SeekFrom::Start(value) => SeekFrom::Start(
-                self.offset
-                    .checked_add(value)
-                    .ok_or_else(|| std::io::Error::other("归档偏移溢出"))?,
-            ),
-            other => other,
-        };
-        let absolute = self.reader.seek(position)?;
-        if absolute > self.end {
-            return Err(std::io::Error::other("安装包归档被截断"));
+        if buffer.is_empty() {
+            return Ok(0);
         }
-        absolute
-            .checked_sub(self.offset)
-            .ok_or_else(|| std::io::Error::other("归档偏移超出有效范围"))
+        if self.remaining == 0 {
+            return match self.reader.read(&mut [0])? {
+                0 => Ok(0),
+                _ => Err(std::io::Error::other("安装包解压大小超过限制")),
+            };
+        }
+        let length = self.remaining.min(buffer.len() as u64) as usize;
+        let count = self.reader.read(&mut buffer[..length])?;
+        self.remaining -= count as u64;
+        Ok(count)
     }
 }
 
@@ -53,26 +46,38 @@ pub(super) fn inspect_package(path: &Path) -> Result<LocalPackageInfo, String> {
     inspect_reader(&mut file)
 }
 
+// 在线下载、缓存恢复和上传前只检查封装格式，不解压或改写传输字节。
+pub(super) fn validate_package_format(path: &Path) -> Result<(), String> {
+    let mut file = File::open(path).map_err(|e| format!("读取安装包失败: {e}"))?;
+    payload_offset(&mut file).map(|_| ())
+}
+
 fn read_archive<R: Read + Seek>(
     reader: &mut R,
     offset: u64,
     wanted: &[&str],
 ) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let end = reader
-        .seek(SeekFrom::End(0))
-        .map_err(|e| format!("读取归档长度失败: {e}"))?;
+    read_archive_with_limit(reader, offset, wanted, MAX_ARCHIVE_BYTES)
+}
+
+fn read_archive_with_limit<R: Read + Seek>(
+    reader: &mut R,
+    offset: u64,
+    wanted: &[&str],
+    max_bytes: u64,
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
     reader
         .seek(SeekFrom::Start(offset))
         .map_err(|e| format!("定位安装包归档失败: {e}"))?;
-    let mut archive = tar::Archive::new(ArchiveReader {
-        reader,
-        offset,
-        end,
+    let decoder = flate2::bufread::GzDecoder::new(BufReader::new(reader));
+    let mut archive = tar::Archive::new(BoundedReader {
+        reader: decoder,
+        remaining: max_bytes,
     });
     let mut found = BTreeMap::new();
     let mut names = BTreeSet::new();
     for entry in archive
-        .entries_with_seek()
+        .entries()
         .map_err(|e| format!("读取安装包归档失败: {e}"))?
         // 原始遍历避免 tar 在检查大小前自动分配 GNU/PAX 扩展元数据。
         .raw(true)
@@ -107,8 +112,32 @@ fn read_archive<R: Read + Seek>(
             entry
                 .read_to_end(&mut data)
                 .map_err(|e| format!("读取安装包元数据失败: {e}"))?;
+            if data.len() as u64 != entry.size() {
+                return Err(format!("安装包元数据被截断: {name}"));
+            }
             found.insert(name, data);
+        } else {
+            // 层内容直接流入 sink，不分配整层内存；显式检查声明大小避免截断漏检。
+            let expected = entry.size();
+            let actual = std::io::copy(&mut entry, &mut std::io::sink())
+                .map_err(|e| format!("读取安装包镜像层失败: {e}"))?;
+            if actual != expected {
+                return Err(format!("安装包归档条目被截断: {name}"));
+            }
         }
+    }
+    // tar 的结束块先于 gzip 尾部，必须继续读至 gzip EOF 才能验证 CRC 和长度。
+    let mut bounded = archive.into_inner();
+    std::io::copy(&mut bounded, &mut std::io::sink())
+        .map_err(|e| format!("安装包 gzip 完整性校验失败: {e}"))?;
+    // 仅支持单个 gzip 成员，拒绝拼接成员及尾随内容，避免检查与安装解释不一致。
+    let mut compressed = bounded.reader.into_inner();
+    if compressed
+        .read(&mut [0])
+        .map_err(|e| format!("读取安装包 gzip 尾部失败: {e}"))?
+        != 0
+    {
+        return Err("安装包 gzip 含多成员或尾随数据，请重新下载新版安装包".into());
     }
     Ok(found)
 }
@@ -125,7 +154,7 @@ fn digest(value: &str) -> Option<&str> {
     (hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())).then_some(hash)
 }
 
-fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<LocalPackageInfo, String> {
+fn payload_offset<R: Read + Seek>(reader: &mut R) -> Result<u64, String> {
     reader
         .seek(SeekFrom::Start(0))
         .map_err(|e| format!("读取安装包失败: {e}"))?;
@@ -153,6 +182,21 @@ fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<LocalPackageInfo, St
             }
         }
     }
+    reader
+        .seek(SeekFrom::Start(offset))
+        .map_err(|e| format!("定位安装包 gzip 载荷失败: {e}"))?;
+    let mut magic = [0; 3];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|_| "安装包 gzip 载荷缺失或被截断，请重新下载新版安装包".to_string())?;
+    if magic != [0x1f, 0x8b, 0x08] {
+        return Err("安装包必须使用 gzip 压缩载荷，旧安装包格式不再支持，请下载新版安装包".into());
+    }
+    Ok(offset)
+}
+
+fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<LocalPackageInfo, String> {
+    let offset = payload_offset(reader)?;
     let metadata = read_archive(reader, offset, &["manifest.json", "index.json"])?;
     let manifest = parse_json(&metadata, "manifest.json")?;
     let entries = manifest
@@ -271,7 +315,19 @@ fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<LocalPackageInfo, St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{Cursor, Write};
+
+    fn gzip(payload: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(payload).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn package(payload: &[u8]) -> Vec<u8> {
+        let mut data = b"#!/usr/bin/env bash\nexit 0\n__ARCHIVE_BELOW__\n".to_vec();
+        data.extend(payload);
+        data
+    }
 
     fn archive(files: &[(String, Vec<u8>)]) -> Vec<u8> {
         let mut builder = tar::Builder::new(Vec::new());
@@ -313,9 +369,7 @@ mod tests {
     }
 
     fn inspect(files: &[(String, Vec<u8>)]) -> Result<LocalPackageInfo, String> {
-        let mut data = b"#!/usr/bin/env bash\nexit 0\n__ARCHIVE_BELOW__\n".to_vec();
-        data.extend(archive(files));
-        inspect_reader(&mut Cursor::new(data))
+        inspect_reader(&mut Cursor::new(package(&gzip(&archive(files)))))
     }
 
     // 验证经典及 OCI 包可识别真实版本、架构及配置内容摘要。
@@ -332,12 +386,14 @@ mod tests {
                 format!("sha256:{:x}", Sha256::digest(&input[1].1))
             );
         }
-        let mut input = files(false, "amd64");
-        input[0].1 = String::from_utf8(input[0].1.clone())
-            .unwrap()
-            .replace("linux-arm64", "linux-x64")
-            .into_bytes();
-        assert_eq!(inspect(&input).unwrap().platform, "linux-x64");
+        for oci in [false, true] {
+            let mut input = files(oci, "amd64");
+            input[0].1 = String::from_utf8(input[0].1.clone())
+                .unwrap()
+                .replace("linux-arm64", "linux-x64")
+                .into_bytes();
+            assert_eq!(inspect(&input).unwrap().platform, "linux-x64");
+        }
     }
 
     // 验证损坏摘要、重复元数据、其他产品、多镜像及未知平台均拒绝导入。
@@ -401,8 +457,7 @@ mod tests {
         header.as_mut_bytes()[..9].copy_from_slice(b"../escape");
         header.set_cksum();
         builder.append(&header, b"x".as_slice()).unwrap();
-        let mut bytes = b"#!/bin/bash\n__ARCHIVE_BELOW__\n".to_vec();
-        bytes.extend(builder.into_inner().unwrap());
+        let bytes = package(&gzip(&builder.into_inner().unwrap()));
         assert!(inspect_reader(&mut Cursor::new(bytes))
             .unwrap_err()
             .contains("路径"));
@@ -414,7 +469,7 @@ mod tests {
         assert!(inspect(&input).unwrap_err().contains("平台"));
     }
 
-    // 验证大镜像层跨越 Seek 偏移后仍正确读取元数据，兼容仅 OCI 描述含 v8 变体。
+    // 验证大镜像层流式跳过后仍正确读取元数据，兼容仅 OCI 描述含 v8 变体。
     #[test]
     fn skips_large_layers_and_accepts_descriptor_only_arm_variant() {
         let mut input = files(true, "arm64");
@@ -428,15 +483,109 @@ mod tests {
         assert_eq!(inspect(&input).unwrap().platform, "linux-arm64");
     }
 
-    // 验证无法因 Seek 跳过数据而接受声明完整、实际被截断的镜像层。
+    // 验证声明完整、实际被截断的镜像层不能导入，即使前面的元数据已完整。
     #[test]
     fn rejects_truncated_layer_even_when_metadata_is_complete() {
         let mut input = files(false, "arm64");
         input.push(("layer/layer.tar".into(), vec![b'x'; 2 * MAX_METADATA_BYTES]));
         let mut payload = archive(&input);
         payload.truncate(payload.len() - MAX_METADATA_BYTES);
-        let mut bytes = b"#!/bin/bash\n__ARCHIVE_BELOW__\n".to_vec();
-        bytes.extend(payload);
+        let bytes = package(&gzip(&payload));
         assert!(inspect_reader(&mut Cursor::new(bytes)).is_err());
+    }
+
+    // 旧裸 tar、损坏 CRC、tar 结束后的截断和额外 gzip 成员均拒绝导入。
+    #[test]
+    fn rejects_old_payload_and_corrupt_gzip_trailer() {
+        let tar = archive(&files(false, "arm64"));
+        assert!(inspect_reader(&mut Cursor::new(package(&tar)))
+            .unwrap_err()
+            .contains("gzip"));
+        let mut corrupt = gzip(&tar);
+        let trailer = corrupt.len() - 8;
+        corrupt[trailer] ^= 1;
+        assert!(inspect_reader(&mut Cursor::new(package(&corrupt))).is_err());
+        let mut truncated = gzip(&tar);
+        truncated.truncate(truncated.len() - 4);
+        assert!(inspect_reader(&mut Cursor::new(package(&truncated))).is_err());
+        let mut extra_member = gzip(&tar);
+        extra_member.extend(gzip(b"ignored"));
+        assert!(inspect_reader(&mut Cursor::new(package(&extra_member))).is_err());
+        let mut trailing = gzip(&tar);
+        trailing.push(0);
+        assert!(inspect_reader(&mut Cursor::new(package(&trailing))).is_err());
+    }
+
+    // 直接生成压缩流中的大层，测试过程和解析器都不持有整个未压缩镜像。
+    #[test]
+    fn streams_large_layer_and_bounds_all_decompressed_bytes() {
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        let layer_bytes = 32 * MAX_METADATA_BYTES as u64;
+        let mut header = tar::Header::new_gnu();
+        header.set_size(layer_bytes);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(
+                &mut header,
+                "layer/layer.tar",
+                std::io::repeat(b'x').take(layer_bytes),
+            )
+            .unwrap();
+        for (name, data) in files(false, "arm64") {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, name, data.as_slice())
+                .unwrap();
+        }
+        let payload = builder.into_inner().unwrap().finish().unwrap();
+        assert!(payload.len() < MAX_METADATA_BYTES);
+        let bytes = package(&payload);
+        assert_eq!(
+            inspect_reader(&mut Cursor::new(&bytes)).unwrap().platform,
+            "linux-arm64"
+        );
+        let mut reader = Cursor::new(&bytes);
+        let offset = payload_offset(&mut reader).unwrap();
+        assert!(read_archive_with_limit(
+            &mut reader,
+            offset,
+            &["manifest.json"],
+            MAX_METADATA_BYTES as u64
+        )
+        .unwrap_err()
+        .contains("解压大小"));
+
+        // tar 结束后追加的解压数据也计入上限，不能仅限制条目内容。
+        let mut tar = archive(&files(false, "arm64"));
+        let limit = tar.len() as u64;
+        tar.extend([0; 512]);
+        let mut reader = Cursor::new(package(&gzip(&tar)));
+        let offset = payload_offset(&mut reader).unwrap();
+        assert!(
+            read_archive_with_limit(&mut reader, offset, &["manifest.json"], limit)
+                .unwrap_err()
+                .contains("解压大小")
+        );
+    }
+
+    // 下载/上传的轻量检查明确拒绝旧载荷，并保持原文件字节不变。
+    #[test]
+    fn validates_package_format_without_rewriting_bytes() {
+        let path =
+            std::env::temp_dir().join(format!("mskdsp-format-test-{}.run", std::process::id()));
+        let bytes = package(&gzip(&archive(&files(false, "arm64"))));
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(validate_package_format(&path).is_ok());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        std::fs::write(&path, package(&archive(&files(false, "arm64")))).unwrap();
+        assert!(validate_package_format(&path)
+            .unwrap_err()
+            .contains("旧安装包"));
+        std::fs::remove_file(path).unwrap();
     }
 }
