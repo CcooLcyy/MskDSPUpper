@@ -7,7 +7,7 @@ import {
   buildImportedPointRoutes,
   getImportedPointRouteDirection,
   reverseImportedPointRoutes,
-  saveImportedPointsWithOptionalRoutes,
+  saveImportedPointsWithRoutes,
 } from '../../src/pages/IEC104/import-routing.ts';
 
 const pageSource = readFileSync(new URL('../../src/pages/IEC104/index.tsx', import.meta.url), 'utf8');
@@ -115,13 +115,13 @@ test('IEC104 slave import skips parameter and unspecified routes', () => {
   assert.deepEqual(buildImportedPointRoutes(drafts, { moduleName: 'IEC104', connName: 'station-1' }, { stationRole: 'slave' }), []);
 });
 
-// 验证未勾选自动路由时仅保存 IEC104 点表。
-test('IEC104 import skips DataCenter routes when the option is disabled', async () => {
+// 验证没有适用路由时仅保存 IEC104 点表，不调用路由清理或保存接口。
+test('IEC104 import skips DataCenter writes when no routes apply', async () => {
   const calls = [];
-  const result = await saveImportedPointsWithOptionalRoutes({
-    createRoutes: false,
-    routes: [{ src: { module_name: 'A', conn_name: 'a', tag: 'x' }, dst: { module_name: 'B', conn_name: 'b', tag: 'y' } }],
+  const result = await saveImportedPointsWithRoutes({
+    routes: [],
     savePointTable: async () => calls.push('point-table'),
+    deleteRoutes: async () => calls.push('delete-routes'),
     saveRoutes: async () => calls.push('routes'),
   });
 
@@ -129,12 +129,11 @@ test('IEC104 import skips DataCenter routes when the option is disabled', async 
   assert.equal(result.routesCreated, 0);
 });
 
-// 验证勾选自动路由时必须先保存点表、再增量保存路由。
+// 验证导入无需路由开关，必须先保存点表、再自动增量保存路由。
 test('IEC104 import saves the point table before DataCenter routes', async () => {
   const calls = [];
   const routes = [{ src: { module_name: 'A', conn_name: 'a', tag: 'x' }, dst: { module_name: 'B', conn_name: 'b', tag: 'y' } }];
-  const result = await saveImportedPointsWithOptionalRoutes({
-    createRoutes: true,
+  const result = await saveImportedPointsWithRoutes({
     routes,
     savePointTable: async () => calls.push('point-table'),
     saveRoutes: async (nextRoutes) => {
@@ -160,8 +159,7 @@ test('IEC104 import removes reverse routes before saving the selected direction'
     dst: { module_name: 'ModbusRTU', conn_name: 'meter-1', tag: 'voltage_a' },
   }]);
 
-  const result = await saveImportedPointsWithOptionalRoutes({
-    createRoutes: true,
+  const result = await saveImportedPointsWithRoutes({
     routes,
     savePointTable: async () => calls.push('point-table'),
     deleteRoutes: async (reverseRoutes) => {
@@ -181,8 +179,7 @@ test('IEC104 import reports route failure after the point table was saved', asyn
   const calls = [];
 
   await assert.rejects(
-    saveImportedPointsWithOptionalRoutes({
-      createRoutes: true,
+    saveImportedPointsWithRoutes({
       routes: [{ src: { module_name: 'A', conn_name: 'a', tag: 'x' }, dst: { module_name: 'B', conn_name: 'b', tag: 'y' } }],
       savePointTable: async () => calls.push('point-table'),
       saveRoutes: async () => {
@@ -201,18 +198,15 @@ test('IEC104 import reports route failure after the point table was saved', asyn
   assert.deepEqual(calls, ['point-table', 'routes']);
 });
 
-// 验证导入页面的自动路由默认关闭，并对 IEC104 MASTER 命令语义给出提示。
-test('IEC104 import page exposes an opt-in route checkbox and MASTER warning', () => {
-  assert.match(pageSource, /const \[createImportRoutes, setCreateImportRoutes\] = useState\(false\)/);
-  assert.match(pageSource, /const openImportPointModal = useCallback\(\(\) => \{[\s\S]*setCreateImportRoutes\(false\)/);
-  assert.match(pageSource, /checked=\{createImportRoutes\}/);
-  assert.match(pageSource, /导入并按业务类型创建 DataCenter 路由/);
+// 验证导入自动创建路由，隐藏开关及规则说明，并保留主站命令提示。
+test('IEC104 import page creates routes automatically without an opt-in control', () => {
+  assert.doesNotMatch(pageSource, /createImportRoutes|setCreateImportRoutes/);
+  assert.doesNotMatch(pageSource, /导入并按业务类型创建 DataCenter 路由|路由使用下方最终确认的 Tag/);
+  assert.match(pageSource, /const importRoutesTriggerCommands = isMasterStationConfig\(selectedLink\?\.config\)/);
   assert.match(pageSource, /当前 IEC104 连接为 MASTER/);
   assert.match(pageSource, /config\.station_role === 0 && config\.role === ROLE_CLIENT/);
   assert.match(pageSource, /isSlaveStationConfig/);
-  assert.match(pageSource, /遥信、遥测：来源点位 → 当前 IEC104 点位/);
-  assert.match(pageSource, /遥控、遥调：当前 IEC104 点位 → 来源点位/);
-  assert.match(pageSource, /参数、未分类点位不自动创建路由/);
+  assert.match(pageSource, /routesSkipped = importPointDrafts\.length - importRoutes\.length/);
   assert.doesNotMatch(pageSource, /business_type: item\.business_type \|\| getPointBusinessTypeByCategory\(nextCategory\)/);
   assert.match(pageSource, /business_type: getPointBusinessTypeByCategory\(nextCategory\)/);
 });
@@ -221,7 +215,7 @@ test('IEC104 import page exposes an opt-in route checkbox and MASTER warning', (
 test('IEC104 import page keeps point-table and route saves in one stopped operation', () => {
   assert.match(
     pageSource,
-    /runSelectedLinkStopped\(async \(\) => \{[\s\S]*saveImportedPointsWithOptionalRoutes\(\{[\s\S]*savePointTable: \(\) => api\.iec104UpsertPointTable\([\s\S]*deleteRoutes: \(routes\) => api\.dcDeleteRoutes\(routes\)[\s\S]*saveRoutes: \(routes\) => api\.dcUpsertRoutes\(routes, false\)/,
+    /runSelectedLinkStopped\(async \(\) => \{[\s\S]*saveImportedPointsWithRoutes\(\{[\s\S]*savePointTable: \(\) => api\.iec104UpsertPointTable\([\s\S]*deleteRoutes: \(routes\) => api\.dcDeleteRoutes\(routes\)[\s\S]*saveRoutes: \(routes\) => api\.dcUpsertRoutes\(routes, false\)/,
   );
   assert.match(
     pageSource,

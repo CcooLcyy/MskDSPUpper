@@ -82,7 +82,7 @@ import {
   ImportedPointRoutesError,
   buildImportedPointRoutes,
   getImportedPointRouteDirection,
-  saveImportedPointsWithOptionalRoutes,
+  saveImportedPointsWithRoutes,
 } from './import-routing';
 import {
   IOA_CATEGORY_FILTER_OPTIONS,
@@ -617,7 +617,6 @@ const IEC104: React.FC = () => {
   const [importAllocationStep, setImportAllocationStep] = useState(1);
   const [importAllocationSkipOccupied, setImportAllocationSkipOccupied] = useState(true);
   const [importDragKey, setImportDragKey] = useState<string | null>(null);
-  const [createImportRoutes, setCreateImportRoutes] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const [searchParams] = useSearchParams();
   const pointLoadRequestRef = useRef(0);
@@ -766,7 +765,7 @@ const IEC104: React.FC = () => {
         })),
     [dataBusEndpointOptions, importSourceConnId],
   );
-  const importRoutesTriggerCommands = createImportRoutes && isMasterStationConfig(selectedLink?.config);
+  const importRoutesTriggerCommands = isMasterStationConfig(selectedLink?.config);
   const importStationRole = isSlaveStationConfig(selectedLink?.config) ? 'slave' : 'master';
   const hasRemoteControlImportDrafts = importPointDrafts.some((draft) =>
     isRemoteControlBusinessType(draft.business_type));
@@ -1617,7 +1616,6 @@ const IEC104: React.FC = () => {
     setImportAllocationStep(1);
     setImportAllocationSkipOccupied(true);
     setImportDragKey(null);
-    setCreateImportRoutes(false);
     setImportPointModalOpen(true);
     void refreshDataBusEndpointOptions();
   }, [points, refreshDataBusEndpointOptions]);
@@ -2404,8 +2402,7 @@ const IEC104: React.FC = () => {
     for (const draft of importPointDrafts) {
       const tag = draft.tag.trim();
       if (
-        createImportRoutes
-        && getImportedPointRouteDirection(draft.business_type, importStationRole) !== 'skip'
+        getImportedPointRouteDirection(draft.business_type, importStationRole) !== 'skip'
         && draft.sourceEndpoint.module_name === IEC104_MODULE_NAME
         && draft.sourceEndpoint.conn_name === selectedConn
       ) {
@@ -2481,7 +2478,7 @@ const IEC104: React.FC = () => {
         },
         { stationRole: importStationRole },
       );
-      console.info('IEC104 导入路由方向已确定', {
+      console.info('IEC104 导入自动路由方向已确定', {
         connName: selectedConn,
         stationRole: importStationRole,
         routes: importRoutes.map((route) => ({
@@ -2489,10 +2486,9 @@ const IEC104: React.FC = () => {
           dst: `${route.dst.module_name}/${route.dst.conn_name}/${route.dst.tag}`,
         })),
       });
-      routesSkipped = createImportRoutes ? importPointDrafts.length - importRoutes.length : 0;
+      routesSkipped = importPointDrafts.length - importRoutes.length;
       const restartResult = await runSelectedLinkStopped(async () => {
-        const saveResult = await saveImportedPointsWithOptionalRoutes({
-          createRoutes: createImportRoutes,
+        const saveResult = await saveImportedPointsWithRoutes({
           routes: importRoutes,
           savePointTable: () => api.iec104UpsertPointTable(selectedConn, newPoints, true),
           deleteRoutes: (routes) => api.dcDeleteRoutes(routes),
@@ -2549,7 +2545,6 @@ const IEC104: React.FC = () => {
       setImportSubmitting(false);
     }
   }, [
-    createImportRoutes,
     importPointDrafts,
     importSubmitting,
     importValidation.errorCount,
@@ -4581,19 +4576,6 @@ const IEC104: React.FC = () => {
               </div>
             </div>
           ) : null}
-
-          <div>
-            <Checkbox
-              checked={createImportRoutes}
-              disabled={importSubmitting}
-              onChange={(event) => setCreateImportRoutes(event.target.checked)}
-            >
-              导入并按业务类型创建 DataCenter 路由
-            </Checkbox>
-            <Text type="secondary" style={{ display: 'block', marginTop: 6 }}>
-              路由使用下方最终确认的 Tag，不会自动转换数据类型或工程量单位。从站规则：遥信、遥测：来源点位 → 当前 IEC104 点位；遥控、遥调：当前 IEC104 点位 → 来源点位；参数、未分类点位不自动创建路由。
-            </Text>
-          </div>
 
           {importRoutesTriggerCommands ? (
             <Alert
