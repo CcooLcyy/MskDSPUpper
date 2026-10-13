@@ -6,13 +6,13 @@ const source = readFileSync(new URL('../../src/pages/AVC/index.tsx', import.meta
 
 // 验证组弹窗读取映射基线，保存使用字段差异计划，失败计划保留在弹窗外供重试。
 test('AVC integrates mapping baseline, staged save and retained retry', () => {
-  assert.match(source, /useControlMappings\('AVC'\)/);
+  assert.match(source, /useControlMappings\('AVC', memberModalOpen\)/);
   assert.match(source, /usePendingControlRoutes\('AVC'\)/);
   assert.match(source, /mappings\.error \|\| pendingRouteError/);
   assert.match(source, /groupName=\{currentGroupName\}/);
   assert.match(source, /mappings\.open\('', undefined\)/);
   assert.match(source, /mappings\.open\(selectedConfig\.group_name, selectedGroup\?\.conn_id\)/);
-  assert.match(source, /mappings\.plan\(buildAvcMappingFields\(config\), routeBindings, config\.group_name\)/);
+  assert.match(source, /mappings\.plan\(planFields, \[\], config\.group_name, clearedFields\)/);
   assert.match(source, /removedRoutes: plan\.removedRoutes/);
   assert.match(source, /setPendingRouteError\(routeSaveError\)/);
   assert.match(source, /<ControlRouteRetry error=\{pendingRouteError\}/);
@@ -22,8 +22,8 @@ test('AVC integrates mapping baseline, staged save and retained retry', () => {
 
 // 验证成员只暂存、关闭草稿需确认、运行中编辑有原因提示。
 test('AVC protects group and member drafts and explains stopped editing', () => {
-  assert.match(source, /okText="暂存成员"/);
-  assert.match(source, /仍需保存控制组/);
+  assert.match(source, /okText="确认成员"/);
+  assert.match(source, /保存控制组时下发成员与路由/);
   assert.match(source, /closeGroupDraft/);
   assert.match(source, /closeMemberDraft/);
   assert.match(source, /放弃未保存的控制组改动/);
@@ -37,7 +37,7 @@ test('AVC reports runtime freshness and endpoint loading errors', () => {
   assert.match(source, /offline=\{!!runtimeStatus\.error\}/);
   assert.match(source, /Math\.max\(30000,/);
   assert.doesNotMatch(source, /updatedAt: Date\.now\(\)/);
-  assert.match(source, /dataBusEndpointError/);
-  assert.match(source, /刷新快速选点/);
-  assert.match(source, /connection\.module_name === AVC_MODULE_NAME && connection\.conn_name === currentGroupName/);
+  assert.match(source, /<AvcMemberEditor/);
+  assert.match(source, /error=\{mappings\.error\}/);
+  assert.match(source, /endpoint\.module_name !== AVC_MODULE_NAME \|\| option\.endpoint\.conn_name !== currentGroupName/);
 });

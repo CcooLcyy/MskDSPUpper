@@ -211,25 +211,24 @@ test('AGC member dialog content selects existing points without signal conversio
   assert.doesNotMatch(source, /name=\{\[['"]p_(?:meas|set)['"][^}]*['"](?:tag|unit|scale(?:_decimal)?|offset(?:_decimal)?)['"]/);
 });
 
-// 验证 AVC 组级与成员级自动路由开关均默认关闭，并保留完整外部端点。
-test('AVC group and member pickers expose opt-in auto routing', () => {
-  assert.match(avcSource, /const \[groupAutoRouteEnabled, setGroupAutoRouteEnabled\] = useState\(false\)/);
-  assert.match(avcSource, /const \[memberAutoRouteEnabled, setMemberAutoRouteEnabled\] = useState\(false\)/);
-  assert.match(avcSource, /保存时自动创建组级 DataCenter 路由/);
-  assert.match(avcSource, /保存控制组时自动创建该成员的 DataCenter 路由/);
-  assert.match(avcSource, /moduleName: connection\.module_name/);
+// 验证 AVC 成员选点与统一映射共用基线，不再暴露重复的自动路由开关。
+test('AVC member pickers use the shared binding draft', () => {
+  assert.match(avcSource, /<AvcMemberEditor/);
+  assert.match(avcSource, /endpoints=\{memberEndpoints\}/);
+  assert.match(avcSource, /buildAvcMemberBindingEdits\(/);
+  assert.doesNotMatch(avcSource, /groupAutoRouteEnabled|memberAutoRouteEnabled/);
 });
 
 // 验证 AVC 组级和成员量测为输入，q_set 为输出，并在组保存后增量提交。
 test('AVC auto routing maps group and member fields to the correct directions', () => {
-  assert.match(avcSource, /addRouteBinding\('input', config\.voltage_meas\?\.tag/);
-  assert.match(avcSource, /addRouteBinding\('input', config\.voltage_cmd\.tag/);
-  assert.match(avcSource, /addRouteBinding\('input', config\.q_total_cmd\.signal\?\.tag/);
-  assert.match(avcSource, /addRouteBinding\('input', member\.q_meas\?\.tag/);
-  assert.match(avcSource, /addRouteBinding\('output', member\.q_set\.signal\?\.tag/);
+  assert.match(avcSource, /add\('电压量测', config\.voltage_meas\?\.tag, 'input'\)/);
+  assert.match(avcSource, /add\('目标电压命令', config\.voltage_cmd\?\.tag, 'input'\)/);
+  assert.match(avcSource, /add\('总无功命令', config\.q_total_cmd\?\.signal\?\.tag, 'input'\)/);
+  assert.match(avcSource, /collectAvcMemberMappingFields\(editingGroup\?\.members \?\? \[\]\)/);
+  assert.match(avcSource, /removedRoutes: plan\.removedRoutes/);
   assert.match(
     avcSource,
     /savedGroup = await api\.avcUpsertGroup\(config, createOnly\)[\s\S]*saveRoutes: \(nextRoutes\) => api\.dcUpsertRoutes\(nextRoutes, false\)/,
   );
-  assert.match(avcSource, /AVC 控制组已保存，路由创建失败/);
+  assert.match(avcSource, /AVC 控制组已保存，路由创建或旧绑定清理失败/);
 });

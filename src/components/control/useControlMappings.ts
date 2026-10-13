@@ -82,10 +82,10 @@ export default function useControlMappings(moduleName: 'AGC' | 'AVC', preserveBa
     setEdited(next);
     console.info('控制组映射草稿已修改', { 模块: moduleName, 控制组: groupName, 点位: field.tag, 方向: field.direction, 端点数量: endpoints.length });
   };
-  const plan = (fields: ControlMappingField[], bindings: ControlDataBusBinding[] = [], actualGroupName = groupName) => {
+  const plan = (fields: ControlMappingField[], bindings: ControlDataBusBinding[] = [], actualGroupName = groupName, clearedFields: ControlMappingField[] = []) => {
     if (loading || error || !initializedRef.current) throw new Error('请先完成已有映射加载，再保存控制组');
     // 最终保存可能刚完成组内成员编辑，使用最新草稿避免 React 状态更新前遗漏绑定。
-    return buildControlMappingPlan({ moduleName, groupName: actualGroupName, fields, baselineRoutes: routes, edited: editedRef.current, bindings });
+    return buildControlMappingPlan({ moduleName, groupName: actualGroupName, fields, baselineRoutes: routes, edited: editedRef.current, bindings, clearedFields });
   };
   return { moduleName, groupName, options, routes, loading, error, warning, changed: Object.keys(edited).length > 0, open, refresh, getEndpoints, setEndpoints, plan };
 }

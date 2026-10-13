@@ -35,10 +35,12 @@ export function getControlMappingEndpoints(routes: DcRoute[], moduleName: string
 /** 仅为用户明确编辑的字段计算路由差异，保留其他字段和连接的路由。 */
 export function buildControlMappingPlan(options: {
   moduleName: string; groupName: string; fields: ControlMappingField[]; baselineRoutes: DcRoute[];
-  edited: Record<string, DcEndpoint[]>; bindings?: ControlDataBusBinding[];
+  edited: Record<string, DcEndpoint[]>; bindings?: ControlDataBusBinding[]; clearedFields?: ControlMappingField[];
 }): ControlMappingPlan {
   const { moduleName, groupName, baselineRoutes } = options;
   const edited = { ...options.edited };
+  // 停用字段只覆盖当前计划，配置保存失败后不会污染用户的映射草稿。
+  for (const field of options.clearedFields ?? []) edited[controlMappingFieldKey(field)] = [];
   // 成员快速选点保持增量兼容；统一映射区的明确更改优先。
   const legacy = new Map<string, DcEndpoint[]>();
   for (const binding of options.bindings ?? []) {

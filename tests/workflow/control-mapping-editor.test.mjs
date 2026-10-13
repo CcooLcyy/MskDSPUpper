@@ -39,6 +39,23 @@ test('清空外部点生成纯删除计划', () => {
   assert.deepEqual(plan, { routes: [], removedRoutes: [oldRoute] });
 });
 
+// 验证切换模式的当次清理不写入编辑草稿，配置保存失败后切回仍保留原绑定。
+test('临时停用字段的清理不污染失败后恢复的映射草稿', async () => {
+  const edited = {};
+  const disabledPlan = buildControlMappingPlan({ ...options, edited, clearedFields: [field] });
+  assert.deepEqual(disabledPlan, { routes: [], removedRoutes: [oldRoute] });
+  const calls = [];
+  await assert.rejects(saveControlGroupWithOptionalRoutes({
+    createRoutes: true, ...disabledPlan,
+    saveGroup: async () => { throw new Error('配置保存失败'); },
+    saveRoutes: async () => calls.push('新增'),
+    deleteRoutes: async () => calls.push('删除'),
+  }), /配置保存失败/);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(edited, {});
+  assert.deepEqual(buildControlMappingPlan({ ...options, edited }), { routes: [], removedRoutes: [] });
+});
+
 // 验证显式编辑的映射优先于旧成员快速选点草稿。
 test('明确编辑优先于成员自动路由草稿', () => {
   const plan = buildControlMappingPlan({ ...options, edited: { [controlMappingFieldKey(field)]: [] }, bindings: [{ direction: 'input', groupTag: field.tag, external: external('快速选点') }] });

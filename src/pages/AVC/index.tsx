@@ -12,7 +12,6 @@ import {
   Popconfirm,
   Select,
   Space,
-  Switch,
   Table,
   Tag,
   Tooltip,
@@ -56,7 +55,11 @@ import {
   ControlGroupRoutesError,
   saveControlGroupWithOptionalRoutes,
 } from '../../utils/control-auto-routing';
-import type { ControlDataBusBinding } from '../../utils/control-auto-routing';
+import AvcMemberEditor from '../../components/control/AvcMemberEditor';
+import { buildAvcMemberSignals, buildAvcMemberBindingEdits, collectAvcMemberMappingFields } from '../../utils/avc-member-bindings';
+import type { AvcMemberEndpoints, AvcMemberPointKind } from '../../utils/avc-member-bindings';
+import { controlEndpointKey, controlMappingFieldKey } from '../../utils/control-mapping-editor';
+import { synchronizeAvcNumberFields } from '../../utils/avc-number-fields';
 import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import {
@@ -103,33 +106,6 @@ type AvcGroupFormValues = {
   voltage_control: AvcVoltageControlConfig;
   strategy: { strategy_type: string };
   members: AvcMemberConfig[];
-};
-
-type DataBusEndpointOption = {
-  value: string;
-  label: string;
-  tag: string;
-  moduleName: string;
-  connName: string;
-};
-
-type DataBusConnectionOption = {
-  value: string;
-  label: string;
-  memberName: string;
-  moduleName: string;
-  connName: string;
-};
-
-type GroupTagPickerKey = 'voltage_meas' | 'voltage_cmd' | 'q_total_cmd' | 'q_total_base_tag';
-type MemberTagPickerKey = 'q_meas' | 'q_set' | 'base_tag';
-
-type GroupRouteEndpoints = Partial<Record<GroupTagPickerKey, DcEndpoint>>;
-type MemberRouteEndpoints = Partial<Record<MemberTagPickerKey, DcEndpoint>>;
-
-type MemberRouteDraft = {
-  enabled: boolean;
-  endpoints: MemberRouteEndpoints;
 };
 
 type GroupOperation = 'start' | 'stop' | 'delete';
@@ -287,6 +263,7 @@ const buildEmptyGroupForm = (): AvcGroupFormValues => ({
 });
 
 const cloneSignal = (signal: AvcSignalSpec | null | undefined): AvcSignalSpec => ({
+  ...signal,
   tag: signal?.tag ?? '',
   unit: signal?.unit ?? '',
   scale: signal?.scale ?? 1,
@@ -294,6 +271,7 @@ const cloneSignal = (signal: AvcSignalSpec | null | undefined): AvcSignalSpec =>
 });
 
 const cloneValueSpec = (spec: AvcValueSpec | null | undefined): AvcValueSpec => ({
+  ...spec,
   signal: cloneSignal(spec?.signal),
   mode: spec?.mode ?? 1,
   delta_base: spec?.delta_base ?? 0,
@@ -303,11 +281,13 @@ const cloneValueSpec = (spec: AvcValueSpec | null | undefined): AvcValueSpec => 
 const cloneVoltageControl = (
   config: AvcVoltageControlConfig | null | undefined,
 ): AvcVoltageControlConfig => ({
+  ...config,
   kp: config?.kp ?? 1,
   deadband: config?.deadband ?? 0,
 });
 
 const cloneMember = (member: AvcMemberConfig | null | undefined): AvcMemberConfig => ({
+  ...member,
   member_name: member?.member_name ?? '',
   controllable: member?.controllable ?? true,
   weight: member?.weight ?? 1,
@@ -344,6 +324,7 @@ const normalizeSignal = (signal: AvcSignalSpec | null | undefined): AvcSignalSpe
   }
 
   return {
+    ...signal,
     tag: signal.tag.trim(),
     unit: signal.unit.trim(),
     scale: signal.scale ?? 1,
@@ -362,6 +343,7 @@ const normalizeValueSpec = (spec: AvcValueSpec | null | undefined): AvcValueSpec
   }
 
   return {
+    ...spec,
     signal,
     mode: spec.mode ?? 1,
     delta_base: spec.mode === 2 ? (spec.delta_base ?? 0) : 0,
@@ -377,6 +359,7 @@ const normalizeVoltageControl = (
   }
 
   return {
+    ...config,
     kp: config.kp ?? 0,
     deadband: config.deadband ?? 0,
   };
@@ -424,19 +407,6 @@ const formatPointValue = (update: DcPointUpdate | null | undefined): string => {
     default:
       return '—';
   }
-};
-
-const buildDefaultMemberTag = (memberName: string, kind: 'q_meas' | 'q_set'): string => {
-  const normalizedMemberName = memberName
-    .trim()
-    .replace(/[\\/:]/g, '_')
-    .replace(/\s+/g, '_');
-  if (!normalizedMemberName) {
-    return '';
-  }
-
-  const suffix = kind === 'q_meas' ? '无功测量' : '无功设定';
-  return `${normalizedMemberName}_${suffix}`;
 };
 
 const findDuplicateGroupEndpointTags = (config: AvcGroupConfig): string[] => {
@@ -698,24 +668,14 @@ const AVC: React.FC = () => {
   const [editingMemberIndex, setEditingMemberIndex] = useState<number | null>(null);
   const [allocationMode, setAllocationMode] = useState<AllocationMode>('equal');
   const [membersDraft, setMembersDraft] = useState<AvcMemberConfig[]>([]);
-  const [memberRouteDrafts, setMemberRouteDrafts] = useState<MemberRouteDraft[]>([]);
-  const [allDataBusConnectionOptions, setDataBusConnectionOptions] = useState<DataBusConnectionOption[]>([]);
-  const [allDataBusEndpointOptions, setDataBusEndpointOptions] = useState<DataBusEndpointOption[]>([]);
-  const [dataBusEndpointLoading, setDataBusEndpointLoading] = useState(false);
-  const [dataBusEndpointError, setDataBusEndpointError] = useState<string | null>(null);
+  const [removedMemberFields, setRemovedMemberFields] = useState<ControlMappingField[]>([]);
+  const [memberEndpoints, setMemberEndpoints] = useState<AvcMemberEndpoints>({});
+  const [memberInitialEndpoints, setMemberInitialEndpoints] = useState<AvcMemberEndpoints>({});
+  const [memberEndpointChanges, setMemberEndpointChanges] = useState<AvcMemberEndpoints>({});
+  const [memberDirty, setMemberDirty] = useState(false);
   const [pendingRouteError, setPendingRouteError] = usePendingControlRoutes('AVC');
-  const mappings = useControlMappings('AVC');
+  const mappings = useControlMappings('AVC', memberModalOpen);
   const groupDraftBaseline = useRef('');
-  const memberDraftBaseline = useRef('');
-  const [groupAutoRouteEnabled, setGroupAutoRouteEnabled] = useState(false);
-  const [groupRouteEndpoints, setGroupRouteEndpoints] = useState<GroupRouteEndpoints>({});
-  const [groupTagPickerValues, setGroupTagPickerValues] = useState<Partial<Record<GroupTagPickerKey, string>>>({});
-  const [memberConnectionPickerValue, setMemberConnectionPickerValue] = useState<string>();
-  const [memberAutoRouteEnabled, setMemberAutoRouteEnabled] = useState(false);
-  const [memberRouteEndpoints, setMemberRouteEndpoints] = useState<MemberRouteEndpoints>({});
-  const [memberTagPickerValues, setMemberTagPickerValues] = useState<
-    Partial<Record<MemberTagPickerKey, string>>
-  >({});
   const [runtimeUpdates, setRuntimeUpdates] = useState<Record<string, DcPointUpdate>>({});
   const groupOperationRef = useRef<GroupOperation | null>(null);
   const runtimeRequestIdRef = useRef(0);
@@ -729,25 +689,18 @@ const AVC: React.FC = () => {
 
   const groupValues = Form.useWatch([], { form: groupForm, preserve: true }) as AvcGroupFormValues | undefined;
   const currentGroupName = String(groupValues?.group_name ?? editingGroup?.group_name ?? '').trim();
-  const isCurrentGroup = (connection: { module_name: string; conn_name: string }) => (
-    connection.module_name === AVC_MODULE_NAME && connection.conn_name === currentGroupName
-  );
-  const dataBusEndpointOptions = allDataBusEndpointOptions.filter((item) => !isCurrentGroup({ module_name: item.moduleName, conn_name: item.connName }));
-  const dataBusConnectionOptions = allDataBusConnectionOptions.filter((item) => !isCurrentGroup({ module_name: item.moduleName, conn_name: item.connName }));
+  const memberPointOptions = mappings.options.filter((option) =>
+    option.endpoint.module_name !== AVC_MODULE_NAME || option.endpoint.conn_name !== currentGroupName);
   const commandMode = Form.useWatch('command_mode', groupForm) ?? 'voltage';
   const mappingFields = buildAvcMappingFields({
     voltage_meas: groupValues?.voltage_meas ?? null,
     voltage_cmd: commandMode === 'voltage' ? groupValues?.voltage_cmd ?? null : null,
     q_total_cmd: commandMode === 'q_total' ? groupValues?.q_total_cmd ?? null : null,
-    members: membersDraft,
+    members: [],
   });
   const controlMode = effectiveControlMode(Form.useWatch('control_mode', groupForm));
   const qTotalMode = Form.useWatch(['q_total_cmd', 'mode'], groupForm) ?? 1;
   const qTotalDeltaBase = Form.useWatch(['q_total_cmd', 'delta_base'], groupForm) ?? 0;
-  const memberControllable = Form.useWatch('controllable', memberForm) ?? true;
-  const memberQSetMode = Form.useWatch(['q_set', 'mode'], memberForm) ?? 1;
-  const memberQSetDeltaBase = Form.useWatch(['q_set', 'delta_base'], memberForm) ?? 0;
-
   const selectedGroup = useMemo(
     () => groups.find((item) => item.config?.group_name === selectedGroupName) ?? null,
     [groups, selectedGroupName],
@@ -767,7 +720,8 @@ const AVC: React.FC = () => {
       setMembersDraft((prev) => prev.map((member) => {
         if (!member.controllable) return member;
         const range = member.q_max_kvar - member.q_min_kvar;
-        return { ...member, weight: resolveControlAllocationWeight(mode, range, member.weight) };
+        // 显式切换分配方式后，旧 Decimal20 权重不能覆盖新的分配结果。
+        return synchronizeAvcNumberFields({ ...member, weight: resolveControlAllocationWeight(mode, range, member.weight) }, undefined, ['weight']);
       }));
     }
   }, []);
@@ -775,7 +729,7 @@ const AVC: React.FC = () => {
   const handleMemberWeightChange = useCallback((index: number, value: number | null) => {
     if (typeof value !== 'number' || !Number.isFinite(value)) return;
     setMembersDraft((prev) => prev.map((member, memberIndex) => (
-      memberIndex === index ? { ...member, weight: value } : member
+      memberIndex === index ? synchronizeAvcNumberFields({ ...member, weight: value }, member, ['weight']) : member
     )));
   }, []);
   const selectedConfig = selectedGroup?.config ?? null;
@@ -855,44 +809,6 @@ const AVC: React.FC = () => {
     }
   }, [messageApi]);
 
-  const refreshDataBusEndpointOptions = useCallback(async () => {
-    setDataBusEndpointLoading(true);
-    setDataBusEndpointError(null);
-    try {
-      const connections = await api.dcListConnections();
-      setDataBusConnectionOptions(connections.map((connection) => ({
-        value: String(connection.conn_id),
-        label: `${connection.module_name}/${connection.conn_name}`,
-        memberName: connection.conn_name,
-        moduleName: connection.module_name,
-        connName: connection.conn_name,
-      })).sort((left, right) => left.label.localeCompare(right.label, 'zh-CN')));
-      const endpointGroups = await Promise.allSettled(connections.map(async (connection) => {
-        const connTags = await api.dcGetConnTags(connection.conn_id);
-        return connTags.tags.map((tag) => ({
-          value: `${connection.conn_id}:${tag}`,
-          label: `${connection.module_name}/${connection.conn_name} : ${tag}`,
-          tag,
-          moduleName: connection.module_name,
-          connName: connection.conn_name,
-        }));
-      }));
-      setDataBusEndpointOptions(endpointGroups.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
-        .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN')));
-      const failedConnections = endpointGroups.flatMap((result, index) => result.status === 'rejected'
-        ? [`${connections[index].module_name}/${connections[index].conn_name}: ${formatErrorText(result.reason)}`] : []);
-      if (failedConnections.length) {
-        setDataBusEndpointError(`部分连接点位读取失败：${failedConnections.join('；')}`);
-        console.error('AVC 快速选点读取部分失败', { 连接错误: failedConnections });
-      }
-    } catch (error) {
-      setDataBusEndpointError(`数据总线连接读取失败：${formatErrorText(error)}`);
-      console.error('AVC 快速选点加载失败', error);
-    } finally {
-      setDataBusEndpointLoading(false);
-    }
-  }, []);
-
   const refreshRuntime = useCallback(async () => {
     const requestId = runtimeRequestIdRef.current + 1;
     runtimeRequestIdRef.current = requestId;
@@ -947,10 +863,6 @@ const AVC: React.FC = () => {
   }, [refreshGroups]);
 
   useEffect(() => {
-    void refreshDataBusEndpointOptions();
-  }, [refreshDataBusEndpointOptions]);
-
-  useEffect(() => {
     if ((currentView !== 'strategy' && currentView !== 'default-points') || !selectedGroup?.conn_id) {
       runtimeRequestIdRef.current += 1;
       setRuntimeUpdates({});
@@ -980,152 +892,33 @@ const AVC: React.FC = () => {
     setSelectedGroupName(groupName);
   }, []);
 
-  const handleSelectGroupEndpoint = useCallback(
-    (picker: GroupTagPickerKey, endpointValue: string | undefined) => {
-      setGroupTagPickerValues((prev) => ({ ...prev, [picker]: endpointValue }));
-      if (!endpointValue) {
-        setGroupRouteEndpoints((prev) => {
-          const next = { ...prev };
-          delete next[picker];
-          return next;
-        });
-        return;
-      }
-
-      const selected = dataBusEndpointOptions.find((item) => item.value === endpointValue);
-      if (!selected) {
-        setGroupRouteEndpoints((prev) => {
-          const next = { ...prev };
-          delete next[picker];
-          return next;
-        });
-        return;
-      }
-
-      setGroupRouteEndpoints((prev) => ({
-        ...prev,
-        [picker]: {
-          module_name: selected.moduleName,
-          conn_name: selected.connName,
-          tag: selected.tag,
-        },
-      }));
-
-      switch (picker) {
-        case 'voltage_meas':
-          groupForm.setFieldValue(['voltage_meas', 'tag'], selected.tag);
-          break;
-        case 'voltage_cmd':
-          groupForm.setFieldValue(['voltage_cmd', 'tag'], selected.tag);
-          break;
-        case 'q_total_cmd':
-          groupForm.setFieldValue(['q_total_cmd', 'signal', 'tag'], selected.tag);
-          break;
-        case 'q_total_base_tag':
-          groupForm.setFieldValue(['q_total_cmd', 'base_tag'], selected.tag);
-          break;
-        default:
-          break;
-      }
-    },
-    [dataBusEndpointOptions, groupForm],
-  );
-
-  const handleSelectMemberConnection = useCallback(
-    (connectionValue: string | undefined) => {
-      setMemberConnectionPickerValue(connectionValue);
-      if (!connectionValue) {
-        return;
-      }
-
-      const selected = dataBusConnectionOptions.find((item) => item.value === connectionValue);
-      if (!selected) {
-        return;
-      }
-
-      const previousMemberName = String(memberForm.getFieldValue('member_name') ?? '').trim();
-      const currentQMeasTag = String(memberForm.getFieldValue(['q_meas', 'tag']) ?? '').trim();
-      const currentQSetTag = String(memberForm.getFieldValue(['q_set', 'signal', 'tag']) ?? '').trim();
-      memberForm.setFieldValue('member_name', selected.memberName);
-
-      const previousQMeasTag = buildDefaultMemberTag(previousMemberName, 'q_meas');
-      if (!currentQMeasTag || (previousQMeasTag && currentQMeasTag === previousQMeasTag)) {
-        memberForm.setFieldValue(['q_meas', 'tag'], buildDefaultMemberTag(selected.memberName, 'q_meas'));
-      }
-
-      const previousQSetTag = buildDefaultMemberTag(previousMemberName, 'q_set');
-      if (!currentQSetTag || (previousQSetTag && currentQSetTag === previousQSetTag)) {
-        memberForm.setFieldValue(['q_set', 'signal', 'tag'], buildDefaultMemberTag(selected.memberName, 'q_set'));
-      }
-    },
-    [dataBusConnectionOptions, memberForm],
-  );
-
-  const handleSelectMemberEndpoint = useCallback(
-    (picker: MemberTagPickerKey, endpointValue: string | undefined) => {
-      setMemberTagPickerValues((prev) => ({ ...prev, [picker]: endpointValue }));
-      if (!endpointValue) {
-        setMemberRouteEndpoints((prev) => {
-          const next = { ...prev };
-          delete next[picker];
-          return next;
-        });
-        return;
-      }
-
-      const selected = dataBusEndpointOptions.find((item) => item.value === endpointValue);
-      if (!selected) {
-        setMemberRouteEndpoints((prev) => {
-          const next = { ...prev };
-          delete next[picker];
-          return next;
-        });
-        return;
-      }
-
-      setMemberRouteEndpoints((prev) => ({
-        ...prev,
-        [picker]: {
-          module_name: selected.moduleName,
-          conn_name: selected.connName,
-          tag: selected.tag,
-        },
-      }));
-
-      const memberName = String(memberForm.getFieldValue('member_name') ?? '').trim();
-      if (!memberName) {
-        memberForm.setFieldValue('member_name', selected.connName);
-      }
-
-      switch (picker) {
-        case 'q_meas':
-          memberForm.setFieldValue(['q_meas', 'tag'], selected.tag);
-          break;
-        case 'q_set':
-          memberForm.setFieldValue(['q_set', 'signal', 'tag'], selected.tag);
-          break;
-        case 'base_tag':
-          memberForm.setFieldValue(['q_set', 'base_tag'], selected.tag);
-          break;
-        default:
-          break;
-      }
-    },
-    [dataBusEndpointOptions, memberForm],
-  );
+  const handleSelectMemberEndpoint = (kind: AvcMemberPointKind, endpoints: DcEndpoint[]) => {
+    setMemberDirty(true);
+    setMemberEndpoints((previous) => ({ ...previous, [kind]: endpoints }));
+    const initial = (memberInitialEndpoints[kind] ?? []).map(controlEndpointKey).sort();
+    const selected = endpoints.map(controlEndpointKey).sort();
+    setMemberEndpointChanges((previous) => {
+      const next = { ...previous };
+      if (JSON.stringify(initial) === JSON.stringify(selected)) delete next[kind];
+      else next[kind] = endpoints;
+      return next;
+    });
+    if (!memberForm.getFieldValue('member_name') && endpoints[0]) {
+      memberForm.setFieldValue('member_name', endpoints[0].conn_name);
+    }
+  };
 
   const openCreateGroupForm = useCallback(() => {
     if (pendingRouteError) { messageApi.warning('请先完成待处理映射的重试，再修改控制组配置'); return; }
     setEditingGroup(null);
     setAllocationMode('equal');
     setMembersDraft([]);
-    setMemberRouteDrafts([]);
-    setGroupAutoRouteEnabled(false);
-    setGroupRouteEndpoints({});
-    setGroupTagPickerValues({});
+    setRemovedMemberFields([]);
+    setMemberModalOpen(false);
+    setMemberDirty(false);
     groupForm.resetFields();
     groupForm.setFieldsValue(buildEmptyGroupForm());
-    groupDraftBaseline.current = draftFingerprint({ values: groupForm.getFieldsValue(true), members: [], routes: [], allocation: 'equal', auto: false, endpoints: {} });
+    groupDraftBaseline.current = draftFingerprint({ values: groupForm.getFieldsValue(true), members: [], allocation: 'equal' });
     void mappings.open('', undefined);
     setGroupModalOpen(true);
   }, [groupForm, mappings, messageApi, pendingRouteError]);
@@ -1151,13 +944,12 @@ const AVC: React.FC = () => {
     setEditingGroup(selectedConfig);
     setAllocationMode(inferAllocationMode(selectedConfig.members));
     setMembersDraft(selectedConfig.members.map((member) => cloneMember(member)));
-    setMemberRouteDrafts(selectedConfig.members.map(() => ({ enabled: false, endpoints: {} })));
-    setGroupAutoRouteEnabled(false);
-    setGroupRouteEndpoints({});
-    setGroupTagPickerValues({});
+    setRemovedMemberFields([]);
+    setMemberModalOpen(false);
+    setMemberDirty(false);
     groupForm.resetFields();
     groupForm.setFieldsValue(buildGroupFormValues(selectedConfig));
-    groupDraftBaseline.current = draftFingerprint({ values: groupForm.getFieldsValue(true), members: selectedConfig.members.map(cloneMember), routes: selectedConfig.members.map(() => ({ enabled: false, endpoints: {} })), allocation: inferAllocationMode(selectedConfig.members), auto: false, endpoints: {} });
+    groupDraftBaseline.current = draftFingerprint({ values: groupForm.getFieldsValue(true), members: selectedConfig.members.map(cloneMember), allocation: inferAllocationMode(selectedConfig.members) });
     void mappings.open(selectedConfig.group_name, selectedGroup?.conn_id);
     setGroupModalOpen(true);
   }, [groupForm, mappings, selectedConfig, selectedGroup?.conn_id, messageApi, pendingRouteError]);
@@ -1176,53 +968,39 @@ const AVC: React.FC = () => {
     setRenameModalOpen(true);
   }, [renameForm, selectedConfig, messageApi, pendingRouteError]);
 
-  const openCreateMember = useCallback(() => {
+  const openCreateMember = () => {
+    if (memberModalOpen || groupSubmitting || mappings.loading || mappings.error) return;
     setEditingMemberIndex(null);
-    setMemberConnectionPickerValue(undefined);
-    setMemberAutoRouteEnabled(false);
-    setMemberRouteEndpoints({});
-    setMemberTagPickerValues({});
+    setMemberEndpoints({});
+    setMemberInitialEndpoints({});
+    setMemberEndpointChanges({});
+    setMemberDirty(false);
     memberForm.resetFields();
     memberForm.setFieldsValue(cloneMember(DEFAULT_MEMBER));
-    memberDraftBaseline.current = draftFingerprint({ values: memberForm.getFieldsValue(true), auto: false, endpoints: {} });
     setMemberModalOpen(true);
-  }, [memberForm]);
+    console.info('AVC 添加成员弹窗已打开');
+  };
 
-  const openEditMember = useCallback(
-    (index: number) => {
-      const member = membersDraft[index];
-      if (!member) {
-        return;
-      }
-
-      const routeDraft = memberRouteDrafts[index] ?? { enabled: false, endpoints: {} };
-      const pickerValues: Partial<Record<MemberTagPickerKey, string>> = {};
-      (Object.entries(routeDraft.endpoints) as Array<[MemberTagPickerKey, DcEndpoint]>).forEach(
-        ([picker, endpoint]) => {
-          const option = dataBusEndpointOptions.find(
-            (item) =>
-              item.moduleName === endpoint.module_name
-              && item.connName === endpoint.conn_name
-              && item.tag === endpoint.tag,
-          );
-          if (option) {
-            pickerValues[picker] = option.value;
-          }
-        },
-      );
-
-      setEditingMemberIndex(index);
-      setMemberConnectionPickerValue(undefined);
-      setMemberAutoRouteEnabled(routeDraft.enabled);
-      setMemberRouteEndpoints({ ...routeDraft.endpoints });
-      setMemberTagPickerValues(pickerValues);
-      memberForm.resetFields();
-      memberForm.setFieldsValue(cloneMember(member));
-      memberDraftBaseline.current = draftFingerprint({ values: memberForm.getFieldsValue(true), auto: routeDraft.enabled, endpoints: routeDraft.endpoints });
-      setMemberModalOpen(true);
-    },
-    [dataBusEndpointOptions, memberForm, memberRouteDrafts, membersDraft],
-  );
+  const openEditMember = (index: number) => {
+    if (memberModalOpen || groupSubmitting || mappings.loading || mappings.error) return;
+    const member = membersDraft[index];
+    if (!member) return;
+    const endpoints: AvcMemberEndpoints = {};
+    for (const field of collectAvcMemberMappingFields([member])) {
+      const kind: AvcMemberPointKind = field.direction === 'output' ? 'q_set'
+        : field.tag === member.q_meas?.tag ? 'q_meas' : 'base_tag';
+      endpoints[kind] = mappings.getEndpoints(field);
+    }
+    setEditingMemberIndex(index);
+    setMemberEndpoints(endpoints);
+    setMemberInitialEndpoints(endpoints);
+    setMemberEndpointChanges({});
+    setMemberDirty(false);
+    memberForm.resetFields();
+    memberForm.setFieldsValue(cloneMember(member));
+    setMemberModalOpen(true);
+    console.info('AVC 编辑成员弹窗已打开', { 成员: member.member_name });
+  };
 
   const handleDeleteGroup = useCallback(
     async (groupName: string) => {
@@ -1284,7 +1062,7 @@ const AVC: React.FC = () => {
   }, [beginGroupOperation, endGroupOperation, messageApi, refreshGroups, selectedGroup, selectedGroupName]);
 
   const handleGroupSubmit = useCallback(async () => {
-    if (groupSubmitting || mappings.loading || mappings.error || pendingRouteError) return;
+    if (groupSubmitting || memberModalOpen || memberSubmitting || mappings.loading || mappings.error || pendingRouteError) return;
     setGroupSubmitting(true);
     let savedGroup: AvcGroupInfo | null = null;
     let savedGroupName = '';
@@ -1296,13 +1074,16 @@ const AVC: React.FC = () => {
         control_mode: effectiveControlMode(values.control_mode),
         calculation_execution_period_seconds: values.calculation_execution_period_seconds ?? 1,
         command_control_period_seconds: values.command_control_period_seconds ?? 4,
-        voltage_meas: normalizeSignal(values.voltage_meas),
-        voltage_cmd: values.command_mode === 'voltage' ? normalizeSignal(values.voltage_cmd) : null,
-        q_total_cmd: values.command_mode === 'q_total' ? normalizeValueSpec(values.q_total_cmd) : null,
+        voltage_meas: normalizeSignal(synchronizeAvcNumberFields(values.voltage_meas, editingGroup?.voltage_meas ?? undefined, ['scale', 'offset'])),
+        voltage_cmd: values.command_mode === 'voltage' ? normalizeSignal(synchronizeAvcNumberFields(values.voltage_cmd, editingGroup?.voltage_cmd ?? undefined, ['scale', 'offset'])) : null,
+        q_total_cmd: values.command_mode === 'q_total' ? normalizeValueSpec({ ...values.q_total_cmd,
+          signal: synchronizeAvcNumberFields(values.q_total_cmd.signal!, editingGroup?.q_total_cmd?.signal ?? undefined, ['scale', 'offset']),
+        }) : null,
         voltage_control:
-          values.command_mode === 'voltage' ? normalizeVoltageControl(values.voltage_control) : null,
+          values.command_mode === 'voltage' ? normalizeVoltageControl(synchronizeAvcNumberFields(values.voltage_control, editingGroup?.voltage_control ?? undefined, ['kp', 'deadband'])) : null,
         strategy: { strategy_type: values.strategy?.strategy_type ?? 'weighted' },
-        members: membersDraft.map((member) => ({
+        members: membersDraft.map((member) => synchronizeAvcNumberFields({
+          ...member,
           member_name: member.member_name.trim(),
           controllable: member.controllable ?? true,
           weight: member.controllable
@@ -1316,7 +1097,7 @@ const AVC: React.FC = () => {
           q_max_kvar: member.q_max_kvar ?? 0,
           q_meas: normalizeSignal(member.q_meas),
           q_set: member.controllable ? normalizeValueSpec(member.q_set) : null,
-        })),
+        }, member, ['weight', 'q_min_kvar', 'q_max_kvar'])),
       };
 
       if (allocationMode === 'proportional') {
@@ -1330,51 +1111,17 @@ const AVC: React.FC = () => {
       validateGroupConfig(config);
       savedGroupName = config.group_name;
 
-      const routeBindings: ControlDataBusBinding[] = [];
-      const addRouteBinding = (
-        direction: ControlDataBusBinding['direction'],
-        groupTag: string | null | undefined,
-        external: DcEndpoint | undefined,
-      ) => {
-        if (!groupTag?.trim() || !external) {
-          return;
-        }
-        routeBindings.push({ direction, groupTag: groupTag.trim(), external });
-      };
-
-      if (groupAutoRouteEnabled) {
-        addRouteBinding('input', config.voltage_meas?.tag, groupRouteEndpoints.voltage_meas);
-        if (config.voltage_cmd) {
-          addRouteBinding('input', config.voltage_cmd.tag, groupRouteEndpoints.voltage_cmd);
-        }
-        if (config.q_total_cmd) {
-          addRouteBinding('input', config.q_total_cmd.signal?.tag, groupRouteEndpoints.q_total_cmd);
-          if (config.q_total_cmd.mode === 2 && config.q_total_cmd.delta_base === 3) {
-            addRouteBinding(
-              'input',
-              config.q_total_cmd.base_tag,
-              groupRouteEndpoints.q_total_base_tag,
-            );
-          }
-        }
-      }
-
-      config.members.forEach((member, index) => {
-        const routeDraft = memberRouteDrafts[index];
-        if (!routeDraft?.enabled) {
-          return;
-        }
-
-        addRouteBinding('input', member.q_meas?.tag, routeDraft.endpoints.q_meas);
-        if (member.q_set) {
-          addRouteBinding('output', member.q_set.signal?.tag, routeDraft.endpoints.q_set);
-          if (member.q_set.mode === 2 && member.q_set.delta_base === 3) {
-            addRouteBinding('input', member.q_set.base_tag, routeDraft.endpoints.base_tag);
-          }
-        }
-      });
-
-      const plan = mappings.plan(buildAvcMappingFields(config), routeBindings, config.group_name);
+      // 原成员及已确认草稿的旧字段参与计划，确保删除/换点只清理对应路由。
+      const planFields = [
+        ...buildAvcMappingFields(config),
+        ...collectAvcMemberMappingFields(editingGroup?.members ?? []),
+        ...removedMemberFields,
+      ];
+      const originalGroupFields = editingGroup ? buildAvcMappingFields({ ...editingGroup, members: [] }) : [];
+      const activeKeys = new Set(buildAvcMappingFields(config).map(controlMappingFieldKey));
+      const clearedFields = originalGroupFields.filter((field) => !activeKeys.has(controlMappingFieldKey(field)));
+      planFields.push(...clearedFields);
+      const plan = mappings.plan(planFields, [], config.group_name, clearedFields);
       plannedRouteCount = plan.routes.length + plan.removedRoutes.length;
       const createRoutes = plannedRouteCount > 0;
       const createOnly = !editingGroup;
@@ -1404,7 +1151,7 @@ const AVC: React.FC = () => {
       console.info('AVC 控制组保存完成', {
         控制组: config.group_name,
         操作: createOnly ? '创建' : '更新',
-        自动路由开关: createRoutes,
+        映射变更数量: plannedRouteCount,
         路由数量: routesSubmitted,
       });
       const routeSummary = routesSubmitted > 0 ? `，并提交 ${routesSubmitted} 条 DataCenter 路由` : '';
@@ -1449,7 +1196,7 @@ const AVC: React.FC = () => {
           计划路由数量: plannedRouteCount,
           错误: routeSaveError.routeError,
         });
-        messageApi.error(`AVC 控制组已保存，路由创建失败: ${formatErrorText(routeSaveError.routeError)}`);
+        messageApi.error(`AVC 控制组已保存，路由创建或旧绑定清理失败，请使用映射重试入口: ${formatErrorText(routeSaveError.routeError)}`);
         if (error instanceof RuntimeRestartError) {
           messageApi.warning(`控制组恢复启动失败: ${formatErrorText(error.restartError)}`);
         }
@@ -1465,10 +1212,10 @@ const AVC: React.FC = () => {
     allocationMode,
     editingGroup,
     groupSubmitting,
-    groupAutoRouteEnabled,
     groupForm,
-    groupRouteEndpoints,
-    memberRouteDrafts,
+    memberModalOpen,
+    memberSubmitting,
+    removedMemberFields,
     membersDraft,
     messageApi,
     refreshGroups,
@@ -1499,109 +1246,102 @@ const AVC: React.FC = () => {
     }
   }, [messageApi, refreshGroups, renameForm, renameSubmitting, pendingRouteError]);
 
-  const handleMemberSubmit = useCallback(async () => {
-    if (memberSubmitting) return;
+  const handleMemberSubmit = async () => {
+    if (memberSubmitting || groupSubmitting || mappings.loading || mappings.error) return;
     setMemberSubmitting(true);
     try {
-      const values = await memberForm.validateFields();
-      const nextMember: AvcMemberConfig = {
-        member_name: values.member_name.trim(),
-        controllable: values.controllable ?? true,
-        weight: allocationMode === 'equal'
-          ? 1
-          : allocationMode === 'proportional'
-            ? (values.q_max_kvar ?? 0) - (values.q_min_kvar ?? 0)
-            : (values.weight ?? 0),
-        q_min_kvar: values.q_min_kvar ?? 0,
-        q_max_kvar: values.q_max_kvar ?? 0,
-        q_meas: cloneSignal(values.q_meas),
-        q_set: values.controllable ? cloneValueSpec(values.q_set) : null,
-      };
-
-      if (nextMember.q_min_kvar > nextMember.q_max_kvar) {
-        throw new Error('q_min_kvar 不能大于 q_max_kvar');
+      await memberForm.validateFields();
+      const values = memberForm.getFieldsValue(true);
+      const originalMember = editingMemberIndex === null ? undefined : membersDraft[editingMemberIndex];
+      const name = values.member_name.trim();
+      const others = membersDraft.filter((_member, index) => index !== editingMemberIndex);
+      if (others.some((member) => member.member_name.trim() === name)) throw new Error('成员名称不能重复');
+      const minimum = values.q_min_kvar;
+      const maximum = values.q_max_kvar;
+      if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || minimum > maximum) {
+        throw new Error('无功上下限必须是有限数值，且下限不能大于上限');
       }
-      if (
-        allocationMode === 'proportional'
-        && nextMember.controllable
-        && nextMember.q_min_kvar === nextMember.q_max_kvar
-      ) {
+      const controllable = values.controllable ?? true;
+      if (allocationMode === 'proportional' && controllable && maximum <= minimum) {
         throw new Error('按可调范围比例分配时，无功上限必须大于下限');
       }
-
-      if (nextMember.controllable && !(nextMember.q_set?.signal?.tag ?? '').trim()) {
-        throw new Error('可控成员必须配置 q_set');
+      if ((!originalMember?.q_meas?.tag || memberEndpointChanges.q_meas !== undefined) && !memberEndpoints.q_meas?.length) {
+        throw new Error('请选择已有的无功测量点');
       }
-
-      if (!(nextMember.q_meas?.tag ?? '').trim()) {
-        throw new Error('请配置 q_meas');
-      }
-
-      assertNotReservedDefaultTag(nextMember.q_meas?.tag, 'q_meas.tag');
-      if (nextMember.controllable || nextMember.q_set) {
-        validateValueSpecForSubmit(nextMember.q_set, 'q_set');
-      }
-      const duplicateMember = membersDraft.some(
-        (member, index) => index !== editingMemberIndex
-          && member.member_name.trim() === nextMember.member_name.trim(),
-      );
-      if (duplicateMember) {
-        throw new Error(`成员名称不能重复：${nextMember.member_name}`);
-      }
-
-      setMembersDraft((prev) => {
-        if (editingMemberIndex === null) {
-          return [...prev, nextMember];
-        }
-
-        return prev.map((member, index) => (index === editingMemberIndex ? nextMember : member));
+      if (controllable && (!originalMember?.controllable || !originalMember.q_set?.signal?.tag || memberEndpointChanges.q_set !== undefined)
+        && !memberEndpoints.q_set?.length) throw new Error('请选择已有的无功设定点');
+      const valueSpec = cloneValueSpec(values.q_set);
+      if (controllable && valueSpec.mode === 2 && valueSpec.delta_base === 3
+        && (originalMember?.q_set?.mode !== 2 || originalMember.q_set.delta_base !== 3 || !originalMember.q_set.base_tag || memberEndpointChanges.base_tag !== undefined)
+        && !memberEndpoints.base_tag?.length) throw new Error('请选择已有的增量基准点');
+      const signals = buildAvcMemberSignals({
+        memberName: name, existingMembers: others,
+        groupTags: buildAvcMappingFields({ ...groupForm.getFieldsValue(true), members: [] }).map((field) => field.tag),
+        originalMember: originalMember ? { ...originalMember, q_set: {
+          ...valueSpec, signal: originalMember.q_set?.signal ?? null,
+        } } : { ...cloneMember(DEFAULT_MEMBER), q_meas: null, q_set: { ...valueSpec, signal: null } },
+        changedSignals: {
+          q_meas: !originalMember || memberEndpointChanges.q_meas !== undefined,
+          q_set: !originalMember || memberEndpointChanges.q_set !== undefined,
+          base_tag: memberEndpointChanges.base_tag !== undefined,
+        },
       });
-      const nextRouteDraft: MemberRouteDraft = {
-        enabled: memberAutoRouteEnabled,
-        endpoints: { ...memberRouteEndpoints },
-      };
-      setMemberRouteDrafts((prev) => {
-        if (editingMemberIndex === null) {
-          return [...prev, nextRouteDraft];
-        }
-
-        return prev.map((draft, index) => (index === editingMemberIndex ? nextRouteDraft : draft));
+      const weight = allocationMode === 'equal' ? 1 : allocationMode === 'proportional' ? maximum - minimum : values.weight;
+      if (controllable && (!Number.isFinite(weight) || weight <= 0)) throw new Error('调节权重必须大于 0');
+      const nextMember: AvcMemberConfig = synchronizeAvcNumberFields({
+        ...values, member_name: name, controllable, weight,
+        q_meas: signals.q_meas,
+        q_set: controllable ? normalizeValueSpec(signals.q_set) : null,
+      }, originalMember, ['weight', 'q_min_kvar', 'q_max_kvar']);
+      assertNotReservedDefaultTag(nextMember.q_meas?.tag, '无功测量点');
+      if (controllable) validateValueSpecForSubmit(nextMember.q_set, '无功设定点');
+      const fields = [
+        ...collectAvcMemberMappingFields(originalMember ? [originalMember] : []),
+        ...collectAvcMemberMappingFields([nextMember]),
+      ];
+      const edits = buildAvcMemberBindingEdits({
+        member: nextMember, originalMember,
+        selected: originalMember ? memberEndpointChanges : memberEndpoints,
       });
-      console.info('AVC 成员草稿已暂存', { 成员: nextMember.member_name });
-      messageApi.success('成员已暂存，仍需保存控制组才能下发');
+      for (const field of fields) {
+        const key = controlMappingFieldKey(field);
+        if (Object.hasOwn(edits, key)) mappings.setEndpoints(field, edits[key]);
+      }
+      setMembersDraft(editingMemberIndex === null ? [...membersDraft, nextMember]
+        : membersDraft.map((member, index) => index === editingMemberIndex ? nextMember : member));
+      setRemovedMemberFields((previous) => [...previous, ...fields]);
+      setMemberDirty(false);
       setMemberModalOpen(false);
+      console.info('AVC 成员确认完成，已加入控制组草稿', { 成员: name, 明确修改绑定数量: Object.keys(edits).length });
     } catch (error) {
-      messageApi.error(`保存成员失败: ${error instanceof Error ? error.message : String(error)}`);
+      console.error('AVC 成员确认失败', { 错误: error });
+      messageApi.error(`成员编辑失败: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setMemberSubmitting(false);
     }
-  }, [
-    allocationMode,
-    editingMemberIndex,
-    memberAutoRouteEnabled,
-    memberForm,
-    memberRouteEndpoints,
-    memberSubmitting,
-    membersDraft,
-    messageApi,
-  ]);
+  };
 
-  const handleDeleteMember = useCallback((index: number) => {
-    setMembersDraft((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
-    setMemberRouteDrafts((prev) => prev.filter((_item, itemIndex) => itemIndex !== index));
-  }, []);
+  const handleDeleteMember = (index: number) => {
+    if (memberModalOpen || groupSubmitting) return;
+    const member = membersDraft[index];
+    if (!member) return;
+    const fields = collectAvcMemberMappingFields([member]);
+    fields.forEach((field) => mappings.setEndpoints(field, []));
+    setRemovedMemberFields((previous) => [...previous, ...fields]);
+    setMembersDraft((previous) => previous.filter((_item, itemIndex) => itemIndex !== index));
+    console.info('AVC 成员已从草稿删除，路由将在最终保存时清理', { 成员: member.member_name });
+  };
 
   const closeGroupDraft = () => {
-    if (groupSubmitting) return;
-    const changed = mappings.changed || draftFingerprint({ values: groupForm.getFieldsValue(true), members: membersDraft, routes: memberRouteDrafts, allocation: allocationMode, auto: groupAutoRouteEnabled, endpoints: groupRouteEndpoints }) !== groupDraftBaseline.current;
+    if (groupSubmitting || memberModalOpen) return;
+    const changed = mappings.changed || draftFingerprint({ values: groupForm.getFieldsValue(true), members: membersDraft, allocation: allocationMode }) !== groupDraftBaseline.current;
     if (!changed) { setGroupModalOpen(false); return; }
     modalApi.confirm({ title: '放弃未保存的控制组改动？', content: '关闭后将丢弃本次配置与映射草稿。', okText: '放弃改动', cancelText: '继续编辑', onOk: () => { console.info('AVC 控制组草稿已放弃'); setGroupModalOpen(false); } });
   };
 
   const closeMemberDraft = () => {
-    if (memberSubmitting) return;
-    const changed = draftFingerprint({ values: memberForm.getFieldsValue(true), auto: memberAutoRouteEnabled, endpoints: memberRouteEndpoints }) !== memberDraftBaseline.current;
-    if (!changed) { setMemberModalOpen(false); return; }
+    if (memberSubmitting || groupSubmitting) return;
+    if (!memberDirty) { setMemberModalOpen(false); return; }
     modalApi.confirm({ title: '放弃未暂存的成员改动？', content: '当前成员改动尚未暂存到控制组草稿。', okText: '放弃改动', cancelText: '继续编辑', onOk: () => { console.info('AVC 成员草稿已放弃'); setMemberModalOpen(false); } });
   };
 
@@ -1738,18 +1478,18 @@ const AVC: React.FC = () => {
       render: (_, record) => `${formatAutoRealtimeNumber(record.q_min_kvar)} ~ ${formatAutoRealtimeNumber(record.q_max_kvar)}`,
     },
     {
-      title: '测量值',
-      key: 'q_meas_value',
-      width: 110,
-      render: (_, record) => formatPointValue(record.q_meas?.tag ? runtimeUpdates[record.q_meas.tag] : null),
+      title: '测量点',
+      key: 'q_meas_binding',
+      width: 200,
+      render: (_, record) => mappings.getEndpoints({ label: '', tag: record.q_meas?.tag ?? '', direction: 'input' })
+        .map((endpoint) => `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag}`).join('；') || '未绑定',
     },
     {
-      title: '设定值',
-      key: 'q_set_value',
-      width: 110,
-      render: (_, record) => formatPointValue(
-        record.q_set?.signal?.tag ? runtimeUpdates[record.q_set.signal.tag] : null,
-      ),
+      title: '设定点',
+      key: 'q_set_binding',
+      width: 200,
+      render: (_, record) => record.controllable ? mappings.getEndpoints({ label: '', tag: record.q_set?.signal?.tag ?? '', direction: 'output' })
+        .map((endpoint) => `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag}`).join('；') || '未绑定' : '仅测量',
     },
     {
       title: '权重',
@@ -1800,9 +1540,9 @@ const AVC: React.FC = () => {
       width: 96,
       render: (_, __, index) => (
         <Space>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditMember(index)} />
-          <Popconfirm title="确认删除该成员？" onConfirm={() => handleDeleteMember(index)}>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+          <Button type="link" size="small" icon={<EditOutlined />} aria-label={`编辑 ${membersDraft[index]?.member_name}`} disabled={groupSubmitting || memberModalOpen || mappings.loading || !!mappings.error} onClick={() => openEditMember(index)} />
+          <Popconfirm title="确认删除该成员？" disabled={groupSubmitting || memberModalOpen || mappings.loading || !!mappings.error} onConfirm={() => handleDeleteMember(index)}>
+            <Button type="link" size="small" danger aria-label={`删除 ${membersDraft[index]?.member_name}`} disabled={groupSubmitting || memberModalOpen || mappings.loading || !!mappings.error} icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
       ),
@@ -2139,19 +1879,19 @@ const AVC: React.FC = () => {
         open={groupModalOpen}
         onOk={() => void handleGroupSubmit()}
         onCancel={closeGroupDraft}
-        okText="保存配置"
+        okText="保存控制组并建立路由"
         cancelText="取消"
         confirmLoading={groupSubmitting}
-        okButtonProps={{ disabled: mappings.loading || !!mappings.error || !!pendingRouteError }}
-        maskClosable={!groupSubmitting}
-        closable={!groupSubmitting}
-        keyboard={!groupSubmitting}
+        okButtonProps={{ disabled: memberModalOpen || memberSubmitting || mappings.loading || !!mappings.error || !!pendingRouteError }}
+        maskClosable={!groupSubmitting && !memberModalOpen}
+        closable={!groupSubmitting && !memberModalOpen}
+        keyboard={!groupSubmitting && !memberModalOpen}
         width={1100}
         centered
         className="control-config-modal control-group-modal"
         destroyOnClose
       >
-        <Form form={groupForm} layout="vertical" size="small">
+        <Form form={groupForm} component="div" layout="vertical" size="small" disabled={groupSubmitting}>
           <div className="control-config-intro">
             <span className="control-config-intro__mark">AVC</span>
             <span className="control-config-intro__text">控制组配置</span>
@@ -2240,19 +1980,6 @@ const AVC: React.FC = () => {
           </div>
 
           {pendingRouteError ? <Alert type="warning" showIcon title="已有控制组配置保存成功、映射尚未完成，请先重试映射，再保存新的配置。" style={{ marginBottom: 12 }} /> : null}
-          <ControlMappingsEditor mapping={mappings} fields={mappingFields} groupName={currentGroupName} />
-          <Space style={{ marginBottom: 12 }}><Button icon={<ReloadOutlined />} loading={dataBusEndpointLoading} onClick={() => void refreshDataBusEndpointOptions()}>刷新快速选点</Button></Space>
-          {dataBusEndpointError ? <Alert type="error" showIcon title={dataBusEndpointError} style={{ marginBottom: 12 }} /> : null}
-          <div className="control-config-section control-config-section--routing">
-            <Space>
-              <Switch checked={groupAutoRouteEnabled} onChange={setGroupAutoRouteEnabled} />
-              <Text strong>保存时自动创建组级 DataCenter 路由</Text>
-            </Space>
-            <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
-              仅为本次从数据总线选择的组级点位增量创建路由，方向为外部点位 → AVC；已有路由不会自动删除。
-            </Text>
-          </div>
-
           <Card className="control-config-section control-config-section--command" title="电压测量（voltage_meas）" size="small" bordered>
             <div style={{ display: 'flex', gap: 16 }}>
               <div style={{ flex: 1 }}>
@@ -2263,21 +1990,6 @@ const AVC: React.FC = () => {
                   rules={requiredTagRules('voltage_meas.tag')}
                 >
                   <Input placeholder="bus_voltage_meas" />
-                </Form.Item>
-                <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
-                  <Select
-                    allowClear
-                    showSearch
-                    placeholder="可选：从数据总线点位回填 voltage_meas"
-                    options={dataBusEndpointOptions}
-                    value={groupTagPickerValues.voltage_meas}
-                    loading={dataBusEndpointLoading}
-                    notFoundContent="暂无可选点位，可继续手动输入"
-                    onChange={(value) => handleSelectGroupEndpoint('voltage_meas', value)}
-                    filterOption={(input, option) =>
-                      String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                    }
-                  />
                 </Form.Item>
               </div>
               <div style={{ width: 140 }}>
@@ -2310,21 +2022,6 @@ const AVC: React.FC = () => {
                       rules={requiredTagRules('voltage_cmd.tag')}
                     >
                       <Input placeholder="bus_voltage_cmd" />
-                    </Form.Item>
-                    <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
-                      <Select
-                        allowClear
-                        showSearch
-                        placeholder="可选：从数据总线点位回填 voltage_cmd"
-                        options={dataBusEndpointOptions}
-                        value={groupTagPickerValues.voltage_cmd}
-                        loading={dataBusEndpointLoading}
-                        notFoundContent="暂无可选点位，可继续手动输入"
-                        onChange={(value) => handleSelectGroupEndpoint('voltage_cmd', value)}
-                        filterOption={(input, option) =>
-                          String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                        }
-                      />
                     </Form.Item>
                   </div>
                   <div style={{ width: 140 }}>
@@ -2394,21 +2091,6 @@ const AVC: React.FC = () => {
                   >
                     <Input placeholder="q_total_cmd" />
                   </Form.Item>
-                  <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
-                    <Select
-                      allowClear
-                      showSearch
-                      placeholder="可选：从数据总线点位回填 q_total_cmd"
-                      options={dataBusEndpointOptions}
-                      value={groupTagPickerValues.q_total_cmd}
-                      loading={dataBusEndpointLoading}
-                      notFoundContent="暂无可选点位，可继续手动输入"
-                      onChange={(value) => handleSelectGroupEndpoint('q_total_cmd', value)}
-                      filterOption={(input, option) =>
-                        String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                      }
-                    />
-                  </Form.Item>
                 </div>
                 <div style={{ width: 140 }}>
                   <Form.Item name={['q_total_cmd', 'signal', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
@@ -2470,21 +2152,6 @@ const AVC: React.FC = () => {
                         >
                           <Input placeholder="q_total_base_tag" />
                         </Form.Item>
-                        <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
-                          <Select
-                            allowClear
-                            showSearch
-                            placeholder="可选：从数据总线点位回填 base_tag"
-                            options={dataBusEndpointOptions}
-                            value={groupTagPickerValues.q_total_base_tag}
-                            loading={dataBusEndpointLoading}
-                            notFoundContent="暂无可选点位，可继续手动输入"
-                            onChange={(value) => handleSelectGroupEndpoint('q_total_base_tag', value)}
-                            filterOption={(input, option) =>
-                              String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                            }
-                          />
-                        </Form.Item>
                       </div>
                     ) : null}
                   </>
@@ -2499,7 +2166,7 @@ const AVC: React.FC = () => {
             size="small"
             bordered
             extra={
-              <Button size="small" icon={<PlusOutlined />} onClick={openCreateMember}>
+              <Button size="small" aria-label="添加成员" icon={<PlusOutlined />} disabled={groupSubmitting || mappings.loading || !!mappings.error} onClick={openCreateMember}>
                 添加成员
               </Button>
             }
@@ -2514,6 +2181,7 @@ const AVC: React.FC = () => {
               locale={{ emptyText: '暂无成员，请添加' }}
             />
           </Card>
+          <ControlMappingsEditor mapping={mappings} fields={mappingFields} groupName={currentGroupName} />
         </Form>
       </Modal>
 
@@ -2565,266 +2233,37 @@ const AVC: React.FC = () => {
 
       <Modal
         title={editingMemberIndex === null ? '添加成员' : '编辑成员'}
-        open={memberModalOpen}
+        open={memberModalOpen && groupModalOpen}
         onOk={() => void handleMemberSubmit()}
         onCancel={closeMemberDraft}
-        okText="暂存成员"
-        cancelText="取消"
+        okText="确认成员"
+        cancelText="取消编辑"
         confirmLoading={memberSubmitting}
-        maskClosable={!memberSubmitting}
-        closable={!memberSubmitting}
-        keyboard={!memberSubmitting}
-        width={920}
+        okButtonProps={{ disabled: groupSubmitting || mappings.loading || !!mappings.error }}
+        cancelButtonProps={{ disabled: memberSubmitting || groupSubmitting }}
+        mask={{ closable: false }}
+        closable={!memberSubmitting && !groupSubmitting}
+        keyboard={!memberSubmitting && !groupSubmitting}
+        width={820}
         centered
-        className="control-config-modal control-member-modal"
-        destroyOnClose
+        className="control-config-modal control-member-modal agc-member-modal"
+        destroyOnHidden
+        footer={(_origin, { OkBtn, CancelBtn }) => <div className="agc-member-modal__footer">
+          <Typography.Text type="secondary">确认后返回成员列表，保存控制组时下发成员与路由</Typography.Text>
+          <Space><CancelBtn /><OkBtn /></Space>
+        </div>}
       >
-        <Form form={memberForm} layout="vertical" size="small">
-          <Alert type="info" showIcon title="暂存成员仅更新当前草稿，仍需保存控制组才能下发配置与映射。" style={{ marginBottom: 16 }} />
-          <Space style={{ marginBottom: 12 }}><Button icon={<ReloadOutlined />} loading={dataBusEndpointLoading} onClick={() => void refreshDataBusEndpointOptions()}>刷新快速选点</Button></Space>
-          {dataBusEndpointError ? <Alert type="error" showIcon title={dataBusEndpointError} style={{ marginBottom: 12 }} /> : null}
-          <div style={{ marginBottom: 16 }}>
-            <Space>
-              <Switch checked={memberAutoRouteEnabled} onChange={setMemberAutoRouteEnabled} />
-              <Text>保存控制组时自动创建该成员的 DataCenter 路由</Text>
-            </Space>
-            <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
-              q_meas 与 base_tag 为外部点位 → AVC，q_set 为 AVC → 外部点位；仅增量创建，不自动删除已有路由。
-            </Text>
-          </div>
-
-          <div style={{ display: 'flex', gap: 16 }}>
-            <div style={{ flex: 1 }}>
-              <Form.Item
-                name="member_name"
-                label="成员名称"
-                rules={[{ required: true, message: '请输入成员名称' }]}
-              >
-                <Input placeholder="pcs_1" />
-              </Form.Item>
-              <Form.Item label="从数据总线连接快速填充" style={{ marginTop: -8, marginBottom: 0 }}>
-                <Select
-                  allowClear
-                  showSearch
-                  placeholder="可选：按连接名回填 member_name"
-                  options={dataBusConnectionOptions}
-                  value={memberConnectionPickerValue}
-                  loading={dataBusEndpointLoading}
-                  notFoundContent="暂无可选连接，可继续手动输入"
-                  onChange={handleSelectMemberConnection}
-                  filterOption={(input, option) =>
-                    String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                  }
-                />
-              </Form.Item>
-            </div>
-            <div style={{ width: 140 }}>
-              <Form.Item name="controllable" label="是否可控" tooltip={PARAMETER_HELP.control.controllable} valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: 16 }}>
-            <div style={{ flex: 1 }}>
-              <Form.Item
-                name="weight"
-                label="调节权重"
-                tooltip={PARAMETER_HELP.control.weight}
-                dependencies={['controllable']}
-                rules={[{
-                  validator: async (_rule, value) => {
-                    if (
-                      allocationMode === 'custom'
-                      && memberForm.getFieldValue('controllable')
-                      && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0)
-                    ) {
-                      throw new Error('自定义比例下，可控成员的权重必须大于 0');
-                    }
-                  },
-                }]}
-              >
-                <InputNumber
-                  disabled={allocationMode !== 'custom'}
-                  style={{ width: '100%' }}
-                  step={0.1}
-                  min={0}
-                />
-              </Form.Item>
-            </div>
-            <div style={{ flex: 1 }}>
-              <Form.Item name="q_min_kvar" label="无功下限（kVar）" tooltip={PARAMETER_HELP.control.reactiveLimits}>
-                <InputNumber style={{ width: '100%' }} step={0.1} />
-              </Form.Item>
-            </div>
-            <div style={{ flex: 1 }}>
-              <Form.Item name="q_max_kvar" label="无功上限（kVar）" tooltip={PARAMETER_HELP.control.reactiveLimits}>
-                <InputNumber style={{ width: '100%' }} step={0.1} />
-              </Form.Item>
-            </div>
-          </div>
-
-          <Card className="control-config-section control-config-section--command" title="无功测量点（q_meas）" size="small" bordered>
-            <div style={{ display: 'flex', gap: 16 }}>
-              <div style={{ flex: 1 }}>
-                <Form.Item
-                  name={['q_meas', 'tag']}
-                  label="测量点 tag"
-                  tooltip={PARAMETER_HELP.control.signalTag}
-                  rules={requiredTagRules('q_meas.tag')}
-                >
-                  <Input placeholder="pcs_1_q_meas" />
-                </Form.Item>
-                <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
-                  <Select
-                    allowClear
-                    showSearch
-                    placeholder="可选：从数据总线点位回填 q_meas"
-                    options={dataBusEndpointOptions}
-                    value={memberTagPickerValues.q_meas}
-                    loading={dataBusEndpointLoading}
-                    notFoundContent="暂无可选点位，可继续手动输入"
-                    onChange={(value) => handleSelectMemberEndpoint('q_meas', value)}
-                    filterOption={(input, option) =>
-                      String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                    }
-                  />
-                </Form.Item>
-              </div>
-              <div style={{ width: 140 }}>
-                <Form.Item name={['q_meas', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
-                  <Input placeholder="kVar" />
-                </Form.Item>
-              </div>
-              <div style={{ width: 140 }}>
-                <Form.Item name={['q_meas', 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
-                </Form.Item>
-              </div>
-              <div style={{ width: 140 }}>
-                <Form.Item name={['q_meas', 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
-                </Form.Item>
-              </div>
-            </div>
-          </Card>
-
-          {memberControllable ? (
-            <Card className="control-config-section control-config-section--command" title="无功设定点（q_set）" size="small" bordered>
-              <div style={{ display: 'flex', gap: 16 }}>
-                <div style={{ flex: 1 }}>
-                  <Form.Item
-                    name={['q_set', 'signal', 'tag']}
-                    label="设定点 tag"
-                    tooltip={PARAMETER_HELP.control.signalTag}
-                    rules={requiredTagRules('q_set.signal.tag')}
-                  >
-                    <Input placeholder="pcs_1_q_set" />
-                  </Form.Item>
-                  <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
-                    <Select
-                      allowClear
-                      showSearch
-                      placeholder="可选：从数据总线点位回填 q_set"
-                      options={dataBusEndpointOptions}
-                      value={memberTagPickerValues.q_set}
-                      loading={dataBusEndpointLoading}
-                      notFoundContent="暂无可选点位，可继续手动输入"
-                      onChange={(value) => handleSelectMemberEndpoint('q_set', value)}
-                      filterOption={(input, option) =>
-                        String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                      }
-                    />
-                  </Form.Item>
-                </div>
-                <div style={{ width: 140 }}>
-                  <Form.Item name={['q_set', 'signal', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
-                    <Input placeholder="kVar" />
-                  </Form.Item>
-                </div>
-                <div style={{ width: 140 }}>
-                  <Form.Item name={['q_set', 'signal', 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
-                    <InputNumber step={0.01} style={{ width: '100%' }} />
-                  </Form.Item>
-                </div>
-                <div style={{ width: 140 }}>
-                  <Form.Item name={['q_set', 'signal', 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
-                    <InputNumber step={0.01} style={{ width: '100%' }} />
-                  </Form.Item>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 16 }}>
-                <div style={{ width: 260 }}>
-                    <Form.Item
-                      name={['q_set', 'mode']}
-                      label="指令模式"
-                      tooltip={PARAMETER_HELP.control.commandMode}
-                      rules={valueModeRules('q_set.mode')}
-                    >
-                      <Select
-                        options={VALUE_MODE_OPTIONS}
-                    />
-                  </Form.Item>
-                </div>
-                {memberQSetMode === 2 ? (
-                  <>
-                    <div style={{ width: 260 }}>
-                        <Form.Item
-                          name={['q_set', 'delta_base']}
-                          label="增量基准"
-                          tooltip={PARAMETER_HELP.control.deltaBase}
-                          rules={deltaBaseRules('q_set.delta_base')}
-                        >
-                          <Select
-                            options={DELTA_BASE_OPTIONS}
-                        />
-                      </Form.Item>
-                    </div>
-                    {memberQSetDeltaBase === 3 ? (
-                      <div style={{ flex: 1 }}>
-                          <Form.Item
-                            name={['q_set', 'base_tag']}
-                            label="基准点 tag"
-                            tooltip={PARAMETER_HELP.control.baseTag}
-                            rules={[
-                              ...reservedTagRules('q_set.base_tag'),
-                              {
-                                required: true,
-                                whitespace: true,
-                                message: 'base_tag 不能为空',
-                              },
-                            ]}
-                          >
-                          <Input placeholder="q_base_tag" />
-                        </Form.Item>
-                        <Form.Item label="从数据总线快速选择" style={{ marginTop: -8, marginBottom: 0 }}>
-                          <Select
-                            allowClear
-                            showSearch
-                            placeholder="可选：从数据总线点位回填 base_tag"
-                            options={dataBusEndpointOptions}
-                            value={memberTagPickerValues.base_tag}
-                            loading={dataBusEndpointLoading}
-                            notFoundContent="暂无可选点位，可继续手动输入"
-                            onChange={(value) => handleSelectMemberEndpoint('base_tag', value)}
-                            filterOption={(input, option) =>
-                              String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                            }
-                          />
-                        </Form.Item>
-                      </div>
-                    ) : null}
-                  </>
-                ) : null}
-              </div>
-            </Card>
-          ) : (
-            <Card className="control-config-section control-config-section--command" title="无功设定点（q_set）" size="small" bordered>
-              <Text type="secondary">当前成员为不可控成员，不需要配置 q_set。</Text>
-            </Card>
-          )}
-        </Form>
+        <AvcMemberEditor
+          key={editingMemberIndex ?? 'new'}
+          form={memberForm} allocationMode={allocationMode}
+          options={memberPointOptions} endpoints={memberEndpoints}
+          loading={mappings.loading} error={mappings.error} warning={mappings.warning}
+          submitting={memberSubmitting || groupSubmitting}
+          onDirty={() => setMemberDirty(true)}
+          onSelect={handleSelectMemberEndpoint} onRefresh={() => void mappings.refresh()}
+        />
       </Modal>
+
     </div>
   );
 };
