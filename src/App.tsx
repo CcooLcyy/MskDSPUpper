@@ -3,6 +3,8 @@ import { ConfigProvider, App as AntApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { AppUpdateProvider } from './components/app-update/AppUpdateProvider';
 import { LowerUpdateAutoProvider } from './components/lower-update/LowerUpdateAutoProvider';
+import { LowerUpdateDeploymentProvider } from './components/lower-update/LowerUpdateDeploymentProvider';
+import { LowerUpdateDeploymentUi } from './components/lower-update/LowerUpdateDeploymentUi';
 import { AppModeProvider } from './offline/AppModeProvider.tsx';
 import { darkTheme } from './theme/dark';
 import { router } from './router';
@@ -14,7 +16,10 @@ function App() {
         <AppModeProvider>
           <AppUpdateProvider>
             <LowerUpdateAutoProvider>
-              <RouterProvider router={router} />
+              <LowerUpdateDeploymentProvider>
+                <RouterProvider router={router} />
+                <LowerUpdateDeploymentUi />
+              </LowerUpdateDeploymentProvider>
             </LowerUpdateAutoProvider>
           </AppUpdateProvider>
         </AppModeProvider>

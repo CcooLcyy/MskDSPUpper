@@ -75,13 +75,12 @@ test('lower update only deploys manifests for the selected architecture and chan
   assert.equal(matchesLowerUpdateSelection(makeManifest({ platform: 'linux-x64' }), 'linux-x64', 'ci'), true);
 });
 
-// 验证离开页面后残留的异步预检或确认回调不能继续上传、安装旧架构包。
-test('lower update stops deployment after the page has unmounted', () => {
+// 验证页面只负责启动全局任务，页面卸载不控制已启动任务的后续步骤。
+test('lower update hands deployment to the global task service', () => {
   assert.match(pageSource, /return \(\) => \{ deploymentPageMountedRef\.current = false; \}/);
   assert.match(pageSource, /const runDeployFlow[\s\S]*?if \(!deploymentPageMountedRef\.current\) return;/);
-  assert.match(pageSource, /const shouldContinueLowerUpdateDeploy = await checkLowerUpdateTargetBeforeDeploy\(selectedManifest\.image_id\);\s*if \(!deploymentPageMountedRef\.current\) return;/);
-  assert.match(pageSource, /const runUploadStep[^\n]*\{\s*if \(!deploymentPageMountedRef\.current\) return null;/);
-  assert.match(pageSource, /const runInstallStep[\s\S]*?if \(!deploymentPageMountedRef\.current\) return null;/);
+  assert.match(pageSource, /await startDeployment\(/);
+  assert.doesNotMatch(pageSource, /api\.uploadLowerUpdatePackage|api\.installLowerUpdatePackage|const runInstallStep|const runUploadStep/);
 });
 
 // 验证缓存新鲜度在未检查、无缓存、匹配和落后场景下保持明确语义。
@@ -126,14 +125,14 @@ test('lower update assesses cached package freshness against the online manifest
   );
 });
 
-// 验证页面在上传前执行目标机版本预检，并把期望镜像传给安装接口。
-test('lower update deploy flow preflights the target before upload and install', () => {
-  assert.match(pageSource, /checkLowerUpdateTargetBeforeDeploy\(activeManifest\.image_id\)/);
-  assert.match(pageSource, /expected_image_id: expectedImageId/);
-  assert.match(
-    pageSource,
-    /if \(!shouldContinueLowerUpdateDeploy\) \{[\s\S]*?return;[\s\S]*?\}\s*\n\s*setIsUploadModalOpen\(true\)/,
-  );
+// 验证启动全局任务前仍核对当前选择，并提交固定清单、包文件与连接参数。
+test('lower update page preserves selection and submits a deployment snapshot', () => {
+  assert.match(pageSource, /matchesLowerUpdateSelection\(selectedManifest, selection\.platform, selection\.channel\)/);
+  assert.match(pageSource, /manifest: selectedManifest/);
+  assert.match(pageSource, /packageResult: selectedDownloadResult/);
+  assert.match(pageSource, /upload_account: targetUploadAccount\.trim\(\)/);
+  assert.match(pageSource, /reuseSshPasswordForSudo/);
+  assert.match(pageSource, /rememberPassword/);
 });
 
 // 验证 Rust 安装接口在执行安装命令前也会校验期望镜像。

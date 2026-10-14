@@ -99,17 +99,15 @@ test('package cleanup failure preserves verification success and can be retried'
   assert.equal(cleanupCalls, 2);
 });
 
-// 验证页面与各适配器接入同一清理接口，重置安装时清空成功安装记录。
-test('deployment page and adapters wire package cleanup to successful installation context', () => {
+// 验证清理步骤已迁入全局任务，页面不直接清理，后台仍使用同一接口。
+test('global deployment service and adapters wire package cleanup to installation context', () => {
   const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\r\n?/g, '\n');
   const page = read('../../src/pages/AdvancedConfig/index.tsx');
-  assert.match(page, /successfulInstallRequestRef\.current = request/);
-  assert.match(page, /const resetInstallState[^]*?successfulInstallRequestRef\.current = null/);
-  assert.match(page, /confirmLowerUpdateDeployment\(successfulInstallRequestRef\.current/);
-  assert.match(page, /verifyRunningImage\(request\.expected_image_id, request\)/);
-  assert.match(page, /api\.cleanupLowerUpdatePackages\(request\)/);
-  assert.match(page, /历史包清理/);
-  assert.match(page, /升级已完成，历史安装包清理失败/);
+  const provider = read('../../src/components/lower-update/LowerUpdateDeploymentProvider.tsx');
+  assert.doesNotMatch(page, /api\.cleanupLowerUpdatePackages/);
+  assert.match(provider, /cleanup: api\.cleanupLowerUpdatePackages/);
+  assert.match(read('../../src/components/lower-update/LowerUpdateDeploymentUi.tsx'), /历史包清理/);
+  assert.match(read('../../src/utils/lower-update-deployment.ts'), /await operations\.cleanup\(installRequest\(\)\)/);
   assert.match(read('../../src/adapters/tauri.ts'), /cleanupLowerUpdatePackages:[^]*?'cleanup_lower_update_packages'/);
   assert.match(read('../../src/adapters/browser.ts'), /cleanupLowerUpdatePackages:/);
   assert.match(read('../../src/offline/adapter/workspace-api.ts'), /'cleanupLowerUpdatePackages'/);

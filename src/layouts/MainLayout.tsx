@@ -18,6 +18,7 @@ import ControlHeaderViewSwitcher from '../components/control/ControlHeaderViewSw
 import DataBusHeaderViewSwitcher from '../components/data-bus/DataBusHeaderViewSwitcher';
 import { useAppUpdate } from '../components/app-update/app-update-context';
 import SoftwareUpdateHeaderViewSwitcher from '../components/app-update/SoftwareUpdateHeaderViewSwitcher';
+import { LowerUpdateDeploymentHeader } from '../components/lower-update/LowerUpdateDeploymentUi';
 import ProtocolHeaderViewSwitcher from '../components/protocol/ProtocolHeaderViewSwitcher';
 import { useAppMode } from '../offline/app-mode-context.ts';
 import type { Capability } from '../offline/capabilities.ts';
@@ -242,6 +243,7 @@ const MainLayout: React.FC = () => {
             {isSoftwareUpdatePage ? <SoftwareUpdateHeaderViewSwitcher /> : null}
           </div>
           <Space size={12} align="center">
+            <LowerUpdateDeploymentHeader />
             <OfflineModeControls />
             <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
           </Space>
