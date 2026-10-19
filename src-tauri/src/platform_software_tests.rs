@@ -113,14 +113,34 @@ async fn service(mode: &'static str) -> (PlatformCatalog, Catalog, tokio::task::
 }
 
 fn temporary_file() -> PathBuf {
+    static NEXT_FILE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     std::env::temp_dir().join(format!(
-        "upper-grpc-test-{}-{}.part",
+        "upper-grpc-test-{}-{}-{}.part",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT_FILE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ))
+}
+
+// 验证并发测试的临时路径不会重名，避免相互覆盖或清理其他测试文件。
+#[test]
+fn concurrent_download_tests_use_distinct_temporary_files() {
+    let workers = (0..8)
+        .map(|_| std::thread::spawn(|| (0..1000).map(|_| temporary_file()).collect::<Vec<_>>()))
+        .collect::<Vec<_>>();
+    let paths = workers
+        .into_iter()
+        .flat_map(|worker| worker.join().unwrap())
+        .collect::<Vec<_>>();
+    let distinct = paths.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        distinct.len(),
+        paths.len(),
+        "并发下载测试临时文件名发生冲突"
+    );
 }
 
 // 验证真实 tonic 目录与数据流的完整身份和下载摘要。
