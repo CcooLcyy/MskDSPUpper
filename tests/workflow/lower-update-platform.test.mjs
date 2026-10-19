@@ -28,6 +28,8 @@ test('software platform endpoint normalizes hosts and rejects invalid addresses'
   const code = compile('src/utils/software-platform.ts').replace(/export /g, '');
   const { normalizeSoftwarePlatformEndpoint: normalize } = new Function(code + '\nreturn { normalizeSoftwarePlatformEndpoint };')();
   assert.equal(normalize(' http://192.168.10.198:50000/ '), 'http://192.168.10.198:50000');
+  assert.equal(normalize('http://60.208.15.90:50000'), 'http://60.208.15.90:50000');
+  assert.equal(normalize('http://platform.example.com:50000'), 'http://platform.example.com:50000');
   assert.equal(normalize('https://packages.example:443'), 'https://packages.example');
   for (const input of ['', 'file:///tmp', 'http://user:password@host', 'http://host/path', 'http://host?token=x', 'http://host#fragment', 'http://ho st', 'http://host\n:50000']) {
     assert.throws(() => normalize(input), /地址/);

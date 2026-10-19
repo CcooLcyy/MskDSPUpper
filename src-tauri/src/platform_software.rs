@@ -1,7 +1,6 @@
 //! 平台公开软件目录与有界、可续传的数据流；不使用 HTTP 下载或静态清单。
 use sha2::{Digest, Sha256};
 use std::{
-    net::IpAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -46,21 +45,6 @@ pub fn validate_endpoint(value: &str) -> Result<String, String> {
         || !matches!(url.scheme(), "http" | "https")
     {
         return Err("平台 gRPC 地址只能包含 HTTP(S) 协议、主机和端口".into());
-    }
-    if url.scheme() == "http" {
-        let host = url
-            .host_str()
-            .unwrap()
-            .trim_start_matches('[')
-            .trim_end_matches(']');
-        let private = match host.parse::<IpAddr>() {
-            Ok(IpAddr::V4(ip)) => ip.is_loopback() || ip.is_private(),
-            Ok(IpAddr::V6(ip)) => ip.is_loopback() || ip.is_unique_local(),
-            Err(_) => false,
-        };
-        if !private {
-            return Err("明文平台 gRPC 地址只允许回环或私有 IP".into());
-        }
     }
     Ok(url.as_str().trim_end_matches('/').to_string())
 }

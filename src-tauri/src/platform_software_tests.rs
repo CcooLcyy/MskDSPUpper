@@ -176,16 +176,46 @@ async fn malformed_streams_cannot_become_installable() {
     }
 }
 
-// 验证错误产品身份和公共明文地址在传输前即被拒绝。
-#[tokio::test]
-async fn mismatched_catalog_and_public_plaintext_are_rejected() {
-    assert!(PlatformCatalog::new("http://8.8.8.8:50000").is_err());
-    assert!(PlatformCatalog::new("http://user:secret@127.0.0.1:50000").is_err());
-    assert!(PlatformCatalog::new("https://platform.example.com:50000").is_ok());
+// 验证公网、域名与内网端点均可配置，并保留地址格式校验。
+#[test]
+fn endpoint_accepts_public_http_and_preserves_url_validation() {
+    for endpoint in [
+        "http://60.208.15.90:50000",
+        "http://platform.example.com:50000",
+        "http://192.168.10.198:50000",
+        "http://127.0.0.1:50000",
+        "http://[::1]:50000",
+        "http://[2001:db8::1]:50000",
+        "https://platform.example.com:50000",
+    ] {
+        assert_eq!(validate_endpoint(endpoint).unwrap(), endpoint);
+        assert!(PlatformCatalog::new(endpoint).is_ok());
+    }
     assert_eq!(
         validate_endpoint(" HTTPS://PLATFORM.EXAMPLE.COM:50000/ ").unwrap(),
         "https://platform.example.com:50000"
     );
+    for endpoint in [
+        "",
+        "file:///tmp/package",
+        "ftp://platform.example.com",
+        "http://user:secret@60.208.15.90:50000",
+        "http://60.208.15.90:50000/path",
+        "http://60.208.15.90:50000?token=x",
+        "http://60.208.15.90:50000#fragment",
+        "http://ho st:50000",
+        "http://60.208.15.90:99999",
+    ] {
+        assert!(
+            PlatformCatalog::new(endpoint).is_err(),
+            "错误地址未被拒绝：{endpoint}"
+        );
+    }
+}
+
+// 验证错误产品身份仍在下载前被拒绝。
+#[tokio::test]
+async fn mismatched_catalog_is_rejected() {
     let (client, _, task) = service("normal").await;
     assert!(client
         .get_expected("test-package", "mskdsp-lower", "linux-x64", "ci")
