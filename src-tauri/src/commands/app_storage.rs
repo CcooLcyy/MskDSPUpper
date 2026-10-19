@@ -426,7 +426,7 @@ mod tests {
         root.join("settings.json")
     }
 
-    // 验证平台地址按权威规则保存，公共明文与带凭据地址不能覆盖已有设置。
+    // 验证公网明文地址可持久化，非法格式不能覆盖已有设置。
     #[test]
     fn persists_valid_platform_endpoint_and_rejects_invalid_replacement() {
         let path = temp_settings_path("platform-endpoint");
@@ -441,9 +441,24 @@ mod tests {
             store.load().unwrap()[super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY],
             json!("http://192.168.1.2:50000")
         );
+        for endpoint in [
+            "http://60.208.15.90:50000",
+            "http://platform.example.com:50000",
+        ] {
+            store
+                .save_setting(
+                    super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY.into(),
+                    json!(format!("{endpoint}/")),
+                )
+                .unwrap();
+            assert_eq!(
+                store.load().unwrap()[super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY],
+                json!(endpoint)
+            );
+        }
         let original = std::fs::read(&path).unwrap();
         for invalid in [
-            "http://8.8.8.8:50000",
+            "http://60.208.15.90:50000?token=x",
             "https://user:password@example.com",
             "https://example.com/path",
         ] {
