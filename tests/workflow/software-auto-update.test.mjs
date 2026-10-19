@@ -25,8 +25,8 @@ test('upper updater separates download from install and keeps the 30 second time
   assert.match(provider, /const UPDATE_CHECK_INTERVAL_MS = 30_000/);
   assert.match(provider, /downloadAppUpdate/);
   assert.match(provider, /ready-to-install/);
-  assert.match(adapter, /update\.download\(/);
-  assert.match(adapter, /update\.install\(/);
+  assert.match(adapter, /'download_app_update'/);
+  assert.match(adapter, /'install_app_update'/);
   assert.doesNotMatch(provider, /downloadAndInstallAppUpdate/);
 });
 

@@ -96,6 +96,8 @@ export interface LowerUpdateChecksum {
 }
 
 export interface LowerUpdateManifest {
+  /** 平台不可变包 ID；本地导入和旧缓存可缺省。 */
+  platform_package_id?: string | null;
   /** 本地导入来源；通道字段仅用于缓存槽位。 */
   local_import?: boolean;
   schema_version: number;

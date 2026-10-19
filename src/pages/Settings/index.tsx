@@ -25,6 +25,7 @@ import type {
 import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
 import { useCapability } from '../../offline/use-capability.ts';
 import ConfigSectionPickerModal from './components/ConfigSectionPickerModal';
+import SoftwarePlatformSettings from './components/SoftwarePlatformSettings';
 
 const { Paragraph, Text } = Typography;
 
@@ -360,6 +361,8 @@ const Settings: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       {contextHolder}
       {modalContextHolder}
+
+      <SoftwarePlatformSettings />
 
       <Card title="本地数据" size="small" bordered loading={!runtimePaths}>
         {runtimePaths ? (

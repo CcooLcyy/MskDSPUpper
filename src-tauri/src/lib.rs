@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod grpc;
 pub mod logging;
+pub mod platform_software;
 pub mod proto;
 pub mod runtime_paths;
 pub mod state;
@@ -71,6 +72,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::app_update::check_app_update,
+            commands::app_update::download_app_update,
+            commands::app_update::install_app_update,
+            commands::app_update::dispose_app_update,
             commands::app_storage::load_app_settings,
             commands::app_storage::save_app_setting,
             commands::modbus_templates::save_modbus_template_export,

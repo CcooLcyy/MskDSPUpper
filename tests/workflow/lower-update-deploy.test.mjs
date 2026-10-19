@@ -200,15 +200,15 @@ test('lower update download progress is correlated by task and channel', () => {
   );
 });
 
-// 验证只有缓存未命中并准备发起 HTTP 请求时才记录“开始下载”。
+// 验证只有缓存未命中并准备发起 gRPC 下载时才记录“开始下载”。
 test('lower update logs network download only after cache miss', () => {
   const requestLogIndex = backendSource.indexOf('"收到下位机更新包下载请求"');
   const cacheCheckIndex = backendSource.indexOf('if output_path.is_file()');
-  const networkLogIndex = backendSource.indexOf('"开始下载下位机更新包"');
-  const requestSendIndex = backendSource.indexOf('.get(&manifest.asset.url)', networkLogIndex);
+  const networkLogIndex = backendSource.indexOf('"开始通过平台 gRPC 下载下位机更新包"');
+  const requestSendIndex = backendSource.indexOf('catalog.download(&package, &partial_path', networkLogIndex);
 
   assert.ok(requestLogIndex >= 0, '下载命令入口应记录收到请求');
   assert.ok(cacheCheckIndex > requestLogIndex, '收到请求日志应在缓存检查前');
   assert.ok(networkLogIndex > cacheCheckIndex, '开始下载日志应在缓存检查后');
-  assert.ok(requestSendIndex > networkLogIndex, '开始下载日志应紧邻实际 HTTP 请求之前');
+  assert.ok(requestSendIndex > networkLogIndex, '开始下载日志应紧邻实际 gRPC 下载之前');
 });

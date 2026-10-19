@@ -1,5 +1,6 @@
 pub mod agc;
 pub mod app_storage;
+pub mod app_update;
 pub mod avc;
 pub mod calc;
 pub mod control_orchestrator;

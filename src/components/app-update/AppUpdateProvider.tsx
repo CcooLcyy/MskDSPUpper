@@ -9,6 +9,14 @@ import type {
   AppUpdateInstallResult,
 } from './app-update-context';
 
+/** 按不可变包身份复用下载，避免包身份或摘要变化时误用同名版本。 */
+function sameAppUpdatePackage(left: AppUpdateInfo, right: AppUpdateInfo): boolean {
+  if (left.version !== right.version) return false;
+  return ['packageId', 'sha256', 'channel', 'platform'].every(
+    (key) => (left.rawJson[key] ?? null) === (right.rawJson[key] ?? null),
+  );
+}
+
 const UPDATE_CHECK_INTERVAL_MS = 30_000;
 const APP_UPDATE_METADATA_KEY = 'mskdsp.app-update.pending.v1';
 
@@ -178,8 +186,8 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
           return null;
         }
 
-        if (downloaded && downloaded.version === checkedUpdate.version) {
-          // 版本一致：复用已下载的包，只刷新清单元数据，不重复下载。
+        if (downloaded && sameAppUpdatePackage(downloaded, checkedUpdate)) {
+          // 包身份一致：复用已下载的包，只刷新目录元数据，不重复下载。
           const latest = checkedUpdate;
           setAvailableUpdate(latest);
           availableUpdateRef.current = latest;
@@ -190,7 +198,7 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
           return latest;
         }
 
-        // 版本不同：先下载新包，成功后再由适配器释放旧包。
+        // 包身份不同：新包校验成功后再由后端释放旧包。
         persistUpdate(checkedUpdate);
         await downloadUpdate(checkedUpdate, downloaded?.version);
         return checkedUpdate;
@@ -273,7 +281,7 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
         return performInstall();
       }
 
-      if (latest && latest.version !== downloaded.version) {
+      if (latest && !sameAppUpdatePackage(latest, downloaded)) {
         persistUpdate(latest);
         setSupersededUpdate(latest);
         supersededUpdateRef.current = latest;

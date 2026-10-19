@@ -56,12 +56,10 @@ import type {
   LowerUpdateChannel,
   LowerUpdatePlatform,
   LowerUpdateCachedPackage,
-  LowerUpdateDownloadProgress,
   LowerUpdateDownloadResult,
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
   LowerUpdatePackageCleanupResult,
-  LowerUpdateManifest,
   LowerUpdateRuntimeInfo,
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
@@ -82,10 +80,9 @@ import type {
   ModuleRunningInfo,
   RuntimePaths,
 } from './types';
-import { buildLowerUpdateLatestUrl } from './lower-update-source';
 import { clearLowerUpdateConnectionHistoryRememberPassword, lowerUpdateCredentialAccountKey, readLowerUpdateConnectionHistory, readLowerUpdateConnectionSettings, upsertLowerUpdateConnectionHistory, type LowerUpdateConnectionSettings, type LowerUpdateCredentials } from '../utils/lower-update-connection';
 import { LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY, LOWER_UPDATE_CONNECTION_SETTING_KEY } from '../utils/app-settings-core';
-import { assertLowerUpdateManifest, getLowerUpdateChannels } from '../utils/lower-update-platform';
+import { getLowerUpdateChannels } from '../utils/lower-update-platform';
 import {
   normalizeAgcControlProfileDecimalFields,
   normalizeAgcGroupConfigDecimalFields,
@@ -201,12 +198,6 @@ function loadBrowserSettings(): AppSettingsMap {
 
 function saveBrowserSettings(settings: AppSettingsMap): void {
   localStorage.setItem(BROWSER_SETTINGS_KEY, JSON.stringify(settings));
-}
-
-function bytesToHex(bytes: ArrayBuffer): string {
-  return [...new Uint8Array(bytes)]
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1184,14 +1175,8 @@ export const browserApi: typeof tauriApi = {
   },
   relaunchApp: async () => {},
   disposePendingAppUpdate: async () => {},
-  checkLowerUpdate: async (channel: LowerUpdateChannel, platform: LowerUpdatePlatform = 'linux-arm64'): Promise<LowerUpdateManifest> => {
-    const response = await fetch(buildLowerUpdateLatestUrl(channel, platform), { cache: 'no-store' });
-    if (!response.ok) {
-      throw new Error(`获取下位机更新清单失败: HTTP ${response.status}`);
-    }
-    const manifest = await response.json() as LowerUpdateManifest;
-    assertLowerUpdateManifest(manifest, platform, channel);
-    return manifest;
+  checkLowerUpdate: async () => {
+    throw new Error('浏览器开发模式不支持平台 gRPC 更新，请使用桌面上位机');
   },
   getLowerUpdateRuntimeInfo: async (): Promise<LowerUpdateRuntimeInfo> => ({
     container_name: 'mskdsp',
@@ -1199,69 +1184,8 @@ export const browserApi: typeof tauriApi = {
     running: true,
     image_id: browserRunningLowerImageId,
   }),
-  downloadLowerUpdate: async (
-    manifest: LowerUpdateManifest,
-    onProgress?: (progress: LowerUpdateDownloadProgress) => void,
-  ): Promise<LowerUpdateDownloadResult> => {
-    assertLowerUpdateManifest(manifest, manifest.platform as LowerUpdatePlatform, manifest.channel);
-    const taskId = crypto.randomUUID();
-    onProgress?.({
-      task_id: taskId,
-      channel: manifest.channel,
-      package_name: manifest.asset.name,
-      downloaded_bytes: 0,
-      total_bytes: manifest.asset.size,
-      percent: 0,
-      stage: 'started',
-    });
-
-    const response = await fetch(manifest.asset.url);
-    if (!response.ok) {
-      throw new Error(`下载下位机更新包失败: HTTP ${response.status}`);
-    }
-    const bytes = await response.arrayBuffer();
-    if (bytes.byteLength !== manifest.asset.size) {
-      throw new Error(`下位机更新包大小不匹配: 期望 ${manifest.asset.size} 字节，实际 ${bytes.byteLength} 字节`);
-    }
-
-    onProgress?.({
-      task_id: taskId,
-      channel: manifest.channel,
-      package_name: manifest.asset.name,
-      downloaded_bytes: bytes.byteLength,
-      total_bytes: manifest.asset.size,
-      percent: 100,
-      stage: 'verifying',
-    });
-
-    const digest = bytesToHex(await crypto.subtle.digest('SHA-256', bytes));
-    if (digest.toLowerCase() !== manifest.asset.sha256.toLowerCase()) {
-      throw new Error(`下位机更新包校验失败: 期望 ${manifest.asset.sha256}，实际 ${digest}`);
-    }
-
-    browserCachedLowerPackages.set(`${manifest.platform}:${manifest.channel}`, {
-      downloaded_at: Math.floor(Date.now() / 1000),
-      manifest: clone(manifest),
-      package_path: `browser-cache://${manifest.asset.name}`,
-      package_size: bytes.byteLength,
-      sha256: digest,
-    });
-
-    onProgress?.({
-      task_id: taskId,
-      channel: manifest.channel,
-      package_name: manifest.asset.name,
-      downloaded_bytes: bytes.byteLength,
-      total_bytes: manifest.asset.size,
-      percent: 100,
-      stage: 'finished',
-    });
-    return {
-      package_name: manifest.asset.name,
-      package_path: `browser-cache://${manifest.asset.name}`,
-      downloaded_bytes: bytes.byteLength,
-      sha256: digest,
-    };
+  downloadLowerUpdate: async (): Promise<LowerUpdateDownloadResult> => {
+    throw new Error('浏览器开发模式不支持平台 gRPC 下载，请使用桌面上位机');
   },
   uploadLowerUpdatePackage: async (
     request: LowerUpdateUploadRequest,

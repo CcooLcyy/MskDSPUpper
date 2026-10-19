@@ -27,8 +27,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2.7.0"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2.3.1"
-tauri-plugin-updater = "2.10.1"
-tonic = "0.13"
+tauri-plugin-updater = { version = "=2.10.1", path = "vendor/tauri-plugin-updater" }
+tonic = { version = "0.13", features = ["tls-ring", "tls-native-roots"] }
 prost = "0.13"
 prost-types = "0.13"
 tokio = { version = "1", features = ["full"] }
@@ -45,6 +45,10 @@ parking_lot = "0.12"
 russh = { version = "0.62.2", default-features = false, features = ["ring"] }
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
 dirs = "6"
+
+[dev-dependencies]
+tokio-stream = { version = "0.1", features = ["net"] }
+tauri = { version = "2", features = ["test"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

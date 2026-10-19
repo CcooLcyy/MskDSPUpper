@@ -108,8 +108,6 @@ pub struct LowerUpdateCredentialsDto {
     pub sudo_password: Option<String>,
 }
 
-const DEFAULT_LOWER_UPDATE_BASE_URL: &str = "https://update.clsclear.top/mskdsp-lower";
-const DEFAULT_LOWER_UPDATE_X64_BASE_URL: &str = "https://update.clsclear.top/mskdsp-lower-x64";
 const LOWER_UPDATE_PLATFORM: &str = "linux-arm64";
 const LOWER_UPDATE_X64_PLATFORM: &str = "linux-x64";
 const LOWER_UPDATE_PRODUCT: &str = "mskdsp-lower";
@@ -159,6 +157,8 @@ pub struct LowerUpdateChecksumDto {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LowerUpdateManifestDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_package_id: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub local_import: bool,
     pub schema_version: u32,
@@ -737,7 +737,10 @@ async fn query_lower_update_runtime_info(
         )
         .await?;
         if output.exit_code != Some(0) {
-            return Err(format_remote_command_error("查询下位机运行镜像失败", &output));
+            return Err(format_remote_command_error(
+                "查询下位机运行镜像失败",
+                &output,
+            ));
         }
         let (state, inspection) = lower_update_runtime::split_probe_output(&output.stdout);
         let mut runtime = parse_runtime_query_output(state)?;
@@ -747,7 +750,8 @@ async fn query_lower_update_runtime_info(
         if !lower_update_runtime::requires_config_resolution(&raw_image_id, inspection)? {
             return Ok(runtime);
         }
-        if let Some(config_digest) = lower_update_runtime::cached_config_digest(&raw_image_id).await {
+        if let Some(config_digest) = lower_update_runtime::cached_config_digest(&raw_image_id).await
+        {
             tracing::debug!(%raw_image_id, %config_digest, "命中已验证的运行镜像配置摘要映射");
             runtime.image_id = Some(config_digest);
             return Ok(runtime);
@@ -761,7 +765,10 @@ async fn query_lower_update_runtime_info(
         );
         let resolved = execute_root_ssh_command(target, auth, sudo_password, &command).await?;
         if resolved.exit_code != Some(0) {
-            return Err(format_remote_command_error("解析运行镜像配置摘要失败", &resolved));
+            return Err(format_remote_command_error(
+                "解析运行镜像配置摘要失败",
+                &resolved,
+            ));
         }
         let config_digest = normalize_image_id(resolved.stdout.trim())
             .ok_or_else(|| "运行镜像配置摘要解析结果不合法".to_string())?;
@@ -784,7 +791,10 @@ async fn query_lower_update_runtime_info(
         )
         .await?;
         if current.exit_code != Some(0) {
-            return Err(format_remote_command_error("重新确认运行容器状态失败", &current));
+            return Err(format_remote_command_error(
+                "重新确认运行容器状态失败",
+                &current,
+            ));
         }
         let (state, _) = lower_update_runtime::split_probe_output(&current.stdout);
         let mut current_runtime = parse_runtime_query_output(state)?;
@@ -841,32 +851,6 @@ fn validate_platform_channel(platform: &str, channel: &str) -> Result<(), String
         return Err("下位机 x64 更新仅支持 ci 通道".into());
     }
     Ok(())
-}
-
-fn default_base_url(platform: &str) -> &'static str {
-    if platform == LOWER_UPDATE_X64_PLATFORM {
-        DEFAULT_LOWER_UPDATE_X64_BASE_URL
-    } else {
-        DEFAULT_LOWER_UPDATE_BASE_URL
-    }
-}
-
-fn normalize_base_url(base_url: Option<String>, platform: &str) -> Result<String, String> {
-    normalize_platform(Some(platform))?;
-    let raw = base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default_base_url(platform));
-    let parsed = reqwest::Url::parse(raw).map_err(|e| format!("下位机更新源地址不合法: {e}"))?;
-    match parsed.scheme() {
-        "http" | "https" => Ok(raw.trim_end_matches('/').to_string()),
-        _ => Err("下位机更新源地址必须使用 http 或 https".into()),
-    }
-}
-
-fn build_latest_url(base_url: &str, channel: &str) -> String {
-    format!("{base_url}/{channel}/latest.json")
 }
 
 fn is_http_url(value: &str) -> bool {
@@ -1565,13 +1549,24 @@ if test -r /run/mskdsp-vertical-security/steps.log; then cat /run/mskdsp-vertica
 
 fn parse_vertical_security_status_output(
     stdout: &str,
-) -> Result<(String, String, String, Option<i32>, u32, Vec<VerticalSecurityStepResultDto>), String> {
+) -> Result<
+    (
+        String,
+        String,
+        String,
+        Option<i32>,
+        u32,
+        Vec<VerticalSecurityStepResultDto>,
+    ),
+    String,
+> {
     let mut active_state = String::new();
     let mut sub_state = String::new();
     let mut result = String::new();
     let mut exit_code = None;
     let mut restart_count = 0;
-    let mut latest_steps = std::collections::BTreeMap::<String, VerticalSecurityStepResultDto>::new();
+    let mut latest_steps =
+        std::collections::BTreeMap::<String, VerticalSecurityStepResultDto>::new();
     let mut reading_steps = false;
 
     for line in stdout.lines() {
@@ -1723,7 +1718,10 @@ fn validate_manifest(
     {
         return Err("下位机更新清单安装包名称与缓存元数据保留名称冲突".into());
     }
-    if !manifest.local_import && !is_http_url(&manifest.asset.url) {
+    if !manifest.local_import
+        && manifest.platform_package_id.is_none()
+        && !is_http_url(&manifest.asset.url)
+    {
         return Err("下位机更新清单安装包地址不合法".into());
     }
     if !is_sha256(&manifest.asset.sha256) {
@@ -1738,7 +1736,10 @@ fn validate_manifest(
     if !is_safe_file_name(&manifest.checksum.name) {
         return Err("下位机更新清单校验文件名称不能包含路径分隔符".into());
     }
-    if !manifest.local_import && !is_http_url(&manifest.checksum.url) {
+    if !manifest.local_import
+        && manifest.platform_package_id.is_none()
+        && !is_http_url(&manifest.checksum.url)
+    {
         return Err("下位机更新清单校验文件地址不合法".into());
     }
     Ok(())
@@ -2346,6 +2347,7 @@ async fn import_local_lower_update_in(
             return Ok(existing);
         }
         let manifest = LowerUpdateManifestDto {
+            platform_package_id: None,
             local_import: true,
             schema_version: LOWER_UPDATE_SCHEMA_VERSION,
             product: LOWER_UPDATE_PRODUCT.into(),
@@ -2480,84 +2482,63 @@ fn emit_upload_progress(
     }
 }
 
+fn manifest_from_platform(
+    package: &crate::platform_software::Package,
+    channel: &str,
+) -> Result<LowerUpdateManifestDto, String> {
+    let metadata = crate::platform_software::metadata(package)?;
+    if metadata.package_version.is_empty() || normalize_image_id(&metadata.image_id).is_none() {
+        return Err("平台下位机包缺少安装包版本或镜像摘要".into());
+    }
+    let manifest = LowerUpdateManifestDto {
+        platform_package_id: Some(package.id.clone()),
+        local_import: false,
+        schema_version: LOWER_UPDATE_SCHEMA_VERSION,
+        product: metadata.product.clone(),
+        channel: channel.into(),
+        platform: metadata.platform.clone(),
+        version: metadata.version.clone(),
+        package_version: metadata.package_version.clone(),
+        image_id: Some(metadata.image_id.clone()),
+        published_at: package.published_at.clone(),
+        source: LowerUpdateSourceDto {
+            repository: metadata.source_repository.clone(),
+            source_ref: metadata.source_ref.clone(),
+            sha: metadata.source_sha.clone(),
+        },
+        asset: LowerUpdateAssetDto {
+            name: metadata.file_name.clone(),
+            url: String::new(),
+            sha256: metadata.sha256.clone(),
+            size: metadata.size,
+        },
+        checksum: LowerUpdateChecksumDto {
+            name: "SHA256SUMS".into(),
+            url: String::new(),
+        },
+    };
+    validate_manifest(&manifest, channel, &metadata.platform)?;
+    Ok(manifest)
+}
+
 #[tauri::command]
 pub async fn check_lower_update(
+    state: State<'_, AppState>,
     channel: String,
-    base_url: Option<String>,
     platform: Option<String>,
 ) -> Result<LowerUpdateManifestDto, String> {
-    let started_at = Instant::now();
-    let log_base_url = base_url.as_deref().map(log_url).unwrap_or_else(|| {
-        default_base_url(platform.as_deref().unwrap_or(LOWER_UPDATE_PLATFORM)).to_string()
-    });
-    tracing::info!(
-        operation = "check",
-        channel = %log_detail(&channel),
-        platform = %log_detail(platform.as_deref().unwrap_or(LOWER_UPDATE_PLATFORM)),
-        base_url = %log_base_url,
-        "开始获取下位机更新清单"
-    );
-
-    let result = async {
-        let channel = normalize_channel(&channel)?;
-        let platform = normalize_platform(platform.as_deref())?;
-        validate_platform_channel(platform, &channel)?;
-        let base_url = normalize_base_url(base_url, platform)?;
-        let latest_url = build_latest_url(&base_url, &channel);
-
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .map_err(|e| format!("创建下位机更新请求客户端失败: {e}"))?;
-
-        let response = client
-            .get(&latest_url)
-            .send()
-            .await
-            .map_err(|e| format!("获取下位机更新清单失败: {e}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!("获取下位机更新清单失败: HTTP {status}"));
-        }
-
-        let manifest = response
-            .json::<LowerUpdateManifestDto>()
-            .await
-            .map_err(|e| format!("解析下位机更新清单失败: {e}"))?;
-        if manifest.local_import {
-            return Err("在线更新源不能返回本地导入清单".into());
-        }
-        validate_manifest(&manifest, &channel, platform)?;
-        Ok(manifest)
-    }
-    .await;
-
-    match result {
-        Ok(manifest) => {
-            tracing::info!(
-                operation = "check",
-                channel = %manifest.channel,
-                platform = %manifest.platform,
-                version = %manifest.version,
-                package = %manifest.asset.name,
-                image_id = ?manifest.image_id,
-                elapsed_ms = started_at.elapsed().as_millis() as u64,
-                "下位机更新清单获取完成"
-            );
-            Ok(manifest)
-        }
-        Err(error) => {
-            let detail = log_detail(&error);
-            tracing::warn!(
-                operation = "check",
-                channel = %log_detail(&channel),
-                elapsed_ms = started_at.elapsed().as_millis() as u64,
-                error = %detail,
-                "获取下位机更新清单失败"
-            );
-            Err(error)
-        }
-    }
+    let channel = normalize_channel(&channel)?;
+    let platform = normalize_platform(platform.as_deref())?;
+    validate_platform_channel(platform, &channel)?;
+    tracing::info!(%channel, %platform, "开始查询平台下位机软件目录");
+    let catalog = crate::platform_software::configured_catalog(&state)?;
+    let package = catalog
+        .latest(LOWER_UPDATE_PRODUCT, platform, &channel)
+        .await?
+        .ok_or("平台所选通道暂无下位机安装包")?;
+    let manifest = manifest_from_platform(&package, &channel)?;
+    tracing::info!(package_id = %package.id, version = %manifest.version, "平台下位机软件目录查询完成");
+    Ok(manifest)
 }
 
 #[tauri::command]
@@ -2633,19 +2614,24 @@ pub async fn download_lower_update(
         }
         let channel = normalize_channel(&manifest.channel)?;
         validate_manifest(&manifest, &channel, &manifest.platform)?;
+        let package_id = manifest.platform_package_id.as_deref().ok_or("在线下载必须使用平台软件包 ID，不再回退静态下载地址")?;
+        let catalog = crate::platform_software::configured_catalog(&state)?;
+        let package = catalog.get_expected(package_id, LOWER_UPDATE_PRODUCT, &manifest.platform, &channel).await?;
+        let expected = manifest_from_platform(&package, &channel)?;
+        if serde_json::to_value(&expected).map_err(|e| e.to_string())? != serde_json::to_value(&manifest).map_err(|e| e.to_string())? {
+            return Err("下位机清单与平台重新确认的文件身份不一致".into());
+        }
         let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
 
         let output_dir = cache_dir(&state.runtime_paths.lower_update_dir(), &manifest);
         let cleanup_dir = output_dir.clone();
         run_blocking_cache_cleanup(move || {
             ensure_download_cache_dir(&cleanup_dir)?;
-            let mut result = LowerUpdateCacheCleanupResultDto::default();
-            remove_partial_downloads_recursively(&cleanup_dir, &mut result)?;
-            Ok(result)
+            Ok(LowerUpdateCacheCleanupResultDto::default())
         })
         .await?;
         let output_path = output_dir.join(&manifest.asset.name);
-        let partial_path = output_dir.join(format!("{}.download", manifest.asset.name));
+        let partial_path = output_dir.join(format!("{}.{}.grpc-part", manifest.asset.name, manifest.asset.sha256));
 
         if output_path.is_file() {
             let existing_size = fs::metadata(&output_path)
@@ -2699,83 +2685,16 @@ pub async fn download_lower_update(
             return Err("下位机更新缓存路径已存在但不是文件".into());
         }
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30 * 60))
-            .build()
-            .map_err(|e| format!("创建下位机更新下载客户端失败: {e}"))?;
-        tracing::info!(
-            operation = "download",
-            package = %manifest.asset.name,
-            task_id = %task_id,
-            url = %log_url(&manifest.asset.url),
-            "开始下载下位机更新包"
-        );
-        let mut response = client
-            .get(&manifest.asset.url)
-            .send()
-            .await
-            .map_err(|e| format!("下载下位机更新包失败: {e}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!("下载下位机更新包失败: HTTP {status}"));
-        }
-
-        let total_bytes = response.content_length().unwrap_or(manifest.asset.size);
+        let total_bytes = manifest.asset.size;
         emit_download_progress(&app_handle, &manifest, &task_id, 0, total_bytes, "started");
-
-        let mut file = fs::File::create(&partial_path)
-            .await
-            .map_err(|e| format!("创建下位机更新临时文件失败: {e}"))?;
-        let mut downloaded_bytes = 0_u64;
-
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|e| format!("读取下位机更新下载数据失败: {e}"))?
-        {
-            file.write_all(&chunk)
-                .await
-                .map_err(|e| format!("写入下位机更新文件失败: {e}"))?;
-            downloaded_bytes = downloaded_bytes.saturating_add(chunk.len() as u64);
-            emit_download_progress(
-                &app_handle,
-                &manifest,
-                &task_id,
-                downloaded_bytes,
-                total_bytes,
-                "downloading",
-            );
-        }
-
-        file.flush()
-            .await
-            .map_err(|e| format!("刷新下位机更新文件失败: {e}"))?;
-        drop(file);
-
-        if downloaded_bytes != manifest.asset.size {
-            let _ = fs::remove_file(&partial_path).await;
-            return Err(format!(
-                "下位机更新包大小不匹配: 期望 {} 字节，实际 {} 字节",
-                manifest.asset.size, downloaded_bytes
-            ));
-        }
-
-        emit_download_progress(
-            &app_handle,
-            &manifest,
-            &task_id,
-            downloaded_bytes,
-            total_bytes,
-            "verifying",
-        );
+        tracing::info!(package = %manifest.asset.name, platform = %manifest.platform, task_id = %task_id,
+            "开始通过平台 gRPC 下载下位机更新包");
+        catalog.download(&package, &partial_path, |downloaded, total| {
+            emit_download_progress(&app_handle, &manifest, &task_id, downloaded, total, "downloading");
+        }).await?;
+        let downloaded_bytes = manifest.asset.size;
+        emit_download_progress(&app_handle, &manifest, &task_id, downloaded_bytes, total_bytes, "verifying");
         let actual_sha256 = compute_sha256(&partial_path).await?;
-        if !actual_sha256.eq_ignore_ascii_case(&manifest.asset.sha256) {
-            let _ = fs::remove_file(&partial_path).await;
-            return Err(format!(
-                "下位机更新包校验失败: 期望 {}，实际 {}",
-                manifest.asset.sha256, actual_sha256
-            ));
-        }
 
         if let Err(error) = validate_compressed_package_format(&partial_path).await {
             let _ = fs::remove_file(&partial_path).await;
@@ -3435,10 +3354,7 @@ pub async fn install_lower_update_package(
     }
 }
 
-fn normalize_package_cleanup_dir(
-    install_dir: &str,
-    package_name: &str,
-) -> Result<String, String> {
+fn normalize_package_cleanup_dir(install_dir: &str, package_name: &str) -> Result<String, String> {
     if !is_safe_file_name(package_name) {
         return Err("当前安装包名称不能包含路径分隔符".into());
     }
@@ -3628,7 +3544,10 @@ mod tests {
             kind: super::CredentialKind,
             target: &str,
         ) -> Result<Option<String>, String> {
-            Ok(self.values.get(&(kind, target.to_ascii_lowercase())).cloned())
+            Ok(self
+                .values
+                .get(&(kind, target.to_ascii_lowercase()))
+                .cloned())
         }
         fn save(
             &mut self,
@@ -4112,6 +4031,7 @@ mod tests {
         sha256: String,
     ) -> LowerUpdateManifestDto {
         LowerUpdateManifestDto {
+            platform_package_id: None,
             local_import: false,
             schema_version: 1,
             product: "mskdsp-lower".to_string(),
@@ -4276,23 +4196,15 @@ mod tests {
         assert!(super::validate_platform_channel("linux-amd64", "ci").is_err());
     }
 
-    // 验证两种架构的默认更新源独立，同时保留显式覆盖更新源的能力。
+    // 验证平台在线包使用目录 ID 与空 URL，同时历史缓存仍可解析离线安装。
     #[test]
-    fn uses_separate_platform_sources_and_preserves_explicit_override() {
-        assert!(super::normalize_base_url(None, "linux-arm64")
-            .unwrap()
-            .ends_with("/mskdsp-lower"));
-        assert!(super::normalize_base_url(None, "linux-x64")
-            .unwrap()
-            .ends_with("/mskdsp-lower-x64"));
-        assert!(super::normalize_base_url(Some("  ".into()), "linux-x64")
-            .unwrap()
-            .ends_with("/mskdsp-lower-x64"));
-        assert_eq!(
-            super::normalize_base_url(Some(" https://example.com/custom/ ".into()), "linux-x64")
-                .unwrap(),
-            "https://example.com/custom"
-        );
+    fn platform_catalog_identity_uses_id_without_static_urls() {
+        let mut manifest = test_manifest("package", 16, "a".repeat(64));
+        assert!(super::validate_manifest(&manifest, "stable", "linux-arm64").is_ok());
+        manifest.platform_package_id = Some("platform-package".into());
+        manifest.asset.url.clear();
+        manifest.checksum.url.clear();
+        assert!(super::validate_manifest(&manifest, "stable", "linux-arm64").is_ok());
     }
 
     // 验证清单必须匹配所请求的架构和通道，并拒绝不支持的组合。
@@ -4500,17 +4412,38 @@ mod tests {
             raw_image_id: Some(expected.clone()),
         };
         let invalid = [
-            LowerUpdateRuntimeInfoDto { exists: false, ..runtime.clone() },
-            LowerUpdateRuntimeInfoDto { running: false, ..runtime.clone() },
-            LowerUpdateRuntimeInfoDto { image_id: None, ..runtime.clone() },
-            LowerUpdateRuntimeInfoDto { image_id: Some("sha256:bad".into()), ..runtime.clone() },
-            LowerUpdateRuntimeInfoDto { raw_image_id: None, ..runtime.clone() },
-            LowerUpdateRuntimeInfoDto { raw_image_id: Some("sha256:bad".into()), ..runtime.clone() },
+            LowerUpdateRuntimeInfoDto {
+                exists: false,
+                ..runtime.clone()
+            },
+            LowerUpdateRuntimeInfoDto {
+                running: false,
+                ..runtime.clone()
+            },
+            LowerUpdateRuntimeInfoDto {
+                image_id: None,
+                ..runtime.clone()
+            },
+            LowerUpdateRuntimeInfoDto {
+                image_id: Some("sha256:bad".into()),
+                ..runtime.clone()
+            },
+            LowerUpdateRuntimeInfoDto {
+                raw_image_id: None,
+                ..runtime.clone()
+            },
+            LowerUpdateRuntimeInfoDto {
+                raw_image_id: Some("sha256:bad".into()),
+                ..runtime.clone()
+            },
         ];
-        for verified in invalid.iter().chain(std::iter::once(&LowerUpdateRuntimeInfoDto {
-            image_id: Some(format!("sha256:{}", "b".repeat(64))),
-            ..runtime.clone()
-        })) {
+        for verified in invalid
+            .iter()
+            .chain(std::iter::once(&LowerUpdateRuntimeInfoDto {
+                image_id: Some(format!("sha256:{}", "b".repeat(64))),
+                ..runtime.clone()
+            }))
+        {
             assert!(super::verified_package_cleanup_raw_image(&expected, verified).is_err());
         }
     }
@@ -4524,8 +4457,8 @@ mod tests {
         let serialized = serde_json::to_value(&runtime).expect("应能序列化公开运行状态");
         assert!(serialized.get("raw_image_id").is_none());
         assert!(serialized.get("image_id").is_some());
-        let missing = parse_runtime_query_output("__MSKDSP_CONTAINER_MISSING__")
-            .expect("应能解析容器缺失");
+        let missing =
+            parse_runtime_query_output("__MSKDSP_CONTAINER_MISSING__").expect("应能解析容器缺失");
         assert!(missing.raw_image_id.is_none());
     }
 
@@ -4577,9 +4510,8 @@ mod tests {
 
     #[test]
     fn builds_vertical_security_install_command_with_systemd_lifecycle_checks() {
-        let command = build_vertical_security_install_command(
-            "/tmp/mskdsp/mskdsp-vertical-security.sh",
-        );
+        let command =
+            build_vertical_security_install_command("/tmp/mskdsp/mskdsp-vertical-security.sh");
 
         assert!(command.contains("command -v systemctl"));
         assert!(command.contains("bash -n"));
@@ -4625,11 +4557,17 @@ mod tests {
         assert_eq!(restarts, 2);
         assert_eq!(steps.len(), 2);
         assert_eq!(
-            steps.iter().find(|step| step.step_id == "ppp0_wait").map(|step| step.state.as_str()),
+            steps
+                .iter()
+                .find(|step| step.step_id == "ppp0_wait")
+                .map(|step| step.state.as_str()),
             Some("waiting")
         );
         assert_eq!(
-            steps.iter().find(|step| step.step_id == "precheck").map(|step| step.state.as_str()),
+            steps
+                .iter()
+                .find(|step| step.step_id == "precheck")
+                .map(|step| step.state.as_str()),
             Some("success")
         );
     }

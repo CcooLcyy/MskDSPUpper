@@ -24,6 +24,7 @@ pub const APP_MODE_KEY: &str = "mskdsp_app_mode";
 pub const LAST_WORKSPACE_KEY: &str = "mskdsp_last_workspace";
 pub const LOWER_UPDATE_CONNECTION_KEY: &str = "mskdsp_lower_update_connection";
 pub const LOWER_UPDATE_CONNECTION_HISTORY_KEY: &str = "mskdsp_lower_update_connection_history";
+pub const SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY: &str = "softwarePlatformGrpcEndpoint";
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SettingsDocument {
@@ -132,6 +133,7 @@ fn validate_setting_key(key: &str) -> Result<(), String> {
         | DLT645_MQTT_KEY
         | APP_MODE_KEY
         | LAST_WORKSPACE_KEY
+        | SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY
         | LOWER_UPDATE_CONNECTION_KEY
         | LOWER_UPDATE_CONNECTION_HISTORY_KEY => Ok(()),
         _ => Err(format!("不支持的上位机设置项: {key}")),
@@ -256,6 +258,12 @@ fn backup_path(path: &Path) -> PathBuf {
 }
 
 fn sanitize_setting_for_disk(key: &str, mut value: Value) -> Result<Value, String> {
+    if key == SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY {
+        let endpoint = value.as_str().ok_or("平台 gRPC 地址必须是字符串")?;
+        return Ok(Value::String(crate::platform_software::validate_endpoint(
+            endpoint,
+        )?));
+    }
     if key == MODBUS_TEMPLATES_KEY {
         super::modbus_templates::validate_personal_templates(&value)?;
         return Ok(value);
@@ -403,7 +411,10 @@ pub fn open_runtime_directory(kind: String, state: State<'_, AppState>) -> Resul
 mod tests {
     use serde_json::json;
 
-    use super::{read_settings_document, AppSettingsStore, APP_MODE_KEY, LAST_WORKSPACE_KEY, MANAGER_ADDR_KEY};
+    use super::{
+        read_settings_document, AppSettingsStore, APP_MODE_KEY, LAST_WORKSPACE_KEY,
+        MANAGER_ADDR_KEY,
+    };
 
     fn temp_settings_path(name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -415,16 +426,55 @@ mod tests {
         root.join("settings.json")
     }
 
+    // 验证平台地址按权威规则保存，公共明文与带凭据地址不能覆盖已有设置。
+    #[test]
+    fn persists_valid_platform_endpoint_and_rejects_invalid_replacement() {
+        let path = temp_settings_path("platform-endpoint");
+        let store = AppSettingsStore::new(path.clone());
+        store
+            .save_setting(
+                super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY.into(),
+                json!("http://192.168.1.2:50000/"),
+            )
+            .unwrap();
+        assert_eq!(
+            store.load().unwrap()[super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY],
+            json!("http://192.168.1.2:50000")
+        );
+        let original = std::fs::read(&path).unwrap();
+        for invalid in [
+            "http://8.8.8.8:50000",
+            "https://user:password@example.com",
+            "https://example.com/path",
+        ] {
+            assert!(store
+                .save_setting(
+                    super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY.into(),
+                    json!(invalid)
+                )
+                .is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     // 个人点表模板经设置白名单持久化，损坏目录不覆盖原文件。
     #[test]
     fn persists_personal_templates_and_rejects_invalid_directory_atomically() {
         let path = temp_settings_path("modbus-templates");
         let store = AppSettingsStore::new(path.clone());
-        store.save_setting(super::MODBUS_TEMPLATES_KEY.into(), json!([])).unwrap();
+        store
+            .save_setting(super::MODBUS_TEMPLATES_KEY.into(), json!([]))
+            .unwrap();
         let before = std::fs::read(&path).unwrap();
-        assert!(store.save_setting(super::MODBUS_TEMPLATES_KEY.into(), json!({"points": []})).is_err());
+        assert!(store
+            .save_setting(super::MODBUS_TEMPLATES_KEY.into(), json!({"points": []}))
+            .is_err());
         assert_eq!(std::fs::read(&path).unwrap(), before);
-        assert_eq!(store.load().unwrap()[super::MODBUS_TEMPLATES_KEY], json!([]));
+        assert_eq!(
+            store.load().unwrap()[super::MODBUS_TEMPLATES_KEY],
+            json!([])
+        );
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

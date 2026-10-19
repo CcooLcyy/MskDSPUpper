@@ -23,21 +23,15 @@ test('lower update architecture rules reject unsupported manifests and normalize
   rules.assertLowerUpdateManifest({ platform: 'linux-x64', channel: 'ci' }, 'linux-x64', 'ci');
 });
 
-// 两套源独立读取配置，省略参数继续使用 ARM64。
-test('lower update source keeps ARM default and independently configures x64', () => {
-  let env = {};
-  const code = compile('src/adapters/lower-update-source.ts').replace(/^import .*;\s*$/gm, '')
-    .replace(/export /g, '').replace(/import\.meta\.env/g, 'environment()');
-  const { getLowerUpdateStaticBaseUrl, buildLowerUpdateLatestUrl } = new Function('environment', 'getLowerUpdateChannels',
-    code + '\nreturn { getLowerUpdateStaticBaseUrl, buildLowerUpdateLatestUrl };')(() => env, loadRules().getLowerUpdateChannels);
-  assert.match(buildLowerUpdateLatestUrl('ci'), /\/mskdsp-lower\/ci\/latest.json$/);
-  assert.match(buildLowerUpdateLatestUrl('ci', 'linux-x64'), /\/mskdsp-lower-x64\/ci\/latest.json$/);
-  env = { VITE_LOWER_UPDATE_STATIC_BASE_URL: ' https://arm.example/// ', VITE_LOWER_UPDATE_X64_STATIC_BASE_URL: ' https://x64.example/ ' };
-  assert.equal(getLowerUpdateStaticBaseUrl(), 'https://arm.example');
-  assert.equal(getLowerUpdateStaticBaseUrl('linux-x64'), 'https://x64.example');
-  assert.throws(() => buildLowerUpdateLatestUrl('stable', 'linux-x64'), /通道/);
-  env.VITE_LOWER_UPDATE_X64_STATIC_BASE_URL = '  ';
-  assert.match(getLowerUpdateStaticBaseUrl('linux-x64'), /\/mskdsp-lower-x64$/);
+// 上下位机共用一个平台地址，拒绝混入路径或凭据。
+test('software platform endpoint normalizes hosts and rejects invalid addresses', () => {
+  const code = compile('src/utils/software-platform.ts').replace(/export /g, '');
+  const { normalizeSoftwarePlatformEndpoint: normalize } = new Function(code + '\nreturn { normalizeSoftwarePlatformEndpoint };')();
+  assert.equal(normalize(' http://192.168.10.198:50000/ '), 'http://192.168.10.198:50000');
+  assert.equal(normalize('https://packages.example:443'), 'https://packages.example');
+  for (const input of ['', 'file:///tmp', 'http://user:password@host', 'http://host/path', 'http://host?token=x', 'http://host#fragment', 'http://ho st', 'http://host\n:50000']) {
+    assert.throws(() => normalize(input), /地址/);
+  }
 });
 
 function providerHarness(api) {
@@ -129,10 +123,10 @@ test('lower update adapters forward platform and separate browser cache keys', (
   const tauri = source('src/adapters/tauri.ts');
   const browser = source('src/adapters/browser.ts');
   assert.match(tauri, /platform: LowerUpdatePlatform = 'linux-arm64'/);
-  assert.match(tauri, /baseUrl: getLowerUpdateStaticBaseUrl\(platform\)/);
+  assert.doesNotMatch(tauri, /baseUrl:|getLowerUpdateStaticBaseUrl/);
   assert.match(tauri, /channel: channel \?\? null, platform/);
-  assert.match(browser, /buildLowerUpdateLatestUrl\(channel, platform\)/);
+  assert.match(browser, /浏览器开发模式不支持平台 gRPC/);
+  assert.doesNotMatch(browser, /buildLowerUpdateLatestUrl/);
   assert.match(browser, /item\.manifest\.platform === platform/);
-  assert.match(browser, /browserCachedLowerPackages\.set\(`\$\{manifest\.platform\}:\$\{manifest\.channel\}`/);
   assert.match(browser, /browserRunningLowerImageId = request\.expected_image_id/);
 });

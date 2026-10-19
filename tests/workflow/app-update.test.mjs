@@ -29,27 +29,19 @@ test('upper updater keeps the 30-second schedule and only pauses while transferr
   assert.match(providerSource, /downloadingPromiseRef\.current/);
 });
 
-// 验证检查按“版本串不同即更新”语义执行，且不再丢弃已下载的待安装包。
-test('upper updater treats every version change as an update without dropping the downloaded package', () => {
-  const checkHandler = tauriSource.match(/checkAppUpdate: async \(\)[\s\S]*?\n {2}\},/);
+// 检查委派给原生目录查询，不在适配器中释放已下载包。
+test('upper updater delegates catalog checks without dropping the downloaded package', () => {
+  const checkHandler = tauriSource.match(/checkAppUpdate: [^\n]+/);
   assert.ok(checkHandler, '应保留 checkAppUpdate 适配器实现');
-  assert.match(checkHandler[0], /allowDowngrades: true/);
+  assert.match(checkHandler[0], /invoke<AppUpdateInfo \| null>\('check_app_update'\)/);
   assert.doesNotMatch(checkHandler[0], /disposePendingAppUpdate/);
 });
 
-// 验证只保留一份待安装包：相同版本复用、不同版本先下后丢、失败保留旧包。
+// 验证原生下载入口与前端包身份复用规则；失败保留行为由 Provider 实际执行测试覆盖。
 test('upper updater keeps exactly one downloaded package and never leaves none', () => {
-  assert.match(providerSource, /downloaded\.version === checkedUpdate\.version/);
+  assert.match(providerSource, /sameAppUpdatePackage\(downloaded, checkedUpdate\)/);
   assert.match(providerSource, /已保留已下载的客户端/);
-
-  const downloadHandler = tauriSource.match(/async function downloadAppUpdate[\s\S]*?\n\}/);
-  assert.ok(downloadHandler, '应保留 downloadAppUpdate 适配器实现');
-  assert.match(downloadHandler[0], /previous\.version === update\.version/);
-  assert.match(
-    downloadHandler[0],
-    /await update\.download\([\s\S]*?downloadedAppUpdate = update[\s\S]*?previous/,
-  );
-  assert.doesNotMatch(downloadHandler[0], /downloadedAppUpdate = null/);
+  assert.match(tauriSource, /invoke<AppUpdateInfo>\('download_app_update', \{ taskId \}\)/);
 });
 
 // 验证下载照旧自动执行、安装仍由用户触发，且安装前做一次最终检查交由用户选择。
@@ -59,8 +51,8 @@ test('upper updater downloads automatically but only installs after explicit act
   assert.match(providerSource, /请选择要安装的版本/);
   assert.match(providerSource, /kind: 'needs-choice'/);
   assert.doesNotMatch(providerSource, /downloadAndInstallAppUpdate/);
-  assert.match(tauriSource, /await update\.download\(/);
-  assert.match(tauriSource, /await update\.install\(\)/);
+  assert.match(tauriSource, /'download_app_update'/);
+  assert.match(tauriSource, /'install_app_update'/);
   assert.doesNotMatch(tauriSource, /downloadAndInstallAppUpdate: async[\s\S]*?checkAppUpdate/);
 });
 

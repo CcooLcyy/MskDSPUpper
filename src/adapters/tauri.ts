@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { check } from '@tauri-apps/plugin-updater';
 import type {
   AgcControlProfile,
   AgcGroupConfig,
@@ -84,140 +83,38 @@ import type {
   ControlOrchestratorExecuteRequest,
   ControlOrchestratorExecuteResponse,
 } from './types';
-import { getLowerUpdateStaticBaseUrl } from './lower-update-source';
 import type { LowerUpdateConnectionSettings, LowerUpdateCredentials } from '../utils/lower-update-connection';
 import type { LowerUpdateSshAuth } from './types';
 
-type PendingAppUpdate = Awaited<ReturnType<typeof check>>;
-
-let pendingAppUpdate: PendingAppUpdate = null;
-let downloadedAppUpdate: PendingAppUpdate = null;
+const APP_UPDATE_DOWNLOAD_PROGRESS_EVENT = 'app-update-download-progress';
 const LOWER_UPDATE_DOWNLOAD_PROGRESS_EVENT = 'lower-update-download-progress';
 const LOWER_UPDATE_UPLOAD_PROGRESS_EVENT = 'lower-update-upload-progress';
 
-async function disposePendingAppUpdate() {
-  const updates = [pendingAppUpdate, downloadedAppUpdate].filter(
-    (update, index, all): update is NonNullable<PendingAppUpdate> => Boolean(update) && all.indexOf(update) === index,
-  );
-  pendingAppUpdate = null;
-  downloadedAppUpdate = null;
+type AppUpdateProgressPayload = AppUpdateDownloadEvent & { task_id: string };
 
-  if (updates.length === 0) {
-    return;
-  }
-
-  for (const update of updates) {
-    try {
-      await update.close();
-    } catch {
-      // 更新资源清理失败不影响后续检查。
-    }
-  }
-}
-
-function toAppUpdateInfo(update: NonNullable<PendingAppUpdate>): AppUpdateInfo {
-  return {
-    currentVersion: update.currentVersion,
-    version: update.version,
-    date: update.date,
-    body: update.body,
-    rawJson: update.rawJson as Record<string, unknown>,
-  };
-}
-
-/**
- * 释放上一次检查留下、且尚未下载的句柄。
- *
- * 每次清单检查都会新建 updater 资源，未下载的旧句柄必须释放，否则会持续泄漏；
- * 已下载的待安装包绝不能在这里丢弃，否则会出现“没有任何可安装版本”的空窗。
- */
-async function releaseStalePendingUpdate(): Promise<void> {
-  const stale = pendingAppUpdate;
-
-  if (!stale || stale === downloadedAppUpdate) {
-    return;
-  }
-
-  pendingAppUpdate = null;
-
-  try {
-    await stale.close();
-  } catch {
-    // 旧检查句柄释放失败不影响后续检查。
-  }
+async function disposePendingAppUpdate(): Promise<void> {
+  await invoke<void>('dispose_app_update');
 }
 
 async function downloadAppUpdate(
   onEvent?: (event: AppUpdateDownloadEvent) => void,
 ): Promise<AppUpdateInfo> {
-  const update = pendingAppUpdate ?? (await check({ allowDowngrades: true }));
-
-  if (!update) {
-    throw new Error('没有可下载的客户端更新');
+  const taskId = crypto.randomUUID();
+  const unlisten = onEvent
+    ? await listen<AppUpdateProgressPayload>(APP_UPDATE_DOWNLOAD_PROGRESS_EVENT, (event) => {
+        if (event.payload.task_id === taskId) onEvent(event.payload);
+      })
+    : null;
+  try {
+    // 下载身份、断点文件和可安装状态统一由 Rust 管理。
+    return await invoke<AppUpdateInfo>('download_app_update', { taskId });
+  } finally {
+    unlisten?.();
   }
-
-  const previous = downloadedAppUpdate;
-
-  // 版本一致：复用已下载的包，只释放本次检查新建的句柄，不重复下载。
-  if (previous && previous.version === update.version) {
-    pendingAppUpdate = previous;
-
-    if (update !== previous) {
-      try {
-        await update.close();
-      } catch {
-        // 冗余检查句柄释放失败不影响已下载的包。
-      }
-    }
-
-    return toAppUpdateInfo(previous);
-  }
-
-  pendingAppUpdate = update;
-
-  // 先下后丢：新包下载失败时保留旧包，避免出现没有可安装版本的窗口。
-  await update.download((event) => {
-    onEvent?.(event as AppUpdateDownloadEvent);
-  });
-
-  downloadedAppUpdate = update;
-
-  if (previous && previous !== update) {
-    try {
-      await previous.close();
-    } catch {
-      // 旧包释放失败不影响新包安装。
-    }
-  }
-
-  return toAppUpdateInfo(update);
 }
 
 async function installAppUpdate(): Promise<AppUpdateInfo> {
-  const update = downloadedAppUpdate;
-  if (!update) {
-    throw new Error('没有已下载的客户端更新包');
-  }
-
-  const info = toAppUpdateInfo(update);
-
-  // 安装成功后 Windows 上进程会被安装器接管并退出，下面的清理不会执行；
-  // 安装失败时保留已下载包，界面状态与适配器保持一致，可直接重试。
-  await update.install();
-
-  downloadedAppUpdate = null;
-
-  if (pendingAppUpdate === update) {
-    pendingAppUpdate = null;
-  }
-
-  try {
-    await update.close();
-  } catch {
-    // 安装后资源清理失败可忽略。
-  }
-
-  return info;
+  return invoke<AppUpdateInfo>('install_app_update');
 }
 
 async function downloadAndInstallAppUpdate(
@@ -253,16 +150,7 @@ export const api = {
   stopModule: (moduleInfo: ModuleInfo) => invoke<void>('stop_module', { moduleInfo }),
 
   getAppVersion: () => getVersion(),
-  checkAppUpdate: async (): Promise<AppUpdateInfo | null> => {
-    // 只释放上一次未下载的检查句柄，绝不丢弃已下载的待安装包。
-    await releaseStalePendingUpdate();
-
-    // 版本串不同即视为有更新：CI 构建只变构建时间戳或提交 sha 时同样要能发现。
-    const update = await check({ allowDowngrades: true });
-    pendingAppUpdate = update;
-
-    return update ? toAppUpdateInfo(update) : null;
-  },
+  checkAppUpdate: () => invoke<AppUpdateInfo | null>('check_app_update'),
   downloadAppUpdate,
   installAppUpdate,
   // 保留旧适配器接口，供外部集成在升级期间平滑迁移。
@@ -273,7 +161,6 @@ export const api = {
     invoke<LowerUpdateManifest>('check_lower_update', {
       channel,
       platform,
-      baseUrl: getLowerUpdateStaticBaseUrl(platform),
     }),
   downloadLowerUpdate: async (
     manifest: LowerUpdateManifest,

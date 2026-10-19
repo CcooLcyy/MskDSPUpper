@@ -1,0 +1,6 @@
+{
+  "repository": "http://192.168.10.198:8929/mskdsp/mskdspplatformproto.git",
+  "path": "platform/v1/software.proto",
+  "sha256": "eef5ccc235ae6598a7f846ef354f696b8c5a8c13333d33146250d5c9080c28ee",
+  "commit": "b10fe55dcfee83cfb1ca375a2c9d2a950762e222"
+}

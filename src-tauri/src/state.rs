@@ -7,6 +7,7 @@ pub struct AppState {
     pub conn_manager: Arc<ConnectionManager>,
     pub runtime_paths: RuntimePaths,
     pub settings_store: Arc<AppSettingsStore>,
+    pub app_updates: Arc<crate::commands::app_update::AppUpdateStore>,
 }
 
 impl AppState {
@@ -16,6 +17,7 @@ impl AppState {
             conn_manager: Arc::new(ConnectionManager::new(manager_addr)),
             runtime_paths,
             settings_store,
+            app_updates: Arc::default(),
         }
     }
 }
