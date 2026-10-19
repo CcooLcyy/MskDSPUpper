@@ -6,7 +6,15 @@
 
 编译阶段必须导入 x64 MSVC 与 Windows SDK 环境。`VSDEVCMD` 可指定开发环境脚本；默认从 `RUNNER_ENV_ROOT/tools/vs2022/Common7/Tools/VsDevCmd.bat` 读取。脚本通过 `cmd /c call ... && set` 在内存中导入环境，不打印完整环境或认证材料。签名密码未配置时，Node 子进程显式传入空密码，避免 Windows PowerShell 删除空环境变量后触发交互。
 
-Rust 增量编译按阶段控制：`.gitlab-ci.yml` 默认 `CARGO_INCREMENTAL=0`；`pipeline.ps1` 在 Runner 与 MSVC 环境导入完成后，verify 显式设为 `1`，Release package 显式设为 `0`。即使 `guest-env.ps1` 或开发环境脚本改写此变量，进入测试和打包命令时也以阶段策略为准。该策略复用原编译目录，不改变签名和发布流程。
+## CI 构建提速
+
+前端依赖在 Runner 现有工作区的 `node_modules` 内复用，GitLab 检出只对这个目录设置清理例外。缓存身份包含锁文件、依赖配置和 Node/npm 工具链等安装输入；只接受成功完成锁定安装后产生的标记，命中前检查依赖完整性。身份变化、标记缺失或依赖缺损时重新执行 `npm ci`，失败不能留下可复用标记。该目录仍位于原有 `C:\gitlab-runner` 根内；不引入指向个人环境的链接或额外工具链。
+
+完整 Python CI 脚本测试先执行；随后前端依赖准备、workflow/offline 测试和严格 lint 与 Rust 测试在独立进程中并行。两个分支都成功后才进入 package；任一分支失败都会阻止打包，等待另一分支退出后返回失败，异常或中断则清理已启动的子进程。验证输出与分支耗时写入 `package/logs`，便于定位失败与比较并行效果。发布阶段继续串行，原 resource group 防止共享 Cargo 目录发生跨作业竞争。
+
+`.gitlab-ci.yml` 默认 `CARGO_INCREMENTAL=0`；`pipeline.ps1` 在 Runner 与 MSVC 环境导入完成后为 verify 和 CI package 显式设为 `1`。Release 保持原优化等级，并固定原有的 16 个 codegen units，避免启用增量后隐式改变这个值；GitHub Beta/Stable 工作流不受影响。首次建立 Release 增量缓存可能更慢；即使 16/3 与旧默认有效值一致，改为显式 profile 配置也可能使既有依赖首次重新编译，需与后续运行区分。现有发布脚本每轮改写 Cargo 的包版本；版本参与 crate 身份计算，因此主程序跨版本的增量目录会变化，不能假定下一条流水线命中上一版本的主程序缓存。依赖仍按既有规则复用，实际收益以构建日志为准，不能把缓存启用等同于已证明提速。签名、源码身份冻结和公开下载验收继续完整执行。
+
+验证基线为流水线 #51：作业约 588 秒，依赖安装约 91 秒，Rust Release 编译 279 秒。优化验收需要至少一次建立缓存和一次后续运行，分别记录依赖命中、并行区间、编译耗时和平台包校验结果。
 
 CI 产物身份为 `mskdsp-upper`、`windows-x86_64-nsis`、完整源码 SHA、GitLab 仓库地址和现有 CI SemVer。上传前以及发布前核对远端 main；过时任务保留构建产物但不能改写通道。任务串行发布；认证材料仅从保护变量读取，不进入命令参数或产物。
 

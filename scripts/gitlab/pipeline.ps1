@@ -35,18 +35,19 @@ if ($Stage -in @('verify', 'package')) {
 }
 
 if ($Stage -in @('verify', 'package')) {
-    # Runner 与 MSVC 环境导入后再覆盖，测试启用增量，Release 打包保持关闭。
-    $env:CARGO_INCREMENTAL = if ($Stage -eq 'verify') { '1' } else { '0' }
+    # Runner 与 MSVC 环境导入后再覆盖；仅 GitLab CI 启用测试与 Release 增量。
+    $env:CARGO_INCREMENTAL = '1'
+    if ($Stage -eq 'package') {
+        # 保持原 Release 默认优化及代码生成并行度，避免增量默认切换为 256 个单元。
+        $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '16'
+        $env:CARGO_PROFILE_RELEASE_OPT_LEVEL = '3'
+    }
     Write-Host "Rust 增量编译设置：stage=$Stage，CARGO_INCREMENTAL=$env:CARGO_INCREMENTAL"
 }
 
 if ($Stage -eq 'verify') {
     Invoke-Checked -Program 'python' -Arguments @('-B', '-m', 'unittest', 'discover', '-s', 'tests/gitlab', '-v')
-    Invoke-Checked -Program 'npm' -Arguments @('ci')
-    Invoke-Checked -Program 'npm' -Arguments @('run', 'test:workflow')
-    Invoke-Checked -Program 'npm' -Arguments @('run', 'test:offline')
-    Invoke-Checked -Program 'npm' -Arguments @('run', 'lint')
-    Invoke-Checked -Program 'cargo' -Arguments @('test', '--locked', '--manifest-path', 'src-tauri/Cargo.toml', '--target', 'x86_64-pc-windows-msvc')
+    Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/verify.py')
     return
 }
 if ($Stage -eq 'package') {
