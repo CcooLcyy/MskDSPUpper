@@ -6,6 +6,8 @@
 
 编译阶段必须导入 x64 MSVC 与 Windows SDK 环境。`VSDEVCMD` 可指定开发环境脚本；默认从 `RUNNER_ENV_ROOT/tools/vs2022/Common7/Tools/VsDevCmd.bat` 读取。脚本通过 `cmd /c call ... && set` 在内存中导入环境，不打印完整环境或认证材料。签名密码未配置时，Node 子进程显式传入空密码，避免 Windows PowerShell 删除空环境变量后触发交互。
 
+Rust 增量编译按阶段控制：`.gitlab-ci.yml` 默认 `CARGO_INCREMENTAL=0`；`pipeline.ps1` 在 Runner 与 MSVC 环境导入完成后，verify 显式设为 `1`，Release package 显式设为 `0`。即使 `guest-env.ps1` 或开发环境脚本改写此变量，进入测试和打包命令时也以阶段策略为准。该策略复用原编译目录，不改变签名和发布流程。
+
 CI 产物身份为 `mskdsp-upper`、`windows-x86_64-nsis`、完整源码 SHA、GitLab 仓库地址和现有 CI SemVer。上传前以及发布前核对远端 main；过时任务保留构建产物但不能改写通道。任务串行发布；认证材料仅从保护变量读取，不进入命令参数或产物。
 
 平台现有上位机产品强制要求真实 Tauri 签名。使用现有验签公钥对应私钥，不生成替代公钥。缺少私钥时停止发布构建，不能用占位签名宣称成功。平台 HTTP 公共地址用于清单与安装包，gRPC 上传仅允许 TLS 或显式内网 IP。
@@ -14,6 +16,12 @@ CI 产物身份为 `mskdsp-upper`、`windows-x86_64-nsis`、完整源码 SHA、G
 
 `.gitlab-ci.yml` 及配套脚本必须随源码提交；仅安装 Runner、只把这些文件保留在工作区，不会使 GitLab 在推送时创建构建任务。当前规则对 `main` 的 push/web 创建 `upper-ci` 作业，依次执行 verify、package、publish。发布脚本使用固定的平台发布协议，客户端使用仓库内单独固定的新版下载协议快照，两者保持向后兼容。
 
-环境 `ci` 需要 `PLATFORM_GRPC_ENDPOINT`、`PLATFORM_GRPC_PLAINTEXT`（内网为 `1`）、`PLATFORM_PUBLIC_BASE_URL`、保护且隐藏的 `PLATFORM_UPLOAD_TOKEN`，以及 `TAURI_SIGNING_PRIVATE_KEY` / 可选密码。私钥与现有公钥匹配后生成 `.sig`。跨项目读取需要允许 Upper 作业令牌访问设备协议与平台协议项目。
+环境 `ci` 需要 `PLATFORM_GRPC_ENDPOINT`、`PLATFORM_GRPC_PLAINTEXT`（内网为 `1`）、`PLATFORM_PUBLIC_BASE_URL`、保护且掩码的 `PLATFORM_UPLOAD_TOKEN`，以及 `TAURI_SIGNING_PRIVATE_KEY` / 可选密码。私钥与现有公钥匹配后生成 `.sig`。跨项目读取需要允许 Upper 作业令牌访问设备协议与平台协议项目。
 
 验证包括冻结身份与文件篡改、错误通道/流水线拒绝、无签名拒绝、GitLab 配置契约；运行现有 workflow/offline 测试、前端 lint、Rust 测试及真实 NSIS 构建。现场验收必须得到可访问的 CI 清单和下载链接，并对下载内容核对本次 SHA256。上传与发布不安装任何客户端，也不修改平台运行版本。
+
+## Windows 验签夹具的检出约束
+
+流水线 #39 / 作业 #203 在 Rust 验签测试失败：仓库内 36 字节 LF 输入经 Runner 文本转换后变为 37 字节 CRLF，原签名因此不能通过。根目录 `.gitattributes` 对该文件指定 `-text`，保证所有平台按原始字节检出；新增真实 `core.autocrlf=true` 克隆回归，原签名验证继续保留。
+
+已有 Runner 工作区不会仅因新增 Git 属性就重写内容未变的输入文件。因此 `before_script` 在测试前从当前 HEAD 恢复该单一验签输入；不清理整个工作区或编译缓存。回归同时覆盖全新克隆和从旧 CRLF 工作区升级两种情形。

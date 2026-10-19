@@ -16,6 +16,7 @@ upper-ci:
   variables:
     GIT_SUBMODULE_STRATEGY: none
     GIT_DEPTH: "20"
+    # 默认关闭；pipeline.ps1 在环境导入后仅对 verify 显式开启，package 继续关闭。
     CARGO_INCREMENTAL: "0"
     PYTHONDONTWRITEBYTECODE: "1"
     PYTHONUTF8: "1"
@@ -25,6 +26,9 @@ upper-ci:
     - '$ErrorActionPreference = "Stop"'
     - python -B scripts/gitlab/init_device_proto.py
     - if ($LASTEXITCODE -ne 0) { throw '初始化设备协议子模块失败' }
+    # 已有工作区可能仍保留属性变更前的 CRLF，按当前提交重新检出验签输入。
+    - git restore --source=HEAD --worktree -- src-tauri/testdata/updater/fixture.bin
+    - if ($LASTEXITCODE -ne 0) { throw '恢复验签夹具原始字节失败' }
   script:
     - ./scripts/gitlab/pipeline.ps1 -Stage verify
     - ./scripts/gitlab/pipeline.ps1 -Stage package

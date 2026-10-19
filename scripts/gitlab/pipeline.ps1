@@ -34,6 +34,12 @@ if ($Stage -in @('verify', 'package')) {
     Write-Host '已导入 x64 MSVC 与 Windows SDK 环境'
 }
 
+if ($Stage -in @('verify', 'package')) {
+    # Runner 与 MSVC 环境导入后再覆盖，测试启用增量，Release 打包保持关闭。
+    $env:CARGO_INCREMENTAL = if ($Stage -eq 'verify') { '1' } else { '0' }
+    Write-Host "Rust 增量编译设置：stage=$Stage，CARGO_INCREMENTAL=$env:CARGO_INCREMENTAL"
+}
+
 if ($Stage -eq 'verify') {
     Invoke-Checked -Program 'python' -Arguments @('-B', '-m', 'unittest', 'discover', '-s', 'tests/gitlab', '-v')
     Invoke-Checked -Program 'npm' -Arguments @('ci')

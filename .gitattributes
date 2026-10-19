@@ -1,0 +1,2 @@
+# 签名测试输入必须逐字节保存，禁止检出时转换换行。
+src-tauri/testdata/updater/fixture.bin -text
