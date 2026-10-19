@@ -15,7 +15,8 @@ class IncrementalPolicyTests(unittest.TestCase):
         self.assertEqual(cargo[0]["incremental"], "1")
 
     def test_release_enables_incremental_and_keeps_original_optimization_after_import(self):
-        result, events, _ = run_isolated_pipeline(stage="package")
+        # The shared successful execution runs verify and then package; inspect its real node children.
+        result, events, _ = run_isolated_pipeline()
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
         nodes = [entry for entry in events if entry["kind"] == "node"]
         self.assertTrue(nodes, "No package tool executed")

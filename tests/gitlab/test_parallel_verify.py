@@ -1,5 +1,7 @@
 """Exercise real PowerShell/subprocess boundaries using isolated executable tool stubs."""
 import json
+from copy import deepcopy
+from functools import lru_cache
 import os
 from pathlib import Path
 import shutil
@@ -12,6 +14,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def run_isolated_pipeline(stage="verify", fail_tool="", powershell="powershell.exe"):
+    # Reuse one real successful verify+package execution for independent read-only contracts.
+    # Normalize defaults to positional cache keys; defensive copies prevent assertion interference.
+    return deepcopy(_run_isolated_pipeline_cached(stage, fail_tool, powershell))
+
+
+@lru_cache(maxsize=8)
+def _run_isolated_pipeline_cached(stage, fail_tool, powershell):
     with tempfile.TemporaryDirectory(prefix="upper parallel test ") as temporary:
         workspace = Path(temporary)
         scripts = workspace / "scripts/gitlab"
@@ -29,13 +38,26 @@ entry = {"kind": kind, "arguments": arguments, "started": time.time(),
          "include": os.environ.get("INCLUDE"), "lib": os.environ.get("LIB")}
 if kind == "python" and arguments[-1:] == ["scripts/gitlab/verify.py"]:
     sys.exit(subprocess.run([sys.executable, *arguments]).returncode)
-if kind in ("cargo", "dependencies", "npm"):
-    time.sleep(0.7 if kind == "cargo" else 0.2)
+exit_code = 17 if kind == os.environ.get("FAIL_TOOL") else 0
+if kind in ("cargo", "dependencies"):
+    # Synchronize real processes instead of assuming a VM starts both within a fixed sleep.
+    events = Path(os.environ["STUB_EVENTS"])
+    events.with_name(kind + ".started").write_text("started", encoding="utf-8")
+    peer = events.with_name(("dependencies" if kind == "cargo" else "cargo") + ".started")
+    deadline = time.monotonic() + 15
+    while not peer.exists():
+        if time.monotonic() >= deadline:
+            entry["barrier_error"] = "Timed out waiting for the other verification process"
+            exit_code = 124
+            break
+        time.sleep(0.01)
+    entry["barrier_peer_observed"] = peer.exists()
 entry["finished"] = time.time()
-with open(os.environ["STUB_EVENTS"], "a", encoding="utf-8") as output:
-    output.write(json.dumps(entry)+"\n")
-if kind == os.environ.get("FAIL_TOOL"):
-    sys.exit(17)
+# Each process writes its own event file; simultaneous barrier release must not race on append.
+event_directory = Path(os.environ["STUB_EVENTS"]).with_suffix("")
+event_directory.mkdir(exist_ok=True)
+(event_directory / f"{time.time_ns()}-{os.getpid()}.json").write_text(json.dumps(entry), encoding="utf-8")
+sys.exit(exit_code)
 ''', encoding="utf-8")
         for tool in ("python", "npm", "node", "cargo"):
             (workspace / f"{tool}.cmd").write_text(
@@ -70,8 +92,8 @@ if ($Stage -eq 'verify') { & $pipeline -Stage package }
                                 capture_output=True, timeout=45,
                                 env={**os.environ, "PYTHONUTF8": "1", "STUB_EVENTS": str(workspace / "events.jsonl"),
                                      "FAIL_TOOL": fail_tool})
-        events_path = workspace / "events.jsonl"
-        events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()] if events_path.exists() else []
+        events = sorted((json.loads(path.read_text(encoding="utf-8")) for path in (workspace / "events").glob("*.json")),
+                        key=lambda event: event["started"])
         logs = workspace / "package/logs"
         output_logs = {path.name: path.read_text(encoding="utf-8") for path in logs.glob("*")}
         return result, events, output_logs
@@ -88,6 +110,8 @@ class ParallelVerificationTests(unittest.TestCase):
                         min(frontend["finished_at"], rust["finished_at"]))
         cargo = next(event for event in events if event["kind"] == "cargo")
         dependencies = next(event for event in events if event["kind"] == "dependencies")
+        self.assertTrue(cargo["barrier_peer_observed"])
+        self.assertTrue(dependencies["barrier_peer_observed"])
         self.assertLess(max(cargo["started"], dependencies["started"]),
                         min(cargo["finished"], dependencies["finished"]))
         self.assertEqual([event["arguments"] for event in events if event["kind"] == "npm"],
