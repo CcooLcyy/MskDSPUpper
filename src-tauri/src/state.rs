@@ -9,6 +9,7 @@ pub struct AppState {
     pub settings_store: Arc<AppSettingsStore>,
     pub app_updates: Arc<crate::commands::app_update::AppUpdateStore>,
     pub platform_auth: Arc<crate::platform_auth::PlatformAuthManager>,
+    pub remote_ssh: Arc<crate::commands::remote::RemoteSshManager>,
 }
 
 impl AppState {
@@ -18,6 +19,9 @@ impl AppState {
             runtime_paths.data_dir().join("platform-login.json"),
         ));
         Self {
+            remote_ssh: Arc::new(crate::commands::remote::RemoteSshManager::new(
+                runtime_paths.data_dir().join("remote-ssh-hosts.json"),
+            )),
             conn_manager: Arc::new(ConnectionManager::new(manager_addr)),
             runtime_paths,
             settings_store,

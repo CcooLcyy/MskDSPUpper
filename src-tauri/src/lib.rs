@@ -5,6 +5,7 @@ pub mod login_gate;
 pub mod platform_auth;
 pub mod platform_software;
 pub mod proto;
+pub mod remote_access;
 pub mod runtime_paths;
 pub mod state;
 
@@ -93,6 +94,16 @@ pub fn run() {
                 commands::app_storage::get_runtime_paths,
                 commands::app_storage::open_runtime_directory,
                 commands::module_ops::set_manager_addr,
+                commands::remote::remote_list_devices,
+                commands::remote::remote_connection_status,
+                commands::remote::remote_select_device,
+                commands::remote::remote_use_direct,
+                commands::remote::remote_ssh_open,
+                commands::remote::remote_ssh_trust,
+                commands::remote::remote_ssh_input,
+                commands::remote::remote_ssh_resize,
+                commands::remote::remote_ssh_close,
+                commands::remote::remote_ssh_ack,
                 commands::module_ops::get_module_info,
                 commands::module_ops::get_running_module_info,
                 commands::module_ops::start_module,

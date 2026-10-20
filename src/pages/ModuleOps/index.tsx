@@ -19,6 +19,7 @@ import { reconnectManagerRuntime } from '../../utils/manager-connection';
 import { validateManagerAddress } from '../../utils/network';
 import { getStoredManagerAddress, saveManagerAddress } from '../../utils/app-settings';
 import './index.css';
+import RemoteAccessPanel from '../../components/remote/RemoteAccessPanel';
 
 const { Text } = Typography;
 
@@ -37,6 +38,7 @@ const ModuleOps: React.FC = () => {
   const [modules, setModules] = useState<ModuleInfo[]>([]);
   const [runningModules, setRunningModules] = useState<ModuleRunningInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  const [remoteMode, setRemoteMode] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const managerAddrValidation = validateManagerAddress(managerAddr);
   const managerAddrError = managerAddrValidation.ok ? null : managerAddrValidation.error;
@@ -274,6 +276,7 @@ const ModuleOps: React.FC = () => {
   return (
     <div className="module-ops-page">
       {contextHolder}
+      <RemoteAccessPanel directAddress={managerAddr} onModeChange={setRemoteMode} onConnected={refresh} />
 
       <Card size="small" bordered className="module-ops-toolbar-card">
         <Space align="start">
@@ -281,6 +284,7 @@ const ModuleOps: React.FC = () => {
           <div style={{ minWidth: 240 }}>
             <Input
               value={managerAddr}
+              disabled={remoteMode}
               onChange={(event) => setManagerAddr(event.target.value)}
               style={{ width: 240 }}
               status={managerAddrError ? 'error' : undefined}
@@ -292,7 +296,7 @@ const ModuleOps: React.FC = () => {
               </Text>
             )}
           </div>
-          <Button type="primary" onClick={() => void handleConnect()} disabled={Boolean(managerAddrError)}>
+          <Button type="primary" onClick={() => void handleConnect()} disabled={remoteMode || Boolean(managerAddrError)}>
             连接
           </Button>
           <Button icon={<ReloadOutlined />} onClick={() => void refresh()} loading={loading}>

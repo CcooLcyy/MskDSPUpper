@@ -130,7 +130,7 @@ fn reject_uncontrolled_module(module_name: &str) -> Result<(), String> {
     }
 }
 
-fn validate_manager_addr(addr: &str) -> Result<String, String> {
+pub(crate) fn validate_manager_addr(addr: &str) -> Result<String, String> {
     let trimmed = addr.trim();
     if trimmed.is_empty() {
         return Err("请输入 ModuleManager 地址".into());

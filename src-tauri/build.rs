@@ -81,6 +81,9 @@ fn main() {
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .compile_protos(&[agent_protocol], &[agent_root])
+        .compile_protos(
+            &[agent_protocol, agent_root.join("platform/v1/remote.proto")],
+            &[agent_root],
+        )
         .expect("生成平台账号与连接协议失败");
 }

@@ -65,6 +65,41 @@ pub struct PlatformAuthManager {
 }
 
 impl PlatformAuthManager {
+    #[cfg(test)]
+    pub(crate) fn test_session(endpoint: String) -> Self {
+        let auth = Self::new(
+            std::env::temp_dir().join(format!("remote-test-{}.json", std::process::id())),
+        );
+        {
+            let mut state = auth.inner.lock();
+            state.stored.settings.grpc_endpoint = endpoint;
+            state.session = Some(Session {
+                token: "test-session".into(),
+                account_id: "test".into(),
+                username: "test".into(),
+                display_name: "test".into(),
+                deadline: Instant::now() + Duration::from_secs(300),
+                expires_at: now_ms() + 300_000,
+            });
+        }
+        auth
+    }
+    /// 仅 Rust 传输层获取会话；不向前端暴露访问令牌。
+    pub(crate) fn remote_credentials(&self) -> Result<(String, String, u64), String> {
+        self.require_authenticated()?;
+        let state = self.inner.lock();
+        let session = state.session.as_ref().ok_or("平台登录已失效")?;
+        Ok((
+            state.stored.settings.grpc_endpoint.clone(),
+            session.token.clone(),
+            state.generation,
+        ))
+    }
+
+    pub(crate) fn remote_generation_valid(&self, generation: u64) -> bool {
+        self.status().authenticated && self.inner.lock().generation == generation
+    }
+
     pub fn new(settings_file: PathBuf) -> Self {
         Self::with_store(settings_file, Arc::new(WindowsCredentials))
     }

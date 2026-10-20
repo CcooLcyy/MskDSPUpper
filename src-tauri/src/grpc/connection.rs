@@ -1,7 +1,9 @@
+use crate::remote_access::RemoteConnection;
 use anyhow::{anyhow, Result};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tonic::transport::Channel;
 
 /// 模块运行时地址信息
@@ -22,6 +24,8 @@ pub struct ConnectionManager {
     channels: RwLock<HashMap<String, Channel>>,
     /// 运行时缓存代次，用于拒绝重连前发起的过期请求回写
     runtime_generation: AtomicU64,
+    remote: RwLock<Option<Arc<RemoteConnection>>>,
+    remote_channels: tokio::sync::Mutex<HashMap<(u64, String), Channel>>,
 }
 
 impl ConnectionManager {
@@ -31,11 +35,17 @@ impl ConnectionManager {
             module_addrs: RwLock::new(HashMap::new()),
             channels: RwLock::new(HashMap::new()),
             runtime_generation: AtomicU64::new(0),
+            remote: RwLock::new(None),
+            remote_channels: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
     /// 设置 ModuleManager 地址，返回地址是否发生变化
     pub fn set_manager_addr(&self, addr: String) -> bool {
+        // 页面恢复现场地址不会隐式切走当前远程设备。
+        if self.is_remote() {
+            return false;
+        }
         let mut current = self.manager_addr.write();
         if *current == addr {
             tracing::info!(manager_addr = %addr, "ModuleManager 地址未变化");
@@ -128,12 +138,18 @@ impl ConnectionManager {
 
     /// 获取 ModuleManager 的 Channel
     pub async fn manager_channel(&self) -> Result<Channel> {
+        if self.is_remote() {
+            return self.remote_channel("ModuleManager").await;
+        }
         let addr = self.manager_addr();
         self.get_channel(&addr).await
     }
 
     /// 获取指定模块的 Channel
     pub async fn module_channel(&self, module_name: &str) -> Result<Channel> {
+        if self.is_remote() {
+            return self.remote_channel(module_name).await;
+        }
         let addr = self.get_module_addr(module_name).ok_or_else(|| {
             tracing::error!(module = %module_name, "模块地址未知，无法建立 gRPC 连接");
             anyhow!("模块 {} 地址未知，请先刷新运行信息", module_name)
@@ -154,6 +170,50 @@ impl ConnectionManager {
         );
         module_addrs.clear();
         channels.clear();
+    }
+
+    pub fn is_remote(&self) -> bool {
+        self.remote.read().is_some()
+    }
+    pub fn remote_connection(&self) -> Option<Arc<RemoteConnection>> {
+        self.remote.read().clone()
+    }
+    pub async fn select_remote(&self, remote: Option<Arc<RemoteConnection>>) {
+        {
+            let mut current = self.remote.write();
+            let old = std::mem::replace(&mut *current, remote);
+            if let Some(old) = old {
+                old.cancel();
+            }
+            self.clear_runtime_cache();
+        }
+        self.remote_channels.lock().await.clear();
+    }
+    async fn remote_channel(&self, service: &str) -> Result<Channel> {
+        let (generation, remote) = {
+            let current = self.remote.read();
+            (
+                self.runtime_generation(),
+                current.clone().ok_or_else(|| anyhow!("远程连接已切换"))?,
+            )
+        };
+        if !remote.active() {
+            return Err(anyhow!("远程连接已失效，请重新选择设备"));
+        }
+        let mut cache = self.remote_channels.lock().await;
+        if generation != self.runtime_generation() {
+            return Err(anyhow!("远程设备已切换"));
+        }
+        let key = (generation, service.to_string());
+        if let Some(channel) = cache.get(&key) {
+            return Ok(channel.clone());
+        }
+        let channel = remote.channel(service).await?;
+        if generation != self.runtime_generation() || !remote.active() {
+            return Err(anyhow!("远程设备已切换"));
+        }
+        cache.insert(key, channel.clone());
+        Ok(channel)
     }
 }
 
