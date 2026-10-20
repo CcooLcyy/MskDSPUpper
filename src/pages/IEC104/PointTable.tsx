@@ -16,6 +16,7 @@ export interface Iec104PointTableProps {
 }
 
 const pointRowKey = (point: Iec104Point) => point.tag;
+const SELECTION_COLUMN_WIDTH = 48;
 
 function Iec104PointTable({
   columns, points, selectedTags, selectionEnabled, onSelectionChange,
@@ -41,11 +42,20 @@ function Iec104PointTable({
   }, []);
 
   const rowSelection = useMemo<TableRowSelection<Iec104Point> | undefined>(() => selectionEnabled ? {
+    columnWidth: SELECTION_COLUMN_WIDTH,
+    fixed: 'left',
     selectedRowKeys: selectedTags,
     preserveSelectedRowKeys: true,
     onChange: (keys) => onSelectionChange(keys.map(String)),
   } : undefined, [onSelectionChange, selectedTags, selectionEnabled]);
-  const scroll = useMemo(() => ({ x: runtime ? 1100 : 1170, y: bodyHeight }), [bodyHeight, runtime]);
+  const scroll = useMemo(() => ({
+    // 虚拟表格按列宽预留横向空间，避免窄窗口将选择列挤压到剩余宽度。
+    x: Math.max(runtime ? 1100 : 1170, columns.reduce(
+      (total, column) => total + (typeof column.width === 'number' ? column.width : 0),
+      selectionEnabled ? SELECTION_COLUMN_WIDTH : 0,
+    )),
+    y: bodyHeight,
+  }), [bodyHeight, columns, runtime, selectionEnabled]);
   const locale = useMemo(() => ({ emptyText }), [emptyText]);
 
   return (
