@@ -24,7 +24,8 @@ pub const APP_MODE_KEY: &str = "mskdsp_app_mode";
 pub const LAST_WORKSPACE_KEY: &str = "mskdsp_last_workspace";
 pub const LOWER_UPDATE_CONNECTION_KEY: &str = "mskdsp_lower_update_connection";
 pub const LOWER_UPDATE_CONNECTION_HISTORY_KEY: &str = "mskdsp_lower_update_connection_history";
-pub const SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY: &str = "softwarePlatformGrpcEndpoint";
+/// 仅用于忽略历史配置；平台软件更新地址已固定，不接受写入。
+const SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY: &str = "softwarePlatformGrpcEndpoint";
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SettingsDocument {
@@ -109,6 +110,10 @@ impl AppSettingsStore {
         let mut document = read_settings_document(&self.path)?;
         let mut changed = false;
         for (key, value) in legacy {
+            if key == SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY {
+                tracing::debug!("忽略迁移中的历史平台软件更新地址");
+                continue;
+            }
             validate_setting_key(&key)?;
             if document.settings.contains_key(&key) {
                 continue;
@@ -133,9 +138,12 @@ fn validate_setting_key(key: &str) -> Result<(), String> {
         | DLT645_MQTT_KEY
         | APP_MODE_KEY
         | LAST_WORKSPACE_KEY
-        | SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY
         | LOWER_UPDATE_CONNECTION_KEY
         | LOWER_UPDATE_CONNECTION_HISTORY_KEY => Ok(()),
+        SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY => {
+            tracing::warn!("拒绝修改固定的平台软件更新地址");
+            Err("平台软件更新地址已固定，不支持修改".into())
+        }
         _ => Err(format!("不支持的上位机设置项: {key}")),
     }
 }
@@ -154,13 +162,20 @@ fn read_settings_document(path: &Path) -> Result<SettingsDocument, String> {
 fn read_settings_document_from(path: &Path) -> Result<SettingsDocument, String> {
     let bytes = fs::read(path)
         .map_err(|error| format!("读取上位机设置失败: path={}, error={error}", path.display()))?;
-    let document: SettingsDocument = serde_json::from_slice(&bytes)
+    let mut document: SettingsDocument = serde_json::from_slice(&bytes)
         .map_err(|error| format!("解析上位机设置失败: path={}, error={error}", path.display()))?;
     if document.schema_version != SETTINGS_SCHEMA_VERSION {
         return Err(format!(
             "不支持的上位机设置版本: expected={SETTINGS_SCHEMA_VERSION}, actual={}",
             document.schema_version
         ));
+    }
+    if document
+        .settings
+        .remove(SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY)
+        .is_some()
+    {
+        tracing::debug!("忽略已保存的历史平台软件更新地址");
     }
     Ok(document)
 }
@@ -258,12 +273,6 @@ fn backup_path(path: &Path) -> PathBuf {
 }
 
 fn sanitize_setting_for_disk(key: &str, mut value: Value) -> Result<Value, String> {
-    if key == SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY {
-        let endpoint = value.as_str().ok_or("平台 gRPC 地址必须是字符串")?;
-        return Ok(Value::String(crate::platform_software::validate_endpoint(
-            endpoint,
-        )?));
-    }
     if key == MODBUS_TEMPLATES_KEY {
         super::modbus_templates::validate_personal_templates(&value)?;
         return Ok(value);
@@ -426,50 +435,62 @@ mod tests {
         root.join("settings.json")
     }
 
-    // 验证公网明文地址可持久化，非法格式不能覆盖已有设置。
+    // 平台地址已固定，旧设置仍可加载，但任何设置写入入口都不能修改地址。
     #[test]
-    fn persists_valid_platform_endpoint_and_rejects_invalid_replacement() {
+    fn fixed_platform_endpoint_rejects_setting_writes_and_ignores_legacy_values() {
         let path = temp_settings_path("platform-endpoint");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "settings": {
+                    "softwarePlatformGrpcEndpoint": "legacy-invalid-endpoint",
+                    "mskdsp_manager_addr": "192.0.2.1:17000"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         let store = AppSettingsStore::new(path.clone());
-        store
-            .save_setting(
-                super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY.into(),
-                json!("http://192.168.1.2:50000/"),
-            )
-            .unwrap();
-        assert_eq!(
-            store.load().unwrap()[super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY],
-            json!("http://192.168.1.2:50000")
-        );
+        let loaded = store.load().unwrap();
+        assert!(!loaded.contains_key(super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY));
+        assert_eq!(loaded[MANAGER_ADDR_KEY], json!("192.0.2.1:17000"));
+        let original = std::fs::read(&path).unwrap();
         for endpoint in [
             "http://60.208.15.90:50000",
             "http://platform.example.com:50000",
-        ] {
-            store
-                .save_setting(
-                    super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY.into(),
-                    json!(format!("{endpoint}/")),
-                )
-                .unwrap();
-            assert_eq!(
-                store.load().unwrap()[super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY],
-                json!(endpoint)
-            );
-        }
-        let original = std::fs::read(&path).unwrap();
-        for invalid in [
-            "http://60.208.15.90:50000?token=x",
-            "https://user:password@example.com",
-            "https://example.com/path",
+            "legacy-invalid-endpoint",
         ] {
             assert!(store
                 .save_setting(
                     super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY.into(),
-                    json!(invalid)
+                    json!(endpoint),
                 )
                 .is_err());
             assert_eq!(std::fs::read(&path).unwrap(), original);
         }
+        assert!(store
+            .update_settings(|_| Ok(std::collections::BTreeMap::from([(
+                super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY.into(),
+                json!("http://127.0.0.1:50000")
+            )])))
+            .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let migrated = store
+            .migrate_legacy(std::collections::BTreeMap::from([
+                (
+                    super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY.into(),
+                    json!("http://127.0.0.1:50000"),
+                ),
+                (APP_MODE_KEY.into(), json!("offline")),
+            ]))
+            .unwrap();
+        assert!(!migrated.contains_key(super::SOFTWARE_PLATFORM_GRPC_ENDPOINT_KEY));
+        assert_eq!(migrated[APP_MODE_KEY], json!("offline"));
+        assert_eq!(
+            store.load().unwrap()[MANAGER_ADDR_KEY],
+            json!("192.0.2.1:17000")
+        );
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

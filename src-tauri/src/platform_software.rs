@@ -16,18 +16,13 @@ pub mod protocol {
 use protocol::software_catalog_service_client::SoftwareCatalogServiceClient;
 pub use protocol::{Package, PackageMetadata};
 
-pub const DEFAULT_ENDPOINT: &str = "http://192.168.10.198:50000";
-pub const ENDPOINT_SETTING: &str = "softwarePlatformGrpcEndpoint";
+pub const DEFAULT_ENDPOINT: &str = "http://60.208.15.90:50000";
 const MAX_CHUNK: usize = 256 * 1024;
 const MAX_SIZE: u64 = 8 * 1024 * 1024 * 1024;
 
-pub fn configured_catalog(state: &crate::state::AppState) -> Result<PlatformCatalog, String> {
-    let saved = state.settings_store.load()?;
-    let endpoint = saved
-        .get(ENDPOINT_SETTING)
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(DEFAULT_ENDPOINT);
-    PlatformCatalog::new(endpoint)
+pub fn configured_catalog(_state: &crate::state::AppState) -> Result<PlatformCatalog, String> {
+    tracing::debug!(endpoint = DEFAULT_ENDPOINT, "使用固定平台软件更新地址");
+    PlatformCatalog::new(DEFAULT_ENDPOINT)
 }
 
 pub fn configured_endpoint(state: &crate::state::AppState) -> Result<String, String> {

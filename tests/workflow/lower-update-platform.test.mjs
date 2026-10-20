@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import test from 'node:test';
 import ts from 'typescript';
 
@@ -23,17 +24,28 @@ test('lower update architecture rules reject unsupported manifests and normalize
   rules.assertLowerUpdateManifest({ platform: 'linux-x64', channel: 'ci' }, 'linux-x64', 'ci');
 });
 
-// 上下位机共用一个平台地址，拒绝混入路径或凭据。
-test('software platform endpoint normalizes hosts and rejects invalid addresses', () => {
-  const code = compile('src/utils/software-platform.ts').replace(/export /g, '');
-  const { normalizeSoftwarePlatformEndpoint: normalize } = new Function(code + '\nreturn { normalizeSoftwarePlatformEndpoint };')();
-  assert.equal(normalize(' http://192.168.10.198:50000/ '), 'http://192.168.10.198:50000');
-  assert.equal(normalize('http://60.208.15.90:50000'), 'http://60.208.15.90:50000');
-  assert.equal(normalize('http://platform.example.com:50000'), 'http://platform.example.com:50000');
-  assert.equal(normalize('https://packages.example:443'), 'https://packages.example');
-  for (const input of ['', 'file:///tmp', 'http://user:password@host', 'http://host/path', 'http://host?token=x', 'http://host#fragment', 'http://ho st', 'http://host\n:50000']) {
-    assert.throws(() => normalize(input), /地址/);
-  }
+// 实际渲染设置组件：固定地址可见，且不能读取旧设置或提供编辑、保存入口。
+test('software platform settings show the fixed endpoint without editable controls or storage access', () => {
+  const require = createRequire(import.meta.url);
+  const load = (file) => {
+    const code = ts.transpileModule(source(file), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+    }).outputText;
+    const module = { exports: {} };
+    const imports = (name) => {
+      if (name === '../../../utils/software-platform') return load('src/utils/software-platform.ts');
+      assert.ok(['react', 'react/jsx-runtime', 'antd'].includes(name), `只读展示不得依赖设置存储：${name}`);
+      return require(name);
+    };
+    new Function('require', 'module', 'exports', code)(imports, module, module.exports);
+    return module.exports;
+  };
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const Settings = load('src/pages/Settings/components/SoftwarePlatformSettings.tsx').default;
+  const html = renderToStaticMarkup(React.createElement(Settings));
+  assert.match(html, /http:\/\/60\.208\.15\.90:50000/);
+  assert.doesNotMatch(html, /<input\b|<textarea\b|<button\b|contenteditable="true"/i);
 });
 
 function providerHarness(api) {

@@ -196,7 +196,44 @@ async fn malformed_streams_cannot_become_installable() {
     }
 }
 
-// 验证公网、域名与内网端点均可配置，并保留地址格式校验。
+// 上下位机更新共用固定地址，历史持久化地址不能覆盖运行时端点。
+#[test]
+fn fixed_platform_endpoint_ignores_persisted_addresses() {
+    let path = temporary_file();
+    let mut state = crate::state::AppState::new(
+        "127.0.0.1:17000".into(),
+        crate::runtime_paths::RuntimePaths::discover().unwrap(),
+    );
+    state.settings_store = Arc::new(crate::commands::app_storage::AppSettingsStore::new(
+        path.clone(),
+    ));
+    for legacy_endpoint in [
+        "http://192.168.10.198:50000",
+        "http://127.0.0.1:50000",
+        "invalid-old-endpoint",
+    ] {
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "settings": {"softwarePlatformGrpcEndpoint": legacy_endpoint}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            configured_endpoint(&state).unwrap(),
+            "http://60.208.15.90:50000"
+        );
+        assert_eq!(
+            configured_catalog(&state).unwrap().endpoint,
+            "http://60.208.15.90:50000"
+        );
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+// 通用客户端保留测试服务端及内部地址格式校验，生产入口不开放配置。
 #[test]
 fn endpoint_accepts_public_http_and_preserves_url_validation() {
     for endpoint in [
