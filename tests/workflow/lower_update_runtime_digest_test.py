@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import importlib.util
 import io
@@ -159,31 +158,41 @@ class RuntimeDigestTest(unittest.TestCase):
     def test_watchdog_interrupts_blocked_tar_stream(self):
         real_popen = subprocess.Popen
         processes = []
+        ready_at = []
 
         def start_blocked_export(_command, **kwargs):
-            process = real_popen([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+            script = "import sys,time;sys.stdout.buffer.write(b'R');sys.stdout.buffer.flush();time.sleep(30)"
+            process = real_popen([sys.executable, "-c", script], **kwargs)
             processes.append(process)
+            # Windows 冷启动或并行编译可能延迟进程创建；等待替身就绪，
+            # 再测生产代码 watchdog 实际覆盖的区间，不把启动调度算成终止延迟。
+            self.assertEqual(process.stdout.read(1), b"R")
+            ready_at.append(time.monotonic())
             return process
 
-        started_at = time.monotonic()
         with patch.object(runtime.subprocess, "Popen", side_effect=start_blocked_export):
             with self.assertRaisesRegex(RuntimeError, "超时"):
                 runtime.export_config_digest("sha256:" + "a" * 64, timeout=0.1)
-        self.assertLess(time.monotonic() - started_at, 3)
+        self.assertLess(time.monotonic() - ready_at[0], 3)
         self.assertIsNotNone(processes[0].poll())
 
     # 验证读完 tar 结束标记后仍消费尾部 padding，避免 Docker 被管道背压卡住。
     def test_drains_trailing_bytes_before_waiting_for_export(self):
         config_id, manifest_id, entries = image()
-        payload = base64.b64encode(image_archive(config_id, manifest_id, entries).getvalue()).decode()
-        real_popen = subprocess.Popen
+        payload = image_archive(config_id, manifest_id, entries).getvalue() + b"\0" * (1024 * 1024)
+        stream = io.BytesIO(payload)
+        process = Mock(stdout=stream, returncode=0)
 
-        def start_padded_export(_command, **kwargs):
-            script = "import base64,sys;sys.stdout.buffer.write(base64.b64decode('" + payload + "'));sys.stdout.buffer.write(b'\\0'*(1024*1024));sys.stdout.buffer.flush()"
-            return real_popen([sys.executable, "-c", script], **kwargs)
+        def wait_after_drain(**_kwargs):
+            # 精确验证 read→wait 的先后关系；未消费尾部时立即失败，
+            # 不再用 Python 子进程须在一秒内启动并写完管道来间接判断。
+            self.assertEqual(stream.tell(), len(payload), "等待导出进程前必须消费全部尾部字节")
+            return 0
 
-        with patch.object(runtime.subprocess, "Popen", side_effect=start_padded_export):
+        process.wait.side_effect = wait_after_drain
+        with patch.object(runtime.subprocess, "Popen", return_value=process):
             self.assertEqual(runtime.export_config_digest(manifest_id, timeout=1), config_id)
+        process.wait.assert_called_once()
 
 
 if __name__ == "__main__":
