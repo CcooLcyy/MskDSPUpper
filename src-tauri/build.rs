@@ -65,6 +65,16 @@ fn main() {
         .compile_protos(&protos, &[&proto_dir])
         .expect("Failed to compile protobuf files");
 
+    // 随机 localhost 管理器行为测试使用独立生成的服务端，不改变生产设备协议客户端。
+    tonic_build::configure()
+        .build_server(true)
+        .build_client(false)
+        .compile_protos(
+            &[proto_dir.join("ModuleManager.proto")],
+            &[proto_dir.clone()],
+        )
+        .expect("生成管理器测试服务端协议失败");
+
     // 平台软件协议独立生成到 OUT_DIR，不与设备协议命名或输出目录混用。
     let platform_root = PathBuf::from("../proto-platform");
     let platform_protocol = platform_root.join("platform/v1/software.proto");

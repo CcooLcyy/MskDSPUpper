@@ -94,6 +94,8 @@ pub fn run() {
                 commands::app_storage::get_runtime_paths,
                 commands::app_storage::open_runtime_directory,
                 commands::module_ops::set_manager_addr,
+                commands::platform_access::get_lower_platform_access_config,
+                commands::platform_access::set_lower_platform_access_config,
                 commands::remote::remote_list_devices,
                 commands::remote::remote_connection_status,
                 commands::remote::remote_select_device,

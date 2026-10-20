@@ -20,6 +20,7 @@ import { validateManagerAddress } from '../../utils/network';
 import { getStoredManagerAddress, saveManagerAddress } from '../../utils/app-settings';
 import './index.css';
 import RemoteAccessPanel from '../../components/remote/RemoteAccessPanel';
+import DevicePlatformAccessCard from '../../components/remote/DevicePlatformAccessCard';
 
 const { Text } = Typography;
 
@@ -39,6 +40,8 @@ const ModuleOps: React.FC = () => {
   const [runningModules, setRunningModules] = useState<ModuleRunningInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [remoteMode, setRemoteMode] = useState(false);
+  const [platformConnectionKey, setPlatformConnectionKey] = useState(0);
+  const [platformConfigReady, setPlatformConfigReady] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const managerAddrValidation = validateManagerAddress(managerAddr);
   const managerAddrError = managerAddrValidation.ok ? null : managerAddrValidation.error;
@@ -104,6 +107,8 @@ const ModuleOps: React.FC = () => {
         }
 
         await api.setManagerAddr(normalizedAddr);
+        setPlatformConfigReady(true);
+        setPlatformConnectionKey(value => value + 1);
         await refresh({ suppressError: true });
       } catch (error) {
         messageApi.error(`连接失败: ${error}`);
@@ -114,6 +119,7 @@ const ModuleOps: React.FC = () => {
   }, [messageApi, normalizeManagerAddr, refresh]);
 
   const handleConnect = useCallback(async () => {
+    setPlatformConfigReady(false);
     try {
       const normalizedAddr = normalizeManagerAddr(managerAddr);
 
@@ -123,7 +129,11 @@ const ModuleOps: React.FC = () => {
 
       await saveManagerAddress(normalizedAddr);
       await reconnectManagerRuntime(normalizedAddr, {
-        setManagerAddr: api.setManagerAddr,
+        setManagerAddr: async (addr, forceReconnect) => {
+          await api.setManagerAddr(addr, forceReconnect);
+          setPlatformConfigReady(true);
+          setPlatformConnectionKey(value => value + 1);
+        },
         refreshManagerState: () => refresh({ suppressError: true }),
       });
       messageApi.success(`ModuleManager 已连接: ${normalizedAddr}`);
@@ -276,7 +286,11 @@ const ModuleOps: React.FC = () => {
   return (
     <div className="module-ops-page">
       {contextHolder}
-      <RemoteAccessPanel directAddress={managerAddr} onModeChange={setRemoteMode} onConnected={refresh} />
+      <RemoteAccessPanel directAddress={managerAddr} onModeChange={setRemoteMode} onConnected={async () => {
+        setPlatformConfigReady(true);
+        setPlatformConnectionKey(value => value + 1);
+        await refresh();
+      }} />
 
       <Card size="small" bordered className="module-ops-toolbar-card">
         <Space align="start">
@@ -304,6 +318,8 @@ const ModuleOps: React.FC = () => {
           </Button>
         </Space>
       </Card>
+
+      {!remoteMode && <DevicePlatformAccessCard connectionKey={platformConnectionKey} ready={platformConfigReady} />}
 
       <Card title="模块列表" size="small" bordered className="module-ops-list-card">
         <div className="module-ops-table-scroll">
