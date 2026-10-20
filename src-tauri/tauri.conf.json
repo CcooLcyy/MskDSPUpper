@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "MskDSP Upper",
-        "width": 760,
-        "height": 460,
+        "width": 820,
+        "height": 560,
         "center": true,
         "resizable": true,
         "fullscreen": false
