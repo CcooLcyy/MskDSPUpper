@@ -23,6 +23,7 @@ import ProtocolHeaderViewSwitcher from '../components/protocol/ProtocolHeaderVie
 import { useAppMode } from '../offline/app-mode-context.ts';
 import type { Capability } from '../offline/capabilities.ts';
 import OfflineModeControls from '../offline/ui/OfflineModeControls.tsx';
+import { PlatformAccountControl } from '../auth/PlatformAccountControl';
 import './MainLayout.css';
 import '../components/protocol/protocol-page.css';
 
@@ -245,7 +246,7 @@ const MainLayout: React.FC = () => {
           <Space size={12} align="center">
             <LowerUpdateDeploymentHeader />
             <OfflineModeControls />
-            <Text style={{ color: '#aaa', fontSize: 13 }}>admin (管理员)</Text>
+            <PlatformAccountControl />
           </Space>
         </Header>
         <Content

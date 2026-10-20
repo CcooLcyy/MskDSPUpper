@@ -8,21 +8,27 @@ import { LowerUpdateDeploymentUi } from './components/lower-update/LowerUpdateDe
 import { AppModeProvider } from './offline/AppModeProvider.tsx';
 import { darkTheme } from './theme/dark';
 import { router } from './router';
+import { PlatformAuthProvider } from './auth/PlatformAuthProvider';
+import { PlatformAuthGate } from './auth/PlatformAuthGate';
 
 function App() {
   return (
     <ConfigProvider theme={darkTheme} locale={zhCN}>
       <AntApp>
-        <AppModeProvider>
-          <AppUpdateProvider>
-            <LowerUpdateAutoProvider>
-              <LowerUpdateDeploymentProvider>
-                <RouterProvider router={router} />
-                <LowerUpdateDeploymentUi />
-              </LowerUpdateDeploymentProvider>
-            </LowerUpdateAutoProvider>
-          </AppUpdateProvider>
-        </AppModeProvider>
+        <PlatformAuthProvider>
+          <PlatformAuthGate>
+            <AppModeProvider>
+              <AppUpdateProvider>
+                <LowerUpdateAutoProvider>
+                  <LowerUpdateDeploymentProvider>
+                    <RouterProvider router={router} />
+                    <LowerUpdateDeploymentUi />
+                  </LowerUpdateDeploymentProvider>
+                </LowerUpdateAutoProvider>
+              </AppUpdateProvider>
+            </AppModeProvider>
+          </PlatformAuthGate>
+        </PlatformAuthProvider>
       </AntApp>
     </ConfigProvider>
   );

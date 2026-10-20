@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package mskdsp.platform.v1;
+
+// Agent 与平台之间的基础连接协议。
+// 当前版本只承载身份握手、心跳和关闭通知，不包含现场业务命令。
+service AgentService {
+  // 只读健康检查，不需要身份凭据，也不创建 Agent 会话。
+  rpc CheckHealth(HealthRequest) returns (HealthResponse);
+
+  // 建立 Agent 到平台的双向长连接。
+  // Agent 主动发起连接；平台通过同一条流返回 Welcome、HeartbeatAck 或 Error。
+  // 先通过账号密码登录接口获取会话，再携带唯一 authorization: Bearer <access_token>。
+  // 认证失败返回 UNAUTHENTICATED，同账号同安装实例重复在线返回 ALREADY_EXISTS。
+  rpc ConnectAgent(stream AgentMessage) returns (stream ServerMessage);
+
+  // 使用 Web 创建的上位机账号密码登录，返回不可解析的访问会话；客户端不得记录密码或令牌。
+  // 无需 authorization；参数错误返回 INVALID_ARGUMENT，凭据无效返回 UNAUTHENTICATED，限流返回 RESOURCE_EXHAUSTED。
+  rpc Login(LoginRequest) returns (LoginResponse);
+
+  // 使用唯一 authorization: Bearer <access_token> 查询当前会话；响应 access_token 为空，不回显凭据。
+  // 缺失、重复、格式错误或失效的凭据返回 UNAUTHENTICATED，存储故障返回 UNAVAILABLE。
+  rpc GetSession(SessionRequest) returns (LoginResponse);
+
+  // 使用唯一 authorization: Bearer <access_token> 退出当前会话；格式正确但已失效的令牌幂等成功。
+  // 缺失、重复或格式错误的凭据返回 UNAUTHENTICATED；已有长连接随后因授权失效关闭。
+  rpc Logout(SessionRequest) returns (LogoutResponse);
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message SessionRequest {}
+
+message LogoutResponse {}
+
+message AccountIdentity {
+  string id = 1;
+  string username = 2;
+  string display_name = 3;
+}
+
+message LoginResponse {
+  string access_token = 1;
+  string token_type = 2;
+  uint64 expires_in = 3;
+  AccountIdentity account = 4;
+}
+
+message AgentMessage {
+  oneof payload {
+    Hello hello = 1;
+    Heartbeat heartbeat = 2;
+    Goodbye goodbye = 3;
+  }
+}
+
+message ServerMessage {
+  oneof payload {
+    Welcome welcome = 1;
+    HeartbeatAck heartbeat_ack = 2;
+    ProtocolError error = 3;
+  }
+}
+
+message Hello {
+  // 客户端自动保存的安装实例标识；为空时平台为本次连接生成临时标识。
+  string agent_id = 1;
+  // 兼容保留字段，不用于账号认证、授权或现场绑定。
+  string site_id = 2;
+  string agent_version = 3;
+  string protocol_version = 4;
+  repeated string capabilities = 5;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string protocol_version = 1;
+}
+
+message Welcome {
+  string connection_id = 1;
+  string protocol_version = 2;
+  int64 server_time_unix_ms = 3;
+}
+
+message Heartbeat {
+  int64 sent_at_unix_ms = 1;
+}
+
+message HeartbeatAck {
+  int64 server_time_unix_ms = 1;
+}
+
+message Goodbye {
+  string reason = 1;
+}
+
+message ProtocolError {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}

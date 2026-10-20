@@ -16,4 +16,5 @@ pub mod modbus_rtu;
 pub mod modbus_tcp;
 pub mod modbus_templates;
 pub mod module_ops;
+pub mod platform_login;
 pub mod workspace;

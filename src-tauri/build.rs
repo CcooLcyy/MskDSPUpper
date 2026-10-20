@@ -74,4 +74,13 @@ fn main() {
         .build_client(true)
         .compile_protos(&[platform_protocol], &[platform_root])
         .expect("生成平台软件仓库协议失败");
+
+    let agent_root = PathBuf::from("proto-platform-agent");
+    let agent_protocol = agent_root.join("platform/v1/agent.proto");
+    println!("cargo:rerun-if-changed={}", agent_protocol.display());
+    tonic_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .compile_protos(&[agent_protocol], &[agent_root])
+        .expect("生成平台账号与连接协议失败");
 }
