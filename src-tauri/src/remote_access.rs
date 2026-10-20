@@ -12,7 +12,7 @@ use tokio::{
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{
-    transport::{Channel, ClientTlsConfig, Endpoint},
+    transport::{Channel, Endpoint},
     Request,
 };
 
@@ -65,24 +65,18 @@ impl From<Device> for RemoteDevice {
 }
 
 fn validate_remote_endpoint(endpoint: &str) -> Result<()> {
-    let normalized =
-        crate::platform_software::validate_endpoint(endpoint).map_err(|e| anyhow!(e))?;
-    let url = reqwest::Url::parse(&normalized)?;
-    let host = url.host_str().unwrap_or("").trim_matches(['[', ']']);
-    if url.scheme() != "https" && !matches!(host, "127.0.0.1" | "localhost" | "::1") {
-        bail!("远程访问需要 HTTPS，请在平台登录设置中配置平台 TLS 地址");
+    let endpoint =
+        crate::platform_software::validate_endpoint(endpoint).map_err(|error| anyhow!(error))?;
+    if !endpoint.starts_with("http://") {
+        bail!("远程访问使用现有 HTTP gRPC 入口");
     }
     Ok(())
 }
 
 pub(crate) async fn client(endpoint: &str) -> Result<RemoteAccessServiceClient<Channel>> {
     validate_remote_endpoint(endpoint)?;
-    let mut endpoint_builder =
+    let endpoint_builder =
         Endpoint::from_shared(endpoint.to_string())?.connect_timeout(Duration::from_secs(10));
-    if endpoint.starts_with("https://") {
-        endpoint_builder =
-            endpoint_builder.tls_config(ClientTlsConfig::new().with_native_roots())?;
-    }
     Ok(RemoteAccessServiceClient::new(
         endpoint_builder.connect().await?,
     ))

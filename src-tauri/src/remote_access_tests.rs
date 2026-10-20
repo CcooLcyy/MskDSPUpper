@@ -72,7 +72,10 @@ impl RemoteAccessService for Platform {
                     .await;
                 return;
             }
-            if mode == 6 { let _ = tx.send(Ok(TunnelFrame { payload: None })).await; return; }
+            if mode == 6 {
+                let _ = tx.send(Ok(TunnelFrame { payload: None })).await;
+                return;
+            }
             while let Ok(Some(message)) = input.message().await {
                 match message.payload.unwrap() {
                     Payload::Data(bytes) => {
@@ -134,23 +137,38 @@ fn device() -> RemoteDevice {
 }
 
 #[test]
-fn remote_control_requires_https_except_localhost_test_transport() {
+fn remote_control_uses_existing_http_endpoint_and_rejects_other_schemes_or_invalid_urls() {
     for endpoint in [
         "http://60.208.15.90:50000",
         "http://example.com:50000",
         "http://192.168.1.2:50000",
-    ] {
-        assert!(validate_remote_endpoint(endpoint).is_err());
-    }
-    for endpoint in [
-        "https://example.com:50000",
         "http://localhost:50000",
         "http://127.0.0.1:50000",
         "http://[::1]:50000",
     ] {
         validate_remote_endpoint(endpoint).unwrap();
     }
-    assert!(validate_remote_endpoint("http://name:password@localhost:50000").is_err());
+    for endpoint in [
+        "https://example.com:50000",
+        "http://name:password@localhost:50000",
+        "file:///tmp/socket",
+        "http://example.com/rpc",
+        "http://example.com?token=secret",
+        "http://example.com#fragment",
+        "not-a-url",
+    ] {
+        assert!(validate_remote_endpoint(endpoint).is_err());
+    }
+}
+
+#[tokio::test]
+async fn remote_connection_can_select_existing_public_plaintext_endpoint() {
+    let auth = Arc::new(PlatformAuthManager::test_session(
+        "http://60.208.15.90:50000".into(),
+    ));
+    let remote = RemoteConnection::new(device(), auth).unwrap();
+    assert!(remote.active());
+    assert_eq!(remote.endpoint, "http://60.208.15.90:50000");
 }
 
 #[tokio::test]
