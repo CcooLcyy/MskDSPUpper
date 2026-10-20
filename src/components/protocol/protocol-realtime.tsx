@@ -44,6 +44,9 @@ function createEmptyRealtimeState(): ProtocolRealtimeState {
   };
 }
 
+// 未启用查询时复用空映射，避免配置页面的输入使点表列缓存失效。
+const EMPTY_REALTIME_STATE = createEmptyRealtimeState();
+
 function normalizeTags(tags: string[]): string[] {
   // Tags are DataCenter keys; preserve whitespace because it is part of the exact tag identity.
   return Array.from(new Set(tags.filter((tag) => tag.length > 0)));
@@ -285,8 +288,8 @@ export function useProtocolRealtime(
   }, [hasSelection, sourceConnId, tagSignature, normalizedTags, mode]);
 
   return {
-    realtimeByTag: hasSelection ? realtimeState.realtimeByTag : {},
-    realtimeRevisionByTag: hasSelection ? realtimeState.realtimeRevisionByTag : {},
+    realtimeByTag: hasSelection ? realtimeState.realtimeByTag : EMPTY_REALTIME_STATE.realtimeByTag,
+    realtimeRevisionByTag: hasSelection ? realtimeState.realtimeRevisionByTag : EMPTY_REALTIME_STATE.realtimeRevisionByTag,
     loading: hasSelection ? loading : false,
     error: hasSelection ? error : null,
   };

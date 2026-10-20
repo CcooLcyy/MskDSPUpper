@@ -42,6 +42,7 @@ import {
 import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
+import Iec104PointTable from './PointTable';
 import { api } from '../../adapters';
 import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
@@ -655,16 +656,27 @@ const IEC104: React.FC = () => {
   const realtimeQueryMode: ProtocolRealtimeQueryMode = isSlaveStationConfig(selectedLink?.config)
     ? 'destination'
     : 'source';
+  const realtimeConnId = currentView === 'config' && pointTableView === 'runtime'
+    ? selectedLink?.conn_id ?? null
+    : null;
   const {
     realtimeByTag,
     realtimeRevisionByTag,
     loading: realtimeLoading,
     error: realtimeError,
   } = useProtocolRealtime(
-    selectedLink?.conn_id ?? null,
+    realtimeConnId,
     realtimeTags,
     realtimeQueryMode,
   );
+  useEffect(() => {
+    if (selectedConn) {
+      console.info('IEC104 点表实时查询状态已切换', {
+        connName: selectedConn,
+        enabled: realtimeConnId !== null,
+      });
+    }
+  }, [selectedConn, realtimeConnId]);
   const activeSimulationSnapshot = simulationSnapshot?.conn_name === selectedConn
     ? simulationSnapshot
     : null;
@@ -769,8 +781,10 @@ const IEC104: React.FC = () => {
   const importStationRole = isSlaveStationConfig(selectedLink?.config) ? 'slave' : 'master';
   const hasRemoteControlImportDrafts = importPointDrafts.some((draft) =>
     isRemoteControlBusinessType(draft.business_type));
-  const selectedRemoteControlPointCount = points.filter((point) =>
-    selectedPointTags.includes(point.tag) && isRemoteControlBusinessType(point.business_type)).length;
+  const selectedPointTagSet = useMemo(() => new Set(selectedPointTags), [selectedPointTags]);
+  const selectedRemoteControlPointCount = useMemo(() => points.filter((point) =>
+    selectedPointTagSet.has(point.tag) && isRemoteControlBusinessType(point.business_type)).length,
+  [points, selectedPointTagSet]);
   const importValidation = useMemo(() => {
     const cellIssues = new Map<string, string[]>();
     const rowIssues = new Map<string, string[]>();
@@ -2623,6 +2637,7 @@ const IEC104: React.FC = () => {
     },
   ];
 
+  const pointIndexByTag = useMemo(() => new Map(points.map((point, index) => [point.tag, index])), [points]);
   const pointColumns: ColumnsType<Iec104Point> = useMemo(() => {
     const tagColumn = {
       title: 'Tag (标签)',
@@ -2740,8 +2755,8 @@ const IEC104: React.FC = () => {
       width: 132,
       fixed: 'right' as const,
       render: (_value: unknown, record: Iec104Point) => {
-        const originalIndex = points.indexOf(record);
-        if (originalIndex < 0) {
+        const originalIndex = pointIndexByTag.get(record.tag);
+        if (originalIndex === undefined) {
           return null;
         }
         return (
@@ -2826,12 +2841,20 @@ const IEC104: React.FC = () => {
     openCopyPoint,
     openEditPoint,
     pointTableView,
-    points,
+    pointIndexByTag,
     realtimeByTag,
     realtimeRevisionByTag,
     simulationUpdatesByTag,
     selectedSlaveStation,
   ]);
+
+  const handlePointSelectionChange = useCallback((tags: string[]) => setSelectedPointTags(tags), []);
+  const pointTableEmptyText = useMemo(() => selectedConn
+    ? points.length > 0
+      ? <Space direction="vertical" size={4}><Text type="secondary">没有符合当前筛选条件的点位</Text>{hasPointFilters ? <Button type="link" size="small" onClick={clearPointFilters}>清除筛选</Button> : null}</Space>
+      : <Space direction="vertical" size={6}><Text type="secondary">暂无点位</Text><Button type="primary" size="small" icon={<PlusOutlined />} disabled={actionsDisabled} onClick={openCreatePoint}>添加第一点位</Button></Space>
+    : '请先选择连接',
+  [selectedConn, points.length, hasPointFilters, clearPointFilters, actionsDisabled, openCreatePoint]);
 
   const importPointColumns: ColumnsType<ImportedPointDraft> = [
     {
@@ -3317,29 +3340,16 @@ const IEC104: React.FC = () => {
                 <Button type="text" size="small" icon={<ClearOutlined />} disabled={!hasPointFilters} onClick={clearPointFilters}>清除筛选</Button>
               </div>
             ) : null}
-            <div className="protocol-table-scroll">
-              <Table
-                rowKey={(record) => record.tag}
-                columns={pointColumns}
-                dataSource={visiblePoints}
-                rowSelection={pointTableView === 'config' ? {
-                  selectedRowKeys: selectedPointTags,
-                  preserveSelectedRowKeys: true,
-                  onChange: (keys) => setSelectedPointTags(keys.map((key) => String(key))),
-                } : undefined}
-                loading={pointsLoading || (pointTableView === 'runtime' && realtimeLoading)}
-                pagination={false}
-                size="small"
-                scroll={{ x: pointTableView === 'runtime' ? 1100 : 1170 }}
-                locale={{
-                  emptyText: selectedConn
-                    ? points.length > 0
-                      ? <Space direction="vertical" size={4}><Text type="secondary">没有符合当前筛选条件的点位</Text>{hasPointFilters ? <Button type="link" size="small" onClick={clearPointFilters}>清除筛选</Button> : null}</Space>
-                      : <Space direction="vertical" size={6}><Text type="secondary">暂无点位</Text><Button type="primary" size="small" icon={<PlusOutlined />} disabled={actionsDisabled} onClick={openCreatePoint}>添加第一点位</Button></Space>
-                    : '请先选择连接',
-                }}
-              />
-            </div>
+            <Iec104PointTable
+              columns={pointColumns}
+              points={visiblePoints}
+              selectedTags={selectedPointTags}
+              selectionEnabled={pointTableView === 'config'}
+              onSelectionChange={handlePointSelectionChange}
+              loading={pointsLoading || (pointTableView === 'runtime' && realtimeLoading)}
+              runtime={pointTableView === 'runtime'}
+              emptyText={pointTableEmptyText}
+            />
           </Card>
         </ResizableSplit>
       ) : currentView === 'soe' ? (
