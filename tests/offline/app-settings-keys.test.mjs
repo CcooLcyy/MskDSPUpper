@@ -38,8 +38,33 @@ function extractRustWhitelist(source) {
 
   assert.ok(match, '未找到 Rust 侧 validate_setting_key 白名单');
 
-  return new Set([...match[1].matchAll(/([A-Z0-9_]+_KEY)/g)].map((item) => item[1]));
+  // 仅提取直接返回 Ok(()) 的分支，排除返回 Err 的历史设置键。
+  const allowedArms = match[1].matchAll(/((?:[A-Z0-9_]+_KEY\s*\|\s*)*[A-Z0-9_]+_KEY)\s*=>\s*Ok\(\(\)\)/g);
+  return new Set([...allowedArms].flatMap((arm) =>
+    [...arm[1].matchAll(/([A-Z0-9_]+_KEY)/g)].map((item) => item[1])));
 }
+
+// 只允许成功分支中的设置键，历史私有键的拒绝分支不能混入白名单。
+test('Rust 设置白名单排除私有历史键的拒绝分支', () => {
+  const source = `
+pub const FIRST_KEY: &str = "first";
+pub const SECOND_KEY: &str = "second";
+pub const THIRD_KEY: &str = "third";
+const LEGACY_KEY: &str = "legacy";
+fn validate_setting_key(key: &str) -> Result<(), String> {
+    match key {
+        FIRST_KEY
+        | SECOND_KEY => Ok(()),
+        LEGACY_KEY => {
+            Err("历史设置键不允许写入".into())
+        }
+        THIRD_KEY => Ok(()),
+        _ => Err("不支持的设置键".into()),
+    }
+}`;
+
+  assert.deepEqual([...extractRustWhitelist(source)], ['FIRST_KEY', 'SECOND_KEY', 'THIRD_KEY']);
+});
 
 // 前端使用的每个设置键都必须被 Rust 白名单接受，否则保存时会返回“不支持的上位机设置项”。
 test('every frontend setting key is whitelisted by the tauri settings store', () => {
