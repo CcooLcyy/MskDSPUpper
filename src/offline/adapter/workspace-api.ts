@@ -223,6 +223,8 @@ export const DELEGATED_API_METHODS = [
   'installLowerUpdatePackage',
   'cleanupLowerUpdatePackages',
   'getLowerUpdateRuntimeInfo',
+  'submitLowerUpdateTask',
+  'getLowerUpdateTask',
   'getLowerUpdatePassword',
   'clearLowerUpdatePassword',
   'getLowerUpdateCredentials',

@@ -12,6 +12,7 @@ pub mod iec61850;
 pub mod lower_update;
 mod lower_update_local;
 mod lower_update_runtime;
+pub mod lower_update_task;
 pub mod modbus_rtu;
 pub mod modbus_tcp;
 pub mod modbus_templates;

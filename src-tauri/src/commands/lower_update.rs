@@ -8,6 +8,11 @@ use std::{
 };
 
 use super::lower_update_runtime;
+use crate::remote_access::{self, RemoteConnection};
+use super::remote::RemoteSshManager;
+#[cfg(test)]
+#[path = "lower_update_remote_tests.rs"]
+mod remote_update_tests;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -216,8 +221,71 @@ pub struct LowerUpdateCacheCleanupResultDto {
     pub reclaimed_bytes: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LowerUpdateRemoteTargetDto {
+    pub endpoint: String,
+    pub device_id: String,
+}
+
+fn validate_remote_update_target(
+    remote: &LowerUpdateRemoteTargetDto,
+    auth: &LowerUpdateSshAuthDto,
+    current_endpoint: &str,
+) -> Result<(), String> {
+    if !matches!(auth, LowerUpdateSshAuthDto::Password { .. }) {
+        return Err("平台远程更新仅支持 SSH 密码认证".into());
+    }
+    if remote.endpoint != current_endpoint {
+        return Err("更新任务的平台与当前登录平台不同，请重新登录原平台恢复查询".into());
+    }
+    if remote.device_id.trim().is_empty() || remote.device_id.len() > 256 {
+        return Err("远程更新设备身份无效".into());
+    }
+    Ok(())
+}
+
+fn authorized_update_device(
+    devices: Vec<remote_access::RemoteDevice>,
+    device_id: &str,
+) -> Result<remote_access::RemoteDevice, String> {
+    let device = devices.into_iter().find(|device| device.device_id == device_id)
+        .ok_or("原远程设备不可访问，已停止更新操作")?;
+    if !device.allow_ssh { return Err("原远程设备未授权 SSH 访问".into()); }
+    Ok(device)
+}
+
+pub(super) async fn resolve_update_target(
+    state: &AppState,
+    upload_account: &str,
+    remote: Option<&LowerUpdateRemoteTargetDto>,
+    auth: &LowerUpdateSshAuthDto,
+) -> Result<LowerUpdateUploadTarget, String> {
+    let mut target = parse_upload_account(upload_account)?;
+    if let Some(remote) = remote {
+        let (endpoint, _, _) = state.platform_auth.remote_credentials()?;
+        validate_remote_update_target(remote, auth, &endpoint)?;
+        let devices = remote_access::list_devices(&state.platform_auth)
+            .await.map_err(|_| "无法核验原远程设备授权，请恢复平台连接后查询原任务".to_string())?;
+        let device = authorized_update_device(devices, &remote.device_id)?;
+        // 固定任务原设备，避免更新期间切换界面设备后将操作发送到另一台设备。
+        let connection = RemoteConnection::new(device, state.platform_auth.clone())
+            .map_err(|e| e.to_string())?;
+        if connection.endpoint != remote.endpoint {
+            return Err("平台登录已切换，已停止原设备操作".into());
+        }
+        let address = connection.adapter("ssh").await.map_err(|e| e.to_string())?;
+        let socket: std::net::SocketAddr = address.parse().map_err(|_| "远程 SSH 隧道地址无效")?;
+        target.host = socket.ip().to_string();
+        target.port = socket.port();
+        target.remote = Some(RemoteUpdateIdentity { connection, verifier: state.remote_ssh.clone() });
+    }
+    Ok(target)
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct LowerUpdateUploadRequestDto {
+    #[serde(default)]
+    pub remote_target: Option<LowerUpdateRemoteTargetDto>,
     pub package_name: String,
     pub package_path: String,
     pub package_size: u64,
@@ -247,6 +315,8 @@ pub struct LowerUpdateUploadResultDto {
 
 #[derive(Serialize, Deserialize)]
 pub struct LowerUpdateInstallRequestDto {
+    #[serde(default)]
+    pub remote_target: Option<LowerUpdateRemoteTargetDto>,
     pub package_name: String,
     pub expected_image_id: String,
     pub upload_account: String,
@@ -283,6 +353,8 @@ struct LowerUpdatePackageCleanupStats {
 
 #[derive(Serialize, Deserialize)]
 pub struct LowerUpdateRuntimeInfoRequestDto {
+    #[serde(default)]
+    pub remote_target: Option<LowerUpdateRemoteTargetDto>,
     pub upload_account: String,
     pub auth: LowerUpdateSshAuthDto,
     pub sudo_password: String,
@@ -345,22 +417,31 @@ pub struct VerticalSecurityStatusResultDto {
     pub steps: Vec<VerticalSecurityStepResultDto>,
 }
 
-struct RemoteCommandOutput {
-    exit_code: Option<u32>,
-    stdout: String,
-    stderr: String,
+pub(super) struct RemoteCommandOutput {
+    pub(super) exit_code: Option<u32>,
+    pub(super) stdout: String,
+    pub(super) stderr: String,
 }
 
-#[derive(Debug, Clone)]
-struct LowerUpdateUploadTarget {
+#[derive(Clone)]
+pub(super) struct LowerUpdateUploadTarget {
     user: String,
     host: String,
     port: u16,
+    remote: Option<RemoteUpdateIdentity>,
+}
+
+#[derive(Clone)]
+struct RemoteUpdateIdentity {
+    connection: Arc<RemoteConnection>,
+    verifier: Arc<RemoteSshManager>,
 }
 
 struct PasswordSshHandler {
     host: String,
     port: u16,
+    remote: Option<RemoteUpdateIdentity>,
+    trust_error: Arc<parking_lot::Mutex<Option<String>>>,
 }
 
 impl russh::client::Handler for PasswordSshHandler {
@@ -370,6 +451,17 @@ impl russh::client::Handler for PasswordSshHandler {
         &mut self,
         server_public_key: &russh::keys::ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
+        if let Some(remote) = &self.remote {
+            if !remote.connection.active() {
+                *self.trust_error.lock() = Some("平台远程连接已失效，请恢复原平台登录后查询原任务".into());
+                return Ok(false);
+            }
+            let result = remote.verifier.verify_update_host_key(
+                &remote.connection.endpoint, &remote.connection.device.device_id, server_public_key,
+            ).await;
+            if let Err(error) = result { *self.trust_error.lock() = Some(error); return Ok(false); }
+            return Ok(true);
+        }
         match russh::keys::check_known_hosts(&self.host, self.port, server_public_key) {
             Ok(true) => Ok(true),
             Ok(false) => {
@@ -390,6 +482,9 @@ async fn connect_password_ssh(
     target: &LowerUpdateUploadTarget,
     password: &str,
 ) -> Result<russh::client::Handle<PasswordSshHandler>, String> {
+    if target.remote.as_ref().is_some_and(|remote| !remote.connection.active()) {
+        return Err("平台远程连接已失效，请恢复原平台登录后查询原任务".into());
+    }
     if password.is_empty() {
         return Err("SSH 密码不能为空".into());
     }
@@ -397,16 +492,20 @@ async fn connect_password_ssh(
         inactivity_timeout: Some(LOWER_UPDATE_SSH_INACTIVITY_TIMEOUT),
         ..Default::default()
     };
-    let mut session = russh::client::connect(
+    let trust_error = Arc::new(parking_lot::Mutex::new(None));
+    let mut session = tokio::time::timeout(Duration::from_secs(15), russh::client::connect(
         Arc::new(config),
         (target.host.as_str(), target.port),
         PasswordSshHandler {
             host: target.host.clone(),
             port: target.port,
+            remote: target.remote.clone(),
+            trust_error: trust_error.clone(),
         },
-    )
+    ))
     .await
-    .map_err(|e| format!("SSH 密码连接失败: {e}"))?;
+    .map_err(|_| trust_error.lock().clone().unwrap_or_else(|| "SSH 连接超时，请恢复原设备连接后查询原任务".to_string()))?
+    .map_err(|e| trust_error.lock().clone().unwrap_or_else(|| format!("SSH 密码连接失败: {e}")))?;
     let auth = session
         .authenticate_password(target.user.clone(), password.to_string())
         .await
@@ -705,7 +804,7 @@ async fn execute_user_ssh_command_with_stdin(
     }
 }
 
-async fn execute_root_ssh_command(
+pub(super) async fn execute_root_ssh_command(
     target: &LowerUpdateUploadTarget,
     auth: &LowerUpdateSshAuthDto,
     sudo_password: &str,
@@ -868,7 +967,7 @@ fn is_sha256(value: &str) -> bool {
     value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
-fn normalize_image_id(value: &str) -> Option<String> {
+pub(super) fn normalize_image_id(value: &str) -> Option<String> {
     let trimmed = value.trim();
     let (algorithm, digest) = trimmed.split_once(':')?;
     if algorithm != "sha256"
@@ -934,7 +1033,7 @@ fn should_skip_install(
     Ok(expected == actual)
 }
 
-fn is_safe_file_name(value: &str) -> bool {
+pub(super) fn is_safe_file_name(value: &str) -> bool {
     !value.trim().is_empty()
         && !value.contains('/')
         && !value.contains('\\')
@@ -952,7 +1051,7 @@ fn is_safe_ssh_user(value: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
-fn parse_upload_account(value: &str) -> Result<LowerUpdateUploadTarget, String> {
+pub(super) fn parse_upload_account(value: &str) -> Result<LowerUpdateUploadTarget, String> {
     let trimmed = value.trim();
     let (user, host_port) = trimmed
         .split_once('@')
@@ -983,6 +1082,7 @@ fn parse_upload_account(value: &str) -> Result<LowerUpdateUploadTarget, String> 
         user: user.to_string(),
         host: host.to_string(),
         port,
+        remote: None,
     })
 }
 
@@ -1423,7 +1523,7 @@ fn log_progress_emit_error(operation: &str, stage: &str, error: &str) {
     tracing::warn!(operation, stage, error = %log_detail(error), "发送下位机更新进度失败");
 }
 
-fn normalize_install_dir(value: &str) -> Result<String, String> {
+pub(super) fn normalize_install_dir(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err("请输入安装目录".into());
@@ -1443,7 +1543,7 @@ fn normalize_install_dir(value: &str) -> Result<String, String> {
     })
 }
 
-fn remote_package_path(install_dir: &str, package_name: &str) -> String {
+pub(super) fn remote_package_path(install_dir: &str, package_name: &str) -> String {
     if install_dir == "/" {
         format!("/{package_name}")
     } else {
@@ -1451,7 +1551,7 @@ fn remote_package_path(install_dir: &str, package_name: &str) -> String {
     }
 }
 
-fn shell_quote(value: &str) -> String {
+pub(super) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
@@ -2656,6 +2756,7 @@ pub async fn check_lower_update(
 
 #[tauri::command]
 pub async fn get_lower_update_runtime_info(
+    state: State<'_, AppState>,
     request: LowerUpdateRuntimeInfoRequestDto,
 ) -> Result<LowerUpdateRuntimeInfoDto, String> {
     let started_at = Instant::now();
@@ -2669,7 +2770,7 @@ pub async fn get_lower_update_runtime_info(
     );
 
     let result = async {
-        let target = parse_upload_account(&request.upload_account)?;
+        let target = resolve_update_target(&state, &request.upload_account, request.remote_target.as_ref(), &request.auth).await?;
         query_lower_update_runtime_info(&target, &request.auth, &request.sudo_password).await
     }
     .await;
@@ -2898,7 +2999,7 @@ async fn upload_lower_update_package_inner(
         .await?;
     }
 
-    let target = parse_upload_account(&request.upload_account)?;
+    let target = resolve_update_target(&state, &request.upload_account, request.remote_target.as_ref(), &request.auth).await?;
     let install_dir = normalize_install_dir(&request.install_dir)?;
     let remote_path = remote_package_path(&install_dir, &request.package_name);
     let package_path = PathBuf::from(request.package_path.trim());
@@ -3123,6 +3224,7 @@ async fn install_lower_update_package_inner(
     state: &AppState,
     request: LowerUpdateInstallRequestDto,
 ) -> Result<LowerUpdateInstallResultDto, String> {
+    if request.remote_target.is_some() { return Err("平台远程更新必须使用独立任务提交接口".into()); }
     if !is_safe_file_name(&request.package_name) {
         return Err("下位机更新包名称不能包含路径分隔符".into());
     }
@@ -3144,7 +3246,7 @@ async fn install_lower_update_package_inner(
         None
     };
 
-    let target = parse_upload_account(&request.upload_account)?;
+    let target = resolve_update_target(&state, &request.upload_account, request.remote_target.as_ref(), &request.auth).await?;
     let install_dir = normalize_install_dir(&request.install_dir)?;
     let remote_path = remote_package_path(&install_dir, &request.package_name);
     let install_command = match &stable_package {
@@ -3566,9 +3668,10 @@ fn verified_package_cleanup_raw_image(
 }
 
 async fn cleanup_lower_update_packages_inner(
+    state: &AppState,
     request: LowerUpdateInstallRequestDto,
 ) -> Result<LowerUpdatePackageCleanupResultDto, String> {
-    let target = parse_upload_account(&request.upload_account)?;
+    let target = resolve_update_target(&state, &request.upload_account, request.remote_target.as_ref(), &request.auth).await?;
     let install_dir = normalize_package_cleanup_dir(&request.install_dir, &request.package_name)?;
     let expected_image_id = normalize_image_id(&request.expected_image_id)
         .ok_or_else(|| "清理请求缺少有效的期望镜像 ID".to_string())?;
@@ -3600,6 +3703,7 @@ async fn cleanup_lower_update_packages_inner(
 
 #[tauri::command]
 pub async fn cleanup_lower_update_packages(
+    state: State<'_, AppState>,
     request: LowerUpdateInstallRequestDto,
 ) -> Result<LowerUpdatePackageCleanupResultDto, String> {
     let started_at = Instant::now();
@@ -3613,7 +3717,7 @@ pub async fn cleanup_lower_update_packages(
         package = %package,
         "开始校验运行镜像并清理下位机历史安装包"
     );
-    let result = cleanup_lower_update_packages_inner(request).await;
+    let result = cleanup_lower_update_packages_inner(&state, request).await;
     match &result {
         Ok(result) => tracing::info!(
             operation = "package_cleanup",

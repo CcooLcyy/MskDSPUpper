@@ -118,6 +118,8 @@ test('runtime control and unsupported methods are overridden', () => {
 // 本地能力（设置、更新、纵密、.mskcfg 文件读写）必须转发真实实现，离线也要能用。
 test('local capability methods are delegated to the real api', () => {
   const delegated = extractStringArray(adapterSource, 'DELEGATED_API_METHODS');
+  assert.ok(delegated.has('submitLowerUpdateTask'), '独立宿主机更新任务应使用真实更新能力');
+  assert.ok(delegated.has('getLowerUpdateTask'), '离线工作区也应能恢复查询已提交的宿主机任务');
   const required = [
     'loadAppSettings',
     'saveAppSetting',

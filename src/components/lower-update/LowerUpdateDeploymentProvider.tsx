@@ -15,10 +15,24 @@ import {
   LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY,
   LOWER_UPDATE_CONNECTION_SETTING_KEY,
 } from '../../utils/app-settings';
+import { LOWER_UPDATE_PENDING_KEY, readLowerUpdatePendingTask } from '../../utils/lower-update-pending';
 import { LowerUpdateDeploymentContext } from './lower-update-deployment-context';
 
 function createApplicationController(): LowerUpdateDeploymentController {
   return createLowerUpdateDeploymentController({
+    submitTask: api.submitLowerUpdateTask,
+    queryTask: api.getLowerUpdateTask,
+    loadPending: () => {
+      try { return JSON.parse(localStorage.getItem(LOWER_UPDATE_PENDING_KEY) ?? 'null'); }
+      catch { return { invalid: true }; }
+    },
+    savePending: async (record) => {
+      if (record) {
+        const safe = readLowerUpdatePendingTask(record);
+        if (!safe) throw new Error('远程更新恢复记录无效');
+        localStorage.setItem(LOWER_UPDATE_PENDING_KEY, JSON.stringify(safe));
+      } else localStorage.removeItem(LOWER_UPDATE_PENDING_KEY);
+    },
     queryRuntime: api.getLowerUpdateRuntimeInfo,
     upload: api.uploadLowerUpdatePackage,
     install: api.installLowerUpdatePackage,
@@ -55,6 +69,7 @@ export function LowerUpdateDeploymentProvider({ children, controller: suppliedCo
     ...snapshot,
     start: controller.start,
     retry: controller.retry,
+    resumeRemote: controller.resumeRemote,
     openDetails: controller.openDetails,
     closeDetails: controller.closeDetails,
     dismissResult: controller.dismissResult,

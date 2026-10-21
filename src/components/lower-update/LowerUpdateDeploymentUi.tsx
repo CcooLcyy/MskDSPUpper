@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { App, Alert, Button, Descriptions, Input, Modal, Progress, Space, Tag, Typography } from 'antd';
 import {
   CheckCircleOutlined,
@@ -14,6 +15,11 @@ const { Text } = Typography;
 type DeploymentTask = NonNullable<ReturnType<typeof useLowerUpdateDeployment>['task']>;
 
 const STAGE_LABELS: Record<DeploymentTask['stage'], string> = {
+  remote_unknown: '暂时无法确认更新结果',
+  waiting_reconnect: '等待设备重新上线',
+  rolling_back: '正在自动回退',
+  rolled_back: '更新失败，已自动恢复上一版本',
+  rollback_failed: '自动回退失败，需要人工处理',
   checking: '下发前检查中',
   uploading: '上传中',
   installing: '安装中',
@@ -40,6 +46,9 @@ function formatBytes(bytes: number): string {
 }
 
 function getResultTitle(task: DeploymentTask): string {
+  if (task.stage === 'remote_unknown') return '下位机更新结果待确认';
+  if (task.stage === 'rolled_back') return '更新失败，已自动恢复上一版本';
+  if (task.stage === 'rollback_failed') return '自动回退失败，需要人工处理';
   if (task.stage !== 'succeeded') {
     return task.stage === 'verify_failed' || task.stage === 'image_mismatch'
       ? '下位机更新未确认成功'
@@ -62,7 +71,7 @@ export function LowerUpdateDeploymentHeader() {
     : task.alreadyCurrent && succeeded ? '已是指定版本' : STAGE_LABELS[task.stage];
 
   return (
-    <Button size="small" icon={icon} onClick={openDetails} title={`目标下位机：${task.uploadAccount}`}>
+    <Button size="small" icon={icon} onClick={openDetails} title={`目标下位机：${task.remoteTarget ? `${task.remoteTarget.device_id} · ${task.remoteTarget.endpoint}` : task.uploadAccount}`}>
       下位机更新 · {label}
     </Button>
   );
@@ -70,13 +79,16 @@ export function LowerUpdateDeploymentHeader() {
 
 export function LowerUpdateDeploymentUi() {
   const { message } = App.useApp();
-  const { task, isRunning, detailOpen, resultOpen, retry, openDetails, closeDetails, dismissResult } =
+  const [sshPassword, setSshPassword] = useState('');
+  const [sudoPassword, setSudoPassword] = useState('');
+  const { task, isRunning, detailOpen, resultOpen, retry, resumeRemote, openDetails, closeDetails, dismissResult } =
     useLowerUpdateDeployment();
   if (!task) return null;
 
   const succeeded = task.stage === 'succeeded';
-  const failed = !isRunning && !succeeded;
-  const statusColor = isRunning ? 'processing' : succeeded ? task.cleanupError ? 'warning' : 'success' : 'error';
+  const uncertain = task.stage === 'remote_unknown';
+  const failed = !isRunning && !succeeded && !uncertain;
+  const statusColor = uncertain ? 'warning' : isRunning ? 'processing' : succeeded ? task.cleanupError ? 'warning' : 'success' : 'error';
   const retryTask = async (mode: 'retry' | 'reupload' | 'reinstall' | 'reverify') => {
     try {
       await retry(mode);
@@ -95,7 +107,7 @@ export function LowerUpdateDeploymentUi() {
       ? '执行失败'
       : task.installResult
         ? task.installResult.success ? '执行成功' : '执行失败'
-        : task.alreadyCurrent ? '已跳过' : '未执行';
+        : task.remoteTarget && task.operationId ? '由宿主机独立执行' : task.alreadyCurrent ? '已跳过' : '未执行';
   const verificationStatus = task.stage === 'verifying'
     ? '确认中'
     : succeeded || task.stage === 'cleaning'
@@ -120,10 +132,10 @@ export function LowerUpdateDeploymentUi() {
       >
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           {isRunning ? (
-            <Alert type="info" showIcon icon={<CloudUploadOutlined />} title="收起窗口或切换页面后，任务会继续执行。请保持上位机运行。" />
+            <Alert type="info" showIcon icon={<CloudUploadOutlined />} title={task.remoteTarget ? '宿主机任务已提交后，断线或关闭上位机不影响执行；重新打开可恢复查询。' : '收起窗口或切换页面后，任务会继续执行。请保持上位机运行。'} />
           ) : null}
           <Descriptions size="small" column={1} styles={{ content: wrapStyle }}>
-            <Descriptions.Item label="目标下位机">{task.uploadAccount}</Descriptions.Item>
+            <Descriptions.Item label="目标下位机">{task.remoteTarget ? `${task.remoteTarget.device_id} · ${task.remoteTarget.endpoint} · ${task.uploadAccount.split('@')[0]}` : task.uploadAccount}</Descriptions.Item>
             <Descriptions.Item label="目标版本">{task.version}</Descriptions.Item>
             <Descriptions.Item label="SSH 认证方式">{task.authMethod === 'password' ? '密码' : '证书'}</Descriptions.Item>
             <Descriptions.Item label="安装目录">{task.installDir}</Descriptions.Item>
@@ -131,6 +143,7 @@ export function LowerUpdateDeploymentUi() {
             <Descriptions.Item label="本地路径">{task.packagePath}</Descriptions.Item>
             <Descriptions.Item label="远端路径">{task.remotePath || '-'}</Descriptions.Item>
             <Descriptions.Item label="已上传">{formatBytes(task.uploadedBytes)} / {formatBytes(task.totalBytes)}</Descriptions.Item>
+            {task.operationId ? <Descriptions.Item label="宿主机任务编号">{task.operationId}</Descriptions.Item> : null}
             <Descriptions.Item label="任务阶段"><Tag color={statusColor}>{STAGE_LABELS[task.stage]}</Tag></Descriptions.Item>
             <Descriptions.Item label="上传状态">{uploadStatus}</Descriptions.Item>
             <Descriptions.Item label="安装状态">{installStatus}</Descriptions.Item>
@@ -140,28 +153,40 @@ export function LowerUpdateDeploymentUi() {
             <Descriptions.Item label="确认状态">{verificationStatus}</Descriptions.Item>
             <Descriptions.Item label="确认说明">{task.verificationMessage || '-'}</Descriptions.Item>
             <Descriptions.Item label="历史包清理">{task.cleanupMessage || '未执行'}</Descriptions.Item>
-            <Descriptions.Item label="退出码">{task.installResult?.exit_code ?? '-'}</Descriptions.Item>
+            <Descriptions.Item label="退出码">{task.taskExitCode ?? task.installResult?.exit_code ?? '-'}</Descriptions.Item>
             <Descriptions.Item label="执行命令"><Text code style={wrapStyle}>{task.installResult?.command || '-'}</Text></Descriptions.Item>
           </Descriptions>
-          <Progress percent={task.progress} status={failed ? 'exception' : succeeded ? 'success' : 'active'} />
+          <Progress percent={task.progress} status={uncertain ? 'normal' : failed ? 'exception' : succeeded ? 'success' : 'active'} />
           {task.error ? <Alert type="error" showIcon title={task.error} style={wrapStyle} /> : null}
           {task.cleanupError ? <Alert type="warning" showIcon title="更新已确认成功，历史包清理失败" description={task.cleanupError} style={wrapStyle} /> : null}
           {task.connectionWarning ? <Alert type="warning" showIcon title={task.connectionWarning} style={wrapStyle} /> : null}
-          <Space wrap>
+          {task.remoteTarget && (task.stage === 'remote_unknown' || task.stage === 'rollback_failed') ? (
+            <Space orientation="vertical" style={{ width: '100%' }}>
+              <Alert type="warning" title={task.stage === 'rollback_failed' ? '自动回退失败，原任务和恢复材料已保留。请人工检查设备后查询原任务，不能继续新建更新。' : '结果尚未确认，请查询原任务；不要重复安装。首次连接请先在远程 SSH 终端确认设备指纹。'} />
+              <Input.Password aria-label="恢复查询 SSH 密码" placeholder="重新输入原设备 SSH 密码" value={sshPassword} onChange={event => setSshPassword(event.target.value)} />
+              <Input.Password aria-label="恢复查询 sudo 密码" placeholder="重新输入原设备 sudo 密码" value={sudoPassword} onChange={event => setSudoPassword(event.target.value)} />
+              <Button disabled={isRunning || !sshPassword || !sudoPassword} onClick={() => {
+                const auth = { method: 'password' as const, password: sshPassword };
+                const sudo = sudoPassword; setSshPassword(''); setSudoPassword('');
+                void resumeRemote(auth, sudo).catch(error => message.error(String(error)));
+              }}>恢复查询原任务</Button>
+            </Space>
+          ) : null}
+          {!task.remoteTarget ? <Space wrap>
             <Button size="small" icon={<ReloadOutlined />} disabled={!failed || isRunning} onClick={() => void retryTask('retry')}>重试流程</Button>
             <Button size="small" icon={<UploadOutlined />} disabled={isRunning} onClick={() => void retryTask('reupload')}>重新上传并安装</Button>
             <Button size="small" icon={<ReloadOutlined />} disabled={!task.uploadResult || isRunning} onClick={() => void retryTask('reinstall')}>重新安装</Button>
             <Button size="small" icon={<SafetyCertificateOutlined />} disabled={!task.installResult?.success || isRunning} onClick={() => void retryTask('reverify')}>重新确认镜像</Button>
-          </Space>
+          </Space> : null}
           <div style={{ width: '100%' }}>
             <Text type="secondary">安装输出</Text>
-            <Input.TextArea aria-label="安装标准输出" value={task.installResult?.stdout || '-'} readOnly autoSize={{ minRows: 2, maxRows: 6 }} />
+            <Input.TextArea aria-label="安装标准输出" value={task.taskLog || task.installResult?.stdout || '-'} readOnly autoSize={{ minRows: 2, maxRows: 6 }} />
           </div>
           <div style={{ width: '100%' }}>
             <Text type="secondary">错误输出</Text>
             <Input.TextArea aria-label="安装错误输出" value={task.installResult?.stderr || '-'} readOnly autoSize={{ minRows: 2, maxRows: 4 }} />
           </div>
-          <Text type="secondary">安装命令成功并确认运行镜像后，会清理设备上的历史安装包，保留本次安装包；安装或镜像确认失败时保留所有包。</Text>
+          <Text type="secondary">{task.remoteTarget ? '宿主机独立检查运行状态，失败时自动回退；稳定状态保留当前版本与一个先前版本。回退失败保留恢复材料。' : '安装命令成功并确认运行镜像后，会清理设备上的历史安装包，保留本次安装包；安装或镜像确认失败时保留所有包。'}</Text>
         </Space>
       </Modal>
       <Modal
@@ -175,12 +200,12 @@ export function LowerUpdateDeploymentUi() {
       >
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           <Alert
-            type={succeeded ? task.cleanupError ? 'warning' : 'success' : 'error'}
+            type={uncertain ? 'warning' : succeeded ? task.cleanupError ? 'warning' : 'success' : 'error'}
             showIcon
             title={task.alreadyCurrent && succeeded ? '目标下位机已运行指定构建，已跳过重复上传和安装。' : STAGE_LABELS[task.stage]}
           />
           <Descriptions size="small" column={1} styles={{ content: wrapStyle }}>
-            <Descriptions.Item label="目标下位机">{task.uploadAccount}</Descriptions.Item>
+            <Descriptions.Item label="目标下位机">{task.remoteTarget ? `${task.remoteTarget.device_id} · ${task.remoteTarget.endpoint} · ${task.uploadAccount.split('@')[0]}` : task.uploadAccount}</Descriptions.Item>
             <Descriptions.Item label="目标版本">{task.version}</Descriptions.Item>
             <Descriptions.Item label="镜像确认">{task.verificationMessage || verificationStatus}</Descriptions.Item>
             <Descriptions.Item label="历史包清理">{task.cleanupMessage || '未执行'}</Descriptions.Item>

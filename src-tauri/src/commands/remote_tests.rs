@@ -61,6 +61,45 @@ fn host_identity_is_device_and_platform_scoped() {
 }
 
 #[tokio::test]
+async fn update_requires_terminal_trust_and_rejects_changed_or_other_device_keys() {
+    let (manager, _, _, _) = fixture();
+    let first_key = key(1);
+    let untrusted = manager
+        .verify_update_host_key("https://platform", "field", first_key.public_key())
+        .await;
+    assert!(untrusted.unwrap_err().contains("远程终端"));
+    let mut pins = HashMap::new();
+    pins.insert(
+        host_identity("https://platform", "field"),
+        first_key
+            .public_key()
+            .fingerprint(russh::keys::ssh_key::HashAlg::Sha256)
+            .to_string(),
+    );
+    tokio::fs::write(&manager.pins_path, serde_json::to_vec(&pins).unwrap())
+        .await
+        .unwrap();
+    assert!(manager
+        .verify_update_host_key("https://platform", "field", first_key.public_key())
+        .await
+        .is_ok());
+    assert!(manager
+        .verify_update_host_key("https://platform", "other", first_key.public_key())
+        .await
+        .is_err());
+    assert!(manager
+        .verify_update_host_key("https://other", "field", first_key.public_key())
+        .await
+        .is_err());
+    assert!(manager
+        .verify_update_host_key("https://platform", "field", key(2).public_key())
+        .await
+        .unwrap_err()
+        .contains("已变化"));
+    let _ = tokio::fs::remove_file(&manager.pins_path).await;
+}
+
+#[tokio::test]
 async fn ssh_first_trust_requires_confirmation_and_changed_key_is_rejected() {
     let (manager, confirmation, events, mut output) = fixture();
     let mut handler = verifier(manager.clone(), confirmation.clone(), events.clone());

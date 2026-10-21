@@ -130,7 +130,9 @@ test('lower update page preserves selection and submits a deployment snapshot', 
   assert.match(pageSource, /matchesLowerUpdateSelection\(selectedManifest, selection\.platform, selection\.channel\)/);
   assert.match(pageSource, /manifest: selectedManifest/);
   assert.match(pageSource, /packageResult: selectedDownloadResult/);
-  assert.match(pageSource, /upload_account: targetUploadAccount\.trim\(\)/);
+  assert.match(pageSource, /upload_account: effectiveUploadAccount/);
+  assert.match(pageSource, /remote_target: remoteTarget/);
+  assert.match(pageSource, /targetUploadAccount\.trim\(\)/);
   assert.match(pageSource, /reuseSshPasswordForSudo/);
   assert.match(pageSource, /rememberPassword/);
 });

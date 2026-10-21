@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { usePlatformAuth } from '../../auth/platform-auth-context';
 import {
   AutoComplete,
   Button,
@@ -389,6 +391,31 @@ function formatLowerUpdateCheckError(channel: LowerUpdateChannel, error: unknown
 }
 
 const AdvancedConfigPage: React.FC = () => {
+  const { snapshot: platformAuth } = usePlatformAuth();
+  const [remoteSelection, setRemoteSelection] = useState<{ endpoint: string; device_id: string; displayName: string } | null>(null);
+  const [remoteSelectionReady, setRemoteSelectionReady] = useState(!('__TAURI_INTERNALS__' in window));
+  const [remoteSshUser, setRemoteSshUser] = useState('megsky');
+  React.useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const status = await invoke<{ remote: boolean; device_id: string | null }>('remote_connection_status');
+        const endpoint = platformAuth.settings?.grpc_endpoint;
+        if (!active) return;
+        if (status.remote) {
+          if (!status.device_id || !endpoint) { setRemoteSelectionReady(false); return; }
+          const devices = await invoke<Array<{ device_id: string; display_name: string }>>('remote_list_devices');
+          if (!active) return;
+          setRemoteSelection({ endpoint, device_id: status.device_id, displayName: devices.find(item => item.device_id === status.device_id)?.display_name || status.device_id });
+        } else setRemoteSelection(null);
+        setRemoteSelectionReady(true);
+      } catch { if (active) setRemoteSelectionReady(false); }
+    };
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [platformAuth.settings?.grpc_endpoint]);
   const [connectionHistory, setConnectionHistory] = useState(() => readLowerUpdateConnectionHistory(
     getAppSetting(LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY),
     getAppSetting(LOWER_UPDATE_CONNECTION_SETTING_KEY),
@@ -478,7 +505,16 @@ const AdvancedConfigPage: React.FC = () => {
     acceptLatestUpdate,
     relaunchAfterUpdate,
   } = useAppUpdate();
-  const targetUploadAccountValidation = validateUploadAccount(targetUploadAccount);
+  const effectiveUploadAccount = remoteSelection ? `${remoteSshUser.trim()}@remote:22` : targetUploadAccount.trim();
+  const remoteTarget = remoteSelection ? { endpoint: remoteSelection.endpoint, device_id: remoteSelection.device_id } : undefined;
+  const targetUploadAccountValidation = validateUploadAccount(effectiveUploadAccount);
+  const remoteIdentity = remoteTarget ? `${remoteTarget.endpoint}/${remoteTarget.device_id}/${remoteSshUser}` : '';
+  React.useEffect(() => {
+    credentialReadGuardRef.current.invalidate();
+    setTargetSshPassword('');
+    setTargetSudoPassword('');
+    if (remoteIdentity) { setLowerUpdateAuthMethod('password'); setRememberPassword(false); }
+  }, [remoteIdentity]);
   const targetInstallDirValidation = validateInstallDir(targetInstallDir);
   const hasSshPasswordValidationError = lowerUpdateAuthMethod === 'password' && targetSshPassword.length === 0;
   const resolvedSudoPassword = resolveLowerUpdateSudoPassword({
@@ -489,7 +525,7 @@ const AdvancedConfigPage: React.FC = () => {
   });
   const hasSudoPasswordValidationError = resolvedSudoPassword.length === 0;
   const hasRuntimeQueryValidationError =
-    !targetUploadAccountValidation.ok || hasSshPasswordValidationError || hasSudoPasswordValidationError;
+    !remoteSelectionReady || (Boolean(remoteSelection) && lowerUpdateAuthMethod !== 'password') || !targetUploadAccountValidation.ok || hasSshPasswordValidationError || hasSudoPasswordValidationError;
   const hasDeployTargetValidationError = hasRuntimeQueryValidationError || !targetInstallDirValidation.ok;
   const hasCheckedPackage = matchesLowerUpdateSelection(activeManifest, platform, channel);
   const hasVerifiableManifest = hasCheckedPackage && Boolean(activeManifest?.image_id?.trim());
@@ -502,7 +538,9 @@ const AdvancedConfigPage: React.FC = () => {
   } = useLowerUpdateDeployment();
   // 只把同一目标与构建的任务结果用于当前表单，其他任务仍在独立入口展示。
   const hasCurrentDeploymentTask = Boolean(deploymentTask && activeManifest
-    && lowerUpdateCredentialAccountKey(deploymentTask.uploadAccount) === lowerUpdateCredentialAccountKey(targetUploadAccount)
+    && lowerUpdateCredentialAccountKey(deploymentTask.uploadAccount) === lowerUpdateCredentialAccountKey(effectiveUploadAccount)
+    && deploymentTask.remoteTarget?.device_id === remoteTarget?.device_id
+    && deploymentTask.remoteTarget?.endpoint === remoteTarget?.endpoint
     && deploymentTask.installDir === (targetInstallDir.trim().replace(/\/+$/, '') || '/')
     && deploymentTask.packageName === activeManifest.asset.name
     && deploymentTask.version === activeManifest.version
@@ -583,7 +621,7 @@ const AdvancedConfigPage: React.FC = () => {
   }, [lowerUpdateAutoChannelStatus.downloadResult, refreshCachedLowerUpdates]);
 
   React.useEffect(() => {
-    if (!rememberPassword || !targetUploadAccountValidation.ok) {
+    if (remoteSelection || !rememberPassword || !targetUploadAccountValidation.ok) {
       setIsLoadingSavedSshPassword(false);
       return;
     }
@@ -613,7 +651,7 @@ const AdvancedConfigPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [credentialReadRevision, lowerUpdateAuthMethod, targetUploadAccount, rememberPassword, reuseSshPasswordForSudo, targetUploadAccountValidation.ok, messageApi]);
+  }, [remoteSelection, credentialReadRevision, lowerUpdateAuthMethod, targetUploadAccount, rememberPassword, reuseSshPasswordForSudo, targetUploadAccountValidation.ok, messageApi]);
 
   const handleClearSavedCredentials = async (): Promise<void> => {
     if (isDeployingLowerUpdate || isCheckingLowerUpdate || isClearingSavedCredentials) return;
@@ -804,7 +842,8 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const queryLowerUpdateRuntimeInfo = async (): Promise<LowerUpdateRuntimeInfo> => api.getLowerUpdateRuntimeInfo({
-    upload_account: targetUploadAccount.trim(),
+    upload_account: effectiveUploadAccount,
+    remote_target: remoteTarget,
     auth: lowerUpdateAuthMethod === 'password'
       ? { method: 'password', password: targetSshPassword }
       : { method: 'certificate' },
@@ -1017,7 +1056,8 @@ const AdvancedConfigPage: React.FC = () => {
         manifest: selectedManifest,
         packageResult: selectedDownloadResult,
         connection: {
-          upload_account: targetUploadAccount.trim(),
+          upload_account: effectiveUploadAccount,
+          remote_target: remoteTarget,
           install_dir: targetInstallDir.trim(),
           auth: lowerUpdateAuthMethod === 'password'
             ? { method: 'password', password: targetSshPassword }
@@ -1146,8 +1186,15 @@ const AdvancedConfigPage: React.FC = () => {
           <div className="advanced-config-parameter-grid">
             <div className="advanced-config-section">
               <div className="advanced-config-section-title">目标下位机</div>
+              {!remoteSelectionReady ? <Text type="danger">正在确认设备连接方式，暂不能下发</Text> : null}
+              {remoteSelection ? <Paragraph>
+                <Tag color="blue">平台远程设备：{remoteSelection.displayName}（{remoteSelection.device_id}）</Tag>
+                <Text type="secondary">通过平台隧道更新，仅支持密码认证。首次连接请先在远程 SSH 终端核验并信任设备指纹。</Text>
+              </Paragraph> : null}
               <Form layout="vertical" size="small">
-                <Form.Item
+                {remoteSelection ? <Form.Item label="远程设备 SSH 用户" validateStatus={targetUploadAccountValidation.ok ? undefined : 'error'} help={targetUploadAccountValidation.ok ? '目标由平台设备固定，无需填写现场 IP 或隧道端口' : targetUploadAccountValidation.error}>
+                  <Input value={remoteSshUser} disabled={isDeployingLowerUpdate} onChange={event => { setRemoteSshUser(event.target.value); invalidateRuntimeCheck(); }} />
+                </Form.Item> : <Form.Item
                   label="上传账号"
                   validateStatus={targetUploadAccountValidation.ok ? undefined : 'error'}
                   help={targetUploadAccountValidation.ok ? undefined : targetUploadAccountValidation.error}
@@ -1180,12 +1227,12 @@ const AdvancedConfigPage: React.FC = () => {
                     }}
                     placeholder="例如 megsky@192.168.1.219:10022"
                   />
-                </Form.Item>
+                </Form.Item>}
                 <Form.Item label="SSH 认证方式">
                   <Segmented<LowerUpdateAuthMethod>
                     block
                     value={lowerUpdateAuthMethod}
-                    options={Object.entries(LOWER_UPDATE_AUTH_METHOD_LABELS).map(([value, label]) => ({
+                    options={Object.entries(LOWER_UPDATE_AUTH_METHOD_LABELS).filter(([value]) => !remoteSelection || value === 'password').map(([value, label]) => ({
                       value: value as LowerUpdateAuthMethod,
                       label,
                     }))}
@@ -1261,7 +1308,7 @@ const AdvancedConfigPage: React.FC = () => {
                     />
                   </Form.Item>
                 ) : null}
-                <Form.Item label="记住密码" extra="成功下发后保存连接信息。密码由 Windows 凭据管理器加密保存，仅供当前 Windows 用户使用。">
+                {remoteSelection ? <Text type="secondary">远程认证信息仅在当前任务内存中使用，恢复查询时需重新输入。</Text> : <Form.Item label="记住密码" extra="成功下发后保存连接信息。密码由 Windows 凭据管理器加密保存，仅供当前 Windows 用户使用。">
                   <Space wrap>
                     <Switch
                       checked={rememberPassword}
@@ -1284,7 +1331,7 @@ const AdvancedConfigPage: React.FC = () => {
                     >清除已保存密码</Button>
                     {isLoadingSavedSshPassword ? <Text type="secondary">正在读取已保存密码…</Text> : null}
                   </Space>
-                </Form.Item>
+                </Form.Item>}
                 <Form.Item
                   label="安装目录"
                   validateStatus={targetInstallDirValidation.ok ? undefined : 'error'}

@@ -1,4 +1,8 @@
 import type {
+  LowerUpdateTaskSubmitRequest,
+  LowerUpdateTaskQueryRequest,
+  LowerUpdateTaskStatus,
+  LowerUpdateRemoteTarget,
   LowerUpdateDownloadResult,
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
@@ -15,8 +19,12 @@ import { compareLowerUpdateImages } from './lower-update-deploy.ts';
 import { assertLowerUpdateManifest } from './lower-update-platform.ts';
 import { snapshotLowerUpdateConnection } from './lower-update-connection.ts';
 
+import { readLowerUpdatePendingTask } from './lower-update-pending.ts';
+import type { LowerUpdatePendingTask } from './lower-update-pending';
+
 export type LowerUpdateDeploymentStage =
   | 'checking' | 'uploading' | 'installing' | 'verifying' | 'cleaning' | 'succeeded'
+  | 'remote_unknown' | 'waiting_reconnect' | 'rolling_back' | 'rolled_back' | 'rollback_failed'
   | 'check_failed' | 'upload_failed' | 'install_failed' | 'verify_failed' | 'image_mismatch';
 export type LowerUpdateDeploymentRetryMode = 'retry' | 'reupload' | 'reinstall' | 'reverify';
 
@@ -24,6 +32,7 @@ export interface LowerUpdateDeploymentInput {
   manifest: LowerUpdateManifest;
   packageResult: LowerUpdateDownloadResult;
   connection: {
+    remote_target?: LowerUpdateRemoteTarget;
     upload_account: string;
     install_dir: string;
     auth: LowerUpdateSshAuth;
@@ -35,6 +44,10 @@ export interface LowerUpdateDeploymentInput {
 
 export interface LowerUpdateDeploymentTask {
   id: string;
+  remoteTarget?: LowerUpdateRemoteTarget;
+  operationId?: string;
+  taskLog?: string;
+  taskExitCode?: number | null;
   version: string;
   packageName: string;
   packagePath: string;
@@ -67,6 +80,10 @@ export interface LowerUpdateDeploymentSnapshot {
 }
 
 export interface LowerUpdateDeploymentOperations {
+  submitTask?(request: LowerUpdateTaskSubmitRequest): Promise<LowerUpdateTaskStatus>;
+  queryTask?(request: LowerUpdateTaskQueryRequest): Promise<LowerUpdateTaskStatus>;
+  loadPending?(): unknown;
+  savePending?(task: LowerUpdatePendingTask | null): Promise<void>;
   queryRuntime(request: LowerUpdateRuntimeInfoRequest): Promise<LowerUpdateRuntimeInfo>;
   upload(request: LowerUpdateUploadRequest, progress: (value: LowerUpdateUploadProgress) => void): Promise<LowerUpdateUploadResult>;
   install(request: LowerUpdateInstallRequest): Promise<LowerUpdateInstallResult>;
@@ -77,19 +94,23 @@ export interface LowerUpdateDeploymentOperations {
   log?(message: string): void;
 }
 
-const runningStages = new Set<LowerUpdateDeploymentStage>(['checking', 'uploading', 'installing', 'verifying', 'cleaning']);
+const runningStages = new Set<LowerUpdateDeploymentStage>(['checking', 'uploading', 'installing', 'verifying', 'cleaning', 'waiting_reconnect', 'rolling_back']);
 
 /** 流程独立于 React 和路由；私有输入仅保留在内存，公开快照不包含连接凭据。 */
 export function createLowerUpdateDeploymentController(operations: LowerUpdateDeploymentOperations) {
   let snapshot: LowerUpdateDeploymentSnapshot = { task: null, isRunning: false, detailOpen: false, resultOpen: false };
   let privateInput: LowerUpdateDeploymentInput | null = null;
+  const loadedPending = operations.loadPending?.();
+  let pendingRemote = readLowerUpdatePendingTask(loadedPending);
+  const invalidPending = loadedPending !== null && loadedPending !== undefined && !pendingRemote;
+  let recoveredCredentials: { auth: LowerUpdateSshAuth; sudo_password: string } | null = null;
   let credentialRevision = 0;
   let sequence = 0;
   const listeners = new Set<() => void>();
 
   const redact = (value: string): string => {
-    const auth = privateInput?.connection.auth;
-    const secrets = [auth?.method === 'password' ? auth.password : '', privateInput?.connection.sudo_password ?? ''];
+    const auth = privateInput?.connection.auth ?? recoveredCredentials?.auth;
+    const secrets = [auth?.method === 'password' ? auth.password : '', privateInput?.connection.sudo_password ?? recoveredCredentials?.sudo_password ?? ''];
     return secrets.filter(Boolean).sort((a, b) => b.length - a.length)
       .reduce((text, secret) => text.split(secret).join('[已隐藏]'), value);
   };
@@ -117,6 +138,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     expected_image_id: privateInput!.manifest.image_id!.trim(),
   });
   const persistConnection = async (): Promise<void> => {
+    if (privateInput?.connection.remote_target) return;
     try {
       await operations.saveConnection(snapshotLowerUpdateConnection(connection(), privateInput!.reuseSshPasswordForSudo, privateInput!.rememberPassword), credentialRevision);
       update({ connectionWarning: null });
@@ -127,6 +149,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     }
   };
   const validate = (): void => {
+    if (privateInput!.connection.remote_target && privateInput!.connection.auth.method !== 'password') throw new Error('远程更新仅支持密码认证');
     const { manifest, packageResult } = privateInput!;
     if (manifest.platform !== 'linux-arm64' && manifest.platform !== 'linux-x64') throw new Error('下位机更新架构不支持');
     assertLowerUpdateManifest(manifest, manifest.platform, manifest.channel);
@@ -177,6 +200,97 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     finish({ stage: 'verify_failed', status: '镜像确认失败', verificationMessage: detail, error: detail, cleanupMessage: '未清理，运行镜像尚未确认，保留所有安装包' });
   };
 
+  const remoteRequest = (): LowerUpdateTaskSubmitRequest => ({
+    operation_id: pendingRemote!.operation_id, remote_target: { ...pendingRemote!.remote_target },
+    upload_account: pendingRemote!.upload_account, install_dir: pendingRemote!.install_dir,
+    package_name: pendingRemote!.package_name, package_sha256: pendingRemote!.package_sha256,
+    expected_image_id: pendingRemote!.expected_image_id,
+    auth: { ...(privateInput?.connection.auth ?? recoveredCredentials!.auth) },
+    sudo_password: privateInput?.connection.sudo_password ?? recoveredCredentials!.sudo_password,
+  });
+  const applyRemoteStatus = async (result: LowerUpdateTaskStatus): Promise<boolean> => {
+    if (result.operation_id !== pendingRemote!.operation_id || compareLowerUpdateImages(result.expected_image_id, pendingRemote!.expected_image_id) !== 'same') throw new Error('远程任务编号或期望镜像不一致，已停止接收结果');
+    if (result.phase === 'succeeded' && compareLowerUpdateImages(result.actual_image_id, pendingRemote!.expected_image_id) !== 'same') throw new Error('宿主机返回成功，但实际运行镜像不匹配，保留原任务待确认');
+    const terminal = ['succeeded', 'rolled_back', 'rollback_failed', 'failed'].includes(result.phase);
+    const stage: LowerUpdateDeploymentStage = result.phase === 'failed' ? 'install_failed'
+      : result.phase === 'accepted' || result.phase === 'preparing' ? 'installing' : result.phase;
+    const statuses: Record<string, string> = { succeeded: '升级完成', rolled_back: '更新失败，已自动恢复上一版本', rollback_failed: '自动回退失败，需要人工处理', failed: '更新任务失败', rolling_back: '正在自动恢复上一版本' };
+    const changes = { stage, status: statuses[result.phase] ?? '宿主机更新任务执行中', progress: terminal ? 100 : result.phase === 'verifying' ? 85 : 70,
+      taskLog: redact(result.log_tail), taskExitCode: result.exit_code, actualImageId: redact(result.actual_image_id ?? '-'), verificationMessage: redact(result.message),
+      error: terminal && result.phase !== 'succeeded' ? redact(result.message) : null,
+      cleanupMessage: '恢复材料由宿主机管理，稳定状态保留一个先前版本' };
+    if (terminal) {
+      // 先清除恢复记录，失败时仍保留任务身份，避免重启后误装。
+      if (result.phase !== 'rollback_failed') {
+        await operations.savePending!(null);
+        pendingRemote = null;
+      } else changes.cleanupMessage = '自动回退失败，已保留原任务与恢复材料；请人工处理后查询原任务，禁止新建更新';
+      finish(changes);
+    } else update(changes);
+    return terminal;
+  };
+  const finishRejectedRemote = async (error: unknown): Promise<boolean> => {
+    if (!errorText(error).includes('LOWER_UPDATE_TASK_REJECTED:')) return false;
+    // 仅宿主机明确确认该编号从未受理时才释放它；连接失败仍保留原任务。
+    try {
+      await operations.savePending!(null);
+      pendingRemote = null;
+      finish({ stage: 'install_failed', status: '更新任务未受理', error: errorText(error), verificationMessage: '设备已有其他更新或回退失败任务，请先处理原任务', cleanupMessage: '本次任务未执行安装，未清理设备恢复材料' });
+    } catch {
+      finish({ stage: 'remote_unknown', status: '未受理任务的本地记录清除失败', error: null, verificationMessage: '请恢复查询原任务以重新确认受理状态并清除记录' });
+    }
+    return true;
+  };
+  const observeRemote = async (): Promise<void> => {
+    let lastError = '';
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      try {
+        const request = remoteRequest();
+        let result: LowerUpdateTaskStatus;
+        try { result = await operations.queryTask!(request); }
+        catch (error) {
+          // 明确不存在时仅幂等重发原任务，回执丢失不能新建编号。
+          if (!errorText(error).includes('LOWER_UPDATE_TASK_NOT_FOUND')) throw error;
+          result = await operations.submitTask!(request);
+        }
+        if (await applyRemoteStatus(result)) return;
+      } catch (error) {
+        if (await finishRejectedRemote(error)) return;
+        lastError = errorText(error);
+        update({ stage: 'waiting_reconnect', status: '等待设备重新上线', verificationMessage: '连接中断，宿主机任务继续执行；正在查询原任务', error: null });
+      }
+      if (attempt < 59) await operations.sleep(3000);
+    }
+    finish({ stage: 'remote_unknown', status: '暂时无法确认更新结果', error: null, verificationMessage: `请恢复查询原任务，不要重复安装。${lastError}`, cleanupMessage: '保留原任务及恢复材料' });
+  };
+  const executeRemote = async (): Promise<void> => {
+    if (!operations.submitTask || !operations.queryTask || !operations.savePending) throw new Error('远程更新任务接口未初始化');
+    const input = privateInput!;
+    const record: LowerUpdatePendingTask = { operation_id: globalThis.crypto.randomUUID(), remote_target: { ...input.connection.remote_target! },
+      upload_account: input.connection.upload_account, install_dir: input.connection.install_dir, package_name: input.packageResult.package_name,
+      package_sha256: input.packageResult.sha256, expected_image_id: input.manifest.image_id!.trim(), version: input.manifest.version };
+    // 保存完成后才能提交；保存失败不会创建宿主机任务。
+    if (!readLowerUpdatePendingTask(record)) throw new Error('远程更新恢复记录无效，已停止提交');
+    update({ stage: 'checking', status: '保存原任务恢复信息', progress: 60 });
+    await operations.savePending(record);
+    pendingRemote = record;
+    update({ operationId: record.operation_id, stage: 'installing', status: '提交宿主机更新任务', progress: 65 });
+    try { await operations.submitTask(remoteRequest()); }
+    catch (error) {
+      if (await finishRejectedRemote(error)) return;
+      operations.log?.(`远程更新提交回执暂未确认，继续查询原任务：${errorText(error)}`);
+    }
+    await observeRemote();
+  };
+  if (pendingRemote) {
+    snapshot = { task: { id: pendingRemote.operation_id, operationId: pendingRemote.operation_id, remoteTarget: { ...pendingRemote.remote_target },
+      version: pendingRemote.version, packageName: pendingRemote.package_name, packagePath: '-', uploadAccount: pendingRemote.upload_account,
+      installDir: pendingRemote.install_dir, authMethod: 'password', stage: 'remote_unknown', status: '有待确认的远程更新任务', progress: 65,
+      uploadedBytes: 0, totalBytes: 0, remotePath: '-', uploadResult: null, installResult: null, expectedImageId: pendingRemote.expected_image_id,
+      actualImageId: '-', verificationMessage: '请重新输入认证信息后查询原任务', cleanupMessage: '保留原任务及恢复材料', error: null,
+      cleanupError: null, alreadyCurrent: false, connectionWarning: null }, isRunning: false, detailOpen: false, resultOpen: false };
+  }
+
   const execute = async (mode: LowerUpdateDeploymentRetryMode | 'start'): Promise<void> => {
     try {
       validate();
@@ -216,6 +330,10 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
         update({ uploadResult: { package_name: redact(result.package_name), remote_path: redact(result.remote_path), uploaded_bytes: result.uploaded_bytes }, remotePath: redact(result.remote_path), uploadedBytes: result.uploaded_bytes, progress: 60 });
         await persistConnection();
       }
+      if (privateInput!.connection.remote_target) {
+        await executeRemote();
+        return;
+      }
       update({ stage: 'installing', status: '安装中', progress: 65, actualImageId: '-', installResult: null });
       const result = await operations.install(installRequest());
       update({ installResult: {
@@ -244,11 +362,14 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     subscribe(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; },
     async start(input: LowerUpdateDeploymentInput): Promise<void> {
       if (snapshot.isRunning) throw new Error('已有下位机更新任务正在执行，请查看当前任务');
+      if (invalidPending) throw new Error('原任务恢复记录无效，已停止新建更新任务，请检查本地恢复记录');
+      if (pendingRemote) throw new Error('请先恢复查询原任务，结果未确认前不能创建新任务');
       privateInput = structuredClone(input);
       privateInput.connection.upload_account = privateInput.connection.upload_account.trim();
       privateInput.connection.install_dir = privateInput.connection.install_dir.trim().replace(/\/+$/, '') || '/';
       credentialRevision = operations.credentialRevision(privateInput.connection.upload_account);
       const task: LowerUpdateDeploymentTask = {
+        remoteTarget: privateInput.connection.remote_target ? { ...privateInput.connection.remote_target } : undefined,
         id: `lower-update-${Date.now()}-${++sequence}`, version: redact(input.manifest.version),
         packageName: redact(input.packageResult.package_name), packagePath: redact(input.packageResult.package_path),
         uploadAccount: redact(privateInput.connection.upload_account), installDir: redact(privateInput.connection.install_dir), authMethod: input.connection.auth.method,
@@ -261,8 +382,19 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
       operations.log?.('开始执行下位机更新后台任务');
       await execute('start');
     },
+    async resumeRemote(auth: LowerUpdateSshAuth, sudoPassword: string): Promise<void> {
+      if (snapshot.isRunning) throw new Error('原任务正在查询中');
+      if (!pendingRemote) throw new Error('没有可恢复查询的原任务');
+      if (auth.method !== 'password' || !auth.password || !sudoPassword) throw new Error('请输入 SSH 与 sudo 密码');
+      recoveredCredentials = { auth: { ...auth }, sudo_password: sudoPassword };
+      if (privateInput) { privateInput.connection.auth = { ...auth }; privateInput.connection.sudo_password = sudoPassword; }
+      update({ stage: 'waiting_reconnect', status: '正在恢复查询原任务', error: null });
+      publish({ detailOpen: true, resultOpen: false });
+      await observeRemote();
+    },
     async retry(mode: LowerUpdateDeploymentRetryMode): Promise<void> {
       if (snapshot.isRunning) throw new Error('已有下位机更新任务正在执行，请查看当前任务');
+      if (snapshot.task?.remoteTarget) throw new Error('远程更新请恢复查询原任务；已结束任务需明确开始新的更新，不能重新安装原任务');
       if (!privateInput || !snapshot.task) throw new Error('没有可重试的下位机更新任务');
       if (mode === 'reinstall' && !snapshot.task.uploadResult) throw new Error('请先完成上传');
       if (mode === 'reverify' && !snapshot.task.installResult?.success) throw new Error('请先完成安装命令');

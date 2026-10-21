@@ -107,6 +107,28 @@ pub struct RemoteSshManager {
     pins_path: PathBuf,
 }
 impl RemoteSshManager {
+    /// 更新复用终端持久信任记录，首次身份确认必须在远程终端完成。
+    pub(crate) async fn verify_update_host_key(
+        &self,
+        endpoint: &str,
+        device_id: &str,
+        key: &russh::keys::ssh_key::PublicKey,
+    ) -> Result<(), String> {
+        let _guard = self.pins.lock().await;
+        let bytes = tokio::fs::read(&self.pins_path).await.map_err(|_| {
+            "远程设备 SSH 主机身份尚未信任，请先在远程终端核验并确认主机指纹".to_string()
+        })?;
+        let pins: HashMap<String, String> = serde_json::from_slice(&bytes)
+            .map_err(|_| "远程设备 SSH 信任记录损坏，已拒绝更新".to_string())?;
+        let actual = key
+            .fingerprint(russh::keys::ssh_key::HashAlg::Sha256)
+            .to_string();
+        match pins.get(&host_identity(endpoint, device_id)) {
+            Some(expected) if expected == &actual => Ok(()),
+            Some(_) => Err("设备 SSH 主机密钥已变化，已拒绝更新；请先核实设备身份".into()),
+            None => Err("远程设备 SSH 主机身份尚未信任，请先在远程终端核验并确认主机指纹".into()),
+        }
+    }
     pub fn new(path: PathBuf) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),

@@ -49,6 +49,9 @@ import type {
   LowerUpdateCachedPackage,
   LowerUpdateDownloadProgress,
   LowerUpdateDownloadResult,
+  LowerUpdateTaskSubmitRequest,
+  LowerUpdateTaskQueryRequest,
+  LowerUpdateTaskStatus,
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
   LowerUpdatePackageCleanupResult,
@@ -198,6 +201,8 @@ export const api = {
       unlisten?.();
     }
   },
+  submitLowerUpdateTask: (request: LowerUpdateTaskSubmitRequest) => invoke<LowerUpdateTaskStatus>('submit_lower_update_task', { request }),
+  getLowerUpdateTask: (request: LowerUpdateTaskQueryRequest) => invoke<LowerUpdateTaskStatus>('get_lower_update_task', { request }),
   installLowerUpdatePackage: (request: LowerUpdateInstallRequest) =>
     invoke<LowerUpdateInstallResult>('install_lower_update_package', { request }),
   cleanupLowerUpdatePackages: (request: LowerUpdateInstallRequest) =>

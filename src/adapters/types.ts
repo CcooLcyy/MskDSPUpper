@@ -146,7 +146,13 @@ export type LowerUpdateSshAuth =
   | { method: 'password'; password: string }
   | { method: 'certificate' };
 
+export interface LowerUpdateRemoteTarget {
+  endpoint: string;
+  device_id: string;
+}
+
 export interface LowerUpdateUploadRequest {
+  remote_target?: LowerUpdateRemoteTarget;
   package_name: string;
   package_path: string;
   package_size: number;
@@ -173,6 +179,7 @@ export interface LowerUpdateUploadResult {
 }
 
 export interface LowerUpdateInstallRequest {
+  remote_target?: LowerUpdateRemoteTarget;
   package_name: string;
   expected_image_id: string;
   upload_account: string;
@@ -199,9 +206,29 @@ export interface LowerUpdatePackageCleanupResult {
 }
 
 export interface LowerUpdateRuntimeInfoRequest {
+  remote_target?: LowerUpdateRemoteTarget;
   upload_account: string;
   auth: LowerUpdateSshAuth;
   sudo_password: string;
+}
+
+export interface LowerUpdateTaskSubmitRequest extends LowerUpdateInstallRequest {
+  operation_id: string;
+  package_sha256: string;
+}
+
+export interface LowerUpdateTaskQueryRequest extends LowerUpdateRuntimeInfoRequest {
+  operation_id: string;
+}
+
+export interface LowerUpdateTaskStatus {
+  operation_id: string;
+  phase: 'accepted' | 'preparing' | 'installing' | 'verifying' | 'succeeded' | 'rolling_back' | 'rolled_back' | 'rollback_failed' | 'failed';
+  message: string;
+  expected_image_id: string;
+  actual_image_id?: string | null;
+  exit_code?: number | null;
+  log_tail: string;
 }
 
 export interface LowerUpdateRuntimeInfo {
