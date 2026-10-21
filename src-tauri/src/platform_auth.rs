@@ -180,6 +180,7 @@ impl PlatformAuthManager {
         if settings.username.len() > 128 {
             return Err("用户名过长".into());
         }
+        settings.remember_password |= settings.auto_login;
         let mut state = self.inner.lock();
         if let Some(error) = &state.settings_error {
             return Err(error.clone());
@@ -187,12 +188,20 @@ impl PlatformAuthManager {
         let old = &state.stored.settings;
         let changed_identity =
             old.grpc_endpoint != settings.grpc_endpoint || old.username != settings.username;
-        if changed_identity || !settings.auto_login {
+        let changed_settings = *old != settings;
+        if changed_identity || !settings.remember_password {
             self.credentials.delete(&old.grpc_endpoint, &old.username)?;
         }
-        if changed_identity {
+        // 偏好变更也取消在途登录，防止旧响应恢复已清除的密码。
+        if changed_identity
+            || (state.session.is_none()
+                && (changed_settings || state.connection_state == "connecting"))
+        {
             clear_session(&mut state, None);
             state.auto_login_blocked = true;
+        }
+        if changed_settings {
+            tracing::info!("平台登录设置已变更");
         }
         let old_settings = state.stored.settings.clone();
         state.stored.settings = settings.clone();
@@ -203,13 +212,31 @@ impl PlatformAuthManager {
         Ok(settings)
     }
 
+    /// 仅返回凭据存在性，密码始终留在 Rust 和系统凭据存储中。
+    pub fn has_saved_password(&self, username: &str) -> Result<bool, String> {
+        let username = username.trim().to_ascii_lowercase();
+        let state = self.inner.lock();
+        if let Some(error) = &state.settings_error {
+            return Err(error.clone());
+        }
+        let settings = &state.stored.settings;
+        if username.is_empty() || username != settings.username || !settings.remember_password {
+            return Ok(false);
+        }
+        Ok(self
+            .credentials
+            .load(&settings.grpc_endpoint, &username)?
+            .is_some_and(|password| !password.is_empty()))
+    }
+
     pub async fn login(
         &self,
         username: String,
         password: String,
         auto_login: bool,
+        remember_password: bool,
     ) -> Result<PlatformAuthStatus, String> {
-        self.login_internal(username, password, auto_login, None)
+        self.login_internal(username, password, auto_login, remember_password, None)
             .await
     }
 
@@ -222,15 +249,22 @@ impl PlatformAuthManager {
             .credentials
             .load(&settings.grpc_endpoint, &settings.username)?
             .ok_or("未保存平台密码，请手动登录")?;
-        self.login_internal(settings.username.clone(), password, true, Some(settings))
-            .await
+        self.login_internal(
+            settings.username.clone(),
+            password,
+            true,
+            true,
+            Some(settings),
+        )
+        .await
     }
 
     async fn login_internal(
         &self,
         username: String,
-        password: String,
+        mut password: String,
         auto_login: bool,
+        remember_password: bool,
         automatic: Option<PlatformLoginSettings>,
     ) -> Result<PlatformAuthStatus, String> {
         let _operation = self
@@ -238,11 +272,8 @@ impl PlatformAuthManager {
             .try_lock()
             .map_err(|_| "正在登录，请稍候".to_string())?;
         let username = username.trim().to_ascii_lowercase();
-        if username.is_empty()
-            || username.len() > 128
-            || password.is_empty()
-            || password.len() > 128
-        {
+        let remember_password = remember_password || auto_login;
+        if username.is_empty() || username.len() > 128 || password.len() > 128 {
             return Err("请输入有效的用户名和密码".into());
         }
         let (generation, endpoint) = {
@@ -254,6 +285,21 @@ impl PlatformAuthManager {
                 if state.auto_login_blocked || *expected != state.stored.settings {
                     return Err("自动登录设置已变更，请手动登录".into());
                 }
+            }
+            if password.is_empty() {
+                let settings = &state.stored.settings;
+                if !remember_password
+                    || !settings.remember_password
+                    || settings.username != username
+                {
+                    return Err("请输入有效的用户名和密码".into());
+                }
+                password = self
+                    .credentials
+                    .load(&settings.grpc_endpoint, &username)?
+                    .filter(|value| !value.is_empty() && value.len() <= 128)
+                    .ok_or("未保存平台密码，请手动输入密码")?;
+                tracing::info!("使用系统保存的平台凭据重新认证");
             }
             clear_session(&mut state, None);
             state.connection_state = "connecting";
@@ -310,13 +356,14 @@ impl PlatformAuthManager {
                 self.credentials
                     .delete(&previous.grpc_endpoint, &previous.username)?;
             }
-            if auto_login {
+            if remember_password {
                 self.credentials.save(&endpoint, &username, &password)?;
             } else {
                 self.credentials.delete(&endpoint, &username)?;
             }
             state.stored.settings.username = username;
             state.stored.settings.auto_login = auto_login;
+            state.stored.settings.remember_password = remember_password;
             state.stored.save(&self.settings_file)
         })();
         if let Err(error) = persist {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createPlatformAuthController } from '../../src/auth/platform-auth-controller.ts';
 
-const settings = { grpc_endpoint: 'http://localhost:50000', username: 'alice', auto_login: false };
+const settings = { grpc_endpoint: 'http://localhost:50000', username: 'alice', auto_login: false, remember_password: false };
 const signedOut = { authenticated: false, username: null, display_name: null, connection_state: 'signed_out', expires_at: null, message: null };
 const loggedIn = (expires = 10000) => ({ authenticated: true, username: 'alice', display_name: 'Alice', connection_state: 'online', expires_at: expires, message: null });
 function fixture(overrides = {}) {
@@ -13,6 +13,7 @@ function fixture(overrides = {}) {
     saveSettings: async value => { calls.push(['settings', value]); return value; },
     login: async (...args) => { calls.push(['login', ...args]); return loggedIn(); },
     autoLogin: async () => { calls.push(['auto']); return loggedIn(); },
+    hasSavedPassword: async username => { calls.push(['saved', username]); return true; },
     getStatus: async () => signedOut,
     logout: async () => { calls.push(['logout']); return signedOut; },
     ...overrides,
@@ -181,4 +182,99 @@ test('usernames follow platform lowercase rules across settings, login and retai
   await controller.logout();
   await controller.login(' Alice ', 'secret', false);
   assert.equal(controller.getSnapshot().phase, 'authenticated');
+});
+
+// 仅记住密码不能在启动时擅自登录，也不把秘密放入界面快照。
+test('remembered password waits for manual login and keeps independent preferences', async () => {
+  const { controller, calls } = fixture({ getSettings: async () => ({ ...settings, remember_password: true }) });
+  await controller.start();
+  assert.deepEqual(calls, []);
+  assert.equal(await controller.hasSavedPassword(' ALICE '), true);
+  assert.equal(await controller.hasSavedPassword('bob'), false);
+  assert.deepEqual(calls, [['saved', 'alice']]);
+  await controller.login('alice', '', false, true);
+  assert.deepEqual(calls.find(call => call[0] === 'login'), ['login', 'alice', '', false, true]);
+  assert.equal(controller.getSnapshot().settings.remember_password, true);
+  assert.equal(controller.getSnapshot().settings.auto_login, false);
+  assert.equal(controller.getSnapshot().phase, 'authenticated');
+  assert.ok(!JSON.stringify(controller.getSnapshot()).includes('secret'));
+});
+
+// 自动登录必须同时记住密码，兼容旧版设置并规范化新登录请求。
+test('automatic login always implies remembering the password', async () => {
+  const { controller } = fixture({ getSettings: async () => ({ ...settings, auto_login: true }) });
+  await controller.start();
+  assert.equal(controller.getSnapshot().settings.remember_password, true);
+  const manual = fixture();
+  await manual.controller.start();
+  await manual.controller.login('alice', 'secret', true, false);
+  assert.deepEqual(manual.calls.find(call => call[0] === 'login'), ['login', 'alice', 'secret', true, true]);
+  assert.equal(manual.controller.getSnapshot().settings.remember_password, true);
+});
+
+// 撤销或退出后不主动重用保存密码，用户点击后仍可恢复同账号草稿。
+test('remembered password never automatically unlocks revoked or logged out drafts', async () => {
+  const { controller, calls } = fixture({ getSettings: async () => ({ ...settings, remember_password: true }) });
+  await controller.start();
+  await controller.login('alice', '', false, true);
+  await controller.poll();
+  assert.equal(controller.getSnapshot().phase, 'locked');
+  assert.equal(calls.filter(call => call[0] === 'login').length, 1);
+  assert.equal(calls.filter(call => call[0] === 'auto').length, 0);
+  await controller.login('alice', '', false, true);
+  assert.equal(controller.getSnapshot().phase, 'authenticated');
+  assert.equal(calls.filter(call => call[0] === 'initialize').length, 1);
+  await controller.logout();
+  assert.equal(controller.getSnapshot().phase, 'locked');
+  assert.equal(await controller.hasSavedPassword('alice'), true);
+  assert.equal(calls.filter(call => call[0] === 'login').length, 2);
+});
+
+// 清理保存密码时保持锁定草稿，失败时不得把界面偏好误报成已清除。
+test('forgetting password persists both flags and keeps settings on failure', async () => {
+  const remembered = { ...settings, remember_password: true };
+  const { controller, calls } = fixture({ getSettings: async () => remembered });
+  await controller.start();
+  await controller.login('alice', '', false, true);
+  await controller.logout();
+  assert.equal(await controller.saveSettings({ ...remembered, remember_password: false, auto_login: false }), true);
+  assert.equal(controller.getSnapshot().phase, 'locked');
+  assert.equal(await controller.hasSavedPassword('alice'), false);
+  assert.deepEqual(calls.find(call => call[0] === 'settings')[1], settings);
+  const failing = fixture({ getSettings: async () => remembered, saveSettings: async () => { throw Error('store'); } });
+  await failing.controller.start();
+  assert.equal(await failing.controller.saveSettings(settings), false);
+  assert.equal(failing.controller.getSnapshot().settings.remember_password, true);
+  assert.ok(failing.controller.getSnapshot().error);
+});
+
+// 凭据查询和登录失败都不能使配置工作台获得资格。
+test('unavailable or rejected remembered credentials leave manual password entry possible', async () => {
+  const { controller } = fixture({
+    getSettings: async () => ({ ...settings, remember_password: true }),
+    hasSavedPassword: async () => { throw Error('credential store'); },
+    login: async () => { throw Error('credentials rejected'); },
+  });
+  await controller.start();
+  assert.equal(await controller.hasSavedPassword('alice'), false);
+  await controller.login('alice', '', false, true);
+  assert.equal(controller.getSnapshot().phase, 'signed_out');
+  assert.equal(controller.getSnapshot().workspaceReady, false);
+  assert.match(controller.getSnapshot().error, /重新输入密码/);
+});
+
+// 删除保存密码或更换平台后，较晚返回的旧凭据查询不能再次启用留空登录。
+test('stale saved credential query cannot survive changed settings', async () => {
+  let resolve;
+  const pending = new Promise(done => { resolve = done; });
+  const { controller } = fixture({
+    getSettings: async () => ({ ...settings, remember_password: true }),
+    hasSavedPassword: async () => pending,
+  });
+  await controller.start();
+  const queried = controller.hasSavedPassword('alice');
+  await controller.saveSettings(settings);
+  resolve(true);
+  assert.equal(await queried, false);
+  assert.equal(controller.getSnapshot().settings.remember_password, false);
 });

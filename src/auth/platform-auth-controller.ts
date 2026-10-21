@@ -2,6 +2,7 @@ export interface PlatformLoginSettings {
   grpc_endpoint: string;
   username: string;
   auto_login: boolean;
+  remember_password: boolean;
 }
 
 export interface PlatformAuthStatus {
@@ -16,7 +17,8 @@ export interface PlatformAuthStatus {
 export interface PlatformAuthApi {
   getSettings(): Promise<PlatformLoginSettings>;
   saveSettings(settings: PlatformLoginSettings): Promise<PlatformLoginSettings>;
-  login(username: string, password: string, autoLogin: boolean): Promise<PlatformAuthStatus>;
+  login(username: string, password: string, autoLogin: boolean, rememberPassword: boolean): Promise<PlatformAuthStatus>;
+  hasSavedPassword(username: string): Promise<boolean>;
   autoLogin(): Promise<PlatformAuthStatus>;
   getStatus(): Promise<PlatformAuthStatus>;
   logout(): Promise<PlatformAuthStatus>;
@@ -63,6 +65,9 @@ export function createPlatformAuthController(
   }
 
   const normalizedUsername = (username: string) => username.trim().toLowerCase();
+  const normalizeSettings = (settings: PlatformLoginSettings): PlatformLoginSettings => ({
+    ...settings, username: normalizedUsername(settings.username), remember_password: settings.remember_password || settings.auto_login,
+  });
 
   function normalizeStatus(status: PlatformAuthStatus): PlatformAuthStatus {
     return { ...status, username: status.username ? normalizedUsername(status.username) : null };
@@ -102,7 +107,7 @@ export function createPlatformAuthController(
       const epoch = generation;
       try {
         const loaded = await api.getSettings();
-        const settings = { ...loaded, username: normalizedUsername(loaded.username) };
+        const settings = normalizeSettings(loaded);
         if (epoch !== generation) return;
         update({ settings, phase: 'signed_out' });
         if (settings.auto_login) {
@@ -118,7 +123,7 @@ export function createPlatformAuthController(
     return startPromise;
   }
 
-  async function login(username: string, password: string, autoLogin: boolean) {
+  async function login(username: string, password: string, autoLogin: boolean, rememberPassword = false) {
     if (['booting', 'authenticating', 'initializing'].includes(snapshot.phase) || snapshot.savingSettings || snapshot.endingSession) return;
     const account = normalizedUsername(username);
     if (snapshot.owner && account !== snapshot.owner) {
@@ -128,12 +133,13 @@ export function createPlatformAuthController(
     const epoch = ++generation;
     update({ phase: 'authenticating', error: null });
     try {
-      const status = normalizeStatus(await api.login(account, password, autoLogin));
+      const remember = rememberPassword || autoLogin;
+      const status = normalizeStatus(await api.login(account, password, autoLogin, remember));
       if (epoch !== generation) return;
-      if (valid(status) && snapshot.settings) update({ settings: { ...snapshot.settings, username: status.username!, auto_login: autoLogin } });
+      if (valid(status) && snapshot.settings) update({ settings: { ...snapshot.settings, username: status.username!, auto_login: autoLogin, remember_password: remember } });
       await initialize(status, epoch);
     } catch {
-      if (epoch === generation) lock('登录失败，请检查账号、密码、账号启用状态及平台连接地址。');
+      if (epoch === generation) lock(password ? '登录失败，请检查账号、密码、账号启用状态及平台连接地址。' : '无法使用已保存密码登录，请重新输入密码，并检查账号启用状态及平台连接地址。');
     }
   }
 
@@ -179,26 +185,41 @@ export function createPlatformAuthController(
   }
 
   async function saveSettings(settings: PlatformLoginSettings) {
-    if (snapshot.savingSettings || snapshot.endingSession || ['booting', 'authenticating', 'initializing', 'authenticated'].includes(snapshot.phase)) return;
+    if (snapshot.savingSettings || snapshot.endingSession || ['booting', 'authenticating', 'initializing', 'authenticated'].includes(snapshot.phase)) return false;
     if (snapshot.workspaceReady && settings.grpc_endpoint.trim() !== snapshot.settings?.grpc_endpoint) {
       update({ error: '当前保留了原平台账号的配置草稿，更换平台地址前请重启程序。' });
-      return;
+      return false;
     }
     update({ savingSettings: true, error: null });
     try {
-      const saved = await api.saveSettings({ ...settings, username: normalizedUsername(settings.username) });
-      update({ settings: saved, status: null, phase: snapshot.workspaceReady ? 'locked' : 'signed_out' });
+      const saved = await api.saveSettings(normalizeSettings(settings));
+      update({ settings: normalizeSettings(saved), status: null, phase: snapshot.workspaceReady ? 'locked' : 'signed_out', error: null });
+      return true;
     } catch {
       update({ error: '平台连接设置保存失败，请检查 gRPC 地址格式及桌面运行环境。' });
+      return false;
     } finally {
       update({ savingSettings: false });
+    }
+  }
+
+  async function hasSavedPassword(username: string) {
+    const account = normalizedUsername(username);
+    const settings = snapshot.settings;
+    if (!account || !settings?.remember_password || account !== settings.username) return false;
+    try {
+      const saved = await api.hasSavedPassword(account);
+      // 平台、账号或保存选项变化后，不采用旧查询结果。
+      return saved && snapshot.settings === settings;
+    } catch {
+      return false;
     }
   }
 
   return {
     getSnapshot: () => snapshot,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    start, login, logout, poll, tick, saveSettings,
+    start, login, logout, poll, tick, saveSettings, hasSavedPassword,
     retryInitialization: async () => {
       if (snapshot.phase === 'initialization_failed' && snapshot.status) await initialize(snapshot.status, generation);
     },

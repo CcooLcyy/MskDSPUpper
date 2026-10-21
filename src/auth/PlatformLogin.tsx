@@ -1,11 +1,12 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Button, Checkbox, Collapse, Form, Input, Space, Spin, Typography } from 'antd';
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { SOFTWARE_PLATFORM_ENDPOINT } from '../utils/software-platform';
 import { isPlatformDesktop } from './platform-auth-api.ts';
 import { usePlatformAuth } from './platform-auth-context.ts';
+import type { PlatformLoginSettings } from './platform-auth-controller.ts';
 
-interface LoginFields { username: string; password: string; auto_login: boolean }
+interface LoginFields { username: string; password?: string; auto_login: boolean; remember_password: boolean }
 
 export function PlatformLogin() {
   const { controller, snapshot } = usePlatformAuth();
@@ -13,15 +14,47 @@ export function PlatformLogin() {
   const [connectionForm] = Form.useForm<{ grpc_endpoint: string }>();
   const desktop = isPlatformDesktop();
   const busy = ['booting', 'authenticating', 'initializing'].includes(snapshot.phase) || snapshot.endingSession;
+  const username = Form.useWatch('username', form)?.trim().toLowerCase() || '';
+  const rememberPassword = Form.useWatch('remember_password', form) ?? false;
+  const settingsUsername = snapshot.settings?.username || '';
+  const endpoint = snapshot.settings?.grpc_endpoint || SOFTWARE_PLATFORM_ENDPOINT;
+  const savedRemember = snapshot.settings?.remember_password ?? false;
+  const savedAutoLogin = snapshot.settings?.auto_login ?? false;
+  const [savedCredential, setSavedCredential] = useState<{ username: string; settings: PlatformLoginSettings } | null>(null);
+  const canUseSavedPassword = rememberPassword && savedCredential?.username === username && savedCredential?.settings === snapshot.settings;
 
   useEffect(() => {
-    form.setFieldsValue({ username: snapshot.owner || snapshot.settings?.username || '', auto_login: snapshot.settings?.auto_login ?? false, password: '' });
-    connectionForm.setFieldsValue({ grpc_endpoint: snapshot.settings?.grpc_endpoint || SOFTWARE_PLATFORM_ENDPOINT });
-  }, [snapshot.settings, snapshot.owner, form, connectionForm]);
+    form.setFieldsValue({ username: snapshot.owner || settingsUsername, password: '' });
+  }, [settingsUsername, endpoint, snapshot.owner, form]);
+  useEffect(() => {
+    form.setFieldsValue({ auto_login: savedAutoLogin, remember_password: savedRemember });
+  }, [savedAutoLogin, savedRemember, form]);
+  useEffect(() => {
+    connectionForm.setFieldsValue({ grpc_endpoint: endpoint });
+  }, [endpoint, connectionForm]);
+  useEffect(() => {
+    if (!desktop || !snapshot.settings || !['signed_out', 'locked'].includes(snapshot.phase)) return;
+    const settings = snapshot.settings;
+    let active = true;
+    void controller.hasSavedPassword(username).then(saved => {
+      if (active) setSavedCredential(saved ? { username, settings } : null);
+    });
+    return () => { active = false; };
+  }, [controller, desktop, username, snapshot.settings, snapshot.phase]);
   useEffect(() => {
     if (snapshot.phase !== 'signed_out' && snapshot.phase !== 'locked') form.setFieldValue('password', '');
   }, [snapshot.phase, form]);
   useEffect(() => () => { form.setFieldValue('password', ''); }, [form]);
+
+  async function forgetPassword() {
+    form.setFieldValue('auto_login', false);
+    if (!snapshot.settings?.remember_password) return;
+    const saved = await controller.saveSettings({ ...snapshot.settings, remember_password: false, auto_login: false });
+    if (!saved) {
+      const settings = controller.getSnapshot().settings;
+      form.setFieldsValue({ remember_password: settings?.remember_password ?? false, auto_login: settings?.auto_login ?? false });
+    }
+  }
 
   return (
     <main className="platform-login-screen" onKeyDown={event => event.stopPropagation()}>
@@ -44,20 +77,25 @@ export function PlatformLogin() {
             <Button onClick={() => { void controller.logout(); }}>退出登录</Button>
           </Space>
         ) : (
-          <Form form={form} layout="vertical" disabled={busy || snapshot.savingSettings || !desktop} initialValues={{ auto_login: false }} onFinish={(values: LoginFields) => {
-            const request = controller.login(values.username, values.password, values.auto_login);
+          <Form form={form} layout="vertical" disabled={busy || snapshot.savingSettings || !desktop} initialValues={{ auto_login: false, remember_password: false }} onFinish={(values: LoginFields) => {
+            const request = controller.login(values.username, values.password || '', values.auto_login, values.remember_password);
             form.setFieldValue('password', '');
             void request;
           }}>
             <Form.Item name="username" label="账号" rules={[{ required: true, whitespace: true, message: '请输入平台账号' }]}>
               <Input prefix={<UserOutlined />} autoComplete="username" placeholder="平台账号" size="large" readOnly={!!snapshot.owner} autoFocus={!snapshot.owner} />
             </Form.Item>
-            <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
-              <Input.Password prefix={<LockOutlined />} autoComplete="current-password" placeholder="请输入密码" size="large" autoFocus={!!snapshot.owner} />
+            <Form.Item name="password" label="密码" rules={[{ required: !canUseSavedPassword, message: '请输入密码' }]}>
+              <Input.Password prefix={<LockOutlined />} autoComplete="current-password" placeholder={canUseSavedPassword ? '已记住密码，留空即可登录；输入可更新密码' : '请输入密码'} size="large" autoFocus={!!snapshot.owner} />
             </Form.Item>
-            <Form.Item name="auto_login" valuePropName="checked" style={{ marginBottom: 20 }}>
-              <Checkbox>下次自动登录</Checkbox>
-            </Form.Item>
+            <Space wrap size={24} style={{ marginBottom: 20 }}>
+              <Form.Item name="remember_password" valuePropName="checked" style={{ marginBottom: 0 }}>
+                <Checkbox onChange={event => { if (!event.target.checked) void forgetPassword(); }}>记住密码</Checkbox>
+              </Form.Item>
+              <Form.Item name="auto_login" valuePropName="checked" style={{ marginBottom: 0 }}>
+                <Checkbox onChange={event => { if (event.target.checked) form.setFieldValue('remember_password', true); }}>下次自动登录</Checkbox>
+              </Form.Item>
+            </Space>
             <Button type="primary" htmlType="submit" block size="large" loading={busy}>
               {snapshot.endingSession ? '正在退出登录' : snapshot.phase === 'booting' ? '正在读取登录设置' : snapshot.phase === 'initializing' ? '正在加载工作台' : snapshot.phase === 'authenticating' ? '正在验证账号' : '登录'}
             </Button>
@@ -66,7 +104,7 @@ export function PlatformLogin() {
         <Collapse ghost size="small" className="platform-login-connection" items={[{
           key: 'connection', label: '平台连接设置', forceRender: true, children: (
             <Form form={connectionForm} layout="vertical" initialValues={{ grpc_endpoint: SOFTWARE_PLATFORM_ENDPOINT }} disabled={busy || snapshot.savingSettings || !desktop} onFinish={(values: { grpc_endpoint: string }) => {
-              void controller.saveSettings({ grpc_endpoint: values.grpc_endpoint.trim(), username: form.getFieldValue('username')?.trim().toLowerCase() || '', auto_login: form.getFieldValue('auto_login') ?? false });
+              void controller.saveSettings({ grpc_endpoint: values.grpc_endpoint.trim(), username: form.getFieldValue('username')?.trim().toLowerCase() || '', auto_login: form.getFieldValue('auto_login') ?? false, remember_password: form.getFieldValue('remember_password') ?? false });
             }}>
               <Form.Item name="grpc_endpoint" label="平台 gRPC 地址" rules={[{ required: true, whitespace: true, message: '请输入平台 gRPC 地址' }, { pattern: /^https?:\/\/\S+$/, message: '使用 http:// 或 https:// 开头的 gRPC 地址' }]}>
                 <Input placeholder="https://platform.example:50000" readOnly={snapshot.workspaceReady} />
@@ -77,7 +115,7 @@ export function PlatformLogin() {
             </Form>
           ),
         }]} />
-        <Typography.Paragraph type="secondary" className="platform-login-credential-note">自动登录凭据由桌面系统安全保存。</Typography.Paragraph>
+        <Typography.Paragraph type="secondary" className="platform-login-credential-note">记住的密码由 Windows 凭据管理器安全保存；登录失效后需点击登录。</Typography.Paragraph>
         {snapshot.phase === 'initializing' ? <Spin className="platform-login-initializing" /> : null}
         </div>
       </section>

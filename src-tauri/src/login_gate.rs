@@ -6,6 +6,7 @@ fn is_authentication_command(command: &str) -> bool {
         "get_platform_login_settings"
             | "save_platform_login_settings"
             | "platform_login"
+            | "has_platform_saved_password"
             | "platform_auto_login"
             | "get_platform_auth_status"
             | "platform_logout"

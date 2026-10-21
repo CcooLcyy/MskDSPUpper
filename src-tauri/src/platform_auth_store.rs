@@ -9,6 +9,7 @@ pub struct PlatformLoginSettings {
     pub grpc_endpoint: String,
     pub username: String,
     pub auto_login: bool,
+    pub remember_password: bool,
 }
 
 impl Default for PlatformLoginSettings {
@@ -17,6 +18,7 @@ impl Default for PlatformLoginSettings {
             grpc_endpoint: crate::platform_software::DEFAULT_ENDPOINT.to_owned(),
             username: String::new(),
             auto_login: false,
+            remember_password: false,
         }
     }
 }
@@ -37,6 +39,8 @@ impl StoredSettings {
                 value.settings.grpc_endpoint =
                     crate::platform_software::validate_endpoint(&value.settings.grpc_endpoint)?;
                 value.settings.username = value.settings.username.trim().to_ascii_lowercase();
+                // 兼容旧版自动登录配置，自动登录始终包含记住密码。
+                value.settings.remember_password |= value.settings.auto_login;
                 if value.instance_id.is_empty() {
                     value.instance_id = instance_id(path);
                 }

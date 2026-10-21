@@ -1,27 +1,37 @@
 use super::*;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::{Request, Response, Status};
 
 #[derive(Default)]
-struct FakeCredentials(Mutex<HashMap<String, String>>);
+struct FakeCredentials {
+    values: Mutex<HashMap<String, String>>,
+    fail_read: AtomicBool,
+    fail_delete: AtomicBool,
+}
 impl CredentialStore for FakeCredentials {
     fn load(&self, endpoint: &str, username: &str) -> Result<Option<String>, String> {
+        if self.fail_read.load(Ordering::Relaxed) {
+            return Err("读取 Windows 平台凭据失败".into());
+        }
         Ok(self
-            .0
+            .values
             .lock()
             .get(&format!("{endpoint}:{username}"))
             .cloned())
     }
     fn save(&self, endpoint: &str, username: &str, password: &str) -> Result<(), String> {
-        self.0
+        self.values
             .lock()
             .insert(format!("{endpoint}:{username}"), password.into());
         Ok(())
     }
     fn delete(&self, endpoint: &str, username: &str) -> Result<(), String> {
-        self.0.lock().remove(&format!("{endpoint}:{username}"));
+        if self.fail_delete.load(Ordering::Relaxed) {
+            return Err("清除 Windows 平台凭据失败".into());
+        }
+        self.values.lock().remove(&format!("{endpoint}:{username}"));
         Ok(())
     }
 }
@@ -179,6 +189,7 @@ async fn fixture() -> (
             grpc_endpoint: endpoint,
             username: "alice".into(),
             auto_login: false,
+            remember_password: false,
         })
         .await
         .unwrap();
@@ -190,7 +201,7 @@ async fn login_is_grpc_and_settings_never_contain_secrets_or_restore_session() {
     let (manager, _, credentials, path, server) = fixture().await;
     assert!(!manager.status().authenticated);
     let status = manager
-        .login("alice".into(), "secret".into(), true)
+        .login("alice".into(), "secret".into(), true, true)
         .await
         .unwrap();
     assert!(status.authenticated);
@@ -198,7 +209,9 @@ async fn login_is_grpc_and_settings_never_contain_secrets_or_restore_session() {
         .unwrap()
         .contains("private-session"));
     let json = std::fs::read_to_string(&path).unwrap();
-    assert!(!json.contains("secret") && !json.contains("token") && !json.contains("password"));
+    assert!(!json.contains("secret") && !json.contains("token"));
+    let settings_json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(settings_json.get("password").is_none());
     let restarted = PlatformAuthManager::with_store(path.clone(), credentials);
     assert!(restarted.require_authenticated().is_err());
     assert!(restarted.auto_login().await.unwrap().authenticated);
@@ -212,7 +225,7 @@ async fn login_is_grpc_and_settings_never_contain_secrets_or_restore_session() {
 async fn network_failure_preserves_original_lease_but_auth_denial_revokes() {
     let (manager, service, _, path, server) = fixture().await;
     manager
-        .login("alice".into(), "secret".into(), false)
+        .login("alice".into(), "secret".into(), false, false)
         .await
         .unwrap();
     let expiry = manager.status().expires_at;
@@ -240,7 +253,7 @@ async fn expiry_blocks_configuration_even_offline() {
     let (manager, service, _, path, server) = fixture().await;
     service.ttl.store(1, Ordering::Relaxed);
     manager
-        .login("alice".into(), "secret".into(), false)
+        .login("alice".into(), "secret".into(), false, false)
         .await
         .unwrap();
     server.abort();
@@ -255,13 +268,16 @@ async fn logout_during_login_cannot_restore_session_and_duplicate_login_is_rejec
     let (manager, service, _, path, server) = fixture().await;
     service.delay_ms.store(150, Ordering::Relaxed);
     let worker = manager.clone();
-    let pending =
-        tokio::spawn(async move { worker.login("alice".into(), "secret".into(), false).await });
+    let pending = tokio::spawn(async move {
+        worker
+            .login("alice".into(), "secret".into(), false, false)
+            .await
+    });
     while service.login_calls.load(Ordering::Relaxed) == 0 {
         tokio::task::yield_now().await;
     }
     assert!(manager
-        .login("alice".into(), "secret".into(), false)
+        .login("alice".into(), "secret".into(), false, false)
         .await
         .is_err());
     manager.logout().await.unwrap();
@@ -276,7 +292,7 @@ async fn logout_during_login_cannot_restore_session_and_duplicate_login_is_rejec
 async fn changing_identity_clears_session_and_old_credential() {
     let (manager, _, credentials, path, server) = fixture().await;
     manager
-        .login("alice".into(), "secret".into(), true)
+        .login("alice".into(), "secret".into(), true, true)
         .await
         .unwrap();
     let mut settings = manager.settings().unwrap();
@@ -293,7 +309,7 @@ async fn changing_identity_clears_session_and_old_credential() {
 async fn invalid_credentials_are_safe_and_never_authenticate() {
     let (manager, _, _, path, server) = fixture().await;
     let error = manager
-        .login("alice".into(), "wrong".into(), false)
+        .login("alice".into(), "wrong".into(), false, false)
         .await
         .unwrap_err();
     assert!(!error.contains("secret"));
@@ -308,7 +324,7 @@ async fn mismatched_or_malformed_login_response_never_grants_access() {
     for mode in [4, 5, 6] {
         service.mode.store(mode, Ordering::Relaxed);
         assert!(manager
-            .login("alice".into(), "secret".into(), false)
+            .login("alice".into(), "secret".into(), false, false)
             .await
             .is_err());
         assert!(manager.require_authenticated().is_err());
@@ -316,7 +332,7 @@ async fn mismatched_or_malformed_login_response_never_grants_access() {
     service.mode.store(0, Ordering::Relaxed);
     service.ttl.store(0, Ordering::Relaxed);
     assert!(manager
-        .login("alice".into(), "secret".into(), false)
+        .login("alice".into(), "secret".into(), false, false)
         .await
         .is_err());
     assert!(manager.require_authenticated().is_err());
@@ -328,7 +344,7 @@ async fn mismatched_or_malformed_login_response_never_grants_access() {
 async fn password_reset_revokes_current_session() {
     let (manager, service, _, path, server) = fixture().await;
     manager
-        .login("alice".into(), "secret".into(), false)
+        .login("alice".into(), "secret".into(), false, false)
         .await
         .unwrap();
     let generation = manager.inner.lock().generation;
@@ -345,8 +361,11 @@ async fn settings_change_during_login_rejects_old_completion() {
     let (manager, service, _, path, server) = fixture().await;
     service.delay_ms.store(150, Ordering::Relaxed);
     let worker = manager.clone();
-    let pending =
-        tokio::spawn(async move { worker.login("alice".into(), "secret".into(), false).await });
+    let pending = tokio::spawn(async move {
+        worker
+            .login("alice".into(), "secret".into(), false, false)
+            .await
+    });
     while service.login_calls.load(Ordering::Relaxed) == 0 {
         tokio::task::yield_now().await;
     }
@@ -367,12 +386,292 @@ async fn settings_change_during_login_rejects_old_completion() {
 async fn username_normalization_matches_platform_accounts() {
     let (manager, _, _, path, server) = fixture().await;
     let status = manager
-        .login(" ALICE ".into(), "secret".into(), false)
+        .login(" ALICE ".into(), "secret".into(), false, false)
         .await
         .unwrap();
     assert_eq!(status.username.as_deref(), Some("alice"));
     assert_eq!(manager.settings().unwrap().username, "alice");
     manager.logout().await.unwrap();
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// 记住密码可独立于自动登录，并在锁定后重新联网认证。
+#[tokio::test]
+async fn remember_without_auto_login_supports_manual_login_after_lock() {
+    let (manager, service, credentials, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, true)
+        .await
+        .unwrap();
+    assert!(manager.settings().unwrap().remember_password);
+    assert!(!manager.settings().unwrap().auto_login);
+    let restarted = PlatformAuthManager::with_store(path.clone(), credentials);
+    assert!(restarted.auto_login().await.is_err());
+    assert!(restarted.has_saved_password(" ALICE ").unwrap());
+    assert!(!restarted.has_saved_password("bob").unwrap());
+    service.mode.store(2, Ordering::Relaxed);
+    let generation = manager.inner.lock().generation;
+    manager.check_session(generation).await;
+    assert!(!manager.status().authenticated);
+    let calls = service.login_calls.load(Ordering::Relaxed);
+    assert!(
+        manager
+            .login("alice".into(), String::new(), false, true)
+            .await
+            .unwrap()
+            .authenticated
+    );
+    assert_eq!(service.login_calls.load(Ordering::Relaxed), calls + 1);
+    manager.logout().await.unwrap();
+    assert!(manager.has_saved_password("alice").unwrap());
+    assert!(manager.auto_login().await.is_err());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// 自动登录包含记住密码，取消自动登录保留凭据，取消记住立即清除。
+#[tokio::test]
+async fn disabling_auto_preserves_password_and_disabling_remember_deletes_it() {
+    let (manager, _, credentials, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), true, false)
+        .await
+        .unwrap();
+    let mut settings = manager.settings().unwrap();
+    assert!(settings.remember_password);
+    settings.auto_login = false;
+    manager.save_settings(settings.clone()).await.unwrap();
+    assert!(manager.has_saved_password("alice").unwrap());
+    settings.remember_password = false;
+    manager.save_settings(settings.clone()).await.unwrap();
+    assert!(!manager.has_saved_password("alice").unwrap());
+    assert!(credentials
+        .load(&settings.grpc_endpoint, "alice")
+        .unwrap()
+        .is_none());
+    assert!(manager
+        .login("alice".into(), String::new(), false, true)
+        .await
+        .is_err());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// 只有当前平台同账号且明确启用记住时才能复用保存密码。
+#[tokio::test]
+async fn saved_password_requires_matching_identity_and_explicit_remember_choice() {
+    let (manager, service, _, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, true)
+        .await
+        .unwrap();
+    let calls = service.login_calls.load(Ordering::Relaxed);
+    assert!(manager
+        .login("bob".into(), String::new(), false, true)
+        .await
+        .is_err());
+    assert!(manager
+        .login("alice".into(), String::new(), false, false)
+        .await
+        .is_err());
+    assert_eq!(service.login_calls.load(Ordering::Relaxed), calls);
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// 显式输入优先于旧凭据，认证成功后才更新保存密码。
+#[tokio::test]
+async fn explicit_password_takes_precedence_and_only_success_updates_saved_password() {
+    let (manager, _, credentials, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, true)
+        .await
+        .unwrap();
+    let endpoint = manager.settings().unwrap().grpc_endpoint;
+    assert!(manager
+        .login("alice".into(), "wrong".into(), false, true)
+        .await
+        .is_err());
+    assert_eq!(
+        credentials.load(&endpoint, "alice").unwrap().as_deref(),
+        Some("secret")
+    );
+    credentials.save(&endpoint, "alice", "outdated").unwrap();
+    assert!(manager
+        .login("alice".into(), String::new(), false, true)
+        .await
+        .is_err());
+    manager
+        .login("alice".into(), "secret".into(), false, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        credentials.load(&endpoint, "alice").unwrap().as_deref(),
+        Some("secret")
+    );
+    manager.logout().await.unwrap();
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// 取消记住后，在途登录结果不能恢复已清除的凭据。
+#[tokio::test]
+async fn disabling_remember_during_login_prevents_restoring_deleted_password() {
+    let (manager, service, credentials, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, true)
+        .await
+        .unwrap();
+    service.delay_ms.store(150, Ordering::Relaxed);
+    let calls = service.login_calls.load(Ordering::Relaxed);
+    let worker = manager.clone();
+    let pending = tokio::spawn(async move {
+        worker
+            .login("alice".into(), String::new(), false, true)
+            .await
+    });
+    while service.login_calls.load(Ordering::Relaxed) == calls {
+        tokio::task::yield_now().await;
+    }
+    let mut settings = manager.settings().unwrap();
+    settings.remember_password = false;
+    manager.save_settings(settings.clone()).await.unwrap();
+    assert!(pending.await.unwrap().is_err());
+    assert!(!manager.status().authenticated);
+    assert!(!manager.settings().unwrap().remember_password);
+    assert!(credentials
+        .load(&settings.grpc_endpoint, "alice")
+        .unwrap()
+        .is_none());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// 旧版自动登录设置加载时补齐记住密码标志。
+#[tokio::test]
+async fn legacy_auto_login_settings_migrate_to_remember_password() {
+    let (manager, _, _, path, server) = fixture().await;
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    json["auto_login"] = true.into();
+    json.as_object_mut().unwrap().remove("remember_password");
+    std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+    let migrated = StoredSettings::load(&path).unwrap();
+    assert!(migrated.settings.remember_password);
+    assert!(migrated.settings.auto_login);
+    assert!(!manager.settings().unwrap().remember_password);
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// 首次登录尚未保存时取消记住，即使设置值未变也必须取消旧请求。
+#[tokio::test]
+async fn saving_disabled_remember_cancels_first_login_even_when_settings_match() {
+    let (manager, service, credentials, path, server) = fixture().await;
+    service.delay_ms.store(150, Ordering::Relaxed);
+    let worker = manager.clone();
+    let pending = tokio::spawn(async move {
+        worker
+            .login("alice".into(), "secret".into(), false, true)
+            .await
+    });
+    while service.login_calls.load(Ordering::Relaxed) == 0 {
+        tokio::task::yield_now().await;
+    }
+    let settings = manager.settings().unwrap();
+    assert!(!settings.remember_password);
+    manager.save_settings(settings.clone()).await.unwrap();
+    assert!(pending.await.unwrap().is_err());
+    assert!(!manager.status().authenticated);
+    assert!(credentials
+        .load(&settings.grpc_endpoint, "alice")
+        .unwrap()
+        .is_none());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// 凭据读取失败时明确报错，不能把空密码请求视为已认证。
+#[tokio::test]
+async fn credential_read_failure_rejects_lookup_and_saved_password_login() {
+    let (manager, service, credentials, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, true)
+        .await
+        .unwrap();
+    manager.logout().await.unwrap();
+    let calls = service.login_calls.load(Ordering::Relaxed);
+    credentials.fail_read.store(true, Ordering::Relaxed);
+    assert!(manager.has_saved_password("alice").is_err());
+    assert_eq!(
+        manager
+            .login("alice".into(), String::new(), false, true)
+            .await
+            .unwrap_err(),
+        "读取 Windows 平台凭据失败"
+    );
+    assert_eq!(service.login_calls.load(Ordering::Relaxed), calls);
+    assert!(manager.require_authenticated().is_err());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// 删除失败保留原记住选项并返回错误，登录也不能忽略凭据清理失败。
+#[tokio::test]
+async fn credential_delete_failure_preserves_preferences_and_rejects_login() {
+    let (manager, _, credentials, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, true)
+        .await
+        .unwrap();
+    manager.logout().await.unwrap();
+    let previous = manager.settings().unwrap();
+    let mut disabled = previous.clone();
+    disabled.remember_password = false;
+    credentials.fail_delete.store(true, Ordering::Relaxed);
+    assert!(manager.save_settings(disabled).await.is_err());
+    assert!(manager.settings().unwrap() == previous);
+    assert!(StoredSettings::load(&path).unwrap().settings == previous);
+    assert!(manager.has_saved_password("alice").unwrap());
+    assert_eq!(
+        manager
+            .login("alice".into(), "secret".into(), false, false)
+            .await
+            .unwrap_err(),
+        "清除 Windows 平台凭据失败"
+    );
+    assert!(manager.require_authenticated().is_err());
+    assert!(manager.settings().unwrap() == previous);
+    assert!(manager.has_saved_password("alice").unwrap());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// 系统凭据实际缺失或为空时，即使偏好仍为记住也不能复用空密码登录。
+#[tokio::test]
+async fn missing_or_empty_saved_credential_never_grants_authentication() {
+    let (manager, service, credentials, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, true)
+        .await
+        .unwrap();
+    manager.logout().await.unwrap();
+    let endpoint = manager.settings().unwrap().grpc_endpoint;
+    let calls = service.login_calls.load(Ordering::Relaxed);
+    credentials.delete(&endpoint, "alice").unwrap();
+    for empty_entry in [false, true] {
+        if empty_entry {
+            credentials.save(&endpoint, "alice", "").unwrap();
+        }
+        assert!(!manager.has_saved_password("alice").unwrap());
+        assert!(manager
+            .login("alice".into(), String::new(), false, true)
+            .await
+            .is_err());
+        assert!(manager.require_authenticated().is_err());
+    }
+    assert_eq!(service.login_calls.load(Ordering::Relaxed), calls);
     server.abort();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
