@@ -40,7 +40,7 @@ test('lower updater auto coordinator downloads every channel without deployment'
   assert.match(coordinator, /30_000/);
   assert.match(platformRules, /stable[^\n]*beta[^\n]*ci/);
   assert.doesNotMatch(platformRules, /nightly/);
-  assert.match(coordinator, /getLowerUpdateChannels\(platform\)/);
+  assert.match(coordinator, /getLowerUpdateChannels\(platform, clientVersion\)/);
   assert.match(coordinator, /api\.checkLowerUpdate\(channel, platform\)/);
   assert.match(coordinator, /api\.listCachedLowerUpdates\(channel, platform\)/);
   assert.match(coordinator, /api\.downloadLowerUpdate\(manifest/);

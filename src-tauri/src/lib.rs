@@ -8,6 +8,7 @@ pub mod proto;
 pub mod remote_access;
 pub mod runtime_paths;
 pub mod state;
+pub mod update_policy;
 
 use state::AppState;
 use std::time::Duration;

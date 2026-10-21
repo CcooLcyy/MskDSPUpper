@@ -66,6 +66,7 @@ function cachedPackageFromResult(
 }
 
 export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
+  const [clientVersion, setClientVersion] = useState<string | null>(null);
   const [platform, updatePlatform] = useState<LowerUpdatePlatform>('linux-arm64');
   const [statuses, setStatuses] = useState<Record<LowerUpdatePlatform, LowerUpdateAutoStatus>>({
     'linux-arm64': initialLowerUpdateAutoStatus,
@@ -75,6 +76,14 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
   const runningPromiseRef = useRef<Partial<Record<string, Promise<void>>>>({});
   const downloadTasksRef = useRef(new Map<string, Promise<LowerUpdateDownloadResult>>());
   const activeChannelDownloadRef = useRef<Partial<Record<string, Promise<LowerUpdateDownloadResult>>>>({});
+
+  useEffect(() => {
+    let active = true;
+    void api.getAppVersion().then((version) => {
+      if (active) setClientVersion(version);
+    }).catch((error: unknown) => console.warn('读取客户端版本失败，暂停下位机自动下载', String(error)));
+    return () => { active = false; };
+  }, []);
 
   const setPlatform = useCallback((next: LowerUpdatePlatform) => {
     getLowerUpdateChannels(next);
@@ -105,7 +114,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
 
   const ensureDownloaded = useCallback((manifest: LowerUpdateManifest): Promise<LowerUpdateDownloadResult> => {
     const platform = manifest.platform as LowerUpdatePlatform;
-    assertLowerUpdateManifest(manifest, platform, manifest.channel);
+    assertLowerUpdateManifest(manifest, platform, manifest.channel, clientVersion);
     const manifestKey = cacheKey(manifest);
     const runningTask = downloadTasksRef.current.get(manifestKey);
     if (runningTask) {
@@ -194,7 +203,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
     downloadTasksRef.current.set(manifestKey, taskPromise);
     activeChannelDownloadRef.current[channelKey] = taskPromise;
     return taskPromise;
-  }, [updateChannelStatus]);
+  }, [clientVersion, updateChannelStatus]);
 
   const runChannelCheckAndDownload = useCallback(async (platform: LowerUpdatePlatform, channel: LowerUpdateChannel): Promise<void> => {
     const channelKey = `${platform}:${channel}`;
@@ -220,7 +229,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
 
       try {
         const manifest = await api.checkLowerUpdate(channel, platform);
-        assertLowerUpdateManifest(manifest, platform, channel);
+        assertLowerUpdateManifest(manifest, platform, channel, clientVersion);
         const cachedPackages = await api.listCachedLowerUpdates(channel, platform);
         const cachedPackage = cachedPackages.find((item) => matchesManifest(manifest, item)) ?? null;
         if (cachedPackage) {
@@ -270,11 +279,12 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
 
     runningPromiseRef.current[channelKey] = promise;
     return promise;
-  }, [ensureDownloaded, updateChannelStatus]);
+  }, [clientVersion, ensureDownloaded, updateChannelStatus]);
 
   const runAllChannels = useCallback(async (): Promise<void> => {
-    await Promise.all(getLowerUpdateChannels(platform).map((channel) => runChannelCheckAndDownload(platform, channel)));
-  }, [platform, runChannelCheckAndDownload]);
+    if (clientVersion === null) return;
+    await Promise.all(getLowerUpdateChannels(platform, clientVersion).map((channel) => runChannelCheckAndDownload(platform, channel)));
+  }, [clientVersion, platform, runChannelCheckAndDownload]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -291,8 +301,8 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
   }, [runAllChannels]);
 
   const contextValue = useMemo<LowerUpdateAutoContextValue>(
-    () => ({ ...statuses[platform], platform, setPlatform, ensureDownloaded }),
-    [ensureDownloaded, statuses, platform, setPlatform],
+    () => ({ ...statuses[platform], clientVersion, platform, setPlatform, ensureDownloaded }),
+    [clientVersion, ensureDownloaded, statuses, platform, setPlatform],
   );
   return (
     <LowerUpdateAutoContext.Provider value={contextValue}>

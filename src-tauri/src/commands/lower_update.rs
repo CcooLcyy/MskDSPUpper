@@ -834,6 +834,11 @@ fn normalize_channel(channel: &str) -> Result<String, String> {
     }
 }
 
+/// 所有下位机更新入口共用客户端通道策略，远程任务接口也必须调用。
+pub(super) fn validate_lower_update_channel(channel: &str) -> Result<(), String> {
+    crate::update_policy::validate_update_channel(env!("CARGO_PKG_VERSION"), channel)
+}
+
 fn normalize_platform(platform: Option<&str>) -> Result<&str, String> {
     match platform {
         None | Some(LOWER_UPDATE_PLATFORM) => Ok(LOWER_UPDATE_PLATFORM),
@@ -1655,6 +1660,15 @@ fn build_install_command(install_dir: &str, package_name: &str) -> String {
     )
 }
 
+// 在同一次远端执行中先验证内容，再运行安装脚本，避免同名非 Stable 包绕过。
+fn build_verified_install_command(install_dir: &str, package_name: &str, sha256: &str) -> String {
+    let package_path = shell_quote(&format!("./{package_name}"));
+    format!(
+        "set -e; cd {}; actual_sha256=$(sha256sum -- {}); actual_sha256=${{actual_sha256%% *}}; if [ \"$actual_sha256\" != {} ]; then printf '%s\\n' '下位机安装包与 Stable 缓存校验值不一致' >&2; exit 1; fi; chmod +x {}; {} start",
+        shell_quote(install_dir), package_path, shell_quote(sha256), package_path, package_path,
+    )
+}
+
 fn validate_manifest(
     manifest: &LowerUpdateManifestDto,
     requested_channel: &str,
@@ -1936,6 +1950,70 @@ async fn load_cached_package(
     }))
 }
 
+/// Stable 下发必须使用后端重新校验的缓存身份，不能信任前端声明的通道或文件路径。
+pub(super) async fn find_verified_stable_package(
+    cache_root: &Path,
+    package_name: &str,
+    expected_image_id: Option<&str>,
+    package_path: Option<&Path>,
+    package_size: Option<u64>,
+    package_sha256: Option<&str>,
+) -> Result<LowerUpdateCachedPackageDto, String> {
+    let expected_image_id = expected_image_id
+        .map(|value| {
+            normalize_image_id(value).ok_or_else(|| "安装请求缺少有效的期望镜像 ID".to_string())
+        })
+        .transpose()?;
+    let requested_path = match package_path {
+        Some(path) => Some(
+            fs::canonicalize(path)
+                .await
+                .map_err(|error| format!("读取 Stable 安装包真实路径失败: {error}"))?,
+        ),
+        None => None,
+    };
+    for platform in [LOWER_UPDATE_PLATFORM, LOWER_UPDATE_X64_PLATFORM] {
+        if validate_platform_channel(platform, "stable").is_err() {
+            continue;
+        }
+        let Some(package) = load_cached_package(
+            &cache_root.join("stable").join(platform),
+            Some("stable"),
+            platform,
+        )
+        .await?
+        else {
+            continue;
+        };
+        if package.manifest.local_import || package.manifest.asset.name != package_name {
+            continue;
+        }
+        if expected_image_id.as_ref().is_some_and(|expected| {
+            package
+                .manifest
+                .image_id
+                .as_deref()
+                .and_then(normalize_image_id)
+                .as_ref()
+                != Some(expected)
+        }) || package_size.is_some_and(|size| package.package_size != size)
+            || package_sha256.is_some_and(|sha256| !package.sha256.eq_ignore_ascii_case(sha256))
+        {
+            continue;
+        }
+        if let Some(requested_path) = &requested_path {
+            let cached_path = fs::canonicalize(&package.package_path)
+                .await
+                .map_err(|error| format!("读取 Stable 缓存真实路径失败: {error}"))?;
+            if &cached_path != requested_path {
+                continue;
+            }
+        }
+        return Ok(package);
+    }
+    Err("Stable 上位机只能下发已校验的 Stable 缓存安装包，请先下载 Stable 版本".into())
+}
+
 fn is_partial_download(path: &Path) -> bool {
     path.extension()
         .is_some_and(|extension| extension == "download")
@@ -2179,7 +2257,30 @@ pub async fn list_cached_lower_updates(
     let platform = normalize_platform(platform.as_deref())?;
     let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
     let cache_root = state.runtime_paths.lower_update_dir();
-    list_cached_lower_updates_in(&cache_root, requested_channel.as_deref(), platform).await
+    list_cached_lower_updates_for_client(
+        &cache_root,
+        requested_channel.as_deref(),
+        platform,
+        env!("CARGO_PKG_VERSION"),
+    )
+    .await
+}
+
+async fn list_cached_lower_updates_for_client(
+    cache_root: &Path,
+    requested_channel: Option<&str>,
+    platform: &str,
+    client_version: &str,
+) -> Result<Vec<LowerUpdateCachedPackageDto>, String> {
+    if let Some(channel) = requested_channel {
+        crate::update_policy::validate_update_channel(client_version, channel)?;
+    }
+    let channel = if crate::update_policy::is_stable_client(client_version) {
+        Some("stable")
+    } else {
+        requested_channel
+    };
+    list_cached_lower_updates_in(cache_root, channel, platform).await
 }
 
 async fn list_cached_lower_updates_in(
@@ -2273,9 +2374,10 @@ pub async fn import_local_lower_update(
 ) -> Result<LowerUpdateCachedPackageDto, String> {
     let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
     tracing::info!(operation = "local_import", "开始导入本地下位机安装包");
-    let result = import_local_lower_update_in(
+    let result = import_local_lower_update_for_client(
         &state.runtime_paths.lower_update_dir(),
         Path::new(&package_path),
+        env!("CARGO_PKG_VERSION"),
     )
     .await;
     match &result {
@@ -2287,6 +2389,16 @@ pub async fn import_local_lower_update(
         }
     }
     result
+}
+
+async fn import_local_lower_update_for_client(
+    cache_root: &Path,
+    source: &Path,
+    client_version: &str,
+) -> Result<LowerUpdateCachedPackageDto, String> {
+    // 本地导入的来源无法确认，始终按 CI 通道处理，必须先于文件拷贝拒绝。
+    crate::update_policy::validate_update_channel(client_version, "ci")?;
+    import_local_lower_update_in(cache_root, source).await
 }
 
 async fn import_local_lower_update_in(
@@ -2528,6 +2640,7 @@ pub async fn check_lower_update(
     platform: Option<String>,
 ) -> Result<LowerUpdateManifestDto, String> {
     let channel = normalize_channel(&channel)?;
+    validate_lower_update_channel(&channel)?;
     let platform = normalize_platform(platform.as_deref())?;
     validate_platform_channel(platform, &channel)?;
     tracing::info!(%channel, %platform, "开始查询平台下位机软件目录");
@@ -2613,6 +2726,7 @@ pub async fn download_lower_update(
             return Err("本地导入安装包无需下载，请使用已导入缓存".into());
         }
         let channel = normalize_channel(&manifest.channel)?;
+        validate_lower_update_channel(&channel)?;
         validate_manifest(&manifest, &channel, &manifest.platform)?;
         let package_id = manifest.platform_package_id.as_deref().ok_or("在线下载必须使用平台软件包 ID，不再回退静态下载地址")?;
         let catalog = crate::platform_software::configured_catalog(&state)?;
@@ -2763,11 +2877,25 @@ pub async fn download_lower_update(
 }
 
 async fn upload_lower_update_package_inner(
+    state: &AppState,
     app_handle: AppHandle,
     request: LowerUpdateUploadRequestDto,
 ) -> Result<LowerUpdateUploadResultDto, String> {
     if !is_safe_file_name(&request.package_name) {
         return Err("下位机更新包名称不能包含路径分隔符".into());
+    }
+
+    if crate::update_policy::is_stable_client(env!("CARGO_PKG_VERSION")) {
+        let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
+        find_verified_stable_package(
+            &state.runtime_paths.lower_update_dir(),
+            &request.package_name,
+            None,
+            Some(Path::new(request.package_path.trim())),
+            Some(request.package_size),
+            Some(&request.package_sha256),
+        )
+        .await?;
     }
 
     let target = parse_upload_account(&request.upload_account)?;
@@ -2992,16 +3120,39 @@ async fn upload_lower_update_package_inner(
 }
 
 async fn install_lower_update_package_inner(
+    state: &AppState,
     request: LowerUpdateInstallRequestDto,
 ) -> Result<LowerUpdateInstallResultDto, String> {
     if !is_safe_file_name(&request.package_name) {
         return Err("下位机更新包名称不能包含路径分隔符".into());
     }
 
+    let stable_package = if crate::update_policy::is_stable_client(env!("CARGO_PKG_VERSION")) {
+        let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
+        Some(
+            find_verified_stable_package(
+                &state.runtime_paths.lower_update_dir(),
+                &request.package_name,
+                Some(&request.expected_image_id),
+                None,
+                None,
+                None,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
     let target = parse_upload_account(&request.upload_account)?;
     let install_dir = normalize_install_dir(&request.install_dir)?;
     let remote_path = remote_package_path(&install_dir, &request.package_name);
-    let install_command = build_install_command(&install_dir, &request.package_name);
+    let install_command = match &stable_package {
+        Some(package) => {
+            build_verified_install_command(&install_dir, &request.package_name, &package.sha256)
+        }
+        None => build_install_command(&install_dir, &request.package_name),
+    };
 
     let runtime =
         query_lower_update_runtime_info(&target, &request.auth, &request.sudo_password).await?;
@@ -3057,6 +3208,7 @@ async fn install_lower_update_package_inner(
 
 #[tauri::command]
 pub async fn upload_lower_update_package(
+    state: State<'_, AppState>,
     app_handle: AppHandle,
     request: LowerUpdateUploadRequestDto,
 ) -> Result<LowerUpdateUploadResultDto, String> {
@@ -3081,7 +3233,7 @@ pub async fn upload_lower_update_package(
     );
     let result = tokio::time::timeout(
         LOWER_UPDATE_UPLOAD_TOTAL_TIMEOUT,
-        upload_lower_update_package_inner(app_handle, request),
+        upload_lower_update_package_inner(&state, app_handle, request),
     )
     .await
     .map_err(|_| {
@@ -3274,6 +3426,7 @@ pub async fn get_vertical_security_status(
 
 #[tauri::command]
 pub async fn install_lower_update_package(
+    state: State<'_, AppState>,
     request: LowerUpdateInstallRequestDto,
 ) -> Result<LowerUpdateInstallResultDto, String> {
     let started_at = Instant::now();
@@ -3297,7 +3450,7 @@ pub async fn install_lower_update_package(
         "开始执行下位机更新安装"
     );
     let expected_image_id = request.expected_image_id.clone();
-    let result = install_lower_update_package_inner(request).await;
+    let result = install_lower_update_package_inner(&state, request).await;
     match result {
         Ok(result) => {
             if result.already_current {
@@ -3509,6 +3662,162 @@ mod tests {
     };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    // Stable 客户端按发布归属筛选，晋升后的 CI 构建版本号可以保留。
+    #[tokio::test]
+    async fn stable_client_only_lists_stable_cache_and_accepts_promoted_version() {
+        let temp = TestDirectory::new();
+        for channel in ["stable", "beta", "ci"] {
+            let directory = temp.path().join(channel).join("linux-arm64");
+            fs::create_dir_all(&directory).unwrap();
+            let bytes = test_compressed_package(channel);
+            let package_path = directory.join("package");
+            fs::write(&package_path, &bytes).unwrap();
+            let mut manifest = test_manifest(
+                "package",
+                bytes.len() as u64,
+                compute_sha256(&package_path).await.unwrap(),
+            );
+            manifest.channel = channel.into();
+            manifest.version = "0.8.0-ci.123".into();
+            persist_cache_metadata(&directory, &manifest).await.unwrap();
+            if channel == "ci" {
+                let local_directory = temp.path().join("local").join(&manifest.asset.sha256);
+                fs::create_dir_all(&local_directory).unwrap();
+                fs::write(local_directory.join("package"), &bytes).unwrap();
+                manifest.local_import = true;
+                manifest.asset.url.clear();
+                manifest.checksum.url.clear();
+                persist_cache_metadata(&local_directory, &manifest)
+                    .await
+                    .unwrap();
+            }
+        }
+        let stable =
+            super::list_cached_lower_updates_for_client(temp.path(), None, "linux-arm64", "0.8.0")
+                .await
+                .unwrap();
+        assert_eq!(stable.len(), 1);
+        assert_eq!(stable[0].manifest.channel, "stable");
+        assert_eq!(stable[0].manifest.version, "0.8.0-ci.123");
+        assert!(super::list_cached_lower_updates_for_client(
+            temp.path(),
+            Some("ci"),
+            "linux-arm64",
+            "0.8.0"
+        )
+        .await
+        .is_err());
+        for version in ["0.8.0-beta.1", "0.8.0-ci.1"] {
+            assert_eq!(
+                super::list_cached_lower_updates_for_client(
+                    temp.path(),
+                    None,
+                    "linux-arm64",
+                    version
+                )
+                .await
+                .unwrap()
+                .len(),
+                4
+            );
+        }
+    }
+
+    // 必须在读取源文件和创建缓存目录之前拒绝 Stable 的本地导入。
+    #[tokio::test]
+    async fn stable_client_rejects_local_import_before_touching_cache() {
+        let temp = TestDirectory::new();
+        let cache = temp.path().join("missing-cache");
+        let error = super::import_local_lower_update_for_client(
+            &cache,
+            &temp.path().join("missing-package"),
+            "0.8.0",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("Stable"));
+        assert!(!cache.exists());
+    }
+
+    // 上传和安装必须绑定后端校验过的 Stable 缓存，前端不能提供任意同名包。
+    #[tokio::test]
+    async fn stable_package_identity_rejects_unknown_path_image_and_tampered_bytes() {
+        let temp = TestDirectory::new();
+        let directory = temp.path().join("stable/linux-arm64");
+        fs::create_dir_all(&directory).unwrap();
+        let bytes = test_compressed_package("stable");
+        let package_path = directory.join("package");
+        fs::write(&package_path, &bytes).unwrap();
+        let sha256 = compute_sha256(&package_path).await.unwrap();
+        let mut manifest = test_manifest("package", bytes.len() as u64, sha256.clone());
+        manifest.version = "0.8.0-ci.123".into();
+        persist_cache_metadata(&directory, &manifest).await.unwrap();
+        let verified = super::find_verified_stable_package(
+            temp.path(),
+            "package",
+            manifest.image_id.as_deref(),
+            Some(&package_path),
+            Some(bytes.len() as u64),
+            Some(&sha256),
+        )
+        .await
+        .unwrap();
+        assert_eq!(verified.sha256, sha256);
+        let other = temp.path().join("package");
+        fs::write(&other, &bytes).unwrap();
+        assert!(super::find_verified_stable_package(
+            temp.path(),
+            "package",
+            None,
+            Some(&other),
+            None,
+            None
+        )
+        .await
+        .is_err());
+        assert!(super::find_verified_stable_package(
+            temp.path(),
+            "package",
+            Some(&format!("sha256:{}", "f".repeat(64))),
+            None,
+            None,
+            None
+        )
+        .await
+        .is_err());
+        assert!(super::find_verified_stable_package(
+            temp.path(),
+            "unknown-package",
+            None,
+            None,
+            None,
+            None
+        )
+        .await
+        .is_err());
+        fs::write(&package_path, b"tampered").unwrap();
+        assert!(super::find_verified_stable_package(
+            temp.path(),
+            "package",
+            None,
+            None,
+            None,
+            None
+        )
+        .await
+        .is_err());
+    }
+
+    #[test]
+    fn stable_install_checks_remote_checksum_before_running_package() {
+        let checksum = "a".repeat(64);
+        let command = super::build_verified_install_command("/home/megsky", "package", &checksum);
+        assert!(command.contains("sha256sum"));
+        assert!(command.contains(&checksum));
+        assert!(command.find("sha256sum").unwrap() < command.find("chmod +x").unwrap());
+        assert!(command.contains("下位机安装包与 Stable 缓存校验值不一致"));
+    }
 
     // 旧凭据归属沿用 Windows 目标匹配规则，缺少归属或其他目标不能迁移、删除。
     #[test]

@@ -2,6 +2,7 @@
 use crate::{
     platform_software::{self, Package, PlatformCatalog},
     state::AppState,
+    update_policy::validate_update_channel,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -69,6 +70,9 @@ fn candidate(
     endpoint: String,
     current_version: &str,
 ) -> Result<Option<Candidate>, String> {
+    let channel = channel(current_version).to_string();
+    validate_update_channel(current_version, &channel)?;
+    platform_software::matches_selection(&package, PRODUCT, PLATFORM, &channel)?;
     let metadata = platform_software::metadata(&package)?;
     if metadata.version == current_version {
         return Ok(None);
@@ -76,8 +80,6 @@ fn candidate(
     if metadata.size > 512 * 1024 * 1024 || !metadata.file_name.ends_with(".exe") {
         return Err("上位机更新必须是有界的 NSIS 安装包".into());
     }
-    let channel = channel(current_version).to_string();
-    platform_software::matches_selection(&package, PRODUCT, PLATFORM, &channel)?;
     let info = AppUpdateInfo {
         current_version: current_version.into(),
         version: metadata.version.clone(),
@@ -91,6 +93,11 @@ fn candidate(
         channel,
         info,
     }))
+}
+
+fn validate_candidate(current_version: &str, candidate: &Candidate) -> Result<(), String> {
+    validate_update_channel(current_version, &candidate.channel)?;
+    platform_software::matches_selection(&candidate.package, PRODUCT, PLATFORM, &candidate.channel)
 }
 
 fn local_update<R: tauri::Runtime>(
@@ -137,6 +144,7 @@ pub async fn check_app_update(
     state: State<'_, AppState>,
 ) -> Result<Option<AppUpdateInfo>, String> {
     let current = app.package_info().version.to_string();
+    validate_update_channel(&current, channel(&current))?;
     let endpoint = platform_software::configured_endpoint(&state)?;
     tracing::info!(channel = channel(&current), "开始查询平台上位机更新目录");
     let package = PlatformCatalog::new(&endpoint)?
@@ -170,6 +178,7 @@ pub async fn download_app_update(
         .pending
         .clone()
         .ok_or("没有可下载的上位机更新")?;
+    validate_candidate(&app.package_info().version.to_string(), &candidate)?;
     if platform_software::configured_endpoint(&state)? != candidate.endpoint {
         return Err("平台地址已变化，请重新检查更新".into());
     }
@@ -259,6 +268,7 @@ pub async fn install_app_update(
         .ready
         .clone()
         .ok_or("没有已下载且验签的上位机更新包")?;
+    validate_candidate(&app.package_info().version.to_string(), &ready.candidate)?;
     let metadata = platform_software::metadata(&ready.candidate.package)?;
     let bytes = tokio::fs::read(&ready.path)
         .await
@@ -352,6 +362,37 @@ mod tests {
         state.checked(None);
         assert!(state.pending.is_none());
         assert_eq!(state.ready.unwrap().path, PathBuf::from("old.exe"));
+    }
+
+    #[test]
+    fn stable_accepts_promoted_package_with_prerelease_version() {
+        let mut package = package();
+        package.channels.push("stable".into());
+        let candidate = candidate(package, "http://127.0.0.1:50000".into(), "0.7.1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(candidate.channel, "stable");
+        assert!(candidate.info.version.contains("-ci."));
+        assert!(validate_candidate("0.7.1", &candidate).is_ok());
+    }
+
+    #[test]
+    fn stable_rejects_nonstable_catalog_and_cached_candidates() {
+        assert!(candidate(package(), "http://127.0.0.1:50000".into(), "0.7.1").is_err());
+        let cached = candidate(package(), "http://127.0.0.1:50000".into(), "0.7.1-ci.test")
+            .unwrap()
+            .unwrap();
+        assert!(validate_candidate("0.7.1", &cached).is_err());
+        assert!(validate_candidate("0.7.1-beta.1", &cached).is_ok());
+    }
+
+    #[test]
+    fn cached_candidate_channel_must_match_package_publication() {
+        let mut cached = candidate(package(), "http://127.0.0.1:50000".into(), "0.7.1-ci.test")
+            .unwrap()
+            .unwrap();
+        cached.channel = "stable".into();
+        assert!(validate_candidate("0.7.1", &cached).is_err());
     }
 
     // 使用独立临时密钥生成的公开签名夹具，验证原 Tauri 验签成功且错误签名不能进入安装器。

@@ -65,7 +65,7 @@ import {
   resolveLowerUpdateDownloadResult,
   type LowerUpdateCacheFreshness,
 } from '../../utils/lower-update-deploy';
-import { getLowerUpdateChannel, getLowerUpdateChannels } from '../../utils/lower-update-platform';
+import { getLowerUpdateChannel, getLowerUpdateChannels, isStableUpdateClient } from '../../utils/lower-update-platform';
 import { useSearchParams } from 'react-router-dom';
 import './index.css';
 
@@ -399,7 +399,7 @@ const AdvancedConfigPage: React.FC = () => {
   const [credentialReadRevision, setCredentialReadRevision] = useState(0);
   const [searchParams] = useSearchParams();
   const activeUpdateTab = normalizeSoftwareUpdateView(searchParams.get(SOFTWARE_UPDATE_VIEW_QUERY_KEY));
-  const [channel, setChannel] = useState<LowerUpdateChannel>(DEFAULT_LOWER_UPDATE_CHANNEL);
+  const [selectedChannel, setChannel] = useState<LowerUpdateChannel>(DEFAULT_LOWER_UPDATE_CHANNEL);
   const [currentLowerImageId, setCurrentLowerImageId] = useState('-');
   const [latestLowerImageId, setLatestLowerImageId] = useState('-');
   const [packageName, setPackageName] = useState('-');
@@ -436,9 +436,14 @@ const AdvancedConfigPage: React.FC = () => {
   const [onlineLowerUpdateCheckedAt, setOnlineLowerUpdateCheckedAt] = useState<number | null>(null);
   const [isLoadingCachedPackages, setIsLoadingCachedPackages] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
-  const { platform, setPlatform, channels: lowerUpdateAutoChannels, ensureDownloaded } = useLowerUpdateAuto();
+  const { clientVersion, platform, setPlatform, channels: lowerUpdateAutoChannels, ensureDownloaded } = useLowerUpdateAuto();
+  const stableClient = isStableUpdateClient(clientVersion);
+  const channel = getLowerUpdateChannel(platform, selectedChannel, clientVersion);
   const cacheReadRequestRef = React.useRef(0);
   const lowerUpdateSelectionRef = React.useRef({ platform, channel });
+  React.useEffect(() => {
+    lowerUpdateSelectionRef.current = { platform, channel };
+  }, [platform, channel]);
   const deploymentPageMountedRef = React.useRef(true);
   React.useEffect(() => {
     deploymentPageMountedRef.current = true;
@@ -765,12 +770,16 @@ const AdvancedConfigPage: React.FC = () => {
   };
 
   const handleImportLocalUpdate = async (): Promise<void> => {
+    if (stableClient) {
+      messageApi.warning('Stable 上位机仅允许 Stable 发布包，无法导入未确认发布通道的本地安装包');
+      return;
+    }
     setIsImportingLocalUpdate(true);
     try {
       const imported = await api.importLocalLowerUpdate();
       if (!imported || !deploymentPageMountedRef.current) return;
       const importedPlatform = imported.manifest.platform as LowerUpdatePlatform;
-      if (!imported.manifest.local_import || !getLowerUpdateChannels(importedPlatform).includes(imported.manifest.channel)) {
+      if (!imported.manifest.local_import || !getLowerUpdateChannels(importedPlatform, clientVersion).includes(imported.manifest.channel)) {
         throw new Error('导入结果缺少本地来源或有效架构');
       }
       cacheReadRequestRef.current += 1;
@@ -1304,12 +1313,12 @@ const AdvancedConfigPage: React.FC = () => {
                     value={platform}
                     options={[
                       { label: 'ARM64（默认）', value: 'linux-arm64' },
-                      { label: 'x64', value: 'linux-x64' },
+                      { label: 'x64', value: 'linux-x64', disabled: stableClient },
                     ]}
                     disabled={isSelectingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
                     onChange={(value) => {
                       cacheReadRequestRef.current += 1;
-                      const nextChannel = getLowerUpdateChannel(value, channel);
+                      const nextChannel = getLowerUpdateChannel(value, channel, clientVersion);
                       lowerUpdateSelectionRef.current = { platform: value, channel: nextChannel };
                       setChannel(nextChannel);
                       setPlatform(value);
@@ -1324,7 +1333,7 @@ const AdvancedConfigPage: React.FC = () => {
                     value={isLocalPackageSelected ? 'local' : channel}
                     options={[
                       ...(isLocalPackageSelected ? [{ label: '本地安装包', value: 'local' as const }] : []),
-                      ...UPDATE_CHANNEL_OPTIONS.filter((option) => getLowerUpdateChannels(platform).includes(option.value)),
+                      ...UPDATE_CHANNEL_OPTIONS.filter((option) => getLowerUpdateChannels(platform, clientVersion).includes(option.value)),
                     ]}
                     disabled={isSelectingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
                     onChange={(value) => {
@@ -1343,7 +1352,9 @@ const AdvancedConfigPage: React.FC = () => {
                 {platform === 'linux-x64'
                   ? 'x64 目前仅提供 CI 通道安装包，适用于 x64 服务器。'
                   : 'ARM64 适用于 ARM 下位机设备。'}
-                可从所选架构的静态源下载，也可导入本地 mskdsp-版本 安装包，再手动下发到下位机。
+                {stableClient
+                  ? 'Stable 上位机仅支持 Stable 发布包，本地导入不可用；x64 当前只有 CI 包，暂不支持。'
+                  : '可从平台下载，也可导入本地 mskdsp-版本 安装包，再手动下发到下位机。'}
               </Text>
               <div className="advanced-config-cached-package">
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -1413,7 +1424,7 @@ const AdvancedConfigPage: React.FC = () => {
                 <Button
                   icon={<FileSearchOutlined />}
                   onClick={() => void handleImportLocalUpdate()}
-                  disabled={isSelectingLowerUpdate || isDownloadingLowerUpdate || isDeployingLowerUpdate}
+                  disabled={stableClient || isSelectingLowerUpdate || isDownloadingLowerUpdate || isDeployingLowerUpdate}
                   loading={isImportingLocalUpdate}
                 >
                   导入本地安装包
