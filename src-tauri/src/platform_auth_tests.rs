@@ -480,6 +480,78 @@ async fn saved_password_requires_matching_identity_and_explicit_remember_choice(
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
+// 回填只读取当前平台、当前账号已记住的密码，保持状态和持久化设置不含凭据。
+#[tokio::test]
+async fn saved_password_prefill_is_scoped_to_current_remembered_identity() {
+    let (manager, _, credentials, path, server) = fixture().await;
+    assert!(manager.saved_password("alice").unwrap().is_none());
+    manager
+        .login("alice".into(), "secret".into(), false, true)
+        .await
+        .unwrap();
+    manager.logout().await.unwrap();
+    let endpoint = manager.settings().unwrap().grpc_endpoint;
+    let restarted = PlatformAuthManager::with_store(path.clone(), credentials.clone());
+    assert_eq!(
+        restarted.saved_password(" ALICE ").unwrap().as_deref(),
+        Some("secret")
+    );
+    credentials.save(&endpoint, "bob", "other-secret").unwrap();
+    assert!(restarted.saved_password("bob").unwrap().is_none());
+    assert!(restarted.saved_password("").unwrap().is_none());
+    assert!(!restarted.status().authenticated);
+    assert!(!serde_json::to_string(&restarted.status())
+        .unwrap()
+        .contains("secret"));
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("secret"));
+
+    let mut settings = restarted.settings().unwrap();
+    settings.grpc_endpoint = "http://127.0.0.1:9".into();
+    restarted.save_settings(settings.clone()).await.unwrap();
+    // 即使旧平台凭据重新出现，也不能跨平台回填。
+    credentials.save(&endpoint, "alice", "old-secret").unwrap();
+    assert!(restarted.saved_password("alice").unwrap().is_none());
+    credentials
+        .save(&settings.grpc_endpoint, "alice", "new-secret")
+        .unwrap();
+    assert_eq!(
+        restarted.saved_password("alice").unwrap().as_deref(),
+        Some("new-secret")
+    );
+    settings.remember_password = false;
+    restarted.save_settings(settings.clone()).await.unwrap();
+    // 取消记住后，残留系统凭据也不能被回填。
+    credentials
+        .save(&settings.grpc_endpoint, "alice", "stale-secret")
+        .unwrap();
+    assert!(restarted.saved_password("alice").unwrap().is_none());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[tokio::test]
+async fn saved_password_prefill_rejects_empty_credentials_and_read_failures() {
+    let (manager, _, credentials, path, server) = fixture().await;
+    let mut settings = manager.settings().unwrap();
+    settings.remember_password = true;
+    manager.save_settings(settings.clone()).await.unwrap();
+    assert!(manager.saved_password("alice").unwrap().is_none());
+    credentials
+        .save(&settings.grpc_endpoint, "alice", "")
+        .unwrap();
+    assert!(manager.saved_password("alice").unwrap().is_none());
+    credentials.fail_read.store(true, Ordering::Relaxed);
+    assert_eq!(
+        manager.saved_password("alice").unwrap_err(),
+        "读取 Windows 平台凭据失败"
+    );
+    // 不匹配的账号不触碰系统凭据存储。
+    assert!(manager.saved_password("bob").unwrap().is_none());
+    assert!(manager.status().message.is_none());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
 // 显式输入优先于旧凭据，认证成功后才更新保存密码。
 #[tokio::test]
 async fn explicit_password_takes_precedence_and_only_success_updates_saved_password() {

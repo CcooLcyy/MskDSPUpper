@@ -13,6 +13,7 @@ export const platformAuthApi: PlatformAuthApi = {
   saveSettings: settings => desktopInvoke('save_platform_login_settings', { settings }),
   login: (username, password, autoLogin, rememberPassword) => desktopInvoke('platform_login', { username, password, autoLogin, rememberPassword }),
   hasSavedPassword: username => desktopInvoke('has_platform_saved_password', { username }),
+  getSavedPassword: username => desktopInvoke('get_platform_saved_password', { username }),
   autoLogin: () => desktopInvoke('platform_auto_login'),
   getStatus: () => desktopInvoke('get_platform_auth_status'),
   logout: () => desktopInvoke('platform_logout'),

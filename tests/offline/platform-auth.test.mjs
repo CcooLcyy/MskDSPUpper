@@ -14,6 +14,7 @@ function fixture(overrides = {}) {
     login: async (...args) => { calls.push(['login', ...args]); return loggedIn(); },
     autoLogin: async () => { calls.push(['auto']); return loggedIn(); },
     hasSavedPassword: async username => { calls.push(['saved', username]); return true; },
+    getSavedPassword: async username => { calls.push(['password', username]); return 'saved-secret'; },
     getStatus: async () => signedOut,
     logout: async () => { calls.push(['logout']); return signedOut; },
     ...overrides,
@@ -277,4 +278,77 @@ test('stale saved credential query cannot survive changed settings', async () =>
   resolve(true);
   assert.equal(await queried, false);
   assert.equal(controller.getSnapshot().settings.remember_password, false);
+});
+
+// 回填只读取当前平台的已记住账号，秘密不进入认证快照，也不触发登录。
+test('password autofill reads only remembered matching account without authenticating', async () => {
+  const { controller, calls } = fixture({ getSettings: async () => ({ ...settings, remember_password: true }) });
+  await controller.start();
+  assert.equal(await controller.getSavedPassword(' ALICE '), 'saved-secret');
+  assert.equal(await controller.getSavedPassword('bob'), null);
+  assert.equal(await controller.getSavedPassword(''), null);
+  assert.deepEqual(calls, [['password', 'alice']]);
+  assert.equal(controller.getSnapshot().phase, 'signed_out');
+  assert.ok(!JSON.stringify(controller.getSnapshot()).includes('saved-secret'));
+  await controller.saveSettings(settings);
+  assert.equal(await controller.getSavedPassword('alice'), null);
+  assert.equal(calls.filter(call => call[0] === 'password').length, 1);
+});
+
+// 缺失、空凭据或系统读取失败时退回手动输入，不展示原始系统错误。
+test('password autofill safely handles missing empty and unreadable credentials', async () => {
+  for (const read of [async () => null, async () => '', async () => { throw Error('saved-secret'); }]) {
+    const { controller } = fixture({ getSettings: async () => ({ ...settings, remember_password: true }), getSavedPassword: read });
+    await controller.start();
+    assert.equal(await controller.getSavedPassword('alice'), null);
+    assert.equal(controller.getSnapshot().error, null);
+    await controller.login('alice', 'manual-secret', false, true);
+    assert.equal(controller.getSnapshot().phase, 'authenticated');
+  }
+});
+
+// 选项、账号或平台变化使旧密码读取结果失效。
+test('password autofill discards delayed results after identity or preference changes', async () => {
+  for (const changed of [settings, { ...settings, username: 'bob', remember_password: true }, { ...settings, grpc_endpoint: 'https://other.example:50000', remember_password: true }]) {
+    let resolve;
+    const { controller } = fixture({
+      getSettings: async () => ({ ...settings, remember_password: true }),
+      getSavedPassword: () => new Promise(done => { resolve = done; }),
+    });
+    await controller.start();
+    const queried = controller.getSavedPassword('alice');
+    await controller.saveSettings(changed);
+    resolve('saved-secret');
+    assert.equal(await queried, null);
+  }
+});
+
+// 登录或退出已推进会话代次时，晚到的密码不得回填；稳定锁定后仍可主动读取。
+test('password autofill rejects reads during login and delayed results across logout', async () => {
+  let resolve;
+  const { controller, calls } = fixture({
+    getSettings: async () => ({ ...settings, remember_password: true }),
+    getSavedPassword: () => new Promise(done => { resolve = done; }),
+  });
+  await controller.start();
+  const queried = controller.getSavedPassword('alice');
+  await controller.logout();
+  resolve('saved-secret');
+  assert.equal(await queried, null);
+
+  let finishLogin;
+  const pending = fixture({
+    getSettings: async () => ({ ...settings, remember_password: true }),
+    login: () => new Promise(done => { finishLogin = done; }),
+  });
+  await pending.controller.start();
+  const login = pending.controller.login('alice', 'secret', false, true);
+  assert.equal(await pending.controller.getSavedPassword('alice'), null);
+  assert.equal(pending.calls.filter(call => call[0] === 'password').length, 0);
+  finishLogin(loggedIn());
+  await login;
+  assert.equal(await pending.controller.getSavedPassword('alice'), null);
+  await pending.controller.logout();
+  assert.equal(await pending.controller.getSavedPassword('alice'), 'saved-secret');
+  assert.equal(calls.filter(call => call[0] === 'login').length, 0);
 });

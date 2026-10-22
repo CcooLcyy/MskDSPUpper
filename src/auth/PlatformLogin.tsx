@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Alert, Button, Checkbox, Collapse, Form, Input, Space, Spin, Typography } from 'antd';
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { SOFTWARE_PLATFORM_ENDPOINT } from '../utils/software-platform';
 import { isPlatformDesktop } from './platform-auth-api.ts';
 import { usePlatformAuth } from './platform-auth-context.ts';
-import type { PlatformLoginSettings } from './platform-auth-controller.ts';
 
 interface LoginFields { username: string; password?: string; auto_login: boolean; remember_password: boolean }
 
@@ -20,12 +19,15 @@ export function PlatformLogin() {
   const endpoint = snapshot.settings?.grpc_endpoint || SOFTWARE_PLATFORM_ENDPOINT;
   const savedRemember = snapshot.settings?.remember_password ?? false;
   const savedAutoLogin = snapshot.settings?.auto_login ?? false;
-  const [savedCredential, setSavedCredential] = useState<{ username: string; settings: PlatformLoginSettings } | null>(null);
-  const canUseSavedPassword = rememberPassword && savedCredential?.username === username && savedCredential?.settings === snapshot.settings;
+  const passwordEdited = useRef(false);
 
   useEffect(() => {
     form.setFieldsValue({ username: snapshot.owner || settingsUsername, password: '' });
   }, [settingsUsername, endpoint, snapshot.owner, form]);
+  useEffect(() => {
+    passwordEdited.current = false;
+    form.setFieldValue('password', '');
+  }, [username, endpoint, form]);
   useEffect(() => {
     form.setFieldsValue({ auto_login: savedAutoLogin, remember_password: savedRemember });
   }, [savedAutoLogin, savedRemember, form]);
@@ -33,21 +35,25 @@ export function PlatformLogin() {
     connectionForm.setFieldsValue({ grpc_endpoint: endpoint });
   }, [endpoint, connectionForm]);
   useEffect(() => {
-    if (!desktop || !snapshot.settings || !['signed_out', 'locked'].includes(snapshot.phase)) return;
-    const settings = snapshot.settings;
+    if (!desktop || !rememberPassword || !snapshot.settings || snapshot.endingSession || snapshot.savingSettings
+      || !['signed_out', 'locked'].includes(snapshot.phase)) return;
     let active = true;
-    void controller.hasSavedPassword(username).then(saved => {
-      if (active) setSavedCredential(saved ? { username, settings } : null);
+    void controller.getSavedPassword(username).then(password => {
+      if (active && password !== null && !passwordEdited.current) form.setFieldValue('password', password);
     });
     return () => { active = false; };
-  }, [controller, desktop, username, snapshot.settings, snapshot.phase]);
+  }, [controller, desktop, username, rememberPassword, snapshot.settings, snapshot.phase, snapshot.endingSession, snapshot.savingSettings, form]);
   useEffect(() => {
-    if (snapshot.phase !== 'signed_out' && snapshot.phase !== 'locked') form.setFieldValue('password', '');
+    if (snapshot.phase !== 'signed_out' && snapshot.phase !== 'locked') {
+      passwordEdited.current = false;
+      form.setFieldValue('password', '');
+    }
   }, [snapshot.phase, form]);
   useEffect(() => () => { form.setFieldValue('password', ''); }, [form]);
 
   async function forgetPassword() {
     form.setFieldValue('auto_login', false);
+    if (!passwordEdited.current) form.setFieldValue('password', '');
     if (!snapshot.settings?.remember_password) return;
     const saved = await controller.saveSettings({ ...snapshot.settings, remember_password: false, auto_login: false });
     if (!saved) {
@@ -85,8 +91,8 @@ export function PlatformLogin() {
             <Form.Item name="username" label="账号" rules={[{ required: true, whitespace: true, message: '请输入平台账号' }]}>
               <Input prefix={<UserOutlined />} autoComplete="username" placeholder="平台账号" size="large" readOnly={!!snapshot.owner} autoFocus={!snapshot.owner} />
             </Form.Item>
-            <Form.Item name="password" label="密码" rules={[{ required: !canUseSavedPassword, message: '请输入密码' }]}>
-              <Input.Password prefix={<LockOutlined />} autoComplete="current-password" placeholder={canUseSavedPassword ? '已记住密码，留空即可登录；输入可更新密码' : '请输入密码'} size="large" autoFocus={!!snapshot.owner} />
+            <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
+              <Input.Password prefix={<LockOutlined />} autoComplete="current-password" placeholder="请输入密码" size="large" autoFocus={!!snapshot.owner} onChange={() => { passwordEdited.current = true; }} />
             </Form.Item>
             <Space wrap size={24} style={{ marginBottom: 20 }}>
               <Form.Item name="remember_password" valuePropName="checked" style={{ marginBottom: 0 }}>

@@ -82,6 +82,7 @@ pub fn run() {
                 commands::platform_login::save_platform_login_settings,
                 commands::platform_login::platform_login,
                 commands::platform_login::has_platform_saved_password,
+                commands::platform_login::get_platform_saved_password,
                 commands::platform_login::platform_auto_login,
                 commands::platform_login::get_platform_auth_status,
                 commands::platform_login::platform_logout,

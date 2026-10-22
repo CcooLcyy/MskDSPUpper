@@ -42,6 +42,14 @@ pub fn has_platform_saved_password(
 }
 
 #[tauri::command]
+pub fn get_platform_saved_password(
+    state: State<'_, AppState>,
+    username: String,
+) -> Result<Option<String>, String> {
+    state.platform_auth.saved_password(&username)
+}
+
+#[tauri::command]
 pub async fn platform_auto_login(state: State<'_, AppState>) -> Result<PlatformAuthStatus, String> {
     state.platform_auth.auto_login().await
 }

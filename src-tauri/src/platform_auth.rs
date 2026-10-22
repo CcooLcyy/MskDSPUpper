@@ -1,4 +1,4 @@
-//! 密码和会话令牌仅保存在 Rust；程序重启后必须重新联网认证。
+//! 密码由系统凭据存储保存，按需回填登录表单；会话令牌仅留在 Rust。
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::{
@@ -212,8 +212,13 @@ impl PlatformAuthManager {
         Ok(settings)
     }
 
-    /// 仅返回凭据存在性，密码始终留在 Rust 和系统凭据存储中。
+    /// 保留凭据存在性接口，避免调用方为判断存在而接收密码。
     pub fn has_saved_password(&self, username: &str) -> Result<bool, String> {
+        Ok(self.saved_password(username)?.is_some())
+    }
+
+    /// 仅为当前平台、当前已记住的账号回填登录表单；不写入状态或日志。
+    pub fn saved_password(&self, username: &str) -> Result<Option<String>, String> {
         let username = username.trim().to_ascii_lowercase();
         let state = self.inner.lock();
         if let Some(error) = &state.settings_error {
@@ -221,12 +226,12 @@ impl PlatformAuthManager {
         }
         let settings = &state.stored.settings;
         if username.is_empty() || username != settings.username || !settings.remember_password {
-            return Ok(false);
+            return Ok(None);
         }
         Ok(self
             .credentials
             .load(&settings.grpc_endpoint, &username)?
-            .is_some_and(|password| !password.is_empty()))
+            .filter(|password| !password.is_empty()))
     }
 
     pub async fn login(

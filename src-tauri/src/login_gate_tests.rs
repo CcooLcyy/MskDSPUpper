@@ -73,6 +73,7 @@ fn only_exact_authentication_commands_are_public() {
     for command in [
         "get_platform_login_settings",
         "has_platform_saved_password",
+        "get_platform_saved_password",
         "save_platform_login_settings",
         "platform_login",
         "platform_auto_login",

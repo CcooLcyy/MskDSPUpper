@@ -19,6 +19,7 @@ export interface PlatformAuthApi {
   saveSettings(settings: PlatformLoginSettings): Promise<PlatformLoginSettings>;
   login(username: string, password: string, autoLogin: boolean, rememberPassword: boolean): Promise<PlatformAuthStatus>;
   hasSavedPassword(username: string): Promise<boolean>;
+  getSavedPassword(username: string): Promise<string | null>;
   autoLogin(): Promise<PlatformAuthStatus>;
   getStatus(): Promise<PlatformAuthStatus>;
   logout(): Promise<PlatformAuthStatus>;
@@ -216,10 +217,27 @@ export function createPlatformAuthController(
     }
   }
 
+  async function getSavedPassword(username: string) {
+    const account = normalizedUsername(username);
+    const settings = snapshot.settings;
+    const epoch = generation;
+    const canRead = () => ['signed_out', 'locked'].includes(snapshot.phase)
+      && !snapshot.endingSession && !snapshot.savingSettings;
+    if (!canRead() || !account || !settings?.remember_password || account !== settings.username
+      || (snapshot.owner && account !== snapshot.owner)) return null;
+    try {
+      const password = await api.getSavedPassword(account);
+      // 密码只交给当前表单；设置或会话变化后丢弃旧读取结果。
+      return password && snapshot.settings === settings && generation === epoch && canRead() ? password : null;
+    } catch {
+      return null;
+    }
+  }
+
   return {
     getSnapshot: () => snapshot,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    start, login, logout, poll, tick, saveSettings, hasSavedPassword,
+    start, login, logout, poll, tick, saveSettings, hasSavedPassword, getSavedPassword,
     retryInitialization: async () => {
       if (snapshot.phase === 'initialization_failed' && snapshot.status) await initialize(snapshot.status, generation);
     },
