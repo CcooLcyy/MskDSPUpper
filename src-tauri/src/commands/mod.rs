@@ -10,6 +10,7 @@ pub mod export_config;
 pub mod iec104;
 pub mod iec61850;
 pub mod lower_update;
+pub mod lower_update_reconnect;
 mod lower_update_local;
 mod lower_update_runtime;
 pub mod lower_update_task;

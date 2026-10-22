@@ -66,6 +66,7 @@ import type {
   LowerUpdateInstallResult,
   LowerUpdatePackageCleanupResult,
   LowerUpdateRuntimeInfo,
+  LowerUpdateReconnectRequest,
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
   LowerUpdateUploadResult,
@@ -1266,6 +1267,12 @@ export const browserApi: typeof tauriApi = {
       removed_files: 0,
       reclaimed_bytes: 0,
     };
+  },
+  reconnectLowerUpdateRuntime: async (request: LowerUpdateReconnectRequest): Promise<boolean> => {
+    // 浏览器只模拟当前直连目标的刷新，不连接真实设备或切换目标。
+    if (request.remote_target) return false;
+    const host = /^.+@([^@:\s]+):\d+$/.exec(request.upload_account.trim())?.[1];
+    return Boolean(host && host.toLowerCase() === managerAddr.split(':')[0].toLowerCase());
   },
   getLowerUpdatePassword: async (): Promise<string | null> => null,
   clearLowerUpdatePassword: async (): Promise<void> => {},

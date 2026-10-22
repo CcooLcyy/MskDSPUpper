@@ -426,7 +426,7 @@ pub(super) struct RemoteCommandOutput {
 #[derive(Clone)]
 pub(super) struct LowerUpdateUploadTarget {
     user: String,
-    host: String,
+    pub(super) host: String,
     port: u16,
     remote: Option<RemoteUpdateIdentity>,
 }

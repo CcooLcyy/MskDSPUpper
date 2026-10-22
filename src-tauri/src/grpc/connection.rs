@@ -28,6 +28,14 @@ pub struct ConnectionManager {
     remote_channels: tokio::sync::Mutex<HashMap<(u64, String), Channel>>,
 }
 
+/// 独立缓存只向快照目标发请求，成功后再有条件发布到当前连接。
+pub struct RuntimeRefreshSnapshot {
+    pub connection: ConnectionManager,
+    generation: u64,
+    manager_addr: String,
+    remote: Option<Arc<RemoteConnection>>,
+}
+
 impl ConnectionManager {
     pub fn new(manager_addr: String) -> Self {
         Self {
@@ -85,6 +93,69 @@ impl ConnectionManager {
         self.runtime_generation.load(Ordering::SeqCst)
     }
 
+    pub fn runtime_refresh_snapshot(&self) -> RuntimeRefreshSnapshot {
+        let remote = self.remote.read();
+        let manager_addr = self.manager_addr.read();
+        let generation = self.runtime_generation();
+        let connection = ConnectionManager::new(manager_addr.clone());
+        *connection.remote.write() = remote.clone();
+        RuntimeRefreshSnapshot {
+            connection,
+            generation,
+            manager_addr: manager_addr.clone(),
+            remote: remote.clone(),
+        }
+    }
+
+    pub fn runtime_refresh_is_current(&self, snapshot: &RuntimeRefreshSnapshot) -> bool {
+        let remote = self.remote.read();
+        let manager_addr = self.manager_addr.read();
+        self.runtime_generation() == snapshot.generation
+            && *manager_addr == snapshot.manager_addr
+            && same_remote(&remote, &snapshot.remote)
+            && remote.as_ref().is_none_or(|connection| connection.active())
+    }
+
+    pub async fn publish_runtime_refresh(&self, snapshot: &RuntimeRefreshSnapshot) -> bool {
+        let new_remote_channels = snapshot.connection.remote_channels.lock().await.clone();
+        let new_addrs = snapshot.connection.module_addrs.read().clone();
+        let new_channels = snapshot.connection.channels.read().clone();
+        let mut remote_channels = self.remote_channels.lock().await;
+        let remote = self.remote.read();
+        let manager_addr = self.manager_addr.read();
+        let mut module_addrs = self.module_addrs.write();
+        let mut channels = self.channels.write();
+        let next_generation = snapshot.generation.wrapping_add(1);
+        if *manager_addr != snapshot.manager_addr
+            || !same_remote(&remote, &snapshot.remote)
+            || remote
+                .as_ref()
+                .is_some_and(|connection| !connection.active())
+            || self
+                .runtime_generation
+                .compare_exchange(
+                    snapshot.generation,
+                    next_generation,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_err()
+        {
+            return false;
+        }
+        *module_addrs = new_addrs;
+        *channels = new_channels;
+        *remote_channels = new_remote_channels
+            .into_iter()
+            .map(|((_, service), channel)| ((next_generation, service), channel))
+            .collect();
+        tracing::info!(
+            generation = next_generation,
+            "已发布更新后的模块地址与 gRPC 连接"
+        );
+        true
+    }
+
     /// 仅在请求代次仍有效时批量更新模块地址
     pub fn update_module_addrs_if_generation(
         &self,
@@ -106,6 +177,7 @@ impl ConnectionManager {
 
     /// 获取或创建到指定地址的 gRPC Channel
     pub async fn get_channel(&self, addr: &str) -> Result<Channel> {
+        let request_generation = self.runtime_generation();
         // 先尝试读缓存
         {
             let cache = self.channels.read();
@@ -129,9 +201,10 @@ impl ConnectionManager {
                 anyhow!("连接 {} 失败: {}", addr, e)
             })?;
 
-        self.channels
-            .write()
-            .insert(addr.to_string(), channel.clone());
+        let mut channels = self.channels.write();
+        if self.runtime_generation() == request_generation {
+            channels.insert(addr.to_string(), channel.clone());
+        }
         tracing::info!(address = %addr, "gRPC 连接建立完成");
         Ok(channel)
     }
@@ -217,10 +290,86 @@ impl ConnectionManager {
     }
 }
 
+fn same_remote(
+    left: &Option<Arc<RemoteConnection>>,
+    right: &Option<Arc<RemoteConnection>>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ConnectionManager;
     use std::collections::HashMap;
+
+    // 刷新成功时保留管理端口，同时替换模块地址和两类旧业务 Channel 缓存。
+    #[tokio::test]
+    async fn refreshed_snapshot_replaces_addresses_and_both_channel_caches() {
+        let manager = ConnectionManager::new("device:17999".into());
+        manager.update_module_addr("old", "device:17001");
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
+        manager
+            .channels
+            .write()
+            .insert("old".into(), channel.clone());
+        manager
+            .remote_channels
+            .lock()
+            .await
+            .insert((0, "old".into()), channel.clone());
+        let snapshot = manager.runtime_refresh_snapshot();
+        assert_eq!(snapshot.connection.manager_addr(), "device:17999");
+        snapshot
+            .connection
+            .update_module_addr("new", "device:17123");
+        snapshot
+            .connection
+            .channels
+            .write()
+            .insert("new".into(), channel);
+
+        assert!(manager.publish_runtime_refresh(&snapshot).await);
+        assert_eq!(
+            manager.get_module_addr("new").as_deref(),
+            Some("device:17123")
+        );
+        assert!(manager.get_module_addr("old").is_none());
+        assert!(!manager.channels.read().contains_key("old"));
+        assert!(manager.channels.read().contains_key("new"));
+        assert!(manager.remote_channels.lock().await.is_empty());
+    }
+
+    // 原设备查询完成得较晚时，不得覆盖用户后来选择的设备及其地址缓存。
+    #[tokio::test]
+    async fn stale_refresh_does_not_overwrite_current_target_or_caches() {
+        let manager = ConnectionManager::new("first:17000".into());
+        let snapshot = manager.runtime_refresh_snapshot();
+        snapshot.connection.update_module_addr("old", "first:17001");
+        manager.set_manager_addr("second:17999".into());
+        manager.clear_runtime_cache();
+        manager.update_module_addr("new", "second:17002");
+
+        assert!(!manager.publish_runtime_refresh(&snapshot).await);
+        assert_eq!(manager.manager_addr(), "second:17999");
+        assert_eq!(
+            manager.get_module_addr("new").as_deref(),
+            Some("second:17002")
+        );
+        assert!(manager.get_module_addr("old").is_none());
+    }
+
+    // 即使地址相同，用户已执行的新一轮重连也必须使旧快照失效。
+    #[tokio::test]
+    async fn same_target_reselected_generation_rejects_older_refresh() {
+        let manager = ConnectionManager::new("device:17000".into());
+        let snapshot = manager.runtime_refresh_snapshot();
+        manager.clear_runtime_cache();
+        assert!(!manager.publish_runtime_refresh(&snapshot).await);
+    }
 
     #[test]
     fn same_manager_address_preserves_module_address_cache() {

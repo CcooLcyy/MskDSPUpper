@@ -3,6 +3,7 @@ import type {
   LowerUpdateTaskQueryRequest,
   LowerUpdateTaskStatus,
   LowerUpdateRemoteTarget,
+  LowerUpdateReconnectRequest,
   LowerUpdateDownloadResult,
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
@@ -23,10 +24,10 @@ import { readLowerUpdatePendingTask } from './lower-update-pending.ts';
 import type { LowerUpdatePendingTask } from './lower-update-pending';
 
 export type LowerUpdateDeploymentStage =
-  | 'checking' | 'uploading' | 'installing' | 'verifying' | 'cleaning' | 'succeeded'
+  | 'checking' | 'uploading' | 'installing' | 'verifying' | 'cleaning' | 'reconnecting' | 'succeeded'
   | 'remote_unknown' | 'waiting_reconnect' | 'rolling_back' | 'rolled_back' | 'rollback_failed'
   | 'check_failed' | 'upload_failed' | 'install_failed' | 'verify_failed' | 'image_mismatch';
-export type LowerUpdateDeploymentRetryMode = 'retry' | 'reupload' | 'reinstall' | 'reverify';
+export type LowerUpdateDeploymentRetryMode = 'retry' | 'reupload' | 'reinstall' | 'reverify' | 'reconnect';
 
 export interface LowerUpdateDeploymentInput {
   manifest: LowerUpdateManifest;
@@ -70,6 +71,8 @@ export interface LowerUpdateDeploymentTask {
   cleanupError: string | null;
   alreadyCurrent: boolean;
   connectionWarning: string | null;
+  runtimeRefreshMessage: string;
+  runtimeRefreshError: string | null;
 }
 
 export interface LowerUpdateDeploymentSnapshot {
@@ -90,11 +93,12 @@ export interface LowerUpdateDeploymentOperations {
   cleanup(request: LowerUpdateInstallRequest): Promise<LowerUpdatePackageCleanupResult>;
   saveConnection(snapshot: ReturnType<typeof snapshotLowerUpdateConnection>, revision: number): Promise<void>;
   credentialRevision(account: string): number;
+  reconnectRuntime(request: LowerUpdateReconnectRequest): Promise<boolean>;
   sleep(duration: number): Promise<void>;
   log?(message: string): void;
 }
 
-const runningStages = new Set<LowerUpdateDeploymentStage>(['checking', 'uploading', 'installing', 'verifying', 'cleaning', 'waiting_reconnect', 'rolling_back']);
+const runningStages = new Set<LowerUpdateDeploymentStage>(['checking', 'uploading', 'installing', 'verifying', 'cleaning', 'reconnecting', 'waiting_reconnect', 'rolling_back']);
 
 /** 流程独立于 React 和路由；私有输入仅保留在内存，公开快照不包含连接凭据。 */
 export function createLowerUpdateDeploymentController(operations: LowerUpdateDeploymentOperations) {
@@ -102,6 +106,9 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
   let privateInput: LowerUpdateDeploymentInput | null = null;
   const loadedPending = operations.loadPending?.();
   let pendingRemote = readLowerUpdatePendingTask(loadedPending);
+  let runtimeTarget: LowerUpdateReconnectRequest | null = pendingRemote ? {
+    upload_account: pendingRemote.upload_account, remote_target: { ...pendingRemote.remote_target },
+  } : null;
   const invalidPending = loadedPending !== null && loadedPending !== undefined && !pendingRemote;
   let recoveredCredentials: { auth: LowerUpdateSshAuth; sudo_password: string } | null = null;
   let credentialRevision = 0;
@@ -161,6 +168,31 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     }
   };
 
+  const restoreRuntime = async (changes: Partial<LowerUpdateDeploymentTask>): Promise<void> => {
+    update({ ...changes, stage: 'reconnecting', status: '正在恢复业务连接', progress: 97, runtimeRefreshError: null });
+    let lastError = '';
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      update({ runtimeRefreshMessage: `等待设备业务连接恢复 (${attempt}/6)` });
+      try {
+        // 仅包含固定目标身份；恢复查询和重试连接均不需要重新读取凭据。
+        const refreshed = await operations.reconnectRuntime(structuredClone(runtimeTarget!));
+        update({ runtimeRefreshMessage: refreshed ? '已自动恢复连接并刷新模块信息' : '当前业务连接与更新目标不同，已跳过自动重连', runtimeRefreshError: null });
+        operations.log?.(refreshed ? '下位机更新后业务连接已恢复并刷新' : '下位机更新后已跳过其他目标的业务连接');
+        return;
+      } catch (error) {
+        lastError = errorText(error);
+        operations.log?.(`下位机更新后恢复业务连接失败 (${attempt}/6)：${lastError}`);
+        if (attempt < 6) await operations.sleep(3000);
+      }
+    }
+    update({ runtimeRefreshMessage: '更新已完成，业务连接暂未恢复，可单独重试连接', runtimeRefreshError: lastError });
+  };
+
+  const finishSucceeded = async (changes: Partial<LowerUpdateDeploymentTask> = {}): Promise<void> => {
+    await restoreRuntime(changes);
+    finish({ stage: 'succeeded', status: snapshot.task!.alreadyCurrent ? '已是最新' : '升级完成', progress: 100, error: null });
+  };
+
   const verifyAndCleanup = async (): Promise<void> => {
     update({ stage: 'verifying', status: '镜像确认中', progress: 85, actualImageId: '-', verificationMessage: '等待下位机容器恢复', cleanupMessage: '等待运行镜像确认' });
     await operations.sleep(5000);
@@ -189,7 +221,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
           update({ cleanupMessage: `清理失败，可重新确认镜像后重试：${detail}`, cleanupError: detail });
           operations.log?.('下位机升级已完成，历史安装包清理失败');
         }
-        finish({ stage: 'succeeded', status: snapshot.task!.alreadyCurrent ? '已是最新' : '升级完成', progress: 100, error: null });
+        await finishSucceeded();
         return;
       } catch (error) {
         lastError = error;
@@ -225,7 +257,8 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
         await operations.savePending!(null);
         pendingRemote = null;
       } else changes.cleanupMessage = '自动回退失败，已保留原任务与恢复材料；请人工处理后查询原任务，禁止新建更新';
-      finish(changes);
+      if (result.phase === 'succeeded') await finishSucceeded(changes);
+      else finish(changes);
     } else update(changes);
     return terminal;
   };
@@ -288,7 +321,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
       installDir: pendingRemote.install_dir, authMethod: 'password', stage: 'remote_unknown', status: '有待确认的远程更新任务', progress: 65,
       uploadedBytes: 0, totalBytes: 0, remotePath: '-', uploadResult: null, installResult: null, expectedImageId: pendingRemote.expected_image_id,
       actualImageId: '-', verificationMessage: '请重新输入认证信息后查询原任务', cleanupMessage: '保留原任务及恢复材料', error: null,
-      cleanupError: null, alreadyCurrent: false, connectionWarning: null }, isRunning: false, detailOpen: false, resultOpen: false };
+      cleanupError: null, alreadyCurrent: false, connectionWarning: null, runtimeRefreshMessage: '未执行', runtimeRefreshError: null }, isRunning: false, detailOpen: false, resultOpen: false };
   }
 
   const execute = async (mode: LowerUpdateDeploymentRetryMode | 'start'): Promise<void> => {
@@ -308,7 +341,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
           await verifyAndCleanup();
           return;
         }
-        finish({ stage: 'succeeded', status: '已是最新', progress: 100, verificationMessage: '目标机已运行待下发构建，无需重复安装', cleanupMessage: '已跳过重复上传和安装，未执行历史包清理', error: null });
+        await finishSucceeded({ verificationMessage: '目标机已运行待下发构建，无需重复安装', cleanupMessage: '已跳过重复上传和安装，未执行历史包清理' });
         return;
       }
       if (!snapshot.task!.uploadResult) {
@@ -368,6 +401,9 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
       privateInput.connection.upload_account = privateInput.connection.upload_account.trim();
       privateInput.connection.install_dir = privateInput.connection.install_dir.trim().replace(/\/+$/, '') || '/';
       credentialRevision = operations.credentialRevision(privateInput.connection.upload_account);
+      runtimeTarget = { upload_account: privateInput.connection.upload_account,
+        ...(privateInput.connection.remote_target ? { remote_target: { ...privateInput.connection.remote_target } } : {}),
+      };
       const task: LowerUpdateDeploymentTask = {
         remoteTarget: privateInput.connection.remote_target ? { ...privateInput.connection.remote_target } : undefined,
         id: `lower-update-${Date.now()}-${++sequence}`, version: redact(input.manifest.version),
@@ -375,7 +411,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
         uploadAccount: redact(privateInput.connection.upload_account), installDir: redact(privateInput.connection.install_dir), authMethod: input.connection.auth.method,
         stage: 'checking', status: '下发前预检中', progress: 0, uploadedBytes: 0, totalBytes: input.packageResult.downloaded_bytes,
         remotePath: '-', uploadResult: null, installResult: null, expectedImageId: redact(input.manifest.image_id?.trim() || '-'), actualImageId: '-',
-        verificationMessage: '下发前查询目标机运行镜像', cleanupMessage: '未执行', error: null, cleanupError: null, alreadyCurrent: false, connectionWarning: null,
+        verificationMessage: '下发前查询目标机运行镜像', cleanupMessage: '未执行', error: null, cleanupError: null, alreadyCurrent: false, connectionWarning: null, runtimeRefreshMessage: '未执行', runtimeRefreshError: null,
       };
       // 必须先同步发布占用状态，再进行任何异步预检。
       publish({ task, isRunning: true, detailOpen: true, resultOpen: false });
@@ -394,6 +430,12 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     },
     async retry(mode: LowerUpdateDeploymentRetryMode): Promise<void> {
       if (snapshot.isRunning) throw new Error('已有下位机更新任务正在执行，请查看当前任务');
+      if (mode === 'reconnect') {
+        if (!runtimeTarget || snapshot.task?.stage !== 'succeeded') throw new Error('请先确认更新成功，再重试业务连接');
+        publish({ detailOpen: true, resultOpen: false });
+        await finishSucceeded();
+        return;
+      }
       if (snapshot.task?.remoteTarget) throw new Error('远程更新请恢复查询原任务；已结束任务需明确开始新的更新，不能重新安装原任务');
       if (!privateInput || !snapshot.task) throw new Error('没有可重试的下位机更新任务');
       if (mode === 'reinstall' && !snapshot.task.uploadResult) throw new Error('请先完成上传');

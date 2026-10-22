@@ -23,12 +23,113 @@ function fixture(overrides = {}) {
     cleanup: async (request) => { calls.push(['cleanup', request]); return { removed_files: 1, reclaimed_bytes: 123, remote_path: '/home/user/package' }; },
     saveConnection: async (snapshot, revision) => { calls.push(['save', snapshot, revision]); },
     credentialRevision: () => 7,
+    reconnectRuntime: async request => { calls.push(['reconnect', request]); return true; },
     sleep: async (duration) => { calls.push(['sleep', duration]); },
     log: (text) => { calls.push(['log', text]); },
     ...overrides,
   };
   return { controller: createLowerUpdateDeploymentController(ops), calls };
 }
+
+// 验证更新完成先恢复业务连接，且传入连接目标不包含 SSH 或 sudo 凭据。
+test('更新成功后先自动重连再显示最终结果', { timeout: 5000 }, async () => {
+  let release;
+  let reached;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { reached = resolve; });
+  const f = fixture({ reconnectRuntime: async request => {
+    f.calls.push(['reconnect', request]); reached(); await gate; return true;
+  } });
+  const pending = f.controller.start(input());
+  await started;
+  assert.equal(f.controller.getSnapshot().task.stage, 'reconnecting');
+  assert.equal(f.controller.getSnapshot().isRunning, true);
+  assert.equal(f.controller.getSnapshot().resultOpen, false);
+  await assert.rejects(f.controller.start(input()), /已有下位机更新任务/);
+  assert.deepEqual(f.calls.find(([name]) => name === 'reconnect')[1], { upload_account: 'user@host:22' });
+  assert.ok(f.calls.findIndex(([name]) => name === 'reconnect') > f.calls.findIndex(([name]) => name === 'cleanup'));
+  release(); await pending;
+  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
+  assert.equal(f.controller.getSnapshot().task.runtimeRefreshError, null);
+  assert.match(f.controller.getSnapshot().task.runtimeRefreshMessage, /已.*刷新/);
+});
+
+// 验证短暂重连故障自动重试，耗尽后仍保留更新成功，并允许单独恢复连接。
+test('重连自动重试，失败不改判更新且单独重试不重新安装', async () => {
+  let attempts = 0;
+  let ready = false;
+  const f = fixture({ reconnectRuntime: async () => { attempts += 1; if (!ready) throw Error('服务未就绪 ssh-secret'); return true; } });
+  await f.controller.start(input());
+  assert.equal(attempts, 6);
+  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
+  assert.match(f.controller.getSnapshot().task.runtimeRefreshError, /服务未就绪/);
+  assert.ok(!JSON.stringify(f.controller.getSnapshot()).includes('ssh-secret'));
+  const previousCalls = f.calls.filter(([name]) => ['query', 'upload', 'install', 'cleanup'].includes(name)).length;
+  ready = true;
+  await f.controller.retry('reconnect');
+  assert.equal(attempts, 7);
+  assert.equal(f.controller.getSnapshot().task.runtimeRefreshError, null);
+  assert.equal(f.calls.filter(([name]) => ['query', 'upload', 'install', 'cleanup'].includes(name)).length, previousCalls);
+});
+
+// 验证目标身份使用私有快照，不受页面修改和公共结果脱敏影响。
+test('重连请求保留固定原始目标，公开结果仍脱敏', async () => {
+  const f = fixture();
+  const data = input();
+  data.connection.auth.password = 'host';
+  const pending = f.controller.start(data);
+  data.connection.upload_account = 'user@other:22';
+  await pending;
+  assert.equal(f.calls.find(([name]) => name === 'reconnect')[1].upload_account, 'user@host:22');
+  assert.equal(f.controller.getSnapshot().task.uploadAccount, 'user@[已隐藏]:22');
+});
+
+// 验证后台重连在服务第二次就绪后结束，不消耗剩余重试次数。
+test('服务尚未就绪时自动等待并重连', async () => {
+  let attempts = 0;
+  const f = fixture({ reconnectRuntime: async () => { if (++attempts < 2) throw Error('未就绪'); return true; } });
+  await f.controller.start(input());
+  assert.equal(attempts, 2);
+  assert.equal(f.controller.getSnapshot().task.runtimeRefreshError, null);
+  assert.ok(f.calls.some(([name, duration]) => name === 'sleep' && duration === 3000));
+});
+
+// 验证更新其他目标时跳过当前连接，不把跳过误报为恢复成功或重试。
+test('当前连接已切换时跳过自动重连', async () => {
+  let attempts = 0;
+  const f = fixture({ reconnectRuntime: async () => { attempts += 1; return false; } });
+  await f.controller.start(input());
+  assert.equal(attempts, 1);
+  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
+  assert.equal(f.controller.getSnapshot().task.runtimeRefreshError, null);
+  assert.match(f.controller.getSnapshot().task.runtimeRefreshMessage, /跳过/);
+});
+
+// 验证已是目标版本仍恢复业务连接；清理失败不会跳过恢复。
+test('已是目标版本或历史包清理失败仍自动重连', async () => {
+  for (const overrides of [
+    { queryRuntime: async () => ({ exists: true, running: true, image_id: expected }) },
+    { cleanup: async () => { throw Error('清理失败'); } },
+  ]) {
+    const f = fixture(overrides);
+    await f.controller.start(input());
+    assert.equal(f.calls.filter(([name]) => name === 'reconnect').length, 1);
+    assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
+  }
+});
+
+// 验证安装及镜像确认失败不得恢复业务连接，避免掩盖原有失败。
+test('更新未确认成功时不执行成功后的业务重连', async () => {
+  for (const overrides of [
+    { install: async () => ({ success: false, exit_code: 1 }) },
+    { queryRuntime: async () => ({ exists: true, running: true, image_id: previous }) },
+  ]) {
+    const f = fixture(overrides);
+    await f.controller.start(input());
+    assert.equal(f.calls.some(([name]) => name === 'reconnect'), false);
+    await assert.rejects(f.controller.retry('reconnect'), /确认更新成功/);
+  }
+});
 
 // 验证页面订阅撤销后流程仍执行，且输入修改不影响固定目标和凭据。
 test('后台任务在页面卸载后继续，并复制私有输入', async () => {

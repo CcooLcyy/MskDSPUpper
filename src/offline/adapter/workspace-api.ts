@@ -95,6 +95,7 @@ import { unsupported } from './unsupported.ts';
 
 /** 覆盖实现的全部接口名（顺序与 `adapters/tauri.ts` 一致）。 */
 export const WORKSPACE_OVERRIDE_METHODS = [
+  'reconnectLowerUpdateRuntime',
   'setManagerAddr',
   'getModuleInfo',
   'getRunningModuleInfo',
@@ -244,6 +245,7 @@ export const DELEGATED_API_METHODS = [
 
 /** 显式不支持的接口：离线没有下位机可执行，必须报错而不是静默成功。 */
 const UNSUPPORTED_METHODS = [
+  'reconnectLowerUpdateRuntime',
   'iec61850ImportScl',
   'iec61850ListModels',
   'iec61850DeleteModel',
@@ -382,6 +384,7 @@ function unsupportedApi(): Pick<typeof tauriApi, UnsupportedMethodName> {
 
 function workspaceOverrides(): OverriddenApi {
   return {
+    reconnectLowerUpdateRuntime: async () => unsupported('reconnectLowerUpdateRuntime')(),
     setManagerAddr: async (): Promise<void> => {
       console.info('[离线工作区] 已忽略设置 ModuleManager 地址：离线模式不连接下位机');
     },

@@ -2,6 +2,7 @@ import { useMemo, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../../adapters';
 import { createLowerUpdateDeploymentController } from '../../utils/lower-update-deployment';
+import { notifyManagerRuntimeRefreshed } from '../../utils/manager-runtime-events';
 import type { LowerUpdateDeploymentController } from '../../utils/lower-update-deployment';
 import {
   lowerUpdateCredentialCoordinator,
@@ -37,6 +38,11 @@ function createApplicationController(): LowerUpdateDeploymentController {
     upload: api.uploadLowerUpdatePackage,
     install: api.installLowerUpdatePackage,
     cleanup: api.cleanupLowerUpdatePackages,
+    reconnectRuntime: async (request) => {
+      const refreshed = await api.reconnectLowerUpdateRuntime(request);
+      if (refreshed) notifyManagerRuntimeRefreshed();
+      return refreshed;
+    },
     credentialRevision: (account) => lowerUpdateCredentialCoordinator.revision(account),
     sleep: (duration) => new Promise((resolve) => globalThis.setTimeout(resolve, duration)),
     log: (text) => console.info(text),

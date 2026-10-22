@@ -27,6 +27,7 @@ import { api } from '../../adapters';
 import type { DcConnectionInfo, DcPointValue, DcSourcePointUpdate, ModuleInfo, ModuleRunningInfo } from '../../adapters';
 import type { DataBusThroughputSample, DataBusThroughputSnapshot } from '../../adapters';
 import { loadDashboardAfterRunningModules } from '../../utils/dashboard-loading';
+import { subscribeManagerRuntimeRefreshed } from '../../utils/manager-runtime-events';
 import { getStoredManagerAddress } from '../../utils/app-settings';
 import './index.css';
 
@@ -236,15 +237,18 @@ const Overview: React.FC = () => {
   const [failedSections, setFailedSections] = useState<string[]>([]);
   const [throughput, setThroughput] = useState<DataBusThroughputSnapshot | null>(null);
   const [deviceRuntime, setDeviceRuntime] = useState<DeviceRuntimeState>(emptyDeviceRuntimeState);
+  const [runtimeRefreshKey, setRuntimeRefreshKey] = useState(0);
   const [messageApi, contextHolder] = message.useMessage();
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async ({ preserveConnection = false }: { preserveConnection?: boolean } = {}) => {
     setLoading(true);
     setSyncState('loading');
 
     try {
-      const managerAddr = getStoredManagerAddress(DEFAULT_MANAGER_ADDR);
-      await api.setManagerAddr(managerAddr);
+      if (!preserveConnection) {
+        const managerAddr = getStoredManagerAddress(DEFAULT_MANAGER_ADDR);
+        await api.setManagerAddr(managerAddr);
+      }
 
       const {
         modules: modulesResult,
@@ -315,6 +319,12 @@ const Overview: React.FC = () => {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => subscribeManagerRuntimeRefreshed(() => {
+    // 更新任务已经恢复当前连接，读取概况与指标时保留当前目标和地址。
+    void refresh({ preserveConnection: true });
+    setRuntimeRefreshKey(value => value + 1);
+  }), [refresh]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -362,7 +372,7 @@ const Overview: React.FC = () => {
       cancelled = true;
       if (timer !== undefined) window.clearInterval(timer);
     };
-  }, []);
+  }, [runtimeRefreshKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -413,7 +423,7 @@ const Overview: React.FC = () => {
         window.clearInterval(timer);
       }
     };
-  }, [messageApi]);
+  }, [messageApi, runtimeRefreshKey]);
 
   const summaryCards = useMemo<SummaryCard[]>(
     () => [

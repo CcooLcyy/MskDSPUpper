@@ -16,6 +16,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { api } from '../../adapters';
 import type { ModuleInfo, ModuleRunningInfo } from '../../adapters';
 import { reconnectManagerRuntime } from '../../utils/manager-connection';
+import { subscribeManagerRuntimeRefreshed } from '../../utils/manager-runtime-events';
 import { validateManagerAddress } from '../../utils/network';
 import { getStoredManagerAddress, saveManagerAddress } from '../../utils/app-settings';
 import './index.css';
@@ -117,6 +118,14 @@ const ModuleOps: React.FC = () => {
 
     void connectAndRefreshOnEnter();
   }, [messageApi, normalizeManagerAddr, refresh]);
+
+  useEffect(() => subscribeManagerRuntimeRefreshed(() => {
+    // 业务连接已在更新任务中恢复，页面只读取新数据和设备平台配置。
+    void refresh().then(() => {
+      setPlatformConfigReady(true);
+      setPlatformConnectionKey(value => value + 1);
+    }).catch(() => { /* 刷新失败已由 refresh 提示，保留现有页面。 */ });
+  }), [refresh]);
 
   const handleConnect = useCallback(async () => {
     setPlatformConfigReady(false);

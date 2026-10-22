@@ -151,6 +151,12 @@ export interface LowerUpdateRemoteTarget {
   device_id: string;
 }
 
+/** 更新后仅恢复当前目标的业务连接，无需携带 SSH 凭据。 */
+export interface LowerUpdateReconnectRequest {
+  upload_account: string;
+  remote_target?: LowerUpdateRemoteTarget;
+}
+
 export interface LowerUpdateUploadRequest {
   remote_target?: LowerUpdateRemoteTarget;
   package_name: string;

@@ -37,6 +37,7 @@ function fixture(overrides = {}) {
     install: async () => { throw Error('不得同步安装'); },
     cleanup: async () => { throw Error('不得清理回退材料'); },
     saveConnection: async () => {}, credentialRevision: () => 0, sleep: async () => {},
+    reconnectRuntime: async request => { calls.push(['reconnect', request]); return true; },
     savePending: async record => { saved = structuredClone(record); calls.push(['persist', record]); },
     loadPending: () => null,
     submitTask: async request => { calls.push(['submit', request]); return status(request, 'installing'); },
@@ -45,6 +46,37 @@ function fixture(overrides = {}) {
   };
   return { controller: createLowerUpdateDeploymentController(operations), calls, saved: () => saved };
 }
+
+// 验证平台更新成功和原任务恢复成功后均恢复固定目标，重连请求不携带凭据。
+test('远程更新及恢复查询成功后自动恢复业务连接', async () => {
+  const f = fixture();
+  await f.controller.start(input());
+  const request = f.calls.find(([name]) => name === 'reconnect')[1];
+  assert.deepEqual(request, { upload_account: 'user@remote:22', remote_target: input().connection.remote_target });
+  const uncertain = fixture({ queryTask: async () => { throw Error('离线'); } });
+  await uncertain.controller.start(input());
+  assert.equal(uncertain.calls.some(([name]) => name === 'reconnect'), false);
+  const recovered = fixture({ loadPending: () => uncertain.saved() });
+  await recovered.controller.resumeRemote({ method: 'password', password: 'new-secret' }, 'new-sudo');
+  assert.deepEqual(recovered.calls.find(([name]) => name === 'reconnect')[1], request);
+});
+
+// 验证远程更新已成功时重连耗尽不重新查询已清除的任务，且可单独重试连接。
+test('远程连接恢复失败不丢失已确认成功结果', async () => {
+  let attempts = 0;
+  let ready = false;
+  const f = fixture({ reconnectRuntime: async () => { attempts += 1; if (!ready) throw Error('隧道未恢复'); return true; } });
+  await f.controller.start(input());
+  assert.equal(attempts, 6);
+  assert.equal(f.saved(), null);
+  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
+  assert.match(f.controller.getSnapshot().task.runtimeRefreshError, /隧道未恢复/);
+  assert.equal(f.calls.filter(([name]) => name === 'query').length, 1);
+  ready = true;
+  await f.controller.retry('reconnect');
+  assert.equal(f.controller.getSnapshot().task.runtimeRefreshError, null);
+  assert.equal(f.calls.filter(([name]) => name === 'submit').length, 1);
+});
 
 // 验证提交回执丢失后只查询原任务，且目标固定、持久记录没有凭据。
 test('远程回执丢失后恢复原任务并固定目标', async () => {

@@ -24,11 +24,11 @@ function extractTauriApiMethods(source) {
   return names;
 }
 
-/** 提取适配器导出的接口名清单（按方括号配对，避免被 `as const` 之类后缀误导）。 */
+/** 提取适配器的接口名清单（按方括号配对，避免被 `as const` 之类后缀误导）。 */
 function extractStringArray(source, exportName) {
-  const declarationIndex = source.indexOf(`export const ${exportName}`);
+  const declarationIndex = source.indexOf(`const ${exportName}`);
 
-  assert.ok(declarationIndex >= 0, `未找到导出的接口清单: ${exportName}`);
+  assert.ok(declarationIndex >= 0, `未找到接口清单: ${exportName}`);
 
   const openIndex = source.indexOf('[', declarationIndex);
 
@@ -94,7 +94,10 @@ test('workspace adapter lists only known tauri api methods', () => {
 // 运行态控制与明确不支持的接口必须由离线适配器覆盖，不能被转发到设备。
 test('runtime control and unsupported methods are overridden', () => {
   const overrides = extractStringArray(adapterSource, 'WORKSPACE_OVERRIDE_METHODS');
+  const unsupported = extractStringArray(adapterSource, 'UNSUPPORTED_METHODS');
+  assert.ok(unsupported.has('reconnectLowerUpdateRuntime'), '离线工作区必须明确拒绝业务连接恢复，避免连接真实下位机');
   const required = [
+    'reconnectLowerUpdateRuntime',
     'startModule',
     'stopModule',
     'iec104StartLink',

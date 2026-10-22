@@ -25,6 +25,7 @@ const STAGE_LABELS: Record<DeploymentTask['stage'], string> = {
   installing: '安装中',
   verifying: '镜像确认中',
   cleaning: '历史包清理中',
+  reconnecting: '恢复业务连接中',
   succeeded: '更新完成',
   check_failed: '下发前检查失败',
   upload_failed: '上传失败',
@@ -54,6 +55,7 @@ function getResultTitle(task: DeploymentTask): string {
       ? '下位机更新未确认成功'
       : '下位机更新失败';
   }
+  if (task.runtimeRefreshError) return '下位机更新完成，业务连接恢复失败';
   if (task.cleanupError) return '下位机更新完成，历史包清理失败';
   return task.alreadyCurrent ? '下位机已是指定版本' : '下位机更新完成';
 }
@@ -64,10 +66,11 @@ export function LowerUpdateDeploymentHeader() {
   const succeeded = task.stage === 'succeeded';
   const icon = isRunning
     ? <LoadingOutlined />
-    : succeeded && !task.cleanupError
+    : succeeded && !task.cleanupError && !task.runtimeRefreshError
       ? <CheckCircleOutlined />
       : <WarningOutlined />;
-  const label = task.cleanupError && succeeded ? '更新完成，清理失败'
+  const label = task.runtimeRefreshError && succeeded ? '更新完成，连接待恢复'
+    : task.cleanupError && succeeded ? '更新完成，清理失败'
     : task.alreadyCurrent && succeeded ? '已是指定版本' : STAGE_LABELS[task.stage];
 
   return (
@@ -88,8 +91,9 @@ export function LowerUpdateDeploymentUi() {
   const succeeded = task.stage === 'succeeded';
   const uncertain = task.stage === 'remote_unknown';
   const failed = !isRunning && !succeeded && !uncertain;
-  const statusColor = uncertain ? 'warning' : isRunning ? 'processing' : succeeded ? task.cleanupError ? 'warning' : 'success' : 'error';
-  const retryTask = async (mode: 'retry' | 'reupload' | 'reinstall' | 'reverify') => {
+  const hasWarning = Boolean(task.cleanupError || task.runtimeRefreshError);
+  const statusColor = uncertain ? 'warning' : isRunning ? 'processing' : succeeded ? hasWarning ? 'warning' : 'success' : 'error';
+  const retryTask = async (mode: 'retry' | 'reupload' | 'reinstall' | 'reverify' | 'reconnect') => {
     try {
       await retry(mode);
     } catch (error) {
@@ -110,7 +114,7 @@ export function LowerUpdateDeploymentUi() {
         : task.remoteTarget && task.operationId ? '由宿主机独立执行' : task.alreadyCurrent ? '已跳过' : '未执行';
   const verificationStatus = task.stage === 'verifying'
     ? '确认中'
-    : succeeded || task.stage === 'cleaning'
+    : succeeded || task.stage === 'cleaning' || task.stage === 'reconnecting'
       ? '确认成功'
       : task.stage === 'image_mismatch'
         ? '构建不一致'
@@ -153,13 +157,16 @@ export function LowerUpdateDeploymentUi() {
             <Descriptions.Item label="确认状态">{verificationStatus}</Descriptions.Item>
             <Descriptions.Item label="确认说明">{task.verificationMessage || '-'}</Descriptions.Item>
             <Descriptions.Item label="历史包清理">{task.cleanupMessage || '未执行'}</Descriptions.Item>
+            <Descriptions.Item label="业务连接">{task.runtimeRefreshMessage || '未执行'}</Descriptions.Item>
             <Descriptions.Item label="退出码">{task.taskExitCode ?? task.installResult?.exit_code ?? '-'}</Descriptions.Item>
             <Descriptions.Item label="执行命令"><Text code style={wrapStyle}>{task.installResult?.command || '-'}</Text></Descriptions.Item>
           </Descriptions>
           <Progress percent={task.progress} status={uncertain ? 'normal' : failed ? 'exception' : succeeded ? 'success' : 'active'} />
           {task.error ? <Alert type="error" showIcon title={task.error} style={wrapStyle} /> : null}
           {task.cleanupError ? <Alert type="warning" showIcon title="更新已确认成功，历史包清理失败" description={task.cleanupError} style={wrapStyle} /> : null}
+          {task.runtimeRefreshError ? <Alert type="warning" showIcon title="更新已确认成功，业务连接尚未恢复" description={task.runtimeRefreshError} style={wrapStyle} /> : null}
           {task.connectionWarning ? <Alert type="warning" showIcon title={task.connectionWarning} style={wrapStyle} /> : null}
+          {succeeded && task.runtimeRefreshError ? <Button size="small" icon={<ReloadOutlined />} disabled={isRunning} onClick={() => void retryTask('reconnect')}>只重试业务连接</Button> : null}
           {task.remoteTarget && (task.stage === 'remote_unknown' || task.stage === 'rollback_failed') ? (
             <Space orientation="vertical" style={{ width: '100%' }}>
               <Alert type="warning" title={task.stage === 'rollback_failed' ? '自动回退失败，原任务和恢复材料已保留。请人工检查设备后查询原任务，不能继续新建更新。' : '结果尚未确认，请查询原任务；不要重复安装。首次连接请先在远程 SSH 终端确认设备指纹。'} />
@@ -194,13 +201,14 @@ export function LowerUpdateDeploymentUi() {
         title={getResultTitle(task)}
         onCancel={dismissResult}
         footer={[
+          succeeded && task.runtimeRefreshError ? <Button key="reconnect" icon={<ReloadOutlined />} disabled={isRunning} onClick={() => void retryTask('reconnect')}>只重试业务连接</Button> : null,
           <Button key="close" onClick={dismissResult}>关闭</Button>,
           <Button key="details" type="primary" onClick={openDetails}>查看详情</Button>,
         ]}
       >
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           <Alert
-            type={uncertain ? 'warning' : succeeded ? task.cleanupError ? 'warning' : 'success' : 'error'}
+            type={uncertain ? 'warning' : succeeded ? hasWarning ? 'warning' : 'success' : 'error'}
             showIcon
             title={task.alreadyCurrent && succeeded ? '目标下位机已运行指定构建，已跳过重复上传和安装。' : STAGE_LABELS[task.stage]}
           />
@@ -209,9 +217,11 @@ export function LowerUpdateDeploymentUi() {
             <Descriptions.Item label="目标版本">{task.version}</Descriptions.Item>
             <Descriptions.Item label="镜像确认">{task.verificationMessage || verificationStatus}</Descriptions.Item>
             <Descriptions.Item label="历史包清理">{task.cleanupMessage || '未执行'}</Descriptions.Item>
+            <Descriptions.Item label="业务连接">{task.runtimeRefreshMessage || '未执行'}</Descriptions.Item>
           </Descriptions>
           {task.error ? <Alert type="error" title={task.error} style={wrapStyle} /> : null}
           {task.cleanupError ? <Alert type="warning" title={task.cleanupError} style={wrapStyle} /> : null}
+          {task.runtimeRefreshError ? <Alert type="warning" title="更新已确认成功，业务连接尚未恢复" description={task.runtimeRefreshError} style={wrapStyle} /> : null}
           {task.connectionWarning ? <Alert type="warning" title={task.connectionWarning} style={wrapStyle} /> : null}
         </Space>
       </Modal>

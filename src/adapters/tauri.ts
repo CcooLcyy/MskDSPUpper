@@ -59,6 +59,7 @@ import type {
   LowerUpdateManifest,
   LowerUpdateRuntimeInfo,
   LowerUpdateRuntimeInfoRequest,
+  LowerUpdateReconnectRequest,
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
   LowerUpdateUploadResult,
@@ -210,6 +211,8 @@ export const api = {
     invoke<LowerUpdatePackageCleanupResult>('cleanup_lower_update_packages', { request }),
   getLowerUpdateRuntimeInfo: (request: LowerUpdateRuntimeInfoRequest) =>
     invoke<LowerUpdateRuntimeInfo>('get_lower_update_runtime_info', { request }),
+  reconnectLowerUpdateRuntime: (request: LowerUpdateReconnectRequest) =>
+    invoke<boolean>('reconnect_lower_update_runtime', { request }),
   getLowerUpdatePassword: (uploadAccount: string) =>
     invoke<string | null>('get_lower_update_password', { uploadAccount }),
   clearLowerUpdatePassword: (uploadAccount: string) =>
