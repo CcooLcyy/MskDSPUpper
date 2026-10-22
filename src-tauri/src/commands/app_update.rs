@@ -6,7 +6,11 @@ use crate::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_updater::{OfflineUpdate, Update, UpdaterExt};
 use tokio::sync::Mutex;
@@ -47,6 +51,76 @@ impl UpdateState {
     fn checked(&mut self, pending: Option<Candidate>) {
         self.pending = pending;
     }
+
+    fn release(&mut self) {
+        self.pending = None;
+        self.ready = None;
+    }
+}
+
+// 仅在新包验签并落盘后调用，清理由旧进程遗留的缓存也遵循相同保留规则。
+async fn cleanup_download_cache(directory: &Path, keep: &Path) -> io::Result<usize> {
+    if keep.parent() != Some(directory)
+        || keep.extension().and_then(|extension| extension.to_str()) != Some("exe")
+        || !is_download_cache_file(keep)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "保留的上位机安装包路径不合法",
+        ));
+    }
+    // 新包不存在或路径被替换为链接时不删除任何历史包。
+    if !tokio::fs::symlink_metadata(directory)
+        .await?
+        .file_type()
+        .is_dir()
+        || !tokio::fs::symlink_metadata(keep)
+            .await?
+            .file_type()
+            .is_file()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "上位机更新缓存目录或保留包不是普通目录或文件",
+        ));
+    }
+    let mut entries = tokio::fs::read_dir(directory).await?;
+    let keep_name = keep
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let mut removed = 0;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        // Windows 复用已有包时，目录中的实际大小写可能与平台摘要大小写不同。
+        let is_kept = path == keep
+            || (cfg!(windows)
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(keep_name)));
+        if is_kept || !entry.file_type().await?.is_file() || !is_download_cache_file(&path) {
+            continue;
+        }
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => removed += 1,
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "清理上位机历史更新缓存失败，保留当前可安装包")
+            }
+        }
+    }
+    tracing::info!(removed_files = removed, retained_path = %keep.display(), "上位机更新缓存清理完成，保留最新已验签安装包");
+    Ok(removed)
+}
+
+fn is_download_cache_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("exe" | "part")
+    ) && path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.len() == 64 && stem.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 #[derive(Default)]
@@ -234,14 +308,12 @@ pub async fn download_app_update(
                 .await
                 .map_err(|e| format!("保存上位机更新包失败：{e}"))?;
         }
-        let previous = store.inner.lock().await.ready.replace(Ready {
+        store.inner.lock().await.ready = Some(Ready {
             candidate: candidate.clone(),
             path: path.clone(),
         });
-        if let Some(previous) = previous {
-            if previous.path != path {
-                let _ = tokio::fs::remove_file(previous.path).await;
-            }
+        if let Err(error) = cleanup_download_cache(&directory, &path).await {
+            tracing::warn!(%error, "扫描上位机历史更新缓存失败，当前已验签安装包仍可安装");
         }
         emit(&app, &task_id, "Finished", None);
         tracing::info!(package_id = %package.id, "上位机更新包完整性与签名校验完成，等待手动安装");
@@ -293,17 +365,150 @@ pub async fn dispose_app_update(state: State<'_, AppState>) -> Result<(), String
     let store = Arc::clone(&state.app_updates);
     let _operation = store.operation.lock().await;
     let mut inner = store.inner.lock().await;
-    inner.pending = None;
-    if let Some(ready) = inner.ready.take() {
-        let _ = tokio::fs::remove_file(ready.path).await;
-    }
-    tracing::info!("已释放上位机更新候选与待安装包");
+    inner.release();
+    tracing::info!("已释放上位机更新候选与待安装状态，保留最新安装包缓存");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct CacheTestDir(PathBuf);
+
+    impl CacheTestDir {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "upper-cache-test-{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn file(&self, name: &str) -> PathBuf {
+            let path = self.0.join(name);
+            std::fs::write(&path, "测试缓存内容".as_bytes()).unwrap();
+            path
+        }
+    }
+
+    impl Drop for CacheTestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    // 验证清理跨进程遗留包和所有下载残留，只保留指定包且可重复调用。
+    #[tokio::test]
+    async fn download_cache_keeps_only_verified_package() {
+        let root = CacheTestDir::new();
+        let keep = root.file(&format!("{}.exe", "a".repeat(64)));
+        let old = root.file(&format!("{}.exe", "b".repeat(64)));
+        let interrupted = root.file(&format!("{}.part", "c".repeat(64)));
+        let same_partial = root.file(&format!("{}.part", "a".repeat(64)));
+        let unrelated = root.file("notes.txt");
+        let foreign = root.file("manual-installer.exe");
+        let short = root.file(&format!("{}.exe", "a".repeat(63)));
+        let long = root.file(&format!("{}.exe", "a".repeat(65)));
+        let non_hex = root.file(&format!("{}.exe", "g".repeat(64)));
+        let directory = root.0.join(format!("{}.exe", "d".repeat(64)));
+        std::fs::create_dir(&directory).unwrap();
+        let nested = directory.join(format!("{}.exe", "e".repeat(64)));
+        std::fs::write(&nested, "保留子目录内容".as_bytes()).unwrap();
+
+        assert_eq!(cleanup_download_cache(&root.0, &keep).await.unwrap(), 3);
+        assert_eq!(std::fs::read(&keep).unwrap(), "测试缓存内容".as_bytes());
+        for path in [old, interrupted, same_partial] {
+            assert!(!path.exists(), "历史缓存未清理：{}", path.display());
+        }
+        for path in [unrelated, foreign, short, long, non_hex, nested] {
+            assert!(path.exists(), "误删非缓存文件：{}", path.display());
+        }
+        assert_eq!(cleanup_download_cache(&root.0, &keep).await.unwrap(), 0);
+    }
+
+    // 验证 Windows 文件占用不会影响最新包和其他残留清理，解锁后可再次清理。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn download_cache_retries_locked_old_package_without_losing_latest() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let root = CacheTestDir::new();
+        let keep = root.file(&format!("{}.exe", "a".repeat(64)));
+        let old = root.file(&format!("{}.exe", "b".repeat(64)));
+        let partial = root.file(&format!("{}.part", "c".repeat(64)));
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&old)
+            .unwrap();
+        assert_eq!(cleanup_download_cache(&root.0, &keep).await.unwrap(), 1);
+        assert!(keep.is_file());
+        assert!(old.is_file());
+        assert!(!partial.exists());
+        drop(locked);
+        assert_eq!(cleanup_download_cache(&root.0, &keep).await.unwrap(), 1);
+        assert!(keep.is_file());
+        assert!(!old.exists());
+    }
+
+    // 验证 Windows 缓存复用时摘要大小写变化不会误删保留包。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn download_cache_preserves_case_insensitive_keep_path() {
+        let root = CacheTestDir::new();
+        let actual = root.file(&format!("{}.exe", "a".repeat(64)));
+        let keep = root.0.join(format!("{}.exe", "A".repeat(64)));
+        let old = root.file(&format!("{}.exe", "b".repeat(64)));
+        assert_eq!(cleanup_download_cache(&root.0, &keep).await.unwrap(), 1);
+        assert!(actual.is_file());
+        assert!(keep.is_file());
+        assert!(!old.exists());
+    }
+
+    // 验证新包尚未落盘或保留路径越界时拒绝清理，旧包和续传文件保持完整。
+    #[tokio::test]
+    async fn download_cache_rejects_missing_or_external_keep_without_deleting_old_package() {
+        let root = CacheTestDir::new();
+        let outside = CacheTestDir::new();
+        let old = root.file(&format!("{}.exe", "a".repeat(64)));
+        let partial = root.file(&format!("{}.part", "b".repeat(64)));
+        let missing = root.0.join(format!("{}.exe", "c".repeat(64)));
+        let external = outside.file(&format!("{}.exe", "d".repeat(64)));
+        for keep in [missing, external] {
+            assert!(cleanup_download_cache(&root.0, &keep).await.is_err());
+            assert!(old.exists());
+            assert!(partial.exists());
+        }
+    }
+
+    // 验证释放待安装状态只清除内存，最新安装包仍可跨进程复用。
+    #[test]
+    fn releasing_update_state_preserves_downloaded_file() {
+        let root = CacheTestDir::new();
+        let path = root.file(&format!("{}.exe", "a".repeat(64)));
+        let candidate = candidate(package(), "http://127.0.0.1:50000".into(), "0.7.1-ci.test")
+            .unwrap()
+            .unwrap();
+        let mut state = UpdateState {
+            pending: Some(candidate.clone()),
+            ready: Some(Ready {
+                candidate,
+                path: path.clone(),
+            }),
+        };
+        state.release();
+        assert!(state.pending.is_none());
+        assert!(state.ready.is_none());
+        assert!(path.is_file());
+    }
 
     fn package() -> Package {
         let bytes = include_bytes!("../../testdata/updater/fixture.bin");
