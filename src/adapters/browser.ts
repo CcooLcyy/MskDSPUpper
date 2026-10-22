@@ -61,11 +61,13 @@ import type {
   LowerUpdateDownloadResult,
   LowerUpdateTaskSubmitRequest,
   LowerUpdateTaskQueryRequest,
+  LowerUpdateTaskCloseRequest,
   LowerUpdateTaskStatus,
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
   LowerUpdatePackageCleanupResult,
   LowerUpdateRuntimeInfo,
+  LowerUpdateRuntimeInfoRequest,
   LowerUpdateReconnectRequest,
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
@@ -1226,8 +1228,10 @@ export const browserApi: typeof tauriApi = {
       uploaded_bytes: totalBytes,
     };
   },
+  preflightLowerUpdateTask: async (_request: LowerUpdateRuntimeInfoRequest): Promise<void> => { void _request; throw new Error('远程更新需要桌面版上位机'); },
   submitLowerUpdateTask: async (_request: LowerUpdateTaskSubmitRequest): Promise<LowerUpdateTaskStatus> => { void _request; throw new Error('远程更新需要桌面版上位机'); },
   getLowerUpdateTask: async (_request: LowerUpdateTaskQueryRequest): Promise<LowerUpdateTaskStatus> => { void _request; throw new Error('远程更新需要桌面版上位机'); },
+  closeLowerUpdateTask: async (_request: LowerUpdateTaskCloseRequest): Promise<void> => { void _request; throw new Error('远程更新需要桌面版上位机'); },
   installLowerUpdatePackage: async (request: LowerUpdateInstallRequest): Promise<LowerUpdateInstallResult> => {
     const remotePath = buildRemotePackagePath(request.install_dir, request.package_name);
     const command = `set -e; cd '${request.install_dir}' && chmod +x './${request.package_name}' && './${request.package_name}' start`;

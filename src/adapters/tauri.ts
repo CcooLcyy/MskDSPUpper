@@ -52,6 +52,7 @@ import type {
   LowerUpdateDownloadResult,
   LowerUpdateTaskSubmitRequest,
   LowerUpdateTaskQueryRequest,
+  LowerUpdateTaskCloseRequest,
   LowerUpdateTaskStatus,
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,
@@ -203,8 +204,10 @@ export const api = {
       unlisten?.();
     }
   },
+  preflightLowerUpdateTask: (request: LowerUpdateRuntimeInfoRequest) => invoke<void>('preflight_lower_update_task', { request }),
   submitLowerUpdateTask: (request: LowerUpdateTaskSubmitRequest) => invoke<LowerUpdateTaskStatus>('submit_lower_update_task', { request }),
   getLowerUpdateTask: (request: LowerUpdateTaskQueryRequest) => invoke<LowerUpdateTaskStatus>('get_lower_update_task', { request }),
+  closeLowerUpdateTask: (request: LowerUpdateTaskCloseRequest) => invoke<void>('close_lower_update_task', { request }),
   installLowerUpdatePackage: (request: LowerUpdateInstallRequest) =>
     invoke<LowerUpdateInstallResult>('install_lower_update_package', { request }),
   cleanupLowerUpdatePackages: (request: LowerUpdateInstallRequest) =>

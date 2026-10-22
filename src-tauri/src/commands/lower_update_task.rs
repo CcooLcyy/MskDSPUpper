@@ -2,7 +2,7 @@
 use super::lower_update::{
     execute_root_ssh_command, is_safe_file_name, normalize_image_id, normalize_install_dir,
     remote_package_path, resolve_update_target, shell_quote, LowerUpdateRemoteTargetDto,
-    LowerUpdateSshAuthDto,
+    LowerUpdateRuntimeInfoRequestDto, LowerUpdateSshAuthDto,
 };
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,18 @@ pub struct GetLowerUpdateTaskRequest {
     #[serde(default)]
     pub remote_target: Option<LowerUpdateRemoteTargetDto>,
     pub operation_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct CloseLowerUpdateTaskRequest {
+    pub upload_account: String,
+    pub auth: LowerUpdateSshAuthDto,
+    pub sudo_password: String,
+    #[serde(default)]
+    pub remote_target: Option<LowerUpdateRemoteTargetDto>,
+    pub operation_id: String,
+    pub package_sha256: String,
+    pub expected_image_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,9 +84,7 @@ fn validate_digest(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 按内容摘要命名并安装到 root 独占目录，禁止以 root 执行普通用户可写脚本。
-fn helper_command(arguments: &[&str]) -> Result<String, String> {
-    let digest = format!("{:x}", Sha256::digest(HELPER));
+fn helper_payload() -> Result<String, String> {
     let mut compressor = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
     compressor
         .write_all(HELPER)
@@ -82,18 +92,60 @@ fn helper_command(arguments: &[&str]) -> Result<String, String> {
     let compressed = compressor
         .finish()
         .map_err(|_| "无法编码更新助手".to_string())?;
-    let payload: String = compressed.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(compressed.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// 纯查询与预检只在内存执行随应用分发的可信源码，不安装或调和任务。
+fn readonly_command(action: &str, operation: Option<&str>) -> Result<String, String> {
+    let action = serde_json::to_string(action).map_err(|_| "无法编码只读命令")?;
+    let operation = operation
+        .map(|value| serde_json::to_string(value).unwrap())
+        .unwrap_or("None".into());
+    embedded_command(&format!("namespace['readonly_main']({action},{operation})"))
+}
+
+fn embedded_command(entry: &str) -> Result<String, String> {
+    let payload = helper_payload()?;
+    let source = format!(
+        r#"import sys,zlib
+if sys.version_info < (3,9):
+    sys.exit('独立更新任务需要 Python 3.9 或更高版本')
+namespace={{'__name__':'mskdsp_readonly','__file__':'<可信嵌入助手>'}}
+exec(compile(zlib.decompress(bytes.fromhex('{payload}')),'<可信嵌入助手>','exec'),namespace)
+sys.exit({entry})
+"#
+    );
+    Ok(format!("exec python3 -B -c {}", shell_quote(&source)))
+}
+
+fn close_command(operation: &str, digest: &str, expected: &str) -> Result<String, String> {
+    embedded_command(&format!(
+        "namespace['close_main']({},{},{})",
+        serde_json::to_string(operation).map_err(|_| "无法编码关闭任务编号")?,
+        serde_json::to_string(digest).map_err(|_| "无法编码关闭任务摘要")?,
+        serde_json::to_string(expected).map_err(|_| "无法编码关闭任务镜像")?
+    ))
+}
+
+/// 按内容摘要命名并安装到 root 独占目录，禁止以 root 执行普通用户可写脚本。
+fn helper_command(arguments: &[&str]) -> Result<String, String> {
+    let digest = format!("{:x}", Sha256::digest(HELPER));
+    let payload = helper_payload()?;
     let path = format!("/usr/local/libexec/mskdsp-update/lower_update_task-{digest}.py");
-    let bootstrap = format!(
-        r#"import os,stat,hashlib,tempfile,zlib
+    let body = format!(
+        r#"import os,stat,hashlib,tempfile,zlib,sys
+if sys.version_info < (3,9): raise RuntimeError('独立更新任务需要 Python 3.9 或更高版本')
 data=zlib.decompress(bytes.fromhex('{payload}'))
+namespace={{'__name__':'mskdsp_bootstrap','__file__':'<可信嵌入助手>'}}
+exec(compile(data,'<可信嵌入助手>','exec'),namespace)
+namespace['preflight_environment']()
 root='/usr/local/libexec/mskdsp-update'
-for parent in ['/usr','/usr/local','/usr/local/libexec',root]:
+for parent in ['/','/usr','/usr/local','/usr/local/libexec',root]:
     try: os.mkdir(parent,0o700)
     except FileExistsError: pass
     info=os.lstat(parent)
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
-        raise RuntimeError('更新助手目录不属于 root 独占目录')
+        raise RuntimeError('更新助手目录不属于 root 独占目录: '+parent)
 path='{path}'
 if os.path.lexists(path):
     info=os.lstat(path)
@@ -115,6 +167,9 @@ else:
         if os.path.lexists(tmp): os.unlink(tmp)
 "#
     );
+    // 仅此 bootstrap 失败可以证明从未执行持久任务助手；SSH 超时与断线不能标记拒绝。
+    let bootstrap = format!("try:\n{}\nexcept Exception as error:\n    import sys\n    print('LOWER_UPDATE_TASK_REJECTED: '+str(error),file=sys.stderr)\n    sys.exit(1)\n",
+        body.lines().map(|line| format!("    {line}")).collect::<Vec<_>>().join("\n"));
     let args = arguments
         .iter()
         .map(|value| shell_quote(value))
@@ -176,7 +231,11 @@ async fn invoke_helper(
     arguments: &[&str],
 ) -> Result<LowerUpdateTaskStatus, String> {
     let target = resolve_update_target(state, upload_account, remote, auth).await?;
-    let command = helper_command(arguments)?;
+    let command = if arguments.first() == Some(&"query") {
+        readonly_command("query", Some(operation_id))?
+    } else {
+        helper_command(arguments)?
+    };
     // 提交前复制并校验大包可能较慢；查询保持较短的观测超时。
     let timeout = if arguments.first() == Some(&"submit") {
         600
@@ -205,6 +264,15 @@ async fn invoke_helper(
                 detail = detail.replace(secret, "[已隐藏]");
             }
         }
+        tracing::warn!(operation_id, detail = %detail, exit_code = ?output.exit_code, "宿主机更新任务接口返回错误");
+        for marker in [
+            "LOWER_UPDATE_TASK_REJECTED:",
+            "LOWER_UPDATE_TASK_NOT_FOUND:",
+        ] {
+            if let Some(start) = detail.find(marker) {
+                return Err(detail[start..].to_string());
+            }
+        }
         return Err(format!(
             "宿主机更新任务接口未确认成功，请查询原任务：{detail}"
         ));
@@ -223,6 +291,97 @@ async fn invoke_helper(
         }
     }
     Ok(status)
+}
+
+#[tauri::command]
+pub async fn preflight_lower_update_task(
+    state: State<'_, AppState>,
+    request: LowerUpdateRuntimeInfoRequestDto,
+) -> Result<(), String> {
+    let target = resolve_update_target(
+        &state,
+        &request.upload_account,
+        request.remote_target.as_ref(),
+        &request.auth,
+    )
+    .await?;
+    let command = readonly_command("preflight", None)?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(90),
+        execute_root_ssh_command(&target, &request.auth, &request.sudo_password, &command),
+    )
+    .await
+    .map_err(|_| "更新环境预检超时，未上传安装包".to_string())??;
+    if output.exit_code != Some(0) {
+        let mut detail = output.stderr.chars().take(2048).collect::<String>();
+        for secret in [
+            &request.sudo_password,
+            match &request.auth {
+                LowerUpdateSshAuthDto::Password { password } => password,
+                _ => "",
+            },
+        ] {
+            if !secret.is_empty() {
+                detail = detail.replace(secret, "[已隐藏]");
+            }
+        }
+        tracing::warn!(detail = %detail, "宿主机更新环境预检失败，未上传安装包");
+        return Err(format!("更新环境预检失败，未上传安装包：{detail}"));
+    }
+    tracing::info!("宿主机更新环境只读预检通过");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn close_lower_update_task(
+    state: State<'_, AppState>,
+    request: CloseLowerUpdateTaskRequest,
+) -> Result<(), String> {
+    validate_operation_id(&request.operation_id)?;
+    validate_digest(&request.package_sha256)?;
+    let expected =
+        normalize_image_id(&request.expected_image_id).ok_or("原任务期望镜像 ID 不合法")?;
+    let target = resolve_update_target(
+        &state,
+        &request.upload_account,
+        request.remote_target.as_ref(),
+        &request.auth,
+    )
+    .await?;
+    let command = close_command(
+        &request.operation_id,
+        &request.package_sha256.to_ascii_lowercase(),
+        &expected,
+    )?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(90),
+        execute_root_ssh_command(&target, &request.auth, &request.sudo_password, &command),
+    )
+    .await
+    .map_err(|_| "关闭任务结果暂时未知，请重试核验；本地记录仍需保留".to_string())??;
+    if output.exit_code != Some(0) {
+        let mut detail = output.stderr.chars().take(2048).collect::<String>();
+        for secret in [
+            &request.sudo_password,
+            match &request.auth {
+                LowerUpdateSshAuthDto::Password { password } => password,
+                _ => "",
+            },
+        ] {
+            if !secret.is_empty() {
+                detail = detail.replace(secret, "[已隐藏]");
+            }
+        }
+        tracing::warn!(operation_id = %request.operation_id, detail = %detail, "宿主机拒绝关闭更新任务，本地记录需保留");
+        return Err(format!("无法结束原任务，本地记录仍需保留：{detail}"));
+    }
+    let response: serde_json::Value = serde_json::from_str(output.stdout.trim())
+        .map_err(|_| "关闭任务未返回有效确认，本地记录仍需保留")?;
+    if response.get("ok").and_then(|value| value.as_bool()) != Some(true) {
+        return Err("宿主机未确认原任务关闭，本地记录仍需保留".into());
+    }
+    tracing::info!(operation_id = %request.operation_id, "已确认原任务不存在并保存拒绝迟到安装的关闭记录");
+    Ok(())
 }
 
 #[tauri::command]
@@ -368,3 +527,7 @@ mod tests {
         assert!(command.contains("os.fchmod(output.fileno(),0o500)"));
     }
 }
+
+#[cfg(test)]
+#[path = "lower_update_task_recovery_tests.rs"]
+mod recovery_tests;

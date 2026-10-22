@@ -5,6 +5,7 @@ import type { LowerUpdateDeploymentInput, LowerUpdateDeploymentRetryMode, LowerU
 export interface LowerUpdateDeploymentContextValue extends LowerUpdateDeploymentSnapshot {
   start(input: LowerUpdateDeploymentInput): Promise<void>;
   resumeRemote(auth: LowerUpdateSshAuth, sudoPassword: string): Promise<void>;
+  closeMissingRemote(auth: LowerUpdateSshAuth, sudoPassword: string): Promise<void>;
   retry(mode: LowerUpdateDeploymentRetryMode): Promise<void>;
   openDetails(): void;
   closeDetails(): void;

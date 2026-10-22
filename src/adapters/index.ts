@@ -14,6 +14,7 @@ export type {
   LowerUpdateDownloadStage,
   LowerUpdateTaskSubmitRequest,
   LowerUpdateTaskQueryRequest,
+  LowerUpdateTaskCloseRequest,
   LowerUpdateTaskStatus,
   LowerUpdateInstallRequest,
   LowerUpdateInstallResult,

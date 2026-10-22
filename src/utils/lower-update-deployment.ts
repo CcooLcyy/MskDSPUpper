@@ -1,6 +1,7 @@
 import type {
   LowerUpdateTaskSubmitRequest,
   LowerUpdateTaskQueryRequest,
+  LowerUpdateTaskCloseRequest,
   LowerUpdateTaskStatus,
   LowerUpdateRemoteTarget,
   LowerUpdateReconnectRequest,
@@ -22,10 +23,12 @@ import { snapshotLowerUpdateConnection } from './lower-update-connection.ts';
 
 import { readLowerUpdatePendingTask } from './lower-update-pending.ts';
 import type { LowerUpdatePendingTask } from './lower-update-pending';
+import type { LowerUpdateTaskArchive } from './lower-update-archive';
 
 export type LowerUpdateDeploymentStage =
   | 'checking' | 'uploading' | 'installing' | 'verifying' | 'cleaning' | 'reconnecting' | 'succeeded'
   | 'remote_unknown' | 'waiting_reconnect' | 'rolling_back' | 'rolled_back' | 'rollback_failed'
+  | 'task_missing' | 'task_closed'
   | 'check_failed' | 'upload_failed' | 'install_failed' | 'verify_failed' | 'image_mismatch';
 export type LowerUpdateDeploymentRetryMode = 'retry' | 'reupload' | 'reinstall' | 'reverify' | 'reconnect';
 
@@ -85,6 +88,9 @@ export interface LowerUpdateDeploymentSnapshot {
 export interface LowerUpdateDeploymentOperations {
   submitTask?(request: LowerUpdateTaskSubmitRequest): Promise<LowerUpdateTaskStatus>;
   queryTask?(request: LowerUpdateTaskQueryRequest): Promise<LowerUpdateTaskStatus>;
+  closeTask?(request: LowerUpdateTaskCloseRequest): Promise<void>;
+  preflightTask?(request: LowerUpdateRuntimeInfoRequest): Promise<void>;
+  archivePending?(record: LowerUpdateTaskArchive): Promise<void>;
   loadPending?(): unknown;
   savePending?(task: LowerUpdatePendingTask | null): Promise<void>;
   queryRuntime(request: LowerUpdateRuntimeInfoRequest): Promise<LowerUpdateRuntimeInfo>;
@@ -268,7 +274,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     try {
       await operations.savePending!(null);
       pendingRemote = null;
-      finish({ stage: 'install_failed', status: '更新任务未受理', error: errorText(error), verificationMessage: '设备已有其他更新或回退失败任务，请先处理原任务', cleanupMessage: '本次任务未执行安装，未清理设备恢复材料' });
+      finish({ stage: 'install_failed', status: '更新任务未受理', error: errorText(error), verificationMessage: `宿主机明确未受理本次任务：${errorText(error).split('LOWER_UPDATE_TASK_REJECTED:').at(-1)!.trim()}`, cleanupMessage: '本次任务未执行安装，未清理设备恢复材料' });
     } catch {
       finish({ stage: 'remote_unknown', status: '未受理任务的本地记录清除失败', error: null, verificationMessage: '请恢复查询原任务以重新确认受理状态并清除记录' });
     }
@@ -279,16 +285,15 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     for (let attempt = 0; attempt < 60; attempt += 1) {
       try {
         const request = remoteRequest();
-        let result: LowerUpdateTaskStatus;
-        try { result = await operations.queryTask!(request); }
-        catch (error) {
-          // 明确不存在时仅幂等重发原任务，回执丢失不能新建编号。
-          if (!errorText(error).includes('LOWER_UPDATE_TASK_NOT_FOUND')) throw error;
-          result = await operations.submitTask!(request);
-        }
+        const result = await operations.queryTask!(request);
         if (await applyRemoteStatus(result)) return;
       } catch (error) {
-        if (await finishRejectedRemote(error)) return;
+        if (errorText(error).includes('LOWER_UPDATE_TASK_NOT_FOUND:')) {
+          finish({ stage: 'task_missing', status: '原任务不存在', error: null,
+            verificationMessage: '宿主机未找到原任务，尚未确认旧版本安装成功；可重新核验后结束本地记录。查询不会重新安装。',
+            cleanupMessage: '保留本地原任务、设备安装包与恢复材料' });
+          return;
+        }
         lastError = errorText(error);
         update({ stage: 'waiting_reconnect', status: '等待设备重新上线', verificationMessage: '连接中断，宿主机任务继续执行；正在查询原任务', error: null });
       }
@@ -343,6 +348,11 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
         }
         await finishSucceeded({ verificationMessage: '目标机已运行待下发构建，无需重复安装', cleanupMessage: '已跳过重复上传和安装，未执行历史包清理' });
         return;
+      }
+      if (privateInput!.connection.remote_target) {
+        if (!operations.preflightTask) throw new Error('远程更新预检接口未初始化，已停止上传');
+        update({ stage: 'checking', status: '检查远程安装环境', verificationMessage: '检查 Python、sudo、systemd、Docker 与安装助手目录权限' });
+        await operations.preflightTask(connection());
       }
       if (!snapshot.task!.uploadResult) {
         update({ stage: 'uploading', status: '上传中', progress: 0 });
@@ -427,6 +437,49 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
       update({ stage: 'waiting_reconnect', status: '正在恢复查询原任务', error: null });
       publish({ detailOpen: true, resultOpen: false });
       await observeRemote();
+    },
+    async closeMissingRemote(auth: LowerUpdateSshAuth, sudoPassword: string): Promise<void> {
+      if (snapshot.isRunning) throw new Error('原任务正在核验中');
+      if (!pendingRemote || snapshot.task?.stage !== 'task_missing') throw new Error('只有确认不存在的原任务才能核验并结束本地记录');
+      if (auth.method !== 'password' || !auth.password || !sudoPassword) throw new Error('请输入原设备 SSH 与 sudo 密码');
+      recoveredCredentials = { auth: { ...auth }, sudo_password: sudoPassword };
+      if (privateInput) { privateInput.connection.auth = { ...auth }; privateInput.connection.sudo_password = sudoPassword; }
+      update({ stage: 'checking', status: '正在核验原任务和设备运行状态', error: null });
+      try {
+        if (!operations.queryTask || !operations.archivePending || !operations.closeTask || !operations.savePending) throw new Error('原任务查询、关闭或归档接口未初始化，已保留本地记录');
+        const request = remoteRequest();
+        try {
+          await operations.queryTask(request);
+          finish({ stage: 'remote_unknown', status: '原任务已存在，请恢复查询', error: null,
+            verificationMessage: '二次核验发现宿主机原任务已存在，已停止结束操作；请恢复查询原任务。', cleanupMessage: '保留原任务及恢复材料' });
+          return;
+        } catch (error) {
+          // 后端仅在同时排除其他执行中、回退失败任务和安装进程后返回不存在。
+          if (!errorText(error).includes('LOWER_UPDATE_TASK_NOT_FOUND:')) throw error;
+        }
+        const runtime = await operations.queryRuntime({
+          remote_target: { ...pendingRemote.remote_target }, upload_account: pendingRemote.upload_account,
+          auth: { ...auth }, sudo_password: sudoPassword,
+        });
+        const actualImageId = runtime.image_id?.trim() ?? '';
+        if (!runtime.exists || !runtime.running || !/^sha256:[0-9a-f]{64}$/i.test(actualImageId)) {
+          throw new Error('原设备业务容器未正常运行或镜像 ID 无效，已保留本地记录，请检查设备后重试');
+        }
+        await operations.archivePending({ task: structuredClone(pendingRemote), closed_at: new Date().toISOString(), actual_image_id: actualImageId, reason: 'task_not_found' });
+        // 设备持久记录拒绝原编号，阻止已发出但迟到的提交在本地结束后安装旧包。
+        await operations.closeTask(request);
+        await operations.savePending(null);
+        const publicImageId = redact(actualImageId);
+        pendingRemote = null;
+        recoveredCredentials = null;
+        privateInput = null;
+        finish({ stage: 'task_closed', status: '本地记录已结束', progress: 100, error: null, actualImageId: publicImageId,
+          verificationMessage: '已核验原任务不存在且设备业务容器正常运行；本地恢复记录已归档并结束，不代表旧版本安装成功。',
+          cleanupMessage: '未执行安装，未删除设备安装包或恢复材料' });
+      } catch (error) {
+        finish({ stage: 'task_missing', status: '原任务记录未结束，可重试核验', error: errorText(error),
+          verificationMessage: '核验、归档或本地记录清除未完成，已保留原任务，禁止新建更新。', cleanupMessage: '未执行安装，未删除设备安装包或恢复材料' });
+      }
     },
     async retry(mode: LowerUpdateDeploymentRetryMode): Promise<void> {
       if (snapshot.isRunning) throw new Error('已有下位机更新任务正在执行，请查看当前任务');

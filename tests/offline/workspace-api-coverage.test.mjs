@@ -122,7 +122,9 @@ test('runtime control and unsupported methods are overridden', () => {
 test('local capability methods are delegated to the real api', () => {
   const delegated = extractStringArray(adapterSource, 'DELEGATED_API_METHODS');
   assert.ok(delegated.has('submitLowerUpdateTask'), '独立宿主机更新任务应使用真实更新能力');
+  assert.ok(delegated.has('preflightLowerUpdateTask'), '远程更新上传前应使用真实设备环境预检');
   assert.ok(delegated.has('getLowerUpdateTask'), '离线工作区也应能恢复查询已提交的宿主机任务');
+  assert.ok(delegated.has('closeLowerUpdateTask'), '结束未受理任务应通过真实设备接口阻止迟到提交');
   const required = [
     'loadAppSettings',
     'saveAppSetting',

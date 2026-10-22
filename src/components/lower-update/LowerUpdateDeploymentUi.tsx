@@ -3,6 +3,7 @@ import { App, Alert, Button, Descriptions, Input, Modal, Progress, Space, Tag, T
 import {
   CheckCircleOutlined,
   CloudUploadOutlined,
+  InfoCircleOutlined,
   LoadingOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
@@ -16,6 +17,8 @@ type DeploymentTask = NonNullable<ReturnType<typeof useLowerUpdateDeployment>['t
 
 const STAGE_LABELS: Record<DeploymentTask['stage'], string> = {
   remote_unknown: '暂时无法确认更新结果',
+  task_missing: '原任务不存在，待核验结束记录',
+  task_closed: '本地记录已结束',
   waiting_reconnect: '等待设备重新上线',
   rolling_back: '正在自动回退',
   rolled_back: '更新失败，已自动恢复上一版本',
@@ -47,6 +50,8 @@ function formatBytes(bytes: number): string {
 }
 
 function getResultTitle(task: DeploymentTask): string {
+  if (task.stage === 'task_missing') return '原任务不存在，本地记录待核验';
+  if (task.stage === 'task_closed') return '本地记录已结束，未执行安装';
   if (task.stage === 'remote_unknown') return '下位机更新结果待确认';
   if (task.stage === 'rolled_back') return '更新失败，已自动恢复上一版本';
   if (task.stage === 'rollback_failed') return '自动回退失败，需要人工处理';
@@ -66,6 +71,7 @@ export function LowerUpdateDeploymentHeader() {
   const succeeded = task.stage === 'succeeded';
   const icon = isRunning
     ? <LoadingOutlined />
+    : task.stage === 'task_closed' ? <InfoCircleOutlined />
     : succeeded && !task.cleanupError && !task.runtimeRefreshError
       ? <CheckCircleOutlined />
       : <WarningOutlined />;
@@ -84,15 +90,17 @@ export function LowerUpdateDeploymentUi() {
   const { message } = App.useApp();
   const [sshPassword, setSshPassword] = useState('');
   const [sudoPassword, setSudoPassword] = useState('');
-  const { task, isRunning, detailOpen, resultOpen, retry, resumeRemote, openDetails, closeDetails, dismissResult } =
+  const { task, isRunning, detailOpen, resultOpen, retry, resumeRemote, closeMissingRemote, openDetails, closeDetails, dismissResult } =
     useLowerUpdateDeployment();
   if (!task) return null;
 
   const succeeded = task.stage === 'succeeded';
-  const uncertain = task.stage === 'remote_unknown';
-  const failed = !isRunning && !succeeded && !uncertain;
+  const closed = task.stage === 'task_closed';
+  const missing = task.stage === 'task_missing';
+  const uncertain = task.stage === 'remote_unknown' || missing;
+  const failed = !isRunning && !succeeded && !uncertain && !closed;
   const hasWarning = Boolean(task.cleanupError || task.runtimeRefreshError);
-  const statusColor = uncertain ? 'warning' : isRunning ? 'processing' : succeeded ? hasWarning ? 'warning' : 'success' : 'error';
+  const statusColor = uncertain ? 'warning' : isRunning ? 'processing' : closed ? 'default' : succeeded ? hasWarning ? 'warning' : 'success' : 'error';
   const retryTask = async (mode: 'retry' | 'reupload' | 'reinstall' | 'reverify' | 'reconnect') => {
     try {
       await retry(mode);
@@ -111,7 +119,7 @@ export function LowerUpdateDeploymentUi() {
       ? '执行失败'
       : task.installResult
         ? task.installResult.success ? '执行成功' : '执行失败'
-        : task.remoteTarget && task.operationId ? '由宿主机独立执行' : task.alreadyCurrent ? '已跳过' : '未执行';
+        : missing || closed ? '未确认执行' : task.remoteTarget && task.operationId ? '由宿主机独立执行' : task.alreadyCurrent ? '已跳过' : '未执行';
   const verificationStatus = task.stage === 'verifying'
     ? '确认中'
     : succeeded || task.stage === 'cleaning' || task.stage === 'reconnecting'
@@ -161,15 +169,15 @@ export function LowerUpdateDeploymentUi() {
             <Descriptions.Item label="退出码">{task.taskExitCode ?? task.installResult?.exit_code ?? '-'}</Descriptions.Item>
             <Descriptions.Item label="执行命令"><Text code style={wrapStyle}>{task.installResult?.command || '-'}</Text></Descriptions.Item>
           </Descriptions>
-          <Progress percent={Number(task.progress.toFixed(1))} status={uncertain ? 'normal' : failed ? 'exception' : succeeded ? 'success' : 'active'} />
+          <Progress percent={Number(task.progress.toFixed(1))} status={uncertain || closed ? 'normal' : failed ? 'exception' : succeeded ? 'success' : 'active'} />
           {task.error ? <Alert type="error" showIcon title={task.error} style={wrapStyle} /> : null}
           {task.cleanupError ? <Alert type="warning" showIcon title="更新已确认成功，历史包清理失败" description={task.cleanupError} style={wrapStyle} /> : null}
           {task.runtimeRefreshError ? <Alert type="warning" showIcon title="更新已确认成功，业务连接尚未恢复" description={task.runtimeRefreshError} style={wrapStyle} /> : null}
           {task.connectionWarning ? <Alert type="warning" showIcon title={task.connectionWarning} style={wrapStyle} /> : null}
           {succeeded && task.runtimeRefreshError ? <Button size="small" icon={<ReloadOutlined />} disabled={isRunning} onClick={() => void retryTask('reconnect')}>只重试业务连接</Button> : null}
-          {task.remoteTarget && (task.stage === 'remote_unknown' || task.stage === 'rollback_failed') ? (
+          {task.remoteTarget && (task.stage === 'remote_unknown' || task.stage === 'rollback_failed' || missing) ? (
             <Space orientation="vertical" style={{ width: '100%' }}>
-              <Alert type="warning" title={task.stage === 'rollback_failed' ? '自动回退失败，原任务和恢复材料已保留。请人工检查设备后查询原任务，不能继续新建更新。' : '结果尚未确认，请查询原任务；不要重复安装。首次连接请先在远程 SSH 终端确认设备指纹。'} />
+              <Alert type="warning" title={missing ? '原任务不存在。结束前将再次核验原设备无安装任务且业务容器正常运行，并备份本地记录。结束会阻止原任务后续提交；不安装、不删除设备包或恢复材料，也不代表旧版本升级成功。' : task.stage === 'rollback_failed' ? '自动回退失败，原任务和恢复材料已保留。请人工检查设备后查询原任务，不能继续新建更新。' : '结果尚未确认，请查询原任务；不要重复安装。首次连接请先在远程 SSH 终端确认设备指纹。'} />
               <Input.Password aria-label="恢复查询 SSH 密码" placeholder="重新输入原设备 SSH 密码" value={sshPassword} onChange={event => setSshPassword(event.target.value)} />
               <Input.Password aria-label="恢复查询 sudo 密码" placeholder="重新输入原设备 sudo 密码" value={sudoPassword} onChange={event => setSudoPassword(event.target.value)} />
               <Button disabled={isRunning || !sshPassword || !sudoPassword} onClick={() => {
@@ -177,6 +185,11 @@ export function LowerUpdateDeploymentUi() {
                 const sudo = sudoPassword; setSshPassword(''); setSudoPassword('');
                 void resumeRemote(auth, sudo).catch(error => message.error(String(error)));
               }}>恢复查询原任务</Button>
+              {missing ? <Button disabled={isRunning || !sshPassword || !sudoPassword} onClick={() => {
+                const auth = { method: 'password' as const, password: sshPassword };
+                const sudo = sudoPassword; setSshPassword(''); setSudoPassword('');
+                void closeMissingRemote(auth, sudo).catch(error => message.error(String(error)));
+              }}>核验并结束本地记录</Button> : null}
             </Space>
           ) : null}
           {!task.remoteTarget ? <Space wrap>
@@ -193,7 +206,7 @@ export function LowerUpdateDeploymentUi() {
             <Text type="secondary">错误输出</Text>
             <Input.TextArea aria-label="安装错误输出" value={task.installResult?.stderr || '-'} readOnly autoSize={{ minRows: 2, maxRows: 4 }} />
           </div>
-          <Text type="secondary">{task.remoteTarget ? '宿主机独立检查运行状态，失败时自动回退；稳定状态保留当前版本与一个先前版本。回退失败保留恢复材料。' : '安装命令成功并确认运行镜像后，会清理设备上的历史安装包，保留本次安装包；安装或镜像确认失败时保留所有包。'}</Text>
+          <Text type="secondary">{closed ? '原任务本地记录已归档，设备已阻止该任务的后续提交。需要升级时请另行发起新任务。' : task.remoteTarget ? '宿主机独立检查运行状态，失败时自动回退；稳定状态保留当前版本与一个先前版本。回退失败保留恢复材料。' : '安装命令成功并确认运行镜像后，会清理设备上的历史安装包，保留本次安装包；安装或镜像确认失败时保留所有包。'}</Text>
         </Space>
       </Modal>
       <Modal
@@ -208,7 +221,7 @@ export function LowerUpdateDeploymentUi() {
       >
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           <Alert
-            type={uncertain ? 'warning' : succeeded ? hasWarning ? 'warning' : 'success' : 'error'}
+            type={uncertain ? 'warning' : closed ? 'info' : succeeded ? hasWarning ? 'warning' : 'success' : 'error'}
             showIcon
             title={task.alreadyCurrent && succeeded ? '目标下位机已运行指定构建，已跳过重复上传和安装。' : STAGE_LABELS[task.stage]}
           />

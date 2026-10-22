@@ -17,12 +17,19 @@ import {
   LOWER_UPDATE_CONNECTION_SETTING_KEY,
 } from '../../utils/app-settings';
 import { LOWER_UPDATE_PENDING_KEY, readLowerUpdatePendingTask } from '../../utils/lower-update-pending';
+import { appendLowerUpdateArchive, LOWER_UPDATE_ARCHIVE_KEY } from '../../utils/lower-update-archive';
 import { LowerUpdateDeploymentContext } from './lower-update-deployment-context';
 
 function createApplicationController(): LowerUpdateDeploymentController {
   return createLowerUpdateDeploymentController({
     submitTask: api.submitLowerUpdateTask,
     queryTask: api.getLowerUpdateTask,
+    closeTask: api.closeLowerUpdateTask,
+    preflightTask: api.preflightLowerUpdateTask,
+    archivePending: async (record) => {
+      const existing: unknown = JSON.parse(localStorage.getItem(LOWER_UPDATE_ARCHIVE_KEY) ?? '[]');
+      localStorage.setItem(LOWER_UPDATE_ARCHIVE_KEY, JSON.stringify(appendLowerUpdateArchive(existing, record)));
+    },
     loadPending: () => {
       try { return JSON.parse(localStorage.getItem(LOWER_UPDATE_PENDING_KEY) ?? 'null'); }
       catch { return { invalid: true }; }
@@ -76,6 +83,7 @@ export function LowerUpdateDeploymentProvider({ children, controller: suppliedCo
     start: controller.start,
     retry: controller.retry,
     resumeRemote: controller.resumeRemote,
+    closeMissingRemote: controller.closeMissingRemote,
     openDetails: controller.openDetails,
     closeDetails: controller.closeDetails,
     dismissResult: controller.dismissResult,

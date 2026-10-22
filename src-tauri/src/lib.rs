@@ -224,6 +224,8 @@ pub fn run() {
                 commands::lower_update::upload_lower_update_package,
                 commands::lower_update::install_lower_update_package,
                 commands::lower_update_task::submit_lower_update_task,
+                commands::lower_update_task::preflight_lower_update_task,
+                commands::lower_update_task::close_lower_update_task,
                 commands::lower_update_task::get_lower_update_task,
                 commands::lower_update::cleanup_lower_update_packages,
                 commands::lower_update::deploy_vertical_security_script,

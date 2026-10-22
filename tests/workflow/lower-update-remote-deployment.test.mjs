@@ -38,6 +38,9 @@ function fixture(overrides = {}) {
     cleanup: async () => { throw Error('不得清理回退材料'); },
     saveConnection: async () => {}, credentialRevision: () => 0, sleep: async () => {},
     reconnectRuntime: async request => { calls.push(['reconnect', request]); return true; },
+    preflightTask: async request => { calls.push(['preflight', request]); },
+    archivePending: async record => { calls.push(['archive', structuredClone(record)]); },
+    closeTask: async request => { calls.push(['close', request]); },
     savePending: async record => { saved = structuredClone(record); calls.push(['persist', record]); },
     loadPending: () => null,
     submitTask: async request => { calls.push(['submit', request]); return status(request, 'installing'); },
@@ -135,21 +138,17 @@ test('自动回退成功和失败单独呈现', async () => {
   }
 });
 
-// 验证受理窗口尚未交接 systemd 时，同编号同摘要调和，不生成第二个任务。
-test('明确任务不存在才幂等重发原编号并等待accepted', async () => {
-  let queries = 0;
-  const f = fixture({ queryTask: async request => {
-    f.calls.push(['query', request]);
-    queries += 1;
-    if (queries === 1) throw Error('LOWER_UPDATE_TASK_NOT_FOUND：任务不存在');
-    return status(request, queries === 2 ? 'accepted' : 'succeeded');
-  } });
+// 任务不存在仅显示待核验状态，查询不得重新提交旧版本。
+test('明确任务不存在保留原记录且不重新提交', async () => {
+  const f = fixture({ queryTask: async () => { throw Error('LOWER_UPDATE_TASK_NOT_FOUND: 任务不存在'); } });
   await f.controller.start(input());
-  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
-  const submits = f.calls.filter(call => call[0] === 'submit').map(call => call[1]);
-  assert.equal(submits.length, 2);
-  assert.equal(submits[0].operation_id, submits[1].operation_id);
-  assert.equal(submits[0].package_sha256, submits[1].package_sha256);
+  assert.equal(f.controller.getSnapshot().task.stage, 'task_missing');
+  assert.equal(f.calls.filter(call => call[0] === 'submit').length, 1);
+  assert.ok(f.saved());
+  const recovered = fixture({ loadPending: () => f.saved(), queryTask: async () => { throw Error('LOWER_UPDATE_TASK_NOT_FOUND: 任务不存在'); } });
+  await recovered.controller.resumeRemote({ method: 'password', password: 'new-secret' }, 'new-sudo');
+  assert.equal(recovered.controller.getSnapshot().task.stage, 'task_missing');
+  assert.equal(recovered.calls.some(([name]) => ['submit', 'upload', 'preflight'].includes(name)), false);
 });
 
 // 验证成功状态必须同时有匹配的实际镜像，错误响应保留待查询身份。
@@ -207,21 +206,130 @@ test('远程模式只允许密码认证', async () => {
 });
 
 // 验证明确定未受理且被其他宿主机任务阻止时清除新编号，不陷入永久未知。
-test('其他宿主机任务明确拒绝新任务时释放未受理编号', async () => {
-  for (const rejectAt of ['initial', 'reconcile']) {
+test('只消费首次提交的明确未受理，查询拒绝保留原记录', async () => {
+  for (const rejectAt of ['initial', 'query']) {
     let submissions = 0;
     const f = fixture({
-      queryTask: async () => { throw Error('LOWER_UPDATE_TASK_NOT_FOUND: 未找到原任务'); },
+      queryTask: async () => { throw Error('LOWER_UPDATE_TASK_REJECTED: 助手目录组可写'); },
       submitTask: async () => {
         submissions += 1;
-        if (rejectAt === 'initial' || submissions > 1) throw Error('LOWER_UPDATE_TASK_REJECTED: 原任务 existing-id 尚未处理');
+        if (rejectAt === 'initial') throw Error('LOWER_UPDATE_TASK_REJECTED: 助手目录组可写');
         throw Error('提交回执丢失');
       },
     });
     await f.controller.start(input());
-    assert.equal(f.controller.getSnapshot().task.stage, 'install_failed');
-    assert.equal(f.controller.getSnapshot().task.status, '更新任务未受理');
-    assert.equal(f.saved(), null);
-    assert.equal(submissions, rejectAt === 'initial' ? 1 : 2);
+    assert.equal(f.controller.getSnapshot().task.stage, rejectAt === 'initial' ? 'install_failed' : 'remote_unknown');
+    if (rejectAt === 'initial') {
+      assert.equal(f.controller.getSnapshot().task.status, '更新任务未受理');
+      assert.equal(f.saved(), null);
+      assert.match(f.controller.getSnapshot().task.verificationMessage, /助手目录组可写/);
+    } else {
+      assert.ok(f.saved());
+      await assert.rejects(f.controller.start(input()), /原任务/);
+    }
+    assert.equal(submissions, 1);
   }
+});
+
+test('远程环境预检在上传前执行，拒绝及缺少接口时不上传不保存任务', async () => {
+  const ok = fixture();
+  await ok.controller.start(input());
+  assert.deepEqual(ok.calls.slice(0, 3).map(([name]) => name), ['runtime', 'preflight', 'upload']);
+  assert.deepEqual(ok.calls[1][1].remote_target, input().connection.remote_target);
+  for (const preflightTask of [undefined, async () => { throw Error('/usr/local 组可写 sudo-secret'); }]) {
+    const f = fixture({ preflightTask });
+    await f.controller.start(input());
+    assert.equal(f.controller.getSnapshot().task.stage, 'check_failed');
+    assert.equal(f.calls.some(([name]) => ['upload', 'submit', 'persist'].includes(name)), false);
+    assert.ok(!JSON.stringify(f.controller.getSnapshot()).includes('sudo-secret'));
+  }
+});
+
+async function missingFixture(overrides = {}) {
+  const original = fixture({ queryTask: async () => { throw Error('离线'); } });
+  await original.controller.start(input());
+  const f = fixture({
+    loadPending: () => original.saved(),
+    queryTask: async request => { f.calls.push(['query', request]); throw Error('LOWER_UPDATE_TASK_NOT_FOUND: 原任务不存在'); },
+    queryRuntime: async request => { f.calls.push(['runtime', request]); return { exists: true, running: true, image_id: image }; },
+    ...overrides,
+  });
+  await f.controller.resumeRemote({ method: 'password', password: 'new-secret' }, 'new-sudo');
+  return f;
+}
+
+test('不存在任务经二次核验固定目标、健康镜像和归档后才能结束本地记录', async () => {
+  const f = await missingFixture();
+  await f.controller.closeMissingRemote({ method: 'password', password: 'close-secret' }, 'close-sudo');
+  assert.equal(f.controller.getSnapshot().task.stage, 'task_closed');
+  assert.equal(f.controller.getSnapshot().task.status, '本地记录已结束');
+  assert.equal(f.saved(), null);
+  assert.deepEqual(f.calls.map(([name]) => name), ['query', 'query', 'runtime', 'archive', 'close', 'persist']);
+  assert.equal(f.calls.find(([name]) => name === 'close')[1].operation_id, f.calls[1][1].operation_id);
+  assert.equal(f.calls.find(([name]) => name === 'close')[1].package_sha256, input().packageResult.sha256);
+  assert.equal(f.calls.find(([name]) => name === 'close')[1].expected_image_id, image);
+  const query = f.calls[1][1];
+  const runtime = f.calls[2][1];
+  assert.deepEqual(runtime.remote_target, query.remote_target);
+  assert.equal(runtime.upload_account, query.upload_account);
+  const archive = f.calls.find(([name]) => name === 'archive')[1];
+  assert.equal(archive.task.operation_id, query.operation_id);
+  assert.equal(archive.actual_image_id, image);
+  assert.equal(archive.reason, 'task_not_found');
+  assert.ok(!JSON.stringify(archive).includes('secret'));
+  assert.ok(!JSON.stringify(f.controller.getSnapshot()).includes('close-secret'));
+});
+
+test('结束记录的二次查询发现任务已受理或回退失败时保留记录', async () => {
+  for (const phase of ['accepted', 'succeeded', 'rollback_failed']) {
+    let queries = 0;
+    const f = await missingFixture({ queryTask: async request => {
+      if (++queries === 1) throw Error('LOWER_UPDATE_TASK_NOT_FOUND: 原任务不存在');
+      return status(request, phase);
+    } });
+    await f.controller.closeMissingRemote({ method: 'password', password: 'new-secret' }, 'new-sudo');
+    assert.equal(f.calls.some(([name]) => ['archive', 'persist', 'runtime', 'submit'].includes(name)), false);
+    assert.notEqual(f.controller.getSnapshot().task.stage, 'task_closed');
+    await assert.rejects(f.controller.start(input()), /原任务/);
+  }
+});
+
+test('镜像异常、查询失败、归档失败及清除失败均保留记录且允许重试', async () => {
+  for (const failure of ['not_exists', 'not_running', 'bad_image', 'query', 'archive', 'close', 'persist', 'missing_archive', 'missing_close']) {
+    let bad = true;
+    let queries = 0;
+    const f = await missingFixture({
+      queryTask: async () => {
+        if (++queries > 1 && bad && failure === 'query') throw Error('无权核验安装进程');
+        throw Error('LOWER_UPDATE_TASK_NOT_FOUND: 原任务不存在');
+      },
+      queryRuntime: async () => ({ exists: !(bad && failure === 'not_exists'), running: !(bad && failure === 'not_running'), image_id: bad && failure === 'bad_image' ? 'unknown' : image }),
+      archivePending: failure === 'missing_archive' ? undefined : async () => { if (bad && failure === 'archive') throw Error('备份存储已满'); },
+      closeTask: failure === 'missing_close' ? undefined : async () => { if (bad && failure === 'close') throw Error('设备拒绝关闭原任务'); },
+      savePending: async () => { if (bad && failure === 'persist') throw Error('清除失败'); },
+    });
+    await f.controller.closeMissingRemote({ method: 'password', password: 'new-secret' }, 'new-sudo');
+    assert.equal(f.controller.getSnapshot().task.stage, 'task_missing', failure);
+    await assert.rejects(f.controller.start(input()), /原任务/);
+    if (!['missing_archive', 'missing_close'].includes(failure)) {
+      bad = false;
+      await f.controller.closeMissingRemote({ method: 'password', password: 'new-secret' }, 'new-sudo');
+      assert.equal(f.controller.getSnapshot().task.stage, 'task_closed', failure);
+    }
+  }
+});
+
+test('核验结束记录期间阻止并发查询与新任务，结束后允许明确新建', async () => {
+  let release;
+  const runtime = new Promise(resolve => { release = resolve; });
+  const f = await missingFixture({ queryRuntime: () => runtime });
+  const closing = f.controller.closeMissingRemote({ method: 'password', password: 'new-secret' }, 'new-sudo');
+  await assert.rejects(f.controller.start(input()), /正在执行/);
+  await assert.rejects(f.controller.resumeRemote({ method: 'password', password: 'new-secret' }, 'new-sudo'), /正在查询/);
+  await assert.rejects(f.controller.closeMissingRemote({ method: 'password', password: 'new-secret' }, 'new-sudo'), /核验中/);
+  release({ exists: true, running: true, image_id: image });
+  await closing;
+  assert.equal(f.controller.getSnapshot().task.stage, 'task_closed');
+  await f.controller.start(input());
+  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
 });

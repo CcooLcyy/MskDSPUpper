@@ -227,6 +227,11 @@ export interface LowerUpdateTaskQueryRequest extends LowerUpdateRuntimeInfoReque
   operation_id: string;
 }
 
+export interface LowerUpdateTaskCloseRequest extends LowerUpdateTaskQueryRequest {
+  package_sha256: string;
+  expected_image_id: string;
+}
+
 export interface LowerUpdateTaskStatus {
   operation_id: string;
   phase: 'accepted' | 'preparing' | 'installing' | 'verifying' | 'succeeded' | 'rolling_back' | 'rolled_back' | 'rollback_failed' | 'failed';
