@@ -1,4 +1,5 @@
 import type { api as tauriApi } from './tauri';
+import { buildManualSimulationSnapshot } from '../pages/IEC104/manual-simulation.ts';
 import type {
   AgcControlProfile,
   AgcDefaultPointInfo,
@@ -42,6 +43,7 @@ import type {
   Iec104Point,
   Iec104PointTable,
   Iec104SimulationSnapshot,
+  Iec104ManualSimulationPoint,
   Iec104SimulationGenerateOptions,
   Iec104SoeQuery,
   Iec104SoePage,
@@ -1398,6 +1400,13 @@ export const browserApi: typeof tauriApi = {
     return clone(snapshot);
   },
   iec104GetSimulationSnapshot: async (connName: string) => clone(iec104Simulation.get(connName) ?? { conn_name: connName, points: [] }),
+  iec104SetSimulationValues: async (connName: string, points: Iec104ManualSimulationPoint[]) => {
+    const snapshot = buildManualSimulationSnapshot(
+      connName, iec104Links.get(connName)?.config, iec104Tables.get(connName)?.points ?? [], points, Date.now(),
+    );
+    iec104Simulation.set(connName, snapshot);
+    return clone(snapshot);
+  },
   iec104ApplySimulationValues: async (connName: string) => {
     if (!iec104Simulation.has(connName)) throw new Error('浏览器开发模式 mock 没有模拟值');
   },

@@ -3,8 +3,8 @@ use tauri::State;
 
 use crate::grpc::iec104::Iec104Client;
 use crate::proto::iec104_proto::{
-    ApciParameters, Endpoint, LinkConfig, LinkInfo, Point, PointTable, QuerySoeRequest,
-    SoeAcknowledgedFilter,
+    ApciParameters, Endpoint, LinkConfig, LinkInfo, Point, PointTable, PointType, QuerySoeRequest,
+    SimulationPoint, SoeAcknowledgedFilter,
 };
 use crate::state::AppState;
 
@@ -455,6 +455,56 @@ pub struct SimulationPointDto {
     pub ts_ms: i64,
 }
 
+/// 手动模拟值只传工程量；品质和时间统一由下位机生成。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ManualSimulationPointDto {
+    pub tag: String,
+    pub point_type: i32,
+    pub bool_value: Option<bool>,
+    pub double_value: Option<f64>,
+}
+
+impl TryFrom<ManualSimulationPointDto> for SimulationPoint {
+    type Error = String;
+
+    fn try_from(point: ManualSimulationPointDto) -> Result<Self, Self::Error> {
+        if point.tag.trim().is_empty() {
+            return Err("手动模拟点的 Tag 不能为空".to_string());
+        }
+        match PointType::try_from(point.point_type) {
+            Ok(PointType::Float) => {
+                if point.bool_value.is_some() {
+                    return Err(format!("手动模拟点“{}”是遥测，不能填写遥信值", point.tag));
+                }
+                let value = point.double_value.ok_or_else(|| {
+                    format!("手动模拟点“{}”未填写遥测值", point.tag)
+                })?;
+                if !value.is_finite() {
+                    return Err(format!("手动模拟点“{}”的遥测值必须是有限数值", point.tag));
+                }
+            }
+            Ok(PointType::Single) => {
+                if point.double_value.is_some() {
+                    return Err(format!("手动模拟点“{}”是遥信，不能填写遥测值", point.tag));
+                }
+                if point.bool_value.is_none() {
+                    return Err(format!("手动模拟点“{}”未填写遥信值", point.tag));
+                }
+            }
+            _ => return Err(format!("手动模拟点“{}”的点位类型不支持", point.tag)),
+        }
+        Ok(Self {
+            tag: point.tag,
+            r#type: point.point_type,
+            bool_value: point.bool_value,
+            double_value: point.double_value,
+            quality: 0,
+            ts_ms: 0,
+        })
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SimulationSnapshotDto {
     pub conn_name: String,
@@ -498,6 +548,28 @@ pub async fn iec104_generate_simulation_values(
         tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "生成模拟值失败");
         error.to_string()
     })
+}
+
+#[tauri::command]
+pub async fn iec104_set_simulation_values(
+    state: State<'_, AppState>,
+    conn_name: String,
+    points: Vec<ManualSimulationPointDto>,
+) -> Result<SimulationSnapshotDto, String> {
+    // 完整转换成功后才访问服务端，避免无效草稿产生运行态副作用。
+    let points = points.into_iter().map(SimulationPoint::try_from)
+        .collect::<Result<Vec<_>, _>>().map_err(|error| {
+            tracing::warn!(protocol = "IEC104", conn_name = %conn_name, error = %error, "手动模拟值校验失败");
+            error
+        })?;
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, point_count = points.len(), "开始保存手动模拟值");
+    let client = Iec104Client::new(&state.conn_manager);
+    let snapshot = client.set_simulation_values(conn_name.clone(), points).await.map_err(|error| {
+        tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "保存手动模拟值失败");
+        format!("保存手动模拟值失败：{error}")
+    })?;
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, point_count = snapshot.points.len(), "保存手动模拟值完成");
+    Ok(snapshot.into())
 }
 
 #[tauri::command]
@@ -606,6 +678,85 @@ pub async fn iec104_query_soe(
         total_count: response.total_count,
         unacknowledged_count: response.unacknowledged_count,
     })
+}
+
+#[cfg(test)]
+mod manual_simulation_tests {
+    use super::ManualSimulationPointDto;
+    use crate::proto::iec104_proto::SimulationPoint;
+
+    fn point(point_type: i32, bool_value: Option<bool>, double_value: Option<f64>) -> ManualSimulationPointDto {
+        ManualSimulationPointDto { tag: "测试点".to_string(), point_type, bool_value, double_value }
+    }
+
+    #[test]
+    fn manual_values_preserve_zero_and_false_without_client_metadata() {
+        let float: SimulationPoint = point(1, None, Some(0.0)).try_into().unwrap();
+        assert_eq!(float.double_value, Some(0.0));
+        assert_eq!(float.bool_value, None);
+        assert_eq!(float.quality, 0);
+        assert_eq!(float.ts_ms, 0);
+
+        let single: SimulationPoint = point(2, Some(false), None).try_into().unwrap();
+        assert_eq!(single.bool_value, Some(false));
+        assert_eq!(single.double_value, None);
+        assert_eq!(single.tag, "测试点");
+        assert_eq!(single.r#type, 2);
+    }
+
+    #[test]
+    fn manual_values_reject_missing_mismatched_and_unsupported_types() {
+        for value in [
+            point(1, None, None), point(2, None, None),
+            point(1, Some(false), None), point(2, None, Some(0.0)),
+            point(1, Some(true), Some(1.0)), point(2, Some(false), Some(0.0)),
+            point(0, None, Some(1.0)), point(3, Some(true), None),
+        ] {
+            assert!(SimulationPoint::try_from(value).is_err());
+        }
+    }
+
+    #[test]
+    fn manual_values_reject_non_finite_numbers_and_empty_tags() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(SimulationPoint::try_from(point(1, None, Some(value))).is_err());
+        }
+        for tag in ["", "   "] {
+            let mut value = point(1, None, Some(1.0));
+            value.tag = tag.to_string();
+            assert!(SimulationPoint::try_from(value).is_err());
+        }
+    }
+
+    #[test]
+    fn manual_input_distinguishes_absent_values_from_explicit_zero_and_false() {
+        let missing: ManualSimulationPointDto = serde_json::from_value(serde_json::json!({
+            "tag": "测试点", "point_type": 1
+        })).unwrap();
+        assert!(SimulationPoint::try_from(missing).is_err());
+        let zero: ManualSimulationPointDto = serde_json::from_value(serde_json::json!({
+            "tag": "测试点", "point_type": 1, "double_value": 0, "bool_value": null
+        })).unwrap();
+        assert_eq!(SimulationPoint::try_from(zero).unwrap().double_value, Some(0.0));
+        let single: ManualSimulationPointDto = serde_json::from_value(serde_json::json!({
+            "tag": "测试点", "point_type": 2, "bool_value": false, "double_value": null
+        })).unwrap();
+        assert_eq!(SimulationPoint::try_from(single).unwrap().bool_value, Some(false));
+    }
+
+    #[test]
+    fn manual_input_rejects_client_metadata_and_wrong_json_value_types() {
+        for fields in [
+            serde_json::json!({ "quality": 128 }),
+            serde_json::json!({ "ts_ms": 123 }),
+            serde_json::json!({ "double_value": "0" }),
+            serde_json::json!({ "bool_value": 0 }),
+        ] {
+            let mut json = serde_json::json!({ "tag": "测试点", "point_type": 1 });
+            json.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+            assert!(serde_json::from_value::<ManualSimulationPointDto>(json).is_err());
+        }
+    }
 }
 
 #[cfg(test)]

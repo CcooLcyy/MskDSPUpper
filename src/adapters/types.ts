@@ -526,11 +526,15 @@ export interface Iec61850RuntimeStatistics {
   mms_queue_bytes_high_watermark: number;
 }
 
-export interface Iec104SimulationPoint {
+/** 临时模拟输入为工程量；品质和时间由下位机生成，不写入点表。 */
+export interface Iec104ManualSimulationPoint {
   tag: string;
   point_type: number;
   bool_value?: boolean | null;
   double_value?: number | null;
+}
+
+export interface Iec104SimulationPoint extends Iec104ManualSimulationPoint {
   quality: number;
   ts_ms: number;
 }

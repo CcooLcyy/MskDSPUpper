@@ -124,6 +124,7 @@ pub fn run() {
                 commands::iec104::iec104_get_point_table,
                 commands::iec104::iec104_send_time_sync,
                 commands::iec104::iec104_generate_simulation_values,
+                commands::iec104::iec104_set_simulation_values,
                 commands::iec104::iec104_get_simulation_snapshot,
                 commands::iec104::iec104_apply_simulation_values,
                 commands::iec104::iec104_clear_simulation_values,

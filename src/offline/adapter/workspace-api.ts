@@ -111,6 +111,7 @@ export const WORKSPACE_OVERRIDE_METHODS = [
   'iec104GetPointTable',
   'iec104SendTimeSync',
   'iec104GetSimulationSnapshot',
+  'iec104SetSimulationValues',
   'iec104GenerateSimulationValues',
   'iec104ApplySimulationValues',
   'iec104ClearSimulationValues',
@@ -434,6 +435,7 @@ function workspaceOverrides(): OverriddenApi {
       conn_name: connName,
       points: [],
     }),
+    iec104SetSimulationValues: async () => unsupported('iec104SetSimulationValues')(),
     // 仿真值是纯运行态数据：离线不生成、不发送、不清理，也不失败。
     iec104GenerateSimulationValues: async (connName: string): Promise<Iec104SimulationSnapshot> => ({
       conn_name: connName,

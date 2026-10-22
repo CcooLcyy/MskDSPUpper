@@ -4,7 +4,7 @@ use crate::grpc::connection::ConnectionManager;
 use crate::proto::iec104_proto::{
     iec104_service_client::Iec104ServiceClient, DeleteLinkRequest, Empty, GetLinkRequest,
     GetPointTableRequest, LinkConfig, LinkInfo, Point, PointTable, RenameLinkRequest,
-    SendTimeSyncRequest, SimulationRequest, SimulationSnapshot, StartLinkRequest, StopLinkRequest, UpsertLinkRequest,
+    SendTimeSyncRequest, SetSimulationValuesRequest, SimulationPoint, SimulationRequest, SimulationSnapshot, StartLinkRequest, StopLinkRequest, UpsertLinkRequest,
     UpsertPointTableRequest, QuerySoeRequest, QuerySoeResponse,
 };
 
@@ -126,6 +126,19 @@ impl<'a> Iec104Client<'a> {
         let mut client = Iec104ServiceClient::new(channel);
         Ok(client
             .generate_simulation_values(SimulationRequest { conn_name, mode, bool_mode })
+            .await?
+            .into_inner())
+    }
+
+    pub async fn set_simulation_values(
+        &self,
+        conn_name: String,
+        points: Vec<SimulationPoint>,
+    ) -> Result<SimulationSnapshot> {
+        let channel = self.conn.module_channel("IEC104").await?;
+        let mut client = Iec104ServiceClient::new(channel);
+        Ok(client
+            .set_simulation_values(SetSimulationValuesRequest { conn_name, points })
             .await?
             .into_inner())
     }

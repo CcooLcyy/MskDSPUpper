@@ -43,6 +43,7 @@ import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import Iec104PointTable from './PointTable';
+import ManualSimulationEditor from './ManualSimulationEditor';
 import { api } from '../../adapters';
 import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
@@ -78,6 +79,7 @@ import type {
   Iec104SimulationSnapshot,
   Iec104SimulationGenerateOptions,
   Iec104SimulationBoolMode,
+  Iec104ManualSimulationPoint,
 } from '../../adapters';
 import {
   ImportedPointRoutesError,
@@ -558,6 +560,7 @@ const IEC104: React.FC = () => {
   const [simulationSnapshot, setSimulationSnapshot] = useState<Iec104SimulationSnapshot | null>(null);
   const [simulationLoading, setSimulationLoading] = useState(false);
   const [simulationModalOpen, setSimulationModalOpen] = useState(false);
+  const [manualSimulationConn, setManualSimulationConn] = useState<string | null>(null);
   const [simulationMode, setSimulationMode] = useState<Iec104SimulationGenerateOptions['mode']>('random');
   const [simulationBoolMode, setSimulationBoolMode] = useState<Iec104SimulationBoolMode>('random');
   const [pointTypeFilter, setPointTypeFilter] = useState<number>();
@@ -621,6 +624,7 @@ const IEC104: React.FC = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [searchParams] = useSearchParams();
   const pointLoadRequestRef = useRef(0);
+  const simulationOperationRef = useRef(false);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
 
   const [linkForm] = Form.useForm();
@@ -719,6 +723,7 @@ const IEC104: React.FC = () => {
     setIoaCategoryFilter(undefined);
   }, []);
   const actionsDisabled = simulationLoading
+    || manualSimulationConn !== null
     || pointsLoading
     || pointSubmitting
     || importSubmitting
@@ -966,13 +971,17 @@ const IEC104: React.FC = () => {
   );
 
   const handleGenerateSimulation = useCallback(async () => {
-    if (!selectedConn) return;
+    if (!selectedConn || simulationOperationRef.current) return;
+    const requestId = pointLoadRequestRef.current;
+    simulationOperationRef.current = true;
     setSimulationLoading(true);
     try {
-      setSimulationSnapshot(await api.iec104GenerateSimulationValues(selectedConn, {
+      const snapshot = await api.iec104GenerateSimulationValues(selectedConn, {
         mode: simulationMode,
         boolMode: simulationBoolMode,
-      }));
+      });
+      if (requestId !== pointLoadRequestRef.current) return;
+      setSimulationSnapshot(snapshot);
       const floatModeLabel = simulationMode === 'increment' ? '递增' : '随机';
       const boolModeLabel = simulationBoolMode === 'all_true'
         ? '遥信全真'
@@ -983,41 +992,69 @@ const IEC104: React.FC = () => {
             : '遥信随机';
       messageApi.success(`已生成固定模拟值（遥测${floatModeLabel}，${boolModeLabel}）`);
     } catch (error) {
-      messageApi.error(`生成模拟值失败: ${formatErrorText(error)}`);
+      if (requestId === pointLoadRequestRef.current) messageApi.error(`生成模拟值失败: ${formatErrorText(error)}`);
     } finally {
+      simulationOperationRef.current = false;
       setSimulationLoading(false);
     }
   }, [messageApi, selectedConn, simulationBoolMode, simulationMode]);
 
   const handleApplySimulation = useCallback(async () => {
-    if (!selectedConn) return;
+    if (!selectedConn || simulationOperationRef.current) return;
+    const requestId = pointLoadRequestRef.current;
+    simulationOperationRef.current = true;
     setSimulationLoading(true);
     try {
       await api.iec104ApplySimulationValues(selectedConn);
-      messageApi.success('模拟值已发送');
+      if (requestId === pointLoadRequestRef.current) messageApi.success('模拟值已发送');
     } catch (error) {
-      messageApi.error(`发送模拟值失败: ${formatErrorText(error)}`);
+      if (requestId === pointLoadRequestRef.current) messageApi.error(`发送模拟值失败: ${formatErrorText(error)}`);
     } finally {
+      simulationOperationRef.current = false;
       setSimulationLoading(false);
     }
   }, [messageApi, selectedConn]);
 
   const handleClearSimulation = useCallback(async () => {
-    if (!selectedConn) return;
+    if (!selectedConn || simulationOperationRef.current) return;
+    const requestId = pointLoadRequestRef.current;
+    simulationOperationRef.current = true;
     setSimulationLoading(true);
     try {
       await api.iec104ClearSimulationValues(selectedConn);
+      if (requestId !== pointLoadRequestRef.current) return;
       setSimulationSnapshot({ conn_name: selectedConn, points: [] });
       console.info('IEC104 模拟值已清除，运行视图恢复实时数据', {
         connName: selectedConn,
       });
       messageApi.success('模拟值已清除，已恢复真实数据路径');
     } catch (error) {
-      messageApi.error(`清除模拟值失败: ${formatErrorText(error)}`);
+      if (requestId === pointLoadRequestRef.current) messageApi.error(`清除模拟值失败: ${formatErrorText(error)}`);
     } finally {
+      simulationOperationRef.current = false;
       setSimulationLoading(false);
     }
   }, [messageApi, selectedConn]);
+
+  const handleSaveManualSimulation = useCallback(async (values: Iec104ManualSimulationPoint[]) => {
+    if (!selectedConn || manualSimulationConn !== selectedConn || !selectedSlaveStation || pointsLoading || simulationOperationRef.current) {
+      throw new Error('连接状态已变化，请重新打开手动选点窗口');
+    }
+    const requestId = pointLoadRequestRef.current;
+    simulationOperationRef.current = true;
+    setSimulationLoading(true);
+    try {
+      const snapshot = await api.iec104SetSimulationValues(selectedConn, values);
+      if (requestId !== pointLoadRequestRef.current) return;
+      if (snapshot.conn_name !== selectedConn) throw new Error('下位机返回的模拟快照连接不匹配');
+      setSimulationSnapshot(snapshot);
+      setManualSimulationConn(null);
+      messageApi.success(`已保存 ${snapshot.points.length} 个临时模拟值，可点击“应用并发送”主动发送`);
+    } finally {
+      simulationOperationRef.current = false;
+      setSimulationLoading(false);
+    }
+  }, [manualSimulationConn, messageApi, pointsLoading, selectedConn, selectedSlaveStation]);
 
   const getLinkState = useCallback(
     async (connName: string): Promise<number | null> => {
@@ -1145,6 +1182,7 @@ const IEC104: React.FC = () => {
   }, [refreshLinks]);
 
   useEffect(() => {
+    setManualSimulationConn(null);
     if (selectedConn) {
       void loadPoints(selectedConn);
     } else {
@@ -3411,7 +3449,7 @@ const IEC104: React.FC = () => {
           <Space>
             <ThunderboltOutlined />
             <span>无路由模拟数据</span>
-            {simulationSnapshot?.points.length ? <Tag color="warning">已生成 {simulationSnapshot.points.length} 点</Tag> : null}
+            {activeSimulationSnapshot?.points.length ? <Tag color="warning">已模拟 {activeSimulationSnapshot.points.length} 点</Tag> : null}
           </Space>
         )}
         open={simulationModalOpen}
@@ -3453,6 +3491,10 @@ const IEC104: React.FC = () => {
           />
           {/* 离线工作区没有运行态，隐藏模拟值生成/清除按钮 */}
           <CapabilityGate need="runtime.control">
+            <Button icon={<EditOutlined />} disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || points.length === 0 || actionsDisabled}
+              onClick={() => setManualSimulationConn(selectedConn)}>手动选点</Button>
+          </CapabilityGate>
+          <CapabilityGate need="runtime.control">
             <Button
               icon={<ThunderboltOutlined />}
               loading={simulationLoading}
@@ -3466,13 +3508,13 @@ const IEC104: React.FC = () => {
               type="primary"
               icon={<LinkOutlined />}
               loading={simulationLoading}
-              disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !simulationSnapshot?.points.length || selectedLink?.state !== 2 || actionsDisabled}
+              disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !activeSimulationSnapshot?.points.length || selectedLink?.state !== 2 || actionsDisabled}
               onClick={() => void handleApplySimulation()}
             >应用并发送</Button>
           </CapabilityGate>
           <CapabilityGate need="runtime.control">
             <Popconfirm title="确认清除当前模拟值？" onConfirm={() => void handleClearSimulation()}>
-              <Button danger icon={<ClearOutlined />} loading={simulationLoading} disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !simulationSnapshot?.points.length || actionsDisabled}>清除模拟值</Button>
+              <Button danger icon={<ClearOutlined />} loading={simulationLoading} disabled={!selectedConn || !isSimulationSupported(selectedLink?.config) || !activeSimulationSnapshot?.points.length || actionsDisabled}>清除模拟值</Button>
             </Popconfirm>
           </CapabilityGate>
         </Space>
@@ -3491,7 +3533,7 @@ const IEC104: React.FC = () => {
           rowKey="tag"
           pagination={false}
           scroll={{ x: 720, y: 420 }}
-          dataSource={simulationSnapshot?.points ?? []}
+          dataSource={activeSimulationSnapshot?.points ?? []}
           columns={[
             { title: 'Tag', dataIndex: 'tag', key: 'tag' },
             { title: '类型', dataIndex: 'point_type', key: 'point_type', render: (value: number) => POINT_TYPE_LABELS[value] ?? value },
@@ -3501,6 +3543,14 @@ const IEC104: React.FC = () => {
           locale={{ emptyText: '尚未生成模拟值' }}
         />
       </Modal>
+
+      <CapabilityGate need="runtime.control">
+        {manualSimulationConn && manualSimulationConn === selectedConn && simulationModalOpen ? (
+          <ManualSimulationEditor key={manualSimulationConn} connName={manualSimulationConn}
+            points={points} snapshot={activeSimulationSnapshot} loading={simulationLoading}
+            onSave={handleSaveManualSimulation} onCancel={() => setManualSimulationConn(null)} />
+        ) : null}
+      </CapabilityGate>
 
       {/* Link Modal */}
       <Modal

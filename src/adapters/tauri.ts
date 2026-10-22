@@ -34,6 +34,7 @@ import type {
   Iec104Point,
   Iec104PointTable,
   Iec104SimulationSnapshot,
+  Iec104ManualSimulationPoint,
   Iec104SimulationGenerateOptions,
   Iec104SoeQuery,
   Iec104SoePage,
@@ -251,6 +252,8 @@ export const api = {
     }),
   iec104GetSimulationSnapshot: (connName: string) =>
     invoke<Iec104SimulationSnapshot>('iec104_get_simulation_snapshot', { connName }),
+  iec104SetSimulationValues: (connName: string, points: Iec104ManualSimulationPoint[]) =>
+    invoke<Iec104SimulationSnapshot>('iec104_set_simulation_values', { connName, points }),
   iec104ApplySimulationValues: (connName: string) =>
     invoke<void>('iec104_apply_simulation_values', { connName }),
   iec104ClearSimulationValues: (connName: string) =>

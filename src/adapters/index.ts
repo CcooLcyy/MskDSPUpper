@@ -47,6 +47,7 @@ export type {
   Iec104Point,
   Iec104PointTable,
   Iec104SimulationPoint,
+  Iec104ManualSimulationPoint,
   Iec104SimulationSnapshot,
   Iec104SimulationGenerateOptions,
   Iec104SimulationMode,
