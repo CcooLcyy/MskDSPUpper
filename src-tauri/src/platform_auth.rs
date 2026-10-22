@@ -26,11 +26,30 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const PROTOCOL_VERSION: &str = "platform.v1";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformAccountRole {
+    Admin,
+    Operator,
+}
+
+impl PlatformAccountRole {
+    fn from_platform(role: &str) -> Result<Self, String> {
+        match role {
+            "admin" => Ok(Self::Admin),
+            // 兼容尚未提供角色字段的旧版平台，空值按运维人员解析。
+            "" | "operator" => Ok(Self::Operator),
+            _ => Err("平台账号角色无效，请检查平台版本".into()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct PlatformAuthStatus {
     pub authenticated: bool,
     pub username: Option<String>,
     pub display_name: Option<String>,
+    pub role: Option<PlatformAccountRole>,
     pub connection_state: String,
     pub expires_at: Option<i64>,
     pub message: Option<String>,
@@ -41,6 +60,7 @@ struct Session {
     account_id: String,
     username: String,
     display_name: String,
+    role: PlatformAccountRole,
     deadline: Instant,
     expires_at: i64,
 }
@@ -78,6 +98,7 @@ impl PlatformAuthManager {
                 account_id: "test".into(),
                 username: "test".into(),
                 display_name: "test".into(),
+                role: PlatformAccountRole::Operator,
                 deadline: Instant::now() + Duration::from_secs(300),
                 expires_at: now_ms() + 300_000,
             });
@@ -145,6 +166,7 @@ impl PlatformAuthManager {
             authenticated: state.session.is_some(),
             username: state.session.as_ref().map(|s| s.username.clone()),
             display_name: state.session.as_ref().map(|s| s.display_name.clone()),
+            role: state.session.as_ref().map(|s| s.role),
             connection_state: state.connection_state.to_string(),
             expires_at: state.session.as_ref().map(|s| s.expires_at),
             message: state
@@ -472,8 +494,30 @@ impl PlatformAuthManager {
                 {
                     clear_session(&mut state, Some("平台登录身份已失效，请重新登录".into()));
                     state.auto_login_blocked = true;
+                    return;
                 }
-                // 状态校验只验证身份，不续期本进程原有会话。
+                if Instant::now() >= session.deadline || now_ms() >= session.expires_at {
+                    clear_session(&mut state, Some("登录已过期，请重新登录".into()));
+                    return;
+                }
+                if let Some(account) = response.account {
+                    let role = match PlatformAccountRole::from_platform(&account.role) {
+                        Ok(role) => role,
+                        Err(error) => {
+                            clear_session(&mut state, Some(error));
+                            state.auto_login_blocked = true;
+                            return;
+                        }
+                    };
+                    if let Some(session) = state.session.as_mut() {
+                        if session.role != role {
+                            tracing::info!(previous_role = ?session.role, role = ?role, "平台账号角色已更新");
+                        }
+                        session.role = role;
+                        session.display_name = account.display_name;
+                    }
+                }
+                // 身份及角色同步不续期本进程原有会话，也不改变连接代次。
             }
         }
     }
@@ -631,6 +675,7 @@ fn validate_login(
         account_id: account.id.clone(),
         username: account.username.clone(),
         display_name: account.display_name.clone(),
+        role: PlatformAccountRole::from_platform(&account.role)?,
         deadline,
         expires_at,
     })

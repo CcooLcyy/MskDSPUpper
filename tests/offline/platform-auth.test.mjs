@@ -3,8 +3,8 @@ import test from 'node:test';
 import { createPlatformAuthController } from '../../src/auth/platform-auth-controller.ts';
 
 const settings = { grpc_endpoint: 'http://localhost:50000', username: 'alice', auto_login: false, remember_password: false };
-const signedOut = { authenticated: false, username: null, display_name: null, connection_state: 'signed_out', expires_at: null, message: null };
-const loggedIn = (expires = 10000) => ({ authenticated: true, username: 'alice', display_name: 'Alice', connection_state: 'online', expires_at: expires, message: null });
+const signedOut = { authenticated: false, username: null, display_name: null, role: null, connection_state: 'signed_out', expires_at: null, message: null };
+const loggedIn = (expires = 10000) => ({ authenticated: true, username: 'alice', display_name: 'Alice', role: 'operator', connection_state: 'online', expires_at: expires, message: null });
 function fixture(overrides = {}) {
   let now = 1000;
   const calls = [];
@@ -22,6 +22,41 @@ function fixture(overrides = {}) {
   const controller = createPlatformAuthController(api, async () => calls.push(['initialize']), () => now);
   return { controller, calls, setNow: value => { now = value; } };
 }
+
+test('role changes refresh account identity without reinitializing retained workspace', async () => {
+  let status = loggedIn();
+  const { controller, calls } = fixture({ getStatus: async () => status });
+  await controller.start();
+  await controller.login('alice', 'secret', false);
+  for (const role of ['admin', 'operator']) {
+    status = { ...loggedIn(), role, display_name: '新的显示名' };
+    await controller.poll();
+    assert.equal(controller.getSnapshot().status.role, role);
+    assert.equal(controller.getSnapshot().status.display_name, '新的显示名');
+    assert.equal(controller.getSnapshot().workspaceReady, true);
+    assert.equal(controller.getSnapshot().phase, 'authenticated');
+  }
+  assert.equal(calls.filter(call => call[0] === 'initialize').length, 1);
+  await controller.logout();
+  assert.equal(controller.getSnapshot().status, null);
+  await controller.login('alice', 'secret', false);
+  assert.equal(calls.filter(call => call[0] === 'initialize').length, 1);
+});
+
+test('network failure retains last known role until lease expiry clears identity', async () => {
+  const { controller, setNow } = fixture({
+    login: async () => ({ ...loggedIn(), role: 'admin' }),
+    getStatus: async () => { throw Error('network'); },
+  });
+  await controller.start();
+  await controller.login('alice', 'secret', false);
+  await controller.poll();
+  assert.equal(controller.getSnapshot().status.role, 'admin');
+  setNow(10000);
+  controller.tick();
+  assert.equal(controller.getSnapshot().phase, 'locked');
+  assert.equal(controller.getSnapshot().status, null);
+});
 test('first startup never initializes business settings before successful login', async () => {
   const { controller, calls } = fixture();
   await controller.start();

@@ -1,17 +1,19 @@
-import { App, Badge, Button, Space, Tooltip, Typography } from 'antd';
+import { App, Badge, Button, Space, Tag, Tooltip, Typography } from 'antd';
 import { LogoutOutlined } from '@ant-design/icons';
 import { usePlatformAuth } from './platform-auth-context.ts';
 
 export function PlatformAccountControl() {
   const { snapshot, controller } = usePlatformAuth();
   const { modal } = App.useApp();
-  const status = snapshot.status;
+  const status = snapshot.phase === 'authenticated' ? snapshot.status : null;
   const online = status?.connection_state === 'online';
+  if (!status?.authenticated) return null;
   return (
     <Space size={8} style={{ flexShrink: 0 }}>
       <Tooltip title={status?.message || (online ? '平台在线' : '平台正在重连，会话到期前可继续本地配置')}>
         <Badge status={online ? 'success' : 'warning'} text={<Typography.Text style={{ fontSize: 13 }}>{status?.display_name || status?.username || '平台账号'}</Typography.Text>} />
       </Tooltip>
+      {status.role && <Tag style={{ marginInlineEnd: 0 }}>{status.role === 'admin' ? '管理员' : '运维人员'}</Tag>}
       <Button size="small" type="text" icon={<LogoutOutlined />} onClick={() => {
         modal.confirm({
           title: '退出平台账号？',

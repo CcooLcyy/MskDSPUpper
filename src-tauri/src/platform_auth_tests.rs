@@ -42,6 +42,9 @@ struct MockPlatform {
     login_calls: Arc<AtomicU64>,
     delay_ms: Arc<AtomicU64>,
     ttl: Arc<AtomicU64>,
+    role: Arc<Mutex<String>>,
+    session_delay_ms: Arc<AtomicU64>,
+    session_started: Arc<AtomicBool>,
 }
 
 #[tonic::async_trait]
@@ -72,6 +75,7 @@ impl protocol::agent_service_server::AgentService for MockPlatform {
                 id: "account-1".into(),
                 username: request.username,
                 display_name: "测试用户".into(),
+                role: self.role.lock().clone(),
             }),
         };
         match self.mode.load(Ordering::Relaxed) {
@@ -90,6 +94,11 @@ impl protocol::agent_service_server::AgentService for MockPlatform {
             request.metadata().get("authorization").unwrap(),
             "Bearer private-session-token"
         );
+        self.session_started.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(
+            self.session_delay_ms.load(Ordering::Relaxed),
+        ))
+        .await;
         match self.mode.load(Ordering::Relaxed) {
             1 => Err(Status::unavailable("network-secret")),
             2 => Err(Status::unauthenticated("password-reset-secret")),
@@ -100,8 +109,13 @@ impl protocol::agent_service_server::AgentService for MockPlatform {
                 expires_in: 9999,
                 account: Some(protocol::AccountIdentity {
                     id: "account-1".into(),
-                    username: "alice".into(),
-                    display_name: "测试用户".into(),
+                    username: if self.mode.load(Ordering::Relaxed) == 7 {
+                        "other-account".into()
+                    } else {
+                        "alice".into()
+                    },
+                    display_name: "更新后的用户".into(),
+                    role: self.role.lock().clone(),
                 }),
             })),
         }
@@ -197,6 +211,147 @@ async fn fixture() -> (
 }
 
 #[tokio::test]
+async fn login_role_comes_from_platform_and_never_persists_in_settings() {
+    for (provided, expected) in [
+        ("admin", "admin"),
+        ("operator", "operator"),
+        ("", "operator"),
+    ] {
+        let (manager, service, _, path, server) = fixture().await;
+        *service.role.lock() = provided.into();
+        let status = manager
+            .login("alice".into(), "secret".into(), false, false)
+            .await
+            .unwrap();
+        assert_eq!(serde_json::to_value(&status).unwrap()["role"], expected);
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("role"));
+        manager.logout().await.unwrap();
+        assert!(serde_json::to_value(manager.status()).unwrap()["role"].is_null());
+        server.abort();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+}
+
+#[tokio::test]
+async fn login_unknown_nonempty_role_is_rejected() {
+    for role in ["root", "ADMIN", " operator "] {
+        let (manager, service, _, path, server) = fixture().await;
+        *service.role.lock() = role.into();
+        let error = manager
+            .login("alice".into(), "secret".into(), false, false)
+            .await
+            .unwrap_err();
+        assert!(error.contains("角色"));
+        assert!(!manager.status().authenticated);
+        server.abort();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+}
+
+#[tokio::test]
+async fn session_role_refreshes_both_directions_without_extending_lease_or_generation() {
+    let (manager, service, _, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, false)
+        .await
+        .unwrap();
+    let generation = manager.inner.lock().generation;
+    let deadline = manager.inner.lock().session.as_ref().unwrap().deadline;
+    let expires_at = manager.status().expires_at;
+    for role in ["admin", "operator", "admin", ""] {
+        *service.role.lock() = role.into();
+        manager.check_session(generation).await;
+        let status = manager.status();
+        assert!(status.authenticated);
+        assert_eq!(
+            serde_json::to_value(&status).unwrap()["role"],
+            if role.is_empty() { "operator" } else { role }
+        );
+        assert_eq!(status.display_name.as_deref(), Some("更新后的用户"));
+        assert_eq!(status.expires_at, expires_at);
+        assert_eq!(manager.inner.lock().generation, generation);
+        assert_eq!(
+            manager.inner.lock().session.as_ref().unwrap().deadline,
+            deadline
+        );
+    }
+    service.mode.store(1, Ordering::Relaxed);
+    *service.role.lock() = "admin".into();
+    manager.check_session(generation).await;
+    assert_eq!(
+        serde_json::to_value(manager.status()).unwrap()["role"],
+        "operator"
+    );
+    manager.logout().await.unwrap();
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[tokio::test]
+async fn unknown_role_in_session_refresh_locks_and_clears_identity() {
+    let (manager, service, _, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, false)
+        .await
+        .unwrap();
+    let generation = manager.inner.lock().generation;
+    *service.role.lock() = "superuser".into();
+    manager.check_session(generation).await;
+    let status = manager.status();
+    assert!(!status.authenticated);
+    assert!(status.username.is_none());
+    assert!(status.display_name.is_none());
+    assert!(serde_json::to_value(status).unwrap()["role"].is_null());
+    assert!(manager.inner.lock().auto_login_blocked);
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[tokio::test]
+async fn role_refresh_rejects_changed_account_identity() {
+    let (manager, service, _, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, false)
+        .await
+        .unwrap();
+    let generation = manager.inner.lock().generation;
+    *service.role.lock() = "admin".into();
+    service.mode.store(7, Ordering::Relaxed);
+    manager.check_session(generation).await;
+    assert!(!manager.status().authenticated);
+    assert!(serde_json::to_value(manager.status()).unwrap()["role"].is_null());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[tokio::test]
+async fn delayed_session_role_cannot_restore_logged_out_identity() {
+    let (manager, service, _, path, server) = fixture().await;
+    manager
+        .login("alice".into(), "secret".into(), false, false)
+        .await
+        .unwrap();
+    let generation = manager.inner.lock().generation;
+    *service.role.lock() = "admin".into();
+    service.session_delay_ms.store(100, Ordering::Relaxed);
+    let pending = manager.clone();
+    let request = tokio::spawn(async move { pending.check_session(generation).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !service.session_started.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    manager.logout().await.unwrap();
+    request.await.unwrap();
+    assert!(!manager.status().authenticated);
+    assert!(serde_json::to_value(manager.status()).unwrap()["role"].is_null());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[tokio::test]
 async fn login_is_grpc_and_settings_never_contain_secrets_or_restore_session() {
     let (manager, _, credentials, path, server) = fixture().await;
     assert!(!manager.status().authenticated);
@@ -260,6 +415,7 @@ async fn expiry_blocks_configuration_even_offline() {
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert!(manager.require_authenticated().is_err());
     assert_eq!(manager.status().connection_state, "signed_out");
+    assert!(serde_json::to_value(manager.status()).unwrap()["role"].is_null());
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 

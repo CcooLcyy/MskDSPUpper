@@ -5,10 +5,13 @@ export interface PlatformLoginSettings {
   remember_password: boolean;
 }
 
+export type PlatformAccountRole = 'admin' | 'operator';
+
 export interface PlatformAuthStatus {
   authenticated: boolean;
   username: string | null;
   display_name: string | null;
+  role: PlatformAccountRole | null;
   connection_state: 'signed_out' | 'connecting' | 'online' | 'reconnecting';
   expires_at: number | null;
   message: string | null;
