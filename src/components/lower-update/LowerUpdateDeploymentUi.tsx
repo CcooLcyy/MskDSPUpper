@@ -161,7 +161,7 @@ export function LowerUpdateDeploymentUi() {
             <Descriptions.Item label="退出码">{task.taskExitCode ?? task.installResult?.exit_code ?? '-'}</Descriptions.Item>
             <Descriptions.Item label="执行命令"><Text code style={wrapStyle}>{task.installResult?.command || '-'}</Text></Descriptions.Item>
           </Descriptions>
-          <Progress percent={task.progress} status={uncertain ? 'normal' : failed ? 'exception' : succeeded ? 'success' : 'active'} />
+          <Progress percent={Number(task.progress.toFixed(1))} status={uncertain ? 'normal' : failed ? 'exception' : succeeded ? 'success' : 'active'} />
           {task.error ? <Alert type="error" showIcon title={task.error} style={wrapStyle} /> : null}
           {task.cleanupError ? <Alert type="warning" showIcon title="更新已确认成功，历史包清理失败" description={task.cleanupError} style={wrapStyle} /> : null}
           {task.runtimeRefreshError ? <Alert type="warning" showIcon title="更新已确认成功，业务连接尚未恢复" description={task.runtimeRefreshError} style={wrapStyle} /> : null}

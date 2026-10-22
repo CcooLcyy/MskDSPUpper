@@ -1525,7 +1525,7 @@ const AdvancedConfigPage: React.FC = () => {
                     <Button size="small" onClick={openDeploymentDetails}>查看下发安装任务</Button>
                   </Space>
                   <Progress
-                    percent={deploymentTask.progress}
+                    percent={Number(deploymentTask.progress.toFixed(1))}
                     size="small"
                     status={isDeployingLowerUpdate ? 'active' : deploymentTask.stage === 'succeeded' ? 'success' : 'exception'}
                   />
