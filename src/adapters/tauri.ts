@@ -72,6 +72,7 @@ import type {
   VerticalSecurityAccessResult,
   VerticalSecurityLoginCapabilities,
   VerticalSecurityCertificateProfile,
+  VerticalSecurityBuiltinCertificateMode,
   VerticalSecurityCertificateRequest,
   VerticalSecurityAccessPathRequest,
   VerticalSecurityAccessPathResult,
@@ -255,8 +256,8 @@ export const api = {
     invoke<VerticalSecurityLoginCapabilities>('get_vertical_security_login_capabilities'),
   getVerticalSecurityCertificateProfile: () =>
     invoke<VerticalSecurityCertificateProfile>('get_vertical_security_certificate_profile'),
-  useBuiltinVerticalSecurityCertificates: () =>
-    invoke<VerticalSecurityCertificateProfile>('use_builtin_vertical_security_certificates'),
+  useBuiltinVerticalSecurityCertificates: (mode: VerticalSecurityBuiltinCertificateMode = 'auto') =>
+    invoke<VerticalSecurityCertificateProfile>('use_builtin_vertical_security_certificates', { request: { mode } }),
   configureVerticalSecurityCertificateProfile: (request: VerticalSecurityCertificateRequest) =>
     invoke<VerticalSecurityCertificateProfile>('configure_vertical_security_certificate_profile', { request }),
   selectVerticalSecurityCertificate: async (kind: 'client' | 'trust'): Promise<string | null> => {

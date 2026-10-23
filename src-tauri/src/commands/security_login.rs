@@ -25,6 +25,21 @@ const TARGET_PORT: u16 = 8888;
 const MAX_CERT_BYTES: u64 = 4 * 1024 * 1024;
 const REMOTE_REASON: &str = "远程纵密网络通道待接入，平台在线或 SSH 可达不能代替纵密管理连接";
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum BuiltinMode {
+    #[default]
+    Auto,
+    Old,
+    New,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuiltinCertificateRequest {
+    mode: BuiltinMode,
+}
+
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LoginMode {
@@ -67,6 +82,7 @@ pub struct CertificateProfile {
     configured: bool,
     source: &'static str,
     label: &'static str,
+    builtin_mode: Option<BuiltinMode>,
     client_certificate_path: Option<String>,
     trust_certificate_path: Option<String>,
     server_name: Option<String>,
@@ -77,6 +93,7 @@ impl Default for CertificateProfile {
             configured: false,
             source: "builtin",
             label: "内置配套证书",
+            builtin_mode: Some(BuiltinMode::Auto),
             client_certificate_path: None,
             trust_certificate_path: None,
             server_name: None,
@@ -114,6 +131,8 @@ pub struct LoginResult {
     lock_seconds: Option<u32>,
     last_login_at: Option<String>,
     device_version: Option<String>,
+    certificate_group: Option<&'static str>,
+    legacy_compatibility: bool,
     steps: Vec<LoginStep>,
 }
 impl LoginResult {
@@ -133,6 +152,8 @@ impl LoginResult {
             lock_seconds: None,
             last_login_at: None,
             device_version: None,
+            certificate_group: None,
+            legacy_compatibility: false,
             steps: [
                 ("connect", "连接纵密"),
                 ("tls", "证书连接"),
@@ -166,16 +187,18 @@ impl LoginResult {
 struct TlsCandidate {
     connector: tokio_native_tls::TlsConnector,
     validity: Option<builtin::Validity>,
+    group: Option<&'static str>,
+    legacy_compatibility: bool,
+    server_name: String,
 }
 struct LoadedProfile {
     metadata: CertificateProfile,
     candidates: Vec<TlsCandidate>,
-    server_name: String,
 }
 #[derive(Default)]
 struct LoginInner {
     profile: Option<Arc<LoadedProfile>>,
-    builtin_cache: Option<Arc<LoadedProfile>>,
+    builtin_cache: HashMap<BuiltinMode, Arc<LoadedProfile>>,
     pending: HashMap<String, watch::Sender<bool>>,
     // 保留取消及完成记录，防止 IPC 迟到造成先取消后启动，或重复使用请求标识。
     retired: HashMap<String, Instant>,
@@ -349,6 +372,7 @@ fn load_profile(mut request: CertificateRequest) -> Result<LoadedProfile, String
             configured: true,
             source: "custom",
             label: "自定义证书",
+            builtin_mode: None,
             client_certificate_path: Some(request.client_certificate_path.clone()),
             trust_certificate_path: Some(request.trust_certificate_path.clone()),
             server_name: Some(server_name.clone()),
@@ -356,11 +380,14 @@ fn load_profile(mut request: CertificateRequest) -> Result<LoadedProfile, String
         candidates: vec![TlsCandidate {
             connector: connector.into(),
             validity: None,
+            group: None,
+            legacy_compatibility: false,
+            server_name: server_name.clone(),
         }],
-        server_name,
     })
 }
 
+#[cfg(test)]
 fn load_builtin_profile() -> Result<LoadedProfile, String> {
     load_builtin_profile_at(current_unix_time()?)
 }
@@ -385,52 +412,86 @@ fn parse_builtin_candidate(resource: &builtin::BuiltinIdentity) -> Result<TlsCan
             .map_err(|_| "内置配套信任证书无法解析，请检查程序资源".to_string())?;
         builder.add_root_certificate(certificate);
     }
+    if resource.id == "old" {
+        #[cfg(windows)]
+        builder.mskdsp_legacy_certificate_pin(
+            Certificate::from_der(resource.trust[0])
+                .map_err(|_| "旧版配套 pin 证书无法解析".to_string())?,
+        );
+        #[cfg(not(windows))]
+        return Err("旧版配套证书兼容仅支持 Windows 桌面上位机".into());
+    }
     let connector = builder
         .build()
         .map_err(|_| "内置配套证书连接配置加载失败".to_string())?;
     Ok(TlsCandidate {
         connector: connector.into(),
         validity: Some(resource.validity()?),
+        group: Some(resource.id),
+        legacy_compatibility: resource.id == "old",
+        server_name: if resource.id == "new" {
+            "NARI"
+        } else {
+            TARGET_IP
+        }
+        .into(),
     })
 }
 
+#[cfg(test)]
 fn load_builtin_profile_at(now: i64) -> Result<LoadedProfile, String> {
+    load_builtin_profile_mode_at(now, BuiltinMode::Auto)
+}
+
+fn load_builtin_profile_mode_at(now: i64, mode: BuiltinMode) -> Result<LoadedProfile, String> {
     let mut candidates = Vec::with_capacity(builtin::IDENTITIES.len());
-    let mut selected = Vec::new();
     for resource in builtin::IDENTITIES {
-        if !resource.validity()?.contains(now) {
+        if (mode == BuiltinMode::Old && resource.id != "old")
+            || (mode == BuiltinMode::New && resource.id != "new")
+        {
+            continue;
+        }
+        #[cfg(not(windows))]
+        if resource.id == "old" && mode == BuiltinMode::Auto {
+            continue;
+        }
+        if resource.id != "old" && !resource.validity()?.contains(now) {
             tracing::info!(profile = resource.id, "内置纵密证书不在有效期内，已跳过");
             continue;
         }
         candidates.push(parse_builtin_candidate(resource)?);
-        selected.push(resource.id);
         tracing::info!(profile = resource.id, "内置纵密配套证书已在进程内解析");
     }
     if candidates.is_empty() {
         return Err("内置配套证书均未生效或已过期，请检查系统时间或替换有效证书".into());
     }
-    let label = match selected.as_slice() {
-        ["new"] => "内置配套证书（新组）",
-        ["old"] => "内置配套证书（旧组）",
-        _ => "内置配套证书",
+    let label = match mode {
+        BuiltinMode::Auto => "内置配套证书（自动匹配）",
+        BuiltinMode::Old => "内置配套证书（旧版）",
+        BuiltinMode::New => "内置配套证书（新版）",
     };
     Ok(LoadedProfile {
         metadata: CertificateProfile {
             configured: true,
             source: "builtin",
             label,
+            builtin_mode: Some(mode),
             client_certificate_path: None,
             trust_certificate_path: None,
-            server_name: Some(TARGET_IP.into()),
+            server_name: match mode {
+                BuiltinMode::Auto => None,
+                BuiltinMode::Old => Some(TARGET_IP.into()),
+                BuiltinMode::New => Some("NARI".into()),
+            },
         },
         candidates,
-        server_name: TARGET_IP.into(),
     })
 }
 
 async fn initialize_builtin_profile(
     manager: &SecurityLoginManager,
     force: bool,
+    mode: BuiltinMode,
 ) -> Result<Arc<LoadedProfile>, String> {
     let (generation, cached) = {
         let mut inner = manager.inner.lock();
@@ -441,14 +502,19 @@ async fn initialize_builtin_profile(
         } else {
             inner.config_generation = inner.config_generation.wrapping_add(1);
         }
-        (inner.config_generation, inner.builtin_cache.clone())
+        (
+            inner.config_generation,
+            inner.builtin_cache.get(&mode).cloned(),
+        )
     };
     let loaded = match cached {
         Some(cached) => cached,
         None => Arc::new(
-            tokio::task::spawn_blocking(load_builtin_profile)
-                .await
-                .map_err(|_| "内置证书加载任务未完成".to_string())??,
+            tokio::task::spawn_blocking(move || {
+                load_builtin_profile_mode_at(current_unix_time()?, mode)
+            })
+            .await
+            .map_err(|_| "内置证书加载任务未完成".to_string())??,
         ),
     };
     activate_builtin_profile(manager, generation, force, loaded)
@@ -474,35 +540,100 @@ fn activate_builtin_profile(
             let _ = sender.send(true);
         }
     }
-    inner.builtin_cache = Some(loaded.clone());
+    if let Some(mode) = loaded.metadata.builtin_mode {
+        inner.builtin_cache.insert(mode, loaded.clone());
+    }
     inner.profile = Some(loaded.clone());
     Ok(loaded)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum TlsAttemptError {
-    Connection,
-    Certificate,
+    ConnectionTimeout(Option<i32>),
+    ConnectionFailed(Option<i32>),
+    TlsTimeout,
+    CertificateMismatch(Option<i32>),
+    CertificateValidationFailed(Option<i32>),
+    TlsFailed(Option<i32>),
+}
+impl TlsAttemptError {
+    fn code(self) -> &'static str {
+        match self {
+            Self::ConnectionTimeout(_) => "connection_timeout",
+            Self::ConnectionFailed(_) => "connection_failed",
+            Self::TlsTimeout => "tls_timeout",
+            Self::CertificateMismatch(_) => "certificate_mismatch",
+            Self::CertificateValidationFailed(_) => "certificate_validation_failed",
+            Self::TlsFailed(_) => "tls_failed",
+        }
+    }
+    fn is_tls(self) -> bool {
+        !matches!(self, Self::ConnectionTimeout(_) | Self::ConnectionFailed(_))
+    }
+    fn system_code(self) -> Option<i32> {
+        match self {
+            Self::ConnectionTimeout(code)
+            | Self::ConnectionFailed(code)
+            | Self::CertificateMismatch(code)
+            | Self::CertificateValidationFailed(code)
+            | Self::TlsFailed(code) => code,
+            Self::TlsTimeout => None,
+        }
+    }
+    fn message(self) -> &'static str {
+        match self {
+            Self::ConnectionTimeout(_) => "连接纵密管理服务超时，请检查 101 至 108 口的访问路径",
+            Self::ConnectionFailed(_) => "无法连接纵密管理服务，请检查地址路径与服务状态",
+            Self::TlsTimeout => "等待纵密证书握手超时，尚未发送账号",
+            Self::CertificateMismatch(_) => {
+                "服务端证书与所选配套证书或服务器名称不匹配，尚未发送账号"
+            }
+            Self::CertificateValidationFailed(_) => {
+                "纵密证书验证失败，请检查配套证书、有效期及证书用途"
+            }
+            Self::TlsFailed(_) => "纵密 TLS 握手失败，请检查设备协议与客户端证书兼容性",
+        }
+    }
+}
+
+fn classify_tls_failure_text(text: &str) -> TlsAttemptError {
+    // 原始 TLS 错误仅在此提取稳定类别与系统码，不进入日志或前端响应。
+    let code = text
+        .rfind("(os error ")
+        .and_then(|start| text[start + 10..].split(')').next())
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .or_else(|| {
+            text.rfind("(os=0x")
+                .and_then(|start| text[start + 6..].split(')').next())
+                .and_then(|value| u32::from_str_radix(value.trim(), 16).ok())
+                .map(|code| code as i32)
+        });
+    if text.contains("MSKDSP_LEGACY_CERTIFICATE_MISMATCH") || text.contains("MSKDSP_LEGACY_TARGET_REJECTED") || text.contains("MSKDSP_LEGACY_PIN_INVALID")
+        || code.is_some_and(|code| matches!(code as u32, 0x800B010F | 0x80090322)) {
+        TlsAttemptError::CertificateMismatch(code)
+    } else if text.contains("MSKDSP_LEGACY_CERTIFICATE_VALIDATION_FAILED") || code.is_some_and(|code| matches!(code as u32, 0x800B0100..=0x800B0120 | 0x80096000..=0x80096020 | 0x80092000..=0x80092030 | 0x80090325 | 0x80090328)) {
+        TlsAttemptError::CertificateValidationFailed(code)
+    } else { TlsAttemptError::TlsFailed(code) }
 }
 
 async fn select_tls_candidate<T, F, Fut>(
     count: usize,
     mut handshake: F,
-) -> Result<T, TlsAttemptError>
+) -> Result<(usize, T), TlsAttemptError>
 where
     F: FnMut(usize) -> Fut,
     Fut: std::future::Future<Output = Result<T, TlsAttemptError>>,
 {
     for index in 0..count {
         match handshake(index).await {
-            Ok(stream) => return Ok(stream),
-            Err(TlsAttemptError::Certificate) if index + 1 < count => {
+            Ok(stream) => return Ok((index, stream)),
+            Err(error) if error.is_tls() && index + 1 < count => {
                 tracing::info!("内置配套证书握手未通过，尚未发送账号，尝试另一组证书");
             }
             Err(error) => return Err(error),
         }
     }
-    Err(TlsAttemptError::Certificate)
+    Err(TlsAttemptError::CertificateValidationFailed(None))
 }
 
 enum Reply {
@@ -628,10 +759,11 @@ async fn connect_and_authenticate(
         .candidates
         .iter()
         .filter(|candidate| {
-            candidate
-                .validity
-                .map(|validity| validity.contains(now))
-                .unwrap_or(true)
+            candidate.legacy_compatibility
+                || candidate
+                    .validity
+                    .map(|validity| validity.contains(now))
+                    .unwrap_or(true)
         })
         .collect();
     if active.is_empty() {
@@ -642,57 +774,61 @@ async fn connect_and_authenticate(
         );
     }
     // 在此阶段尚未发送任何账号材料；候选切换只处理 TLS 证书阶段失败。
-    let mut stream = match select_tls_candidate(active.len(), |index| {
-        let profile = profile.clone();
+    let (index, mut stream) = match select_tls_candidate(active.len(), |index| {
         let connector = active[index].connector.clone();
+        let server_name = active[index].server_name.clone();
+        let group = active[index].group.unwrap_or("custom");
         async move {
+            tracing::info!(certificate_group = group, phase = "connect", "开始连接纵密固定管理服务");
+            let outcome = async {
             let stream = tokio::time::timeout(
-                Duration::from_secs(4),
+                Duration::from_secs(10),
                 tokio::net::TcpStream::connect((TARGET_IP, TARGET_PORT)),
             )
             .await
-            .map_err(|_| TlsAttemptError::Connection)?
-            .map_err(|_| TlsAttemptError::Connection)?;
-            tracing::info!("纵密固定管理服务已连接，开始证书握手");
+            .map_err(|_| TlsAttemptError::ConnectionTimeout(None))?
+            .map_err(|error| if error.kind() == std::io::ErrorKind::TimedOut { TlsAttemptError::ConnectionTimeout(error.raw_os_error()) } else { TlsAttemptError::ConnectionFailed(error.raw_os_error()) })?;
+            tracing::info!(certificate_group = group, phase = "tls", "纵密固定管理服务已连接，开始证书握手");
             tokio::time::timeout(
                 Duration::from_secs(6),
-                connector.connect(&profile.server_name, stream),
+                connector.connect(&server_name, stream),
             )
             .await
-            .map_err(|_| TlsAttemptError::Certificate)?
-            .map_err(|_| TlsAttemptError::Certificate)
+            .map_err(|_| TlsAttemptError::TlsTimeout)?
+            .map_err(|error| classify_tls_failure_text(&error.to_string()))
+            }.await;
+            if let Err(error) = &outcome {
+                tracing::warn!(certificate_group = group, phase = if error.is_tls() { "tls" } else { "connect" }, code = error.code(), system_code = ?error.system_code(), "纵密连接阶段失败，尚未发送账号");
+            }
+            outcome
         }
     })
     .await
     {
-        Ok(stream) => stream,
-        Err(TlsAttemptError::Connection) => {
-            return result.failure(
-                0,
-                "connection_failed",
-                "无法连接纵密管理服务，请检查 101 至 108 口的访问路径",
-            )
-        }
-        Err(TlsAttemptError::Certificate) => {
-            result.success_step(0, "已连接固定纵密管理服务");
-            return result.failure(
-                1,
-                "tls_failed",
-                "证书握手失败或超时，请检查证书、信任链、服务器名称与设备 TLS 兼容性",
-            );
+        Ok(selection) => selection,
+        Err(error) => {
+            if error.is_tls() { result.success_step(0, "已连接固定纵密管理服务"); }
+            return result.failure(if error.is_tls() { 1 } else { 0 }, error.code(), error.message());
         }
     };
     result.success_step(0, "已连接固定纵密管理服务");
-    result.success_step(1, "证书链与服务器名称验证通过");
-    tracing::info!("纵密证书验证通过，开始身份认证");
-    let exchange = async {
-        stream
-            .write_all(&packet)
-            .await
-            .map_err(|_| "无法发送登录请求")?;
-        stream.flush().await.map_err(|_| "无法发送登录请求")?;
-        read_login_reply(&mut stream).await
-    };
+    result.certificate_group = active[index].group;
+    result.legacy_compatibility = active[index].legacy_compatibility;
+    result.success_step(
+        1,
+        if result.legacy_compatibility {
+            "已精确匹配批准的旧版服务端证书，启用限定日期及名称兼容"
+        } else {
+            "证书链、有效期与服务器名称验证通过"
+        },
+    );
+    tracing::info!(
+        certificate_group = result.certificate_group.unwrap_or("custom"),
+        legacy_compatibility = result.legacy_compatibility,
+        phase = "authenticate",
+        "纵密证书验证通过，开始单次身份认证"
+    );
+    let exchange = exchange_credentials_once(&mut stream, &packet);
     let reply = tokio::time::timeout(Duration::from_secs(8), exchange).await;
     // 每个分支均释放 TLS 和 TCP 流，关闭未经验证的连接。
     match reply {
@@ -710,6 +846,18 @@ async fn connect_and_authenticate(
     }
 }
 
+async fn exchange_credentials_once<S: AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    stream: &mut S,
+    packet: &[u8],
+) -> Result<Reply, &'static str> {
+    stream
+        .write_all(packet)
+        .await
+        .map_err(|_| "无法发送登录请求")?;
+    stream.flush().await.map_err(|_| "无法发送登录请求")?;
+    read_login_reply(stream).await
+}
+
 #[tauri::command]
 pub fn get_vertical_security_login_capabilities() -> LoginCapabilities {
     LoginCapabilities {
@@ -723,16 +871,24 @@ pub fn get_vertical_security_login_capabilities() -> LoginCapabilities {
 pub async fn get_vertical_security_certificate_profile(
     state: tauri::State<'_, AppState>,
 ) -> Result<CertificateProfile, String> {
-    Ok(initialize_builtin_profile(&state.security_login, false)
-        .await?
-        .metadata
-        .clone())
+    Ok(
+        initialize_builtin_profile(&state.security_login, false, BuiltinMode::Auto)
+            .await?
+            .metadata
+            .clone(),
+    )
 }
 #[tauri::command]
 pub async fn use_builtin_vertical_security_certificates(
     state: tauri::State<'_, AppState>,
+    request: Option<BuiltinCertificateRequest>,
 ) -> Result<CertificateProfile, String> {
-    let profile = initialize_builtin_profile(&state.security_login, true).await?;
+    let profile = initialize_builtin_profile(
+        &state.security_login,
+        true,
+        request.unwrap_or_default().mode,
+    )
+    .await?;
     tracing::info!("已恢复内置纵密配套证书，取消旧登录请求");
     Ok(profile.metadata.clone())
 }
@@ -796,7 +952,7 @@ pub async fn login_vertical_security(
     if request.device_id.is_some() {
         return Ok(result.failure(0, "invalid_target", "直连登录不应携带远程设备标识"));
     }
-    let profile = match initialize_builtin_profile(manager, false).await {
+    let profile = match initialize_builtin_profile(manager, false, BuiltinMode::Auto).await {
         Ok(profile) => profile,
         Err(_) => {
             return Ok(result.failure(
@@ -857,24 +1013,115 @@ pub fn change_vertical_security_password(
 mod tests {
     use super::*;
 
+    // 默认自动模式应先尝试明确批准的旧版 pin，禁止把旧版兼容扩大到新版。
+    #[cfg(windows)]
+    #[test]
+    fn security_login_builtin_modes_and_legacy_expiration_boundary() {
+        let automatic = load_builtin_profile_mode_at(1_790_000_000, BuiltinMode::Auto).unwrap();
+        assert_eq!(automatic.metadata.builtin_mode, Some(BuiltinMode::Auto));
+        assert_eq!(
+            automatic
+                .candidates
+                .iter()
+                .map(|candidate| candidate.group)
+                .collect::<Vec<_>>(),
+            vec![Some("old"), Some("new")]
+        );
+        assert!(automatic.candidates[0].legacy_compatibility);
+        assert!(!automatic.candidates[1].legacy_compatibility);
+        assert_eq!(automatic.candidates[0].server_name, TARGET_IP);
+        assert_eq!(automatic.candidates[1].server_name, "NARI");
+        assert!(automatic.metadata.server_name.is_none());
+        let new = load_builtin_profile_mode_at(1_790_000_000, BuiltinMode::New).unwrap();
+        assert_eq!(new.metadata.server_name.as_deref(), Some("NARI"));
+        assert!(new
+            .candidates
+            .iter()
+            .all(|candidate| !candidate.legacy_compatibility));
+        assert!(load_builtin_profile_mode_at(4_802_035_178, BuiltinMode::New).is_err());
+        let old = load_builtin_profile_mode_at(4_802_035_178, BuiltinMode::Old).unwrap();
+        assert_eq!(old.candidates.len(), 1);
+        assert_eq!(old.candidates[0].group, Some("old"));
+        assert!(old.candidates[0].legacy_compatibility);
+    }
+
+    // 模式请求只接受已定义的内置组，不接受任意目标或兼容开关。
+    #[test]
+    fn security_login_builtin_mode_payload_is_strict_and_optional_default_is_auto() {
+        assert_eq!(BuiltinCertificateRequest::default().mode, BuiltinMode::Auto);
+        for mode in ["auto", "old", "new"] {
+            assert!(serde_json::from_value::<BuiltinCertificateRequest>(
+                serde_json::json!({"mode":mode})
+            )
+            .is_ok());
+        }
+        for payload in [
+            serde_json::json!({"mode":"other"}),
+            serde_json::json!({"mode":"old","target_ip":"other"}),
+            serde_json::json!({"mode":"new","skip_verification":true}),
+        ] {
+            assert!(serde_json::from_value::<BuiltinCertificateRequest>(payload).is_err());
+        }
+    }
+
+    // TLS 还未成功时不能声明已匹配任何内置证书。
+    #[test]
+    fn security_login_matching_fields_start_empty_and_safe_error_codes_are_distinct() {
+        let result = LoginResult::new(&fixture_request());
+        assert!(result.certificate_group.is_none());
+        assert!(!result.legacy_compatibility);
+        assert_eq!(
+            classify_tls_failure_text("MSKDSP_LEGACY_CERTIFICATE_MISMATCH").code(),
+            "certificate_mismatch"
+        );
+        assert_eq!(
+            classify_tls_failure_text("native failure (os error -2146762487)").code(),
+            "certificate_validation_failed"
+        );
+        assert_eq!(
+            classify_tls_failure_text("unclassified handshake failure").code(),
+            "tls_failed"
+        );
+        let hexadecimal = classify_tls_failure_text(
+            "MSKDSP_LEGACY_CERTIFICATE_VALIDATION_FAILED (os=0x800B0110)",
+        );
+        assert_eq!(hexadecimal.code(), "certificate_validation_failed");
+        assert_eq!(hexadecimal.system_code(), Some(0x800B0110_u32 as i32));
+    }
+
     // 实际加载两套内置配套身份及信任证书，不连接设备或写入系统证书存储。
     #[test]
     fn security_login_builtin_profiles_are_real_and_default() {
         let profile = load_builtin_profile_at(1_790_000_000).unwrap();
         assert!(profile.metadata.configured);
         assert_eq!(profile.metadata.source, "builtin");
-        assert_eq!(profile.metadata.label, "内置配套证书（新组）");
+        assert_eq!(profile.metadata.label, "内置配套证书（自动匹配）");
         assert!(profile.metadata.client_certificate_path.is_none());
         assert!(profile.metadata.trust_certificate_path.is_none());
-        assert_eq!(profile.server_name, TARGET_IP);
-        assert_eq!(profile.candidates.len(), 1);
+        assert!(profile.metadata.server_name.is_none());
+        if cfg!(windows) {
+            assert_eq!(profile.candidates[0].server_name, TARGET_IP);
+            assert_eq!(profile.candidates[1].server_name, "NARI");
+            assert_eq!(profile.candidates.len(), 2);
+        } else {
+            assert_eq!(profile.candidates.len(), 1);
+            assert_eq!(profile.candidates[0].server_name, "NARI");
+        }
         let manifest: serde_json::Value = serde_json::from_str(include_str!(
             "../../resources/vertical-security/manifest.json"
         ))
         .unwrap();
         for resource in builtin::IDENTITIES {
-            // 显式解析归档的两套身份；运行时仅选择在有效期内的新组。
-            assert!(parse_builtin_candidate(resource).is_ok());
+            // 旧版仅使用批准的精确 pin；新版继续要求有效期与名称验证。
+            if cfg!(windows) || resource.id != "old" {
+                assert!(parse_builtin_candidate(resource).is_ok());
+            } else {
+                assert!(Identity::from_pkcs12(
+                    resource.identity,
+                    &builtin::bundle_password(resource.unlock_seed)
+                )
+                .is_ok());
+            }
             let metadata = manifest["profiles"]
                 .as_array()
                 .unwrap()
@@ -900,20 +1147,25 @@ mod tests {
                 resource.id == "new"
             );
         }
-        assert!(load_builtin_profile_at(0).is_err());
-        assert!(load_builtin_profile_at(4_802_035_178).is_err());
+        assert!(load_builtin_profile_mode_at(0, BuiltinMode::New).is_err());
+        assert!(load_builtin_profile_mode_at(4_802_035_178, BuiltinMode::New).is_err());
     }
 
     // 通过真实内置资源验证默认缓存、自定义替换保留及恢复默认时取消旧请求。
     #[tokio::test]
     async fn security_login_builtin_cache_custom_override_and_restore() {
         let manager = SecurityLoginManager::default();
-        let initial = initialize_builtin_profile(&manager, false).await.unwrap();
-        let cached = initialize_builtin_profile(&manager, false).await.unwrap();
+        let initial = initialize_builtin_profile(&manager, false, BuiltinMode::Auto)
+            .await
+            .unwrap();
+        let cached = initialize_builtin_profile(&manager, false, BuiltinMode::Auto)
+            .await
+            .unwrap();
         assert!(Arc::ptr_eq(&initial, &cached));
         let mut custom = load_builtin_profile().unwrap();
         custom.metadata.source = "custom";
         custom.metadata.label = "自定义证书";
+        custom.metadata.builtin_mode = None;
         let custom = Arc::new(custom);
         {
             let mut inner = manager.inner.lock();
@@ -922,13 +1174,17 @@ mod tests {
         }
         assert!(Arc::ptr_eq(
             &custom,
-            &initialize_builtin_profile(&manager, false).await.unwrap()
+            &initialize_builtin_profile(&manager, false, BuiltinMode::Auto)
+                .await
+                .unwrap()
         ));
         let late = activate_builtin_profile(&manager, 0, false, initial.clone()).unwrap();
         assert!(Arc::ptr_eq(&custom, &late));
         assert!(activate_builtin_profile(&manager, 0, true, initial.clone()).is_err());
         let (receiver, _guard) = manager.begin("fixture-before-reset").unwrap();
-        let restored = initialize_builtin_profile(&manager, true).await.unwrap();
+        let restored = initialize_builtin_profile(&manager, true, BuiltinMode::Auto)
+            .await
+            .unwrap();
         assert!(Arc::ptr_eq(&initial, &restored));
         assert_eq!(restored.metadata.source, "builtin");
         assert!(*receiver.borrow());
@@ -944,24 +1200,288 @@ mod tests {
             attempts.fetch_add(1, Ordering::SeqCst);
             async move {
                 if index == 0 {
-                    Err(TlsAttemptError::Certificate)
+                    Err(TlsAttemptError::CertificateValidationFailed(None))
                 } else {
                     Ok("stream")
                 }
             }
         })
         .await;
-        assert_eq!(selected.unwrap(), "stream");
+        assert_eq!(selected.unwrap(), (1, "stream"));
         assert_eq!(count.load(Ordering::SeqCst), 2);
         let count = Arc::new(AtomicUsize::new(0));
         let attempts = count.clone();
         assert!(select_tls_candidate::<(), _, _>(2, move |_| {
             attempts.fetch_add(1, Ordering::SeqCst);
-            async { Err(TlsAttemptError::Connection) }
+            async { Err(TlsAttemptError::ConnectionFailed(None)) }
         })
         .await
         .is_err());
         assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    // 高级模式选择保持独立缓存，普通读取不能覆盖已显式选择的组或自定义配置。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn security_login_builtin_mode_switch_preserves_generation_and_cache() {
+        let manager = SecurityLoginManager::default();
+        let automatic = initialize_builtin_profile(&manager, false, BuiltinMode::Auto)
+            .await
+            .unwrap();
+        let new = initialize_builtin_profile(&manager, true, BuiltinMode::New)
+            .await
+            .unwrap();
+        assert_eq!(new.metadata.builtin_mode, Some(BuiltinMode::New));
+        assert!(Arc::ptr_eq(
+            &new,
+            &initialize_builtin_profile(&manager, false, BuiltinMode::Auto)
+                .await
+                .unwrap()
+        ));
+        let (receiver, _guard) = manager.begin("fixture-mode-switch").unwrap();
+        let old = initialize_builtin_profile(&manager, true, BuiltinMode::Old)
+            .await
+            .unwrap();
+        assert_eq!(old.candidates.len(), 1);
+        assert_eq!(old.candidates[0].group, Some("old"));
+        assert!(*receiver.borrow());
+        let restored = initialize_builtin_profile(&manager, true, BuiltinMode::Auto)
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&automatic, &restored));
+        assert!(activate_builtin_profile(&manager, 0, true, old).is_err());
+    }
+
+    // 双工流验证 TLS 候选切换发生在账号报文之前，账号拒绝后只发送一次完整报文。
+    #[tokio::test]
+    async fn security_login_credentials_sent_once_after_tls_fallback_and_never_retried() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let packet = encode_login("fixture", "fixture-secret", 1).unwrap();
+        let expected = packet.to_vec();
+        let (client, mut server) = tokio::io::duplex(256);
+        let server_task = tokio::spawn(async move {
+            let mut received = vec![0; expected.len()];
+            server.read_exact(&mut received).await.unwrap();
+            assert_eq!(received, expected);
+            server
+                .write_all(&[0, 0, 0, 12, 0, 0, 0, 0, 0])
+                .await
+                .unwrap();
+            let mut repeated = Vec::new();
+            server.read_to_end(&mut repeated).await.unwrap();
+            repeated
+        });
+        let count = Arc::new(AtomicUsize::new(0));
+        let attempts = count.clone();
+        let mut client = Some(client);
+        let (index, mut selected) = select_tls_candidate(2, move |index| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            let stream = if index == 1 { client.take() } else { None };
+            async move { stream.ok_or(TlsAttemptError::CertificateMismatch(None)) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(index, 1);
+        assert!(matches!(
+            exchange_credentials_once(&mut selected, &packet)
+                .await
+                .unwrap(),
+            Reply::CredentialsRejected
+        ));
+        drop(selected);
+        assert!(server_task.await.unwrap().is_empty());
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
+    // 即使账号报文只写出部分内容就断线，也不能转到另一证书组再次尝试。
+    #[tokio::test]
+    async fn security_login_partial_write_failure_does_not_return_to_tls_selection() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let packet = encode_login("fixture", "fixture-secret", 1).unwrap();
+        let (client, mut server) = tokio::io::duplex(4);
+        let receiver = tokio::spawn(async move {
+            let mut header = [0; 4];
+            server.read_exact(&mut header).await.unwrap();
+            header
+        });
+        let count = Arc::new(AtomicUsize::new(0));
+        let attempts = count.clone();
+        let mut client = Some(client);
+        let (_, mut selected) = select_tls_candidate(2, move |_| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            let stream = client.take();
+            async move { stream.ok_or(TlsAttemptError::TlsFailed(None)) }
+        })
+        .await
+        .unwrap();
+        assert!(exchange_credentials_once(&mut selected, &packet)
+            .await
+            .is_err());
+        assert_eq!(receiver.await.unwrap(), [0, 0, 0, 12]);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    // 本地随机端口 TLS fixture：只使用配套资源和回环地址，不发送任何账号或应用报文。
+    #[cfg(windows)]
+    async fn local_tls_fixture(
+        server_group: &str,
+        client_group: &str,
+        override_name: Option<&str>,
+    ) -> Result<(), String> {
+        use std::process::Stdio;
+        use tokio::io::AsyncBufReadExt;
+        // Node 仅承载本地 TLS 服务；旧证书弱签名的服务端设置不改变 Rust 客户端校验。
+        const SERVER: &str = r#"
+const fs = require('node:fs');
+const tls = require('node:tls');
+try {
+  const config = JSON.parse(fs.readFileSync(0, 'utf8'));
+  let applicationBytes = 0;
+  let peerCertificateSha256 = null;
+  let completed = false;
+  const server = tls.createServer({
+    pfx: fs.readFileSync(config.pfx), passphrase: config.password,
+    minVersion: 'TLSv1.2', maxVersion: 'TLSv1.2', ciphers: 'DEFAULT@SECLEVEL=0',
+    requestCert: true, rejectUnauthorized: false
+  }, socket => {
+    const peer = socket.getPeerCertificate();
+    if (peer && peer.fingerprint256) peerCertificateSha256 = peer.fingerprint256.replaceAll(':', '').toLowerCase();
+    socket.on('data', data => { applicationBytes += data.length; });
+    socket.on('close', finish);
+    socket.end();
+  });
+  function finish() {
+    if (completed) return;
+    completed = true;
+    process.stdout.write(JSON.stringify({applicationBytes, peerCertificateSha256}) + '\n');
+    server.close(() => process.exit(0));
+  }
+  server.on('tlsClientError', finish);
+  server.on('error', () => process.exit(2));
+  server.listen(0, '127.0.0.1', () => process.stdout.write(JSON.stringify({port: server.address().port}) + '\n'));
+  setTimeout(() => process.exit(3), 12000).unref();
+} catch (error) { process.stdout.write(JSON.stringify({fixtureError: error.code || 'START_FAILED'}) + '\n'); process.exit(2); }
+"#;
+        let resource = builtin::IDENTITIES
+            .iter()
+            .find(|resource| resource.id == server_group)
+            .unwrap();
+        let password = builtin::bundle_password(resource.unlock_seed);
+        let resource_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/vertical-security")
+            .join(format!("builtin-{server_group}.p12"));
+        let payload = Zeroizing::new(
+            serde_json::to_string(
+                &serde_json::json!({"pfx":resource_path,"password":password.as_str()}),
+            )
+            .unwrap(),
+        );
+        let mut command = tokio::process::Command::new(
+            std::env::var_os("MSKDSP_TEST_NODE").unwrap_or_else(|| "node".into()),
+        );
+        command
+            .args(["--eval", SERVER])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .creation_flags(0x08000000);
+        let mut child = command
+            .spawn()
+            .map_err(|_| "无法启动本地 Node TLS fixture".to_string())?;
+        let mut input = child.stdin.take().unwrap();
+        input
+            .write_all(payload.as_bytes())
+            .await
+            .map_err(|_| "本地 fixture 输入失败".to_string())?;
+        input
+            .shutdown()
+            .await
+            .map_err(|_| "本地 fixture 输入未完成".to_string())?;
+        drop(input);
+        let mut output = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        let line = tokio::time::timeout(Duration::from_secs(8), output.next_line())
+            .await
+            .map_err(|_| "本地 fixture 启动超时".to_string())?
+            .map_err(|_| "本地 fixture 状态读取失败".to_string())?
+            .ok_or_else(|| "本地 fixture 未启动".to_string())?;
+        let status: serde_json::Value =
+            serde_json::from_str(&line).map_err(|_| "本地 fixture 状态无效".to_string())?;
+        let port = status["port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .ok_or_else(|| "本地 fixture 没有分配端口".to_string())?;
+        let client_resource = builtin::IDENTITIES
+            .iter()
+            .find(|resource| resource.id == client_group)
+            .unwrap();
+        let client = parse_builtin_candidate(client_resource).unwrap();
+        let socket = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(8),
+            client
+                .connector
+                .connect(override_name.unwrap_or(&client.server_name), socket),
+        )
+        .await
+        .map_err(|_| "本地客户端握手超时".to_string())
+        .and_then(|result| result.map(|_| ()).map_err(|error| error.to_string()));
+        // 客户端无论成功或拒绝都不发送应用数据，并只清理本次创建的服务端进程。
+        let summary = tokio::time::timeout(Duration::from_secs(2), output.next_line()).await;
+        if let Ok(Ok(Some(summary))) = &summary {
+            let summary: serde_json::Value = serde_json::from_str(summary).unwrap();
+            assert_eq!(summary["applicationBytes"].as_u64(), Some(0));
+            if result.is_ok() {
+                // 配套 trust 与客户端叶证书逐字节一致，核对服务端实际收到的身份。
+                let expected: String = sha2::Sha256::digest(client_resource.trust[0])
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                assert_eq!(
+                    summary["peerCertificateSha256"].as_str(),
+                    Some(expected.as_str())
+                );
+            }
+        } else if result.is_ok() {
+            return Err("本地 mTLS fixture 没有返回客户端身份核验结果".into());
+        }
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        result
+    }
+
+    // 真实旧叶证书已过期且名称为 server，只有指定 pin 分支允许固定逻辑目标完成握手。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn security_login_local_tls_exact_legacy_pin_completes_async_handshake() {
+        local_tls_fixture("old", "old", None).await.unwrap();
+    }
+
+    // 异证书不能利用旧版例外，即便普通系统策略尚未完成也必须拒绝。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn security_login_local_tls_legacy_pin_rejects_different_leaf_and_target() {
+        let mismatch = local_tls_fixture("new", "old", None).await.unwrap_err();
+        assert_eq!(
+            classify_tls_failure_text(&mismatch).code(),
+            "certificate_mismatch"
+        );
+        assert!(local_tls_fixture("old", "old", Some("wrong.invalid"))
+            .await
+            .is_err());
+    }
+
+    // 新组使用明确的 NARI 配套逻辑名称，仍拒绝错误名称和旧组过期叶证书。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn security_login_local_tls_new_group_keeps_strict_identity_validation() {
+        local_tls_fixture("new", "new", None).await.unwrap();
+        assert!(local_tls_fixture("new", "new", Some("wrong.invalid"))
+            .await
+            .is_err());
+        assert!(local_tls_fixture("old", "new", None).await.is_err());
     }
 
     // 纯 fixture 验证该分支，不连接真实纵密装置。

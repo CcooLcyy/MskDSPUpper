@@ -64,19 +64,19 @@ impl BuiltinIdentity {
 
 pub(super) const IDENTITIES: &[BuiltinIdentity] = &[
     BuiltinIdentity {
-        id: "new",
-        identity: include_bytes!("../../resources/vertical-security/builtin-new.p12"),
-        unlock_seed: include_bytes!("../../resources/vertical-security/builtin-new.unlock"),
-        trust: &[include_bytes!(
-            "../../resources/vertical-security/builtin-new-trust-0.der"
-        )],
-    },
-    BuiltinIdentity {
         id: "old",
         identity: include_bytes!("../../resources/vertical-security/builtin-old.p12"),
         unlock_seed: include_bytes!("../../resources/vertical-security/builtin-old.unlock"),
         trust: &[include_bytes!(
             "../../resources/vertical-security/builtin-old-trust-0.der"
+        )],
+    },
+    BuiltinIdentity {
+        id: "new",
+        identity: include_bytes!("../../resources/vertical-security/builtin-new.p12"),
+        unlock_seed: include_bytes!("../../resources/vertical-security/builtin-new.unlock"),
+        trust: &[include_bytes!(
+            "../../resources/vertical-security/builtin-new-trust-0.der"
         )],
     },
 ];

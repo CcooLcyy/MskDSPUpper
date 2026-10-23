@@ -289,6 +289,7 @@ export interface VerticalSecurityAccessResult {
 }
 
 export type VerticalSecurityRole = 1 | 2 | 3;
+export type VerticalSecurityBuiltinCertificateMode = 'auto' | 'old' | 'new';
 
 export interface VerticalSecurityLoginCapabilities {
   direct_available: boolean;
@@ -301,6 +302,7 @@ export interface VerticalSecurityCertificateProfile {
   configured: boolean;
   source?: 'builtin' | 'custom';
   label?: string;
+  builtin_mode?: VerticalSecurityBuiltinCertificateMode | null;
   client_certificate_path: string | null;
   trust_certificate_path: string | null;
   server_name: string | null;
@@ -358,6 +360,8 @@ export interface VerticalSecurityLoginResult {
   lock_seconds: number | null;
   last_login_at: string | null;
   device_version: string | null;
+  certificate_group?: 'old' | 'new' | null;
+  legacy_compatibility?: boolean;
   steps: VerticalSecurityLoginStep[];
 }
 

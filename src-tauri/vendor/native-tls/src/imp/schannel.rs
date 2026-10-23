@@ -9,6 +9,17 @@ use windows_sys::Win32::Security::Cryptography as crypt;
 
 use crate::{TlsAcceptorBuilder, TlsConnectorBuilder};
 
+#[path = "mskdsp_legacy.rs"]
+mod mskdsp_legacy;
+use mskdsp_legacy::{
+    legacy_error, validate_legacy_domain, validate_legacy_pin, verify_legacy_leaf,
+    verify_legacy_original_result, verify_legacy_ssl_policy,
+};
+
+#[cfg(test)]
+#[path = "mskdsp_legacy_tests.rs"]
+mod mskdsp_legacy_tests;
+
 const SEC_E_NO_CREDENTIALS: u32 = 0x8009030E;
 
 static PROTOCOLS: &[Protocol] = &[
@@ -266,7 +277,10 @@ impl Certificate {
     }
 }
 
-pub struct MidHandshakeTlsStream<S>(Box<tls_stream::MidHandshakeTlsStream<S>>);
+pub struct MidHandshakeTlsStream<S>(
+    Box<tls_stream::MidHandshakeTlsStream<S>>,
+    Option<CertContext>,
+);
 
 impl<S> fmt::Debug for MidHandshakeTlsStream<S>
 where
@@ -292,10 +306,7 @@ where
     S: io::Read + io::Write,
 {
     pub fn handshake(self) -> Result<TlsStream<S>, HandshakeError<S>> {
-        match self.0.handshake() {
-            Ok(s) => Ok(TlsStream(s)),
-            Err(e) => Err(e.into()),
-        }
+        finish_handshake(self.0.handshake(), self.1)
     }
 }
 
@@ -309,7 +320,7 @@ impl<S> From<tls_stream::HandshakeError<S>> for HandshakeError<S> {
         match e {
             tls_stream::HandshakeError::Failure(e) => HandshakeError::Failure(e.into()),
             tls_stream::HandshakeError::Interrupted(s) => {
-                HandshakeError::WouldBlock(MidHandshakeTlsStream(Box::new(s)))
+                HandshakeError::WouldBlock(MidHandshakeTlsStream(Box::new(s), None))
             }
         }
     }
@@ -318,6 +329,29 @@ impl<S> From<tls_stream::HandshakeError<S>> for HandshakeError<S> {
 impl<S> From<io::Error> for HandshakeError<S> {
     fn from(e: io::Error) -> HandshakeError<S> {
         HandshakeError::Failure(e.into())
+    }
+}
+
+fn finish_handshake<S>(
+    result: Result<tls_stream::TlsStream<S>, tls_stream::HandshakeError<S>>,
+    legacy_pin: Option<CertContext>,
+) -> Result<TlsStream<S>, HandshakeError<S>>
+where
+    S: io::Read + io::Write,
+{
+    match result {
+        Ok(stream) => {
+            if let Some(pin) = legacy_pin {
+                // 回调核对链首叶；交付流之前再次核对实际远端叶，防止特殊多链/CTL 混淆。
+                // 异步握手的 WouldBlock 恢复路径也必须先经过此检查，之后才能发送账号。
+                verify_legacy_leaf(&stream.peer_certificate()?, &pin)?;
+            }
+            Ok(TlsStream(stream))
+        }
+        Err(tls_stream::HandshakeError::Interrupted(stream)) => Err(HandshakeError::WouldBlock(
+            MidHandshakeTlsStream(Box::new(stream), legacy_pin),
+        )),
+        Err(tls_stream::HandshakeError::Failure(error)) => Err(error.into()),
     }
 }
 
@@ -331,12 +365,23 @@ pub struct TlsConnector {
     accept_invalid_hostnames: bool,
     accept_invalid_certs: bool,
     disable_built_in_roots: bool,
+    mskdsp_legacy_pin: Option<CertContext>,
     #[cfg(feature = "alpn")]
     alpn: Vec<Box<str>>,
 }
 
 impl TlsConnector {
     pub fn new(builder: &TlsConnectorBuilder) -> Result<TlsConnector, Error> {
+        let legacy_pin = builder
+            .mskdsp_legacy_pin
+            .as_ref()
+            .map(|pin| (pin.0).0.clone());
+        if let Some(pin) = &legacy_pin {
+            validate_legacy_pin(pin)?;
+            if builder.accept_invalid_certs || builder.accept_invalid_hostnames {
+                return Err(legacy_error("MSKDSP_LEGACY_POLICY_CONFLICT", None).into());
+            }
+        }
         let cert = builder.identity.as_ref().map(|i| i.0.cert.clone());
         let mut roots = Memory::new()?.into_store();
         for cert in &builder.root_certificates {
@@ -352,6 +397,7 @@ impl TlsConnector {
             accept_invalid_hostnames: builder.accept_invalid_hostnames,
             accept_invalid_certs: builder.accept_invalid_certs,
             disable_built_in_roots: builder.disable_built_in_roots,
+            mskdsp_legacy_pin: legacy_pin,
             #[cfg(feature = "alpn")]
             alpn: builder.alpn.clone(),
         })
@@ -361,6 +407,10 @@ impl TlsConnector {
     where
         S: io::Read + io::Write,
     {
+        if let Some(pin) = &self.mskdsp_legacy_pin {
+            validate_legacy_pin(pin)?;
+            validate_legacy_domain(domain)?;
+        }
         let mut builder = SchannelCred::builder();
         builder.enabled_protocols(convert_protocols(self.min_protocol, self.max_protocol));
         if let Some(cert) = self.cert.as_ref() {
@@ -373,7 +423,20 @@ impl TlsConnector {
             .domain(domain)
             .use_sni(self.use_sni)
             .accept_invalid_hostnames(self.accept_invalid_hostnames);
-        if self.accept_invalid_certs {
+        if let Some(pin) = self.mskdsp_legacy_pin.clone() {
+            builder.verify_callback(move |result| {
+                let chain = result
+                    .chain()
+                    .ok_or_else(|| legacy_error("MSKDSP_LEGACY_CERTIFICATE_MISMATCH", None))?;
+                let leaf = chain
+                    .get(0)
+                    .ok_or_else(|| legacy_error("MSKDSP_LEGACY_CERTIFICATE_MISMATCH", None))?;
+                verify_legacy_leaf(&leaf, &pin)?;
+                verify_legacy_original_result(result.result())?;
+                // 原错误在白名单中也不能直接成功，仍须重新完成限定 Windows SSL 策略。
+                verify_legacy_ssl_policy(&leaf, &chain.certificates().collect::<Vec<_>>())
+            });
+        } else if self.accept_invalid_certs {
             builder.verify_callback(|_| Ok(()));
         } else if self.disable_built_in_roots {
             let roots_copy = self.roots.clone();
@@ -403,10 +466,10 @@ impl TlsConnector {
                 );
             }
         }
-        match builder.connect(cred, stream) {
-            Ok(s) => Ok(TlsStream(s)),
-            Err(e) => Err(e.into()),
-        }
+        finish_handshake(
+            builder.connect(cred, stream),
+            self.mskdsp_legacy_pin.clone(),
+        )
     }
 }
 

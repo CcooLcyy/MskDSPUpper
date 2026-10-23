@@ -49,8 +49,8 @@ async function openFixture(options = {}) {
   page.setDefaultTimeout(10000);
   page.on('pageerror', error => failures.push(error.message));
   await page.addInitScript(initial => {
-    const mock = window.__securityPathMock = { calls: [], pathResolve: null, pathReject: null, profileFailure: initial.profileFailure === true, source: initial.source || 'builtin' };
-    const profile = () => ({ configured: true, source: mock.source, label: mock.source === 'builtin' ? '内置配套证书（fixture）' : '虚构自定义证书', client_certificate_path: mock.source === 'builtin' ? null : 'C:\\fixture\\client.p12', trust_certificate_path: mock.source === 'builtin' ? null : 'C:\\fixture\\trust.pem', server_name: '11.22.33.44' });
+    const mock = window.__securityPathMock = { calls: [], pathResolve: null, pathReject: null, profileFailure: initial.profileFailure === true, source: initial.source || 'builtin', builtinMode: initial.builtinMode || 'auto', builtinError: false, deferBuiltin: false, builtinResolve: null };
+    const profile = () => ({ configured: true, source: mock.source, builtin_mode: mock.source === 'builtin' ? mock.builtinMode : null, label: mock.source === 'builtin' ? '内置配套证书（fixture）' : '虚构自定义证书', client_certificate_path: mock.source === 'builtin' ? null : 'C:\\fixture\\client.p12', trust_certificate_path: mock.source === 'builtin' ? null : 'C:\\fixture\\trust.pem', server_name: '11.22.33.44' });
     let callback = 0;
     window.__TAURI_INTERNALS__ = {
       transformCallback: () => ++callback, unregisterCallback: () => {},
@@ -61,10 +61,15 @@ async function openFixture(options = {}) {
         if (command === 'get_vertical_security_login_capabilities') return { direct_available: true, remote_available: false, password_change_available: false, reason: '虚构 TLS 能力，仅用于 UI 测试' };
         if (command === 'get_vertical_security_certificate_profile') { if (mock.profileFailure) throw new Error('fixture profile failure'); return profile(); }
         if (command === 'configure_vertical_security_access_path') return new Promise((resolve, reject) => { mock.pathResolve = resolve; mock.pathReject = reject; });
-        if (command === 'use_builtin_vertical_security_certificates') { mock.source = 'builtin'; return profile(); }
+        if (command === 'use_builtin_vertical_security_certificates') {
+          if (mock.builtinError) throw new Error('fixture certificate mode failure');
+          const apply = () => { mock.source = 'builtin'; mock.builtinMode = args?.request?.mode || 'auto'; return profile(); };
+          if (mock.deferBuiltin) return new Promise(resolve => { mock.builtinResolve = () => resolve(apply()); });
+          return apply();
+        }
         if (command === 'configure_vertical_security_certificate_profile') { mock.source = 'custom'; return profile(); }
         if (command === 'plugin:dialog|open') return args.options.title.includes('PKCS12') ? 'C:\\fixture\\client.p12' : 'C:\\fixture\\trust.pem';
-        if (command === 'login_vertical_security') return { ...args.request, state: 'unverified_response', target_ip: '11.22.33.44', device_id: null, session_id: null, challenge_id: null, code: 'fixture', message: '虚构未验证应答', lock_seconds: null, last_login_at: null, device_version: null, steps: [] };
+        if (command === 'login_vertical_security') return { ...args.request, state: 'unverified_response', target_ip: '11.22.33.44', device_id: null, session_id: null, challenge_id: null, code: 'fixture', message: initial.tlsFailed ? 'fixture TLS 证书验证失败' : '虚构未验证应答', lock_seconds: null, last_login_at: null, device_version: null, certificate_group: initial.certificateGroup || null, legacy_compatibility: initial.legacyCompatibility === true, steps: initial.certificateGroup ? [{ id: 'connect', name: '连接装置', state: 'success', message: 'fixture 已连接' }, { id: 'tls', name: 'TLS 安全连接', state: initial.tlsFailed ? 'failed' : 'success', message: initial.tlsFailed ? 'fixture TLS 失败' : 'fixture TLS 已完成' }, { id: 'authenticate', name: '身份认证', state: 'failed', message: 'fixture 未验证应答' }, { id: 'initialize', name: '读取装置信息', state: 'unsupported', message: 'fixture 未执行' }] : [] };
         if (command === 'cancel_vertical_security_login' || command === 'logout_vertical_security') return;
         throw new Error(`未配置的 fixture IPC：${command}`);
       },
@@ -88,7 +93,7 @@ try {
   browser = await chromium.launch({ headless: true, args: ['--no-proxy-server'], ...(process.env.MSKDSP_BROWSER_EXECUTABLE ? { executablePath: process.env.MSKDSP_BROWSER_EXECUTABLE } : {}) });
   await check('内置证书自动加载，不手选证书即可尝试登录；加载页面不自动配置/检查/登录', async () => {
     await openFixture();
-    await page.getByText('内置配套证书 · 自动加载', { exact: true }).waitFor();
+    await page.getByText('内置配套证书 · 自动匹配', { exact: true }).waitFor();
     assert.equal((await sensitiveCalls()).length, 0);
     await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-user');
     await page.getByLabel('纵密密码', { exact: true }).fill('fixture-login-secret');
@@ -167,8 +172,9 @@ try {
     await page.locator('.security-login-certificate > summary').click();
     await page.getByLabel('纵密证书口令', { exact: true }).fill('fixture-certificate-secret');
     await page.getByRole('button', { name: '使用内置配套证书', exact: true }).click();
-    await page.getByText('内置配套证书 · 自动加载', { exact: true }).waitFor();
+    await page.getByText('内置配套证书 · 自动匹配', { exact: true }).waitFor();
     assert.equal((await calls('use_builtin_vertical_security_certificates')).length, 1);
+    assert.deepEqual((await calls('use_builtin_vertical_security_certificates'))[0].args, { request: { mode: 'auto' } });
     assert.equal(await page.getByLabel('纵密证书口令', { exact: true }).inputValue(), '');
     assert.equal((await calls('configure_vertical_security_certificate_profile')).length, 0);
   });
@@ -177,7 +183,102 @@ try {
     await page.getByText('读取纵密登录能力或证书配置失败，请离开此页后重试。', { exact: true }).waitFor();
     await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-user'); await page.getByLabel('纵密密码', { exact: true }).fill('fixture-secret');
     assert.equal(await page.getByRole('button', { name: /登录纵密/ }).isDisabled(), true);
-    assert.equal(await page.getByText('内置配套证书 · 自动加载', { exact: true }).count(), 0);
+    assert.equal(await page.getByText('内置配套证书 · 自动匹配', { exact: true }).count(), 0);
+  });
+  await check('内置模式只显式应用，运行时锁定并清密码，不提前显示已匹配', async () => {
+    await openFixture();
+    await page.getByText('内置配套证书 · 自动匹配', { exact: true }).waitFor();
+    await page.getByLabel('纵密密码', { exact: true }).fill('fixture-mode-secret');
+    await page.locator('.security-login-certificate > summary').click();
+    await page.locator('.security-login-builtin-mode > summary').click();
+    await page.getByLabel('内置证书模式', { exact: true }).click();
+    await page.locator('.ant-select-item-option-content').filter({ hasText: '仅旧版配套证书' }).click();
+    assert.equal((await calls('use_builtin_vertical_security_certificates')).length, 0);
+    await page.getByText('已生效模式：自动匹配旧版／新版。下方选择须点击应用才会生效。', { exact: true }).waitFor();
+    await page.getByText('内置配套证书 · 自动匹配', { exact: true }).waitFor();
+    await page.evaluate(() => { window.__securityPathMock.deferBuiltin = true; });
+    await page.getByRole('button', { name: /应用内置证书模式/ }).click();
+    await page.waitForFunction(() => Boolean(window.__securityPathMock.builtinResolve));
+    assert.equal(await page.getByLabel('纵密密码', { exact: true }).inputValue(), '');
+    assert.equal(await page.getByRole('radio', { name: /平台远程/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /检查直连/ }).isDisabled(), true);
+    assert.equal(await page.getByLabel('内置证书模式', { exact: true }).isDisabled(), true);
+    assert.equal(await page.getByText(/已匹配旧版证书/).count(), 0);
+    await page.evaluate(() => window.__securityPathMock.builtinResolve());
+    await page.getByText('内置配套证书 · 仅旧版', { exact: true }).waitFor();
+    assert.deepEqual((await calls('use_builtin_vertical_security_certificates'))[0].args, { request: { mode: 'old' } });
+    assert.equal((await calls('login_vertical_security')).length, 0);
+    assert.equal((await calls('check_vertical_security_access')).length, 0);
+    assert.equal(await page.getByRole('radio', { name: /平台远程/ }).isDisabled(), false);
+  });
+  await check('模式应用失败保留原模式，不假切换、不自动重试', async () => {
+    await openFixture({ builtinMode: 'new' });
+    await page.getByText('内置配套证书 · 仅新版', { exact: true }).waitFor();
+    await page.locator('.security-login-certificate > summary').click();
+    await page.locator('.security-login-builtin-mode > summary').click();
+    await page.getByLabel('内置证书模式', { exact: true }).click();
+    await page.locator('.ant-select-item-option-content').filter({ hasText: '仅旧版配套证书' }).click();
+    await page.evaluate(() => { window.__securityPathMock.builtinError = true; });
+    await page.getByRole('button', { name: /应用内置证书模式/ }).click();
+    await page.getByText('加载内置配套证书失败，请检查应用资源与证书状态。', { exact: true }).waitFor();
+    await page.getByText('内置配套证书 · 仅新版', { exact: true }).waitFor();
+    assert.equal(await page.getByText('内置配套证书 · 仅旧版', { exact: true }).count(), 0);
+    assert.equal((await calls('use_builtin_vertical_security_certificates')).length, 1);
+    assert.equal((await calls('login_vertical_security')).length, 0);
+  });
+  await check('实际TLS匹配后显示旧版受限兼容或新版严格校验，账号只发一次', async () => {
+    for (const group of ['old', 'new']) {
+      await openFixture({ certificateGroup: group, legacyCompatibility: group === 'old' });
+      assert.equal(await page.getByText(/已匹配[旧新]版证书/).count(), 0);
+      await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-match-user');
+      await page.getByLabel('纵密密码', { exact: true }).fill('fixture-match-secret');
+      await page.getByRole('button', { name: /登录纵密/ }).click();
+      await page.getByText(group === 'old' ? '已匹配旧版证书' : '已匹配新版证书', { exact: true }).waitFor();
+      await page.getByText(group === 'old' ? /受限旧版兼容已启用/ : /严格证书校验/).waitFor();
+      assert.equal((await calls('login_vertical_security')).length, 1);
+      assert.equal(await page.getByText('已登录纵密装置', { exact: true }).count(), 0);
+    }
+  });
+  await check('TLS失败或旧版兼容元数据缺失时不显示已匹配', async () => {
+    for (const option of [{ certificateGroup: 'old', legacyCompatibility: true, tlsFailed: true }, { certificateGroup: 'old', legacyCompatibility: false }]) {
+      await openFixture(option);
+      await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-match-user');
+      await page.getByLabel('纵密密码', { exact: true }).fill('fixture-match-secret');
+      await page.getByRole('button', { name: /登录纵密/ }).click();
+      await page.getByText('装置应答尚未验证，未建立登录会话', { exact: true }).waitFor();
+      assert.equal(await page.getByText(/已匹配[旧新]版证书/).count(), 0);
+      assert.equal((await calls('login_vertical_security')).length, 1);
+    }
+  });
+  await check('模式应用、自定义替换及恢复自动成功后清除上轮匹配结果', async () => {
+    for (const action of ['mode', 'custom', 'restore']) {
+      await openFixture({ certificateGroup: 'old', legacyCompatibility: true });
+      await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-match-user');
+      await page.getByLabel('纵密密码', { exact: true }).fill('fixture-match-secret');
+      await page.getByRole('button', { name: /登录纵密/ }).click();
+      await page.getByText('已匹配旧版证书', { exact: true }).waitFor();
+      await page.locator('.security-login-certificate > summary').click();
+      if (action === 'mode') {
+        await page.locator('.security-login-builtin-mode > summary').click();
+        await page.getByLabel('内置证书模式', { exact: true }).click();
+        await page.locator('.ant-select-item-option-content').filter({ hasText: '仅新版配套证书' }).click();
+        await page.getByRole('button', { name: /应用内置证书模式/ }).click();
+        await page.getByText('内置配套证书 · 仅新版', { exact: true }).waitFor();
+      } else {
+        await page.locator('.security-login-custom-certificate > summary').click();
+        if (action === 'custom') {
+          await page.getByRole('button', { name: /选择客户端证书/ }).click();
+          await page.getByRole('button', { name: /选择信任证书/ }).click();
+          await page.getByRole('button', { name: /应用连接证书/ }).click();
+          await page.getByText('已配置 · 当前进程有效', { exact: true }).waitFor();
+        } else {
+          await page.getByRole('button', { name: /使用内置配套证书/ }).click();
+          await page.getByText('已启用内置证书自动匹配，等待下次 TLS 连接确认实际组别。', { exact: true }).waitFor();
+        }
+      }
+      assert.equal(await page.getByText(/已匹配[旧新]版证书/).count(), 0);
+      assert.equal((await calls('login_vertical_security')).length, 1);
+    }
   });
   await check('卸载不声称撤销运行中的配置，迟到结果不自动登录或检查', async () => {
     await openFixture(); await openPath(); await fillPath(); await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click();

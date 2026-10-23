@@ -4,15 +4,17 @@ import { FileOutlined, LoginOutlined, LogoutOutlined } from '@ant-design/icons';
 import { api } from '../../adapters';
 import type {
   VerticalSecurityAccessMode,
+  VerticalSecurityBuiltinCertificateMode,
   VerticalSecurityCertificateProfile,
   VerticalSecurityLoginCapabilities,
   VerticalSecurityLoginResult,
   VerticalSecurityRole,
 } from '../../adapters';
-import { canAttemptLogin, isAuthenticatedLogin, LOGIN_STAGES, loginContextMatches, type LoginIdentity } from './login-state';
+import { canAttemptLogin, getBuiltinCertificateMode, getCertificateMatchPresentation, isAuthenticatedLogin, LOGIN_STAGES, loginContextMatches, type LoginIdentity } from './login-state';
 
 const ROLE_OPTIONS = [{ value: 1, label: '系统管理员' }, { value: 2, label: '安全操作员' }, { value: 3, label: '日志审计员' }];
 const ROLE_HINTS = { 1: '管理装置账号与系统设置。', 2: '配置网络、隧道与策略。', 3: '查看运行日志与审计信息。' };
+const BUILTIN_MODE_OPTIONS = [{ value: 'auto', label: '自动匹配旧版／新版' }, { value: 'old', label: '仅旧版配套证书' }, { value: 'new', label: '仅新版配套证书' }];
 type ActiveRequest = { identity: LoginIdentity; generation: number; cancelled: boolean };
 
 export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy, onLockChange }: {
@@ -32,6 +34,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const [trustPath, setTrustPath] = useState('');
   const [certificatePassword, setCertificatePassword] = useState('');
   const [serverName, setServerName] = useState('11.22.33.44');
+  const [builtinMode, setBuiltinMode] = useState<VerticalSecurityBuiltinCertificateMode>('auto');
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [certificateBusy, setCertificateBusy] = useState(false);
@@ -53,6 +56,9 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const mustChangePassword = result?.state === 'password_change_required';
   const locked = busy || certificateBusy || logoutBusy || changeBusy || Boolean(session) || mustChangePassword;
   const allowed = !initializing && canAttemptLogin(mode, deviceId, capabilities, profile);
+  const certificateMatch = getCertificateMatchPresentation(result);
+  const appliedBuiltinMode = getBuiltinCertificateMode(profile);
+  const builtinSummary = appliedBuiltinMode === 'auto' ? '内置配套证书 · 自动匹配' : appliedBuiltinMode === 'old' ? '内置配套证书 · 仅旧版' : '内置配套证书 · 仅新版';
 
   useEffect(() => { onLockChange(locked); }, [locked, onLockChange]);
 
@@ -66,6 +72,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
       setClientPath(configured.client_certificate_path ?? '');
       setTrustPath(configured.trust_certificate_path ?? '');
       setServerName(configured.server_name || '11.22.33.44');
+      setBuiltinMode(getBuiltinCertificateMode(configured));
     }).catch(() => { if (current) setError('读取纵密登录能力或证书配置失败，请离开此页后重试。'); })
       .finally(() => { if (current) setInitializing(false); });
     return () => {
@@ -164,23 +171,30 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
     setCertificatePassword(''); setCertificateBusy(true); setError(null); setNotice(null);
     try {
       const value = await api.configureVerticalSecurityCertificateProfile(request);
-      if (mountedRef.current) { setProfile(value); setNotice(value.configured ? '连接证书已配置，仅在当前上位机进程内有效。' : '连接证书尚未配置成功。'); }
+      if (mountedRef.current) { setProfile(value); setResult(null); setNotice(value.configured ? '连接证书已配置，仅在当前上位机进程内有效。' : '连接证书尚未配置成功。'); }
     } catch { if (mountedRef.current) setError('证书配置失败，请检查格式、口令与装置信任证书。'); }
     finally { if (mountedRef.current) setCertificateBusy(false); }
   };
 
-  const restoreBuiltinCertificate = async () => {
+  const applyBuiltinCertificate = async (requestedMode: VerticalSecurityBuiltinCertificateMode) => {
     if (locked || accessBusy || initializing) return;
     clearSecrets(); setCertificateBusy(true); setError(null); setNotice(null);
     try {
-      const value = await api.useBuiltinVerticalSecurityCertificates();
+      const value = await api.useBuiltinVerticalSecurityCertificates(requestedMode);
       if (!mountedRef.current) return;
+      if (!value.configured || value.source !== 'builtin' || getBuiltinCertificateMode(value) !== requestedMode) {
+        setProfile(null);
+        setResult(null);
+        setError('内置证书配置结果与请求不一致，无法确认当前模式，请重新应用证书配置。');
+        return;
+      }
       setProfile(value);
+      setBuiltinMode(getBuiltinCertificateMode(value));
+      setResult(null);
       setClientPath(value.client_certificate_path ?? '');
       setTrustPath(value.trust_certificate_path ?? '');
       setServerName(value.server_name || '11.22.33.44');
-      if (value.configured && value.source === 'builtin') setNotice('已加载内置配套证书。');
-      else setError('内置配套证书尚未加载成功，当前不能使用内置证书登录。');
+      setNotice(requestedMode === 'auto' ? '已启用内置证书自动匹配，等待下次 TLS 连接确认实际组别。' : `已应用${requestedMode === 'old' ? '旧版' : '新版'}内置证书模式，等待下次 TLS 连接确认。`);
     } catch { if (mountedRef.current) setError('加载内置配套证书失败，请检查应用资源与证书状态。'); }
     finally { if (mountedRef.current) setCertificateBusy(false); }
   };
@@ -242,16 +256,17 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
             <label htmlFor="vertical-security-username">用户名<Input id="vertical-security-username" aria-label="纵密用户名" value={username} maxLength={32} autoComplete="off" disabled={locked || accessBusy} placeholder="输入纵密账号" onChange={event => setUsername(event.target.value)} /></label>
             <label htmlFor="vertical-security-password">密码<Input.Password id="vertical-security-password" aria-label="纵密密码" value={password} maxLength={32} autoComplete="off" disabled={locked || accessBusy} placeholder="输入纵密密码" onChange={event => setPassword(event.target.value)} onPressEnter={() => void login()} ref={node => { secretInputs.current[0] = node?.input ?? null; }} /></label>
           </div>
-          <details className="security-login-certificate"><summary>连接证书 <span>{profile?.configured ? profile.source === 'builtin' ? '内置配套证书 · 自动加载' : '已配置 · 当前进程有效' : initializing ? '读取中' : '尚未配置'}</span></summary>
-            {profile?.source === 'builtin' && profile.configured && <p>{profile.label || '内置配套证书'}已由上位机加载，无需手动选择证书。</p>}
+          <details className="security-login-certificate"><summary>连接证书 <span>{profile?.configured ? profile.source === 'builtin' ? builtinSummary : '已配置 · 当前进程有效' : initializing ? '读取中' : '尚未配置'}</span></summary>
+            {profile?.source === 'builtin' && profile.configured && <p>{profile.label || '内置配套证书'}已由上位机加载，无需手动选择证书。实际组别须等待本次 TLS 匹配完成。</p>}
+            <details className="security-login-builtin-mode"><summary>内置证书模式（高级）</summary><p>自动模式仅在 TLS 握手期间匹配候选证书；发送账号后不切换证书、不自动重试认证。旧版兼容仅适用于固定目标与精确匹配的配套证书，自定义和新版证书保持严格校验。</p><p>已生效模式：{profile?.source === 'builtin' && profile.configured ? BUILTIN_MODE_OPTIONS.find(item => item.value === appliedBuiltinMode)?.label : '当前使用自定义证书或尚未配置'}。下方选择须点击应用才会生效。</p><Space wrap><Select aria-label="内置证书模式" value={builtinMode} options={BUILTIN_MODE_OPTIONS} disabled={locked || accessBusy || initializing} onChange={setBuiltinMode} style={{ minWidth: 210 }} /><Button disabled={locked || accessBusy || initializing} loading={certificateBusy} onClick={() => void applyBuiltinCertificate(builtinMode)}>应用内置证书模式</Button></Space></details>
             <details className="security-login-custom-certificate" open={profile?.source !== 'builtin'}><summary>自定义证书替换（高级）</summary>
-            <p>客户端证书使用 PKCS12（.p12 / .pfx），装置信任证书使用 PEM / DER。原 JKS 需先转换，不能直接导入。自定义配置仅在当前进程内有效，重启恢复内置配套证书。</p>
+            <p>客户端证书使用 PKCS12（.p12 / .pfx），装置信任证书使用 PEM / DER。原 JKS 需先转换，不能直接导入。自定义配置仅在当前进程内有效，重启恢复内置证书自动匹配。</p>
             <Form layout="vertical" onFinish={() => void saveCertificate()} disabled={locked || accessBusy || initializing}>
               <Form.Item label="客户端证书"><Space.Compact block><Input aria-label="客户端证书路径" value={clientPath} readOnly placeholder="选择 .p12 或 .pfx 文件" /><Button icon={<FileOutlined />} onClick={() => void selectCertificate('client')}>选择客户端证书</Button></Space.Compact></Form.Item>
               <Form.Item label="装置信任证书"><Space.Compact block><Input aria-label="信任证书路径" value={trustPath} readOnly placeholder="选择 PEM / DER 证书" /><Button icon={<FileOutlined />} onClick={() => void selectCertificate('trust')}>选择信任证书</Button></Space.Compact></Form.Item>
               <Form.Item label="证书口令"><Input.Password aria-label="纵密证书口令" value={certificatePassword} autoComplete="off" onChange={event => setCertificatePassword(event.target.value)} ref={node => { secretInputs.current[1] = node?.input ?? null; }} /></Form.Item>
               <details className="security-login-advanced"><summary>高级证书校验设置</summary><Form.Item label="服务端证书名称" extra="须与装置证书中的 IP 或 DNS 名称匹配；不会关闭证书验证。"><Input aria-label="服务端证书名称" value={serverName} onChange={event => setServerName(event.target.value)} /></Form.Item></details>
-              <Space wrap><Button htmlType="submit" loading={certificateBusy} disabled={locked || accessBusy || initializing || !clientPath || !trustPath || !serverName.trim()}>应用连接证书</Button><Button htmlType="button" disabled={locked || accessBusy || initializing} onClick={() => void restoreBuiltinCertificate()}>使用内置配套证书</Button></Space>
+              <Space wrap><Button htmlType="submit" loading={certificateBusy} disabled={locked || accessBusy || initializing || !clientPath || !trustPath || !serverName.trim()}>应用连接证书</Button><Button htmlType="button" disabled={locked || accessBusy || initializing} onClick={() => void applyBuiltinCertificate('auto')}>使用内置配套证书</Button></Space>
             </Form>
             </details>
           </details>
@@ -268,7 +283,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
       <Card title="登录进度" className="security-login-progress"><div aria-live="polite">{LOGIN_STAGES.map(stage => {
         const step = result?.steps.find(item => item.id === stage.id);
         return <div className="security-access-step" key={stage.id}><Badge status={step?.state === 'success' ? 'success' : step?.state === 'failed' ? 'error' : step?.state === 'unsupported' ? 'warning' : 'default'} /><div><strong>{stage.name}</strong><p>{step?.message || (busy ? '等待装置返回本次检查结果' : '尚未执行')}</p></div><span>{step?.state === 'success' ? '通过' : step?.state === 'failed' ? '失败' : step?.state === 'unsupported' ? '不支持' : '待确认'}</span></div>;
-      })}</div><p className="security-access-boundary">使用纵密装置账号与连接证书。网络检查与身份认证分别显示；ICMP 无响应不阻止尝试登录。</p></Card>
+      })}</div>{certificateMatch ? <Alert className="security-access-notice" type={certificateMatch.legacy ? 'warning' : 'info'} showIcon title={certificateMatch.label} description={<>{certificateMatch.compatibility}{certificateMatch.legacy && <p>仅此固定纵密目标、精确配套旧证书允许受限日期与名称兼容；不代表账号已经通过认证。</p>}</>} /> : profile?.source === 'builtin' && <p className="security-login-hint">证书组别待 TLS 匹配确认。</p>}<p className="security-access-boundary">使用纵密装置账号与连接证书。网络检查与身份认证分别显示；ICMP 无响应不阻止尝试登录。</p></Card>
     </div>
   </section>;
 }

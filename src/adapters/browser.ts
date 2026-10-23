@@ -80,6 +80,7 @@ import type {
   VerticalSecurityAccessResult,
   VerticalSecurityLoginCapabilities,
   VerticalSecurityCertificateProfile,
+  VerticalSecurityBuiltinCertificateMode,
   VerticalSecurityCertificateRequest,
   VerticalSecurityAccessPathRequest,
   VerticalSecurityAccessPathResult,
@@ -2110,7 +2111,8 @@ export const browserApi: typeof tauriApi = {
     trust_certificate_path: null,
     server_name: null,
   }),
-  useBuiltinVerticalSecurityCertificates: async (): Promise<VerticalSecurityCertificateProfile> => {
+  useBuiltinVerticalSecurityCertificates: async (mode: VerticalSecurityBuiltinCertificateMode = 'auto'): Promise<VerticalSecurityCertificateProfile> => {
+    void mode;
     throw new Error('浏览器模式不能加载桌面端内置纵密证书。');
   },
   configureVerticalSecurityCertificateProfile: async (request: VerticalSecurityCertificateRequest): Promise<VerticalSecurityCertificateProfile> => {

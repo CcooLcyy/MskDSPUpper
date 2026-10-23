@@ -349,11 +349,24 @@ pub struct TlsConnectorBuilder {
     accept_invalid_hostnames: bool,
     use_sni: bool,
     disable_built_in_roots: bool,
+    #[cfg(target_os = "windows")]
+    mskdsp_legacy_pin: Option<Certificate>,
     #[cfg(feature = "alpn")]
     alpn: Vec<Box<str>>,
 }
 
 impl TlsConnectorBuilder {
+    /// 为固定纵密管理目标启用精确旧证书兼容。
+    ///
+    /// 仅 Windows 可用。构建时验证批准的旧证书 SHA256，连接目标必须为
+    /// `11.22.33.44`，远端叶证书必须精确匹配后才能应用限定的日期、名称及 CA 例外。
+    /// 默认关闭，不修改操作系统证书存储，也不会跳过其他 SSL 策略检查。
+    #[cfg(target_os = "windows")]
+    pub fn mskdsp_legacy_certificate_pin(&mut self, certificate: Certificate) -> &mut Self {
+        self.mskdsp_legacy_pin = Some(certificate);
+        self
+    }
+
     /// Sets the identity to be used for client certificate authentication.
     pub fn identity(&mut self, identity: Identity) -> &mut TlsConnectorBuilder {
         self.identity = Some(identity);
@@ -492,6 +505,8 @@ impl TlsConnector {
             accept_invalid_certs: false,
             accept_invalid_hostnames: false,
             disable_built_in_roots: false,
+            #[cfg(target_os = "windows")]
+            mskdsp_legacy_pin: None,
             #[cfg(feature = "alpn")]
             alpn: vec![],
         }
