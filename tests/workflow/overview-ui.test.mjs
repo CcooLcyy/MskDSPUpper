@@ -94,3 +94,15 @@ test('总览运行指标接受 Decimal 点值', () => {
   assert.match(overviewSource, /value\.type === 'Decimal'/);
   assert.match(overviewSource, /Number\(value\.value\)/);
 });
+
+// 验证首页指标接入同一刷新代次，成功刷新地址后才开启，手动刷新也会重新采样。
+test('总览地址就绪后才开启设备指标和吞吐量轮询', () => {
+  assert.match(overviewSource, /const generation = \+\+refreshGeneration\.current/);
+  assert.match(overviewSource, /setRuntimeRefreshKey\(0\)/);
+  assert.match(overviewSource, /if \(runningModulesResult\.status === 'fulfilled'\) \{\s*setRuntimeRefreshKey\(generation\)/);
+  assert.equal(overviewSource.match(/if \(runtimeRefreshKey === 0\) return;/g)?.length, 2);
+  assert.equal(overviewSource.match(/return startOverviewPolling\(/g)?.length, 2);
+  assert.equal(overviewSource.match(/isCurrent: \(\) => runtimeRefreshKey === refreshGeneration\.current/g)?.length, 2);
+  assert.doesNotMatch(overviewSource, /initialSnapshot && initialSnapshot\.source !== 'unavailable'/);
+  assert.doesNotMatch(overviewSource, /setInterval\(/);
+});

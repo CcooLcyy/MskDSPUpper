@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -27,6 +27,7 @@ import { api } from '../../adapters';
 import type { DcConnectionInfo, DcPointValue, DcSourcePointUpdate, ModuleInfo, ModuleRunningInfo } from '../../adapters';
 import type { DataBusThroughputSample, DataBusThroughputSnapshot } from '../../adapters';
 import { loadDashboardAfterRunningModules } from '../../utils/dashboard-loading';
+import { startOverviewPolling } from '../../utils/overview-polling';
 import { subscribeManagerRuntimeRefreshed } from '../../utils/manager-runtime-events';
 import { getStoredManagerAddress } from '../../utils/app-settings';
 import './index.css';
@@ -238,9 +239,12 @@ const Overview: React.FC = () => {
   const [throughput, setThroughput] = useState<DataBusThroughputSnapshot | null>(null);
   const [deviceRuntime, setDeviceRuntime] = useState<DeviceRuntimeState>(emptyDeviceRuntimeState);
   const [runtimeRefreshKey, setRuntimeRefreshKey] = useState(0);
+  const refreshGeneration = useRef(0);
   const [messageApi, contextHolder] = message.useMessage();
 
   const refresh = useCallback(async ({ preserveConnection = false }: { preserveConnection?: boolean } = {}) => {
+    const generation = ++refreshGeneration.current;
+    setRuntimeRefreshKey(0);
     setLoading(true);
     setSyncState('loading');
 
@@ -249,6 +253,7 @@ const Overview: React.FC = () => {
         const managerAddr = getStoredManagerAddress(DEFAULT_MANAGER_ADDR);
         await api.setManagerAddr(managerAddr);
       }
+      if (generation !== refreshGeneration.current) return;
 
       const {
         modules: modulesResult,
@@ -269,6 +274,14 @@ const Overview: React.FC = () => {
         listAgcGroups: api.agcListGroups,
         listRoutes: () => api.dcListRoutes(0, '', 0, ''),
       });
+
+      if (generation !== refreshGeneration.current) return;
+      if (runningModulesResult.status === 'fulfilled') {
+        setRuntimeRefreshKey(generation);
+        console.info('[系统总览] 模块地址已就绪，开始读取设备指标与吞吐量', { generation });
+      } else {
+        console.warn('[系统总览] 运行模块地址刷新失败，已暂停指标读取', runningModulesResult.reason);
+      }
 
       const modules = modulesResult.status === 'fulfilled' ? modulesResult.value : [];
       const runningModules = runningModulesResult.status === 'fulfilled' ? runningModulesResult.value : [];
@@ -307,32 +320,32 @@ const Overview: React.FC = () => {
         messageApi.warning(`部分首页数据加载失败: ${failed.join('、')}`);
       }
     } catch (error) {
+      if (generation !== refreshGeneration.current) return;
+      console.warn('[系统总览] 地址初始化失败，已暂停指标读取', error);
       setFailedSections(['ModuleManager 连接']);
       setSyncState('error');
       messageApi.error(`首页数据加载失败: ${error}`);
     } finally {
-      setLoading(false);
+      if (generation === refreshGeneration.current) setLoading(false);
     }
   }, [messageApi]);
 
   useEffect(() => {
     void refresh();
+    return () => { refreshGeneration.current += 1; };
   }, [refresh]);
 
   useEffect(() => subscribeManagerRuntimeRefreshed(() => {
     // 更新任务已经恢复当前连接，读取概况与指标时保留当前目标和地址。
     void refresh({ preserveConnection: true });
-    setRuntimeRefreshKey(value => value + 1);
   }), [refresh]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const loadDeviceRuntime = async () => {
-      if (!cancelled) {
-        setDeviceRuntime((current) => ({ ...current, status: 'loading', error: '' }));
-      }
-      try {
+    if (runtimeRefreshKey === 0) return;
+    let failed = false;
+    return startOverviewPolling({
+      isCurrent: () => runtimeRefreshKey === refreshGeneration.current,
+      read: async () => {
         const connections = await api.dcListConnections();
         const connection = connections.find(
           (item: DcConnectionInfo) => item.module_name === DEVICE_RUNTIME_MODULE
@@ -347,82 +360,55 @@ const Overview: React.FC = () => {
           throw new Error(`DeviceInfo 运行指标标签未注册: ${missingTags.join('、')}`);
         }
         const updates = await api.dcGetSourceLatest(connection.conn_id, [...DEVICE_RUNTIME_TAGS]);
-        if (!cancelled) {
-          setDeviceRuntime({
-            cpu: deviceRuntimeMetric(updates, DEVICE_RUNTIME_TAGS[0]),
-            memory: deviceRuntimeMetric(updates, DEVICE_RUNTIME_TAGS[1]),
-            status: 'ready',
-            error: '',
-          });
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setDeviceRuntime((current) => ({
-            ...current,
-            status: 'unavailable',
-            error: String(error),
-          }));
-        }
-      }
-    };
-
-    void loadDeviceRuntime();
-    const timer = window.setInterval(() => void loadDeviceRuntime(), 5000);
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearInterval(timer);
-    };
+        return {
+          cpu: deviceRuntimeMetric(updates, DEVICE_RUNTIME_TAGS[0]),
+          memory: deviceRuntimeMetric(updates, DEVICE_RUNTIME_TAGS[1]),
+          status: 'ready' as const,
+          error: '',
+        };
+      },
+      onValue: (value) => {
+        if (failed) console.info('[系统总览] 设备运行指标读取已恢复');
+        failed = false;
+        setDeviceRuntime(value);
+      },
+      onError: (error) => {
+        if (!failed) console.warn('[系统总览] 设备运行指标读取失败，将继续重试', error);
+        failed = true;
+        setDeviceRuntime((current) => ({ ...current, status: 'unavailable', error: String(error) }));
+      },
+      intervalMs: 5000,
+    });
   }, [runtimeRefreshKey]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const loadThroughput = async (): Promise<DataBusThroughputSnapshot | null> => {
-      try {
-        const snapshot = await api.getDataBusThroughputSnapshot();
-        if (!cancelled) {
-          setThroughput(snapshot);
-        }
-        return snapshot;
-      } catch (error) {
-        if (!cancelled) {
-          setThroughput({
-            source: 'unavailable',
-            process_start_time_ms: null,
-            samples: [],
-            current_points_per_second: 0,
-            peak_points_per_second: 0,
-            updated_at_ms: null,
-          });
+    if (runtimeRefreshKey === 0) return;
+    let failed = false;
+    return startOverviewPolling({
+      isCurrent: () => runtimeRefreshKey === refreshGeneration.current,
+      read: () => api.getDataBusThroughputSnapshot(),
+      onValue: (value) => {
+        if (failed) console.info('[系统总览] 吞吐量读取已恢复');
+        failed = false;
+        setThroughput(value);
+      },
+      onError: (error) => {
+        setThroughput({
+          source: 'unavailable',
+          process_start_time_ms: null,
+          samples: [],
+          current_points_per_second: 0,
+          peak_points_per_second: 0,
+          updated_at_ms: null,
+        });
+        if (!failed) {
+          console.warn('[系统总览] 吞吐量读取失败，将继续重试', error);
           messageApi.warning(`吞吐量数据暂不可用: ${error}`);
         }
-        return null;
-      }
-    };
-
-    let timer: number | undefined;
-
-    const startDemoPolling = async () => {
-      const initialSnapshot = await loadThroughput();
-      if (cancelled) {
-        return;
-      }
-
-      if (initialSnapshot && initialSnapshot.source !== 'unavailable') {
-        timer = window.setInterval(() => {
-          void loadThroughput();
-        }, 1000);
-      }
-    };
-
-    void startDemoPolling();
-
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) {
-        window.clearInterval(timer);
-      }
-    };
+        failed = true;
+      },
+      intervalMs: 1000,
+    });
   }, [messageApi, runtimeRefreshKey]);
 
   const summaryCards = useMemo<SummaryCard[]>(
