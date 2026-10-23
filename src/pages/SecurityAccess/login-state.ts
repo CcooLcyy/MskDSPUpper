@@ -38,6 +38,7 @@ export function canAttemptLogin(
   capabilities: VerticalSecurityLoginCapabilities | null,
   profile: VerticalSecurityCertificateProfile | null,
 ): boolean {
-  return Boolean(capabilities && profile?.configured && profile.client_certificate_path && profile.trust_certificate_path
+  return Boolean(capabilities && profile?.configured
+    && (profile.source === 'builtin' || (profile.client_certificate_path && profile.trust_certificate_path))
     && (mode === 'direct' ? capabilities.direct_available : capabilities.remote_available && deviceId));
 }

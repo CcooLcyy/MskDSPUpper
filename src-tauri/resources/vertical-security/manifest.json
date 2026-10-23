@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "source": "NSS3000 V1.1.E.4242 配套证书（用户授权内嵌）",
+  "profiles": [
+    {
+      "id": "old",
+      "identity_file": "builtin-old.p12",
+      "unlock_file": "builtin-old.unlock",
+      "trust_files": [
+        "builtin-old-trust-0.der"
+      ],
+      "client": {
+        "subject": "CN=server,OU=server,O=nari,L=Nanjing,ST=Jiangsu,C=CN",
+        "issuer": "CN=ca,OU=ca,O=nari,L=Nanjing,ST=Jiangsu,C=CN",
+        "not_before": "2009-09-18T03:40:02+00:00",
+        "not_after": "2019-09-17T03:40:02+00:00",
+        "valid_from_unix": 1253245202,
+        "valid_until_unix": 1568691602,
+        "sha256": "e2292d0a9c31c6b9d1a1c07e1a2d743e5e291e3d7d5ae6c5ee47c3db3c4fffc0",
+        "public_key_sha256": "01011ccabaabdb9709347f246c6f9b51e8a6c4bcffd53121ef2a9c5c23c8fe56"
+      },
+      "identity_key_matches": true,
+      "trust": [
+        {
+          "subject": "CN=server,OU=server,O=nari,L=Nanjing,ST=Jiangsu,C=CN",
+          "issuer": "CN=ca,OU=ca,O=nari,L=Nanjing,ST=Jiangsu,C=CN",
+          "not_before": "2009-09-18T03:40:02+00:00",
+          "not_after": "2019-09-17T03:40:02+00:00",
+          "valid_from_unix": 1253245202,
+          "valid_until_unix": 1568691602,
+          "sha256": "e2292d0a9c31c6b9d1a1c07e1a2d743e5e291e3d7d5ae6c5ee47c3db3c4fffc0",
+          "public_key_sha256": "01011ccabaabdb9709347f246c6f9b51e8a6c4bcffd53121ef2a9c5c23c8fe56"
+        }
+      ]
+    },
+    {
+      "id": "new",
+      "identity_file": "builtin-new.p12",
+      "unlock_file": "builtin-new.unlock",
+      "trust_files": [
+        "builtin-new-trust-0.der"
+      ],
+      "client": {
+        "subject": "1.2.840.113549.1.9.1=nari@sgepri.sgcc.com.cn,CN=NARI,OU=NARI,O=NARI,L=NJ,ST=JS,C=CN",
+        "issuer": "1.2.840.113549.1.9.1=ca@ca.com,CN=CA,OU=CA,O=CA,L=NJ,ST=JS,C=CN",
+        "not_before": "2022-03-28T02:39:37+00:00",
+        "not_after": "2122-03-04T02:39:37+00:00",
+        "valid_from_unix": 1648435177,
+        "valid_until_unix": 4802035177,
+        "sha256": "0beb831b53f7ca8aa210c4e28dfa4834d6c8c2d8088bb7ab806001bc74d06234",
+        "public_key_sha256": "1c966509cd34366174411cdc2462552e3a5b2218ea499d291baca61745305ec8"
+      },
+      "identity_key_matches": true,
+      "trust": [
+        {
+          "subject": "1.2.840.113549.1.9.1=nari@sgepri.sgcc.com.cn,CN=NARI,OU=NARI,O=NARI,L=NJ,ST=JS,C=CN",
+          "issuer": "1.2.840.113549.1.9.1=ca@ca.com,CN=CA,OU=CA,O=CA,L=NJ,ST=JS,C=CN",
+          "not_before": "2022-03-28T02:39:37+00:00",
+          "not_after": "2122-03-04T02:39:37+00:00",
+          "valid_from_unix": 1648435177,
+          "valid_until_unix": 4802035177,
+          "sha256": "0beb831b53f7ca8aa210c4e28dfa4834d6c8c2d8088bb7ab806001bc74d06234",
+          "public_key_sha256": "1c966509cd34366174411cdc2462552e3a5b2218ea499d291baca61745305ec8"
+        }
+      ]
+    }
+  ]
+}

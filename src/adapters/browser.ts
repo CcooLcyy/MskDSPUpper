@@ -81,6 +81,8 @@ import type {
   VerticalSecurityLoginCapabilities,
   VerticalSecurityCertificateProfile,
   VerticalSecurityCertificateRequest,
+  VerticalSecurityAccessPathRequest,
+  VerticalSecurityAccessPathResult,
   VerticalSecurityLoginRequest,
   VerticalSecurityLoginResult,
   VerticalSecurityPasswordChangeRequest,
@@ -2086,6 +2088,16 @@ export const browserApi: typeof tauriApi = {
     void _sessionId;
     throw new Error('当前版本没有可关闭的纵密网络访问会话');
   },
+  configureVerticalSecurityAccessPath: async (request: VerticalSecurityAccessPathRequest): Promise<VerticalSecurityAccessPathResult> => {
+    void request;
+    return {
+      target_ip: '11.22.33.44',
+      applied: false,
+      exit_code: null,
+      message: '浏览器模式不能配置 DSP 维护通路，请使用桌面版上位机。',
+      steps: [{ id: 'configure_path', name: '配置访问通路', state: 'unsupported', message: '尚未执行设备网络配置。' }],
+    };
+  },
   getVerticalSecurityLoginCapabilities: async (): Promise<VerticalSecurityLoginCapabilities> => ({
     direct_available: false,
     remote_available: false,
@@ -2098,6 +2110,9 @@ export const browserApi: typeof tauriApi = {
     trust_certificate_path: null,
     server_name: null,
   }),
+  useBuiltinVerticalSecurityCertificates: async (): Promise<VerticalSecurityCertificateProfile> => {
+    throw new Error('浏览器模式不能加载桌面端内置纵密证书。');
+  },
   configureVerticalSecurityCertificateProfile: async (request: VerticalSecurityCertificateRequest): Promise<VerticalSecurityCertificateProfile> => {
     void request;
     throw new Error('浏览器模式无法配置纵密客户端证书，请使用桌面版上位机。');

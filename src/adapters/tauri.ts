@@ -73,6 +73,8 @@ import type {
   VerticalSecurityLoginCapabilities,
   VerticalSecurityCertificateProfile,
   VerticalSecurityCertificateRequest,
+  VerticalSecurityAccessPathRequest,
+  VerticalSecurityAccessPathResult,
   VerticalSecurityLoginRequest,
   VerticalSecurityLoginResult,
   VerticalSecurityPasswordChangeRequest,
@@ -247,10 +249,14 @@ export const api = {
     invoke<VerticalSecurityAccessResult>('check_vertical_security_access', { request }),
   closeVerticalSecurityAccess: (sessionId: string) =>
     invoke<void>('close_vertical_security_access', { sessionId }),
+  configureVerticalSecurityAccessPath: (request: VerticalSecurityAccessPathRequest) =>
+    invoke<VerticalSecurityAccessPathResult>('configure_vertical_security_access_path', { request }),
   getVerticalSecurityLoginCapabilities: () =>
     invoke<VerticalSecurityLoginCapabilities>('get_vertical_security_login_capabilities'),
   getVerticalSecurityCertificateProfile: () =>
     invoke<VerticalSecurityCertificateProfile>('get_vertical_security_certificate_profile'),
+  useBuiltinVerticalSecurityCertificates: () =>
+    invoke<VerticalSecurityCertificateProfile>('use_builtin_vertical_security_certificates'),
   configureVerticalSecurityCertificateProfile: (request: VerticalSecurityCertificateRequest) =>
     invoke<VerticalSecurityCertificateProfile>('configure_vertical_security_certificate_profile', { request }),
   selectVerticalSecurityCertificate: async (kind: 'client' | 'trust'): Promise<string | null> => {

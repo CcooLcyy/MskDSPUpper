@@ -1,2 +1,8 @@
 # 签名测试输入必须逐字节保存，禁止检出时转换换行。
 src-tauri/testdata/updater/fixture.bin -text
+# 内置纵密证书与解锁种子须逐字节保存，避免 Windows 检出换行转换。
+src-tauri/resources/vertical-security/*.p12 binary
+src-tauri/resources/vertical-security/*.der binary
+src-tauri/resources/vertical-security/*.unlock binary
+src-tauri/resources/vertical-security/manifest.json text eol=lf
+src-tauri/src/commands/security_access_path.sh text eol=lf

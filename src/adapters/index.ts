@@ -39,6 +39,8 @@ export type {
   VerticalSecurityLoginCapabilities,
   VerticalSecurityCertificateProfile,
   VerticalSecurityCertificateRequest,
+  VerticalSecurityAccessPathRequest,
+  VerticalSecurityAccessPathResult,
   VerticalSecurityLoginRequest,
   VerticalSecurityLoginStep,
   VerticalSecurityLoginResult,

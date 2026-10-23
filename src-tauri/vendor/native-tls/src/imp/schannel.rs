@@ -3,7 +3,9 @@ use schannel::cert_store::{CertAdd, CertStore, Memory, PfxImportOptions};
 use schannel::crypt_prov::{AcquireOptions, ProviderType};
 use schannel::schannel_cred::{Direction, Protocol, SchannelCred};
 use schannel::tls_stream;
+use schannel::RawPointer;
 use std::{error, fmt, io, str};
+use windows_sys::Win32::Security::Cryptography as crypt;
 
 use crate::{TlsAcceptorBuilder, TlsConnectorBuilder};
 
@@ -62,6 +64,86 @@ pub struct Identity {
     cert: CertContext,
 }
 
+// 临时 PFX 密钥由证书上下文持有。CACHE_FLAG 取到的句柄不能提前释放；
+// Windows 在缓存路径不会执行 COMPARE_KEY，因此另行导出并比较公共密钥信息。
+// 此处从不导出私钥，也不会创建持久化密钥容器。
+fn has_matching_private_key(cert: &CertContext) -> bool {
+    struct AcquiredKey {
+        handle: usize,
+        spec: u32,
+        owned: bool,
+    }
+    impl Drop for AcquiredKey {
+        fn drop(&mut self) {
+            if self.owned {
+                unsafe {
+                    if self.spec == crypt::CERT_NCRYPT_KEY_SPEC {
+                        crypt::NCryptFreeObject(self.handle);
+                    } else {
+                        crypt::CryptReleaseContext(self.handle, 0);
+                    }
+                }
+            }
+        }
+    }
+    unsafe {
+        let context = cert.as_ptr().cast::<crypt::CERT_CONTEXT>();
+        let mut handle = 0;
+        let mut spec = 0;
+        let mut owned = 0;
+        if crypt::CryptAcquireCertificatePrivateKey(
+            context,
+            crypt::CRYPT_ACQUIRE_CACHE_FLAG
+                | crypt::CRYPT_ACQUIRE_SILENT_FLAG
+                | crypt::CRYPT_ACQUIRE_ALLOW_NCRYPT_KEY_FLAG,
+            std::ptr::null(),
+            &mut handle,
+            &mut spec,
+            &mut owned,
+        ) == 0
+        {
+            return false;
+        }
+        let key = AcquiredKey {
+            handle,
+            spec,
+            owned: owned != 0,
+        };
+        let mut bytes = 0;
+        if crypt::CryptExportPublicKeyInfo(
+            key.handle,
+            key.spec,
+            crypt::X509_ASN_ENCODING,
+            std::ptr::null_mut(),
+            &mut bytes,
+        ) == 0
+            || bytes < std::mem::size_of::<crypt::CERT_PUBLIC_KEY_INFO>() as u32
+            || bytes > 65536
+        {
+            return false;
+        }
+        // usize 对齐覆盖 Windows 公共密钥信息的指针字段，缓冲区只接收公共数据。
+        let words = (bytes as usize).div_ceil(std::mem::size_of::<usize>());
+        let mut buffer = vec![0_usize; words];
+        let public_info = buffer.as_mut_ptr().cast::<crypt::CERT_PUBLIC_KEY_INFO>();
+        if crypt::CryptExportPublicKeyInfo(
+            key.handle,
+            key.spec,
+            crypt::X509_ASN_ENCODING,
+            public_info,
+            &mut bytes,
+        ) == 0
+        {
+            return false;
+        }
+        crypt::CertComparePublicKeyInfo(
+            crypt::X509_ASN_ENCODING,
+            public_info,
+            &(*(*context).pCertInfo).SubjectPublicKeyInfo,
+        ) != 0
+    }
+}
+
 impl Identity {
     pub fn from_pkcs12(buf: &[u8], pass: &str) -> Result<Identity, Error> {
         // 纵密客户端证书仅在当前进程使用，不将私钥导入持久化密钥容器。
@@ -72,13 +154,7 @@ impl Identity {
         let mut identity = None;
 
         for cert in store.certs() {
-            if cert
-                .private_key()
-                .silent(true)
-                .compare_key(true)
-                .acquire()
-                .is_ok()
-            {
+            if has_matching_private_key(&cert) {
                 identity = Some(cert);
                 break;
             }

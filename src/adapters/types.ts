@@ -299,6 +299,8 @@ export interface VerticalSecurityLoginCapabilities {
 
 export interface VerticalSecurityCertificateProfile {
   configured: boolean;
+  source?: 'builtin' | 'custom';
+  label?: string;
   client_certificate_path: string | null;
   trust_certificate_path: string | null;
   server_name: string | null;
@@ -309,6 +311,20 @@ export interface VerticalSecurityCertificateRequest {
   trust_certificate_path: string;
   certificate_password: string;
   server_name: string;
+}
+
+export interface VerticalSecurityAccessPathRequest {
+  upload_account: string;
+  auth: LowerUpdateSshAuth;
+  sudo_password: string;
+}
+
+export interface VerticalSecurityAccessPathResult {
+  target_ip: string;
+  applied: boolean;
+  exit_code: number | null;
+  message: string;
+  steps: VerticalSecurityAccessStep[];
 }
 
 export interface VerticalSecurityLoginRequest {

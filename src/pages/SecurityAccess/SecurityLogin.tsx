@@ -169,6 +169,22 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
     finally { if (mountedRef.current) setCertificateBusy(false); }
   };
 
+  const restoreBuiltinCertificate = async () => {
+    if (locked || accessBusy || initializing) return;
+    clearSecrets(); setCertificateBusy(true); setError(null); setNotice(null);
+    try {
+      const value = await api.useBuiltinVerticalSecurityCertificates();
+      if (!mountedRef.current) return;
+      setProfile(value);
+      setClientPath(value.client_certificate_path ?? '');
+      setTrustPath(value.trust_certificate_path ?? '');
+      setServerName(value.server_name || '11.22.33.44');
+      if (value.configured && value.source === 'builtin') setNotice('已加载内置配套证书。');
+      else setError('内置配套证书尚未加载成功，当前不能使用内置证书登录。');
+    } catch { if (mountedRef.current) setError('加载内置配套证书失败，请检查应用资源与证书状态。'); }
+    finally { if (mountedRef.current) setCertificateBusy(false); }
+  };
+
   const logout = async () => {
     const id = sessionRef.current;
     if (!id || logoutBusy) return;
@@ -226,15 +242,18 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
             <label htmlFor="vertical-security-username">用户名<Input id="vertical-security-username" aria-label="纵密用户名" value={username} maxLength={32} autoComplete="off" disabled={locked || accessBusy} placeholder="输入纵密账号" onChange={event => setUsername(event.target.value)} /></label>
             <label htmlFor="vertical-security-password">密码<Input.Password id="vertical-security-password" aria-label="纵密密码" value={password} maxLength={32} autoComplete="off" disabled={locked || accessBusy} placeholder="输入纵密密码" onChange={event => setPassword(event.target.value)} onPressEnter={() => void login()} ref={node => { secretInputs.current[0] = node?.input ?? null; }} /></label>
           </div>
-          <details className="security-login-certificate"><summary>连接证书 <span>{profile?.configured ? '已配置 · 当前进程有效' : initializing ? '读取中' : '尚未配置'}</span></summary>
-            <p>客户端证书使用 PKCS12（.p12 / .pfx），装置信任证书使用 PEM / DER。原 JKS 需先转换，不能直接导入。证书配置在应用重启后失效。</p>
+          <details className="security-login-certificate"><summary>连接证书 <span>{profile?.configured ? profile.source === 'builtin' ? '内置配套证书 · 自动加载' : '已配置 · 当前进程有效' : initializing ? '读取中' : '尚未配置'}</span></summary>
+            {profile?.source === 'builtin' && profile.configured && <p>{profile.label || '内置配套证书'}已由上位机加载，无需手动选择证书。</p>}
+            <details className="security-login-custom-certificate" open={profile?.source !== 'builtin'}><summary>自定义证书替换（高级）</summary>
+            <p>客户端证书使用 PKCS12（.p12 / .pfx），装置信任证书使用 PEM / DER。原 JKS 需先转换，不能直接导入。自定义配置仅在当前进程内有效，重启恢复内置配套证书。</p>
             <Form layout="vertical" onFinish={() => void saveCertificate()} disabled={locked || accessBusy || initializing}>
               <Form.Item label="客户端证书"><Space.Compact block><Input aria-label="客户端证书路径" value={clientPath} readOnly placeholder="选择 .p12 或 .pfx 文件" /><Button icon={<FileOutlined />} onClick={() => void selectCertificate('client')}>选择客户端证书</Button></Space.Compact></Form.Item>
               <Form.Item label="装置信任证书"><Space.Compact block><Input aria-label="信任证书路径" value={trustPath} readOnly placeholder="选择 PEM / DER 证书" /><Button icon={<FileOutlined />} onClick={() => void selectCertificate('trust')}>选择信任证书</Button></Space.Compact></Form.Item>
               <Form.Item label="证书口令"><Input.Password aria-label="纵密证书口令" value={certificatePassword} autoComplete="off" onChange={event => setCertificatePassword(event.target.value)} ref={node => { secretInputs.current[1] = node?.input ?? null; }} /></Form.Item>
               <details className="security-login-advanced"><summary>高级证书校验设置</summary><Form.Item label="服务端证书名称" extra="须与装置证书中的 IP 或 DNS 名称匹配；不会关闭证书验证。"><Input aria-label="服务端证书名称" value={serverName} onChange={event => setServerName(event.target.value)} /></Form.Item></details>
-              <Button htmlType="submit" loading={certificateBusy} disabled={locked || accessBusy || initializing || !clientPath || !trustPath || !serverName.trim()}>应用连接证书</Button>
+              <Space wrap><Button htmlType="submit" loading={certificateBusy} disabled={locked || accessBusy || initializing || !clientPath || !trustPath || !serverName.trim()}>应用连接证书</Button><Button htmlType="button" disabled={locked || accessBusy || initializing} onClick={() => void restoreBuiltinCertificate()}>使用内置配套证书</Button></Space>
             </Form>
+            </details>
           </details>
           {initializing && <p role="status">正在读取登录能力与证书配置…</p>}
           {!initializing && capabilities?.reason && <Alert className="security-access-notice" type="info" title="当前登录能力" description={capabilities.reason} />}

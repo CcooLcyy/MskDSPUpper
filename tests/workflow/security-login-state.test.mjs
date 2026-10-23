@@ -31,3 +31,14 @@ test('能力和证书加载完成前不发登录，ICMP不作为登录条件', (
   assert.equal(canAttemptLogin('remote', undefined, { ...capabilities, remote_available: true }, profile), false);
   assert.equal(canAttemptLogin('remote', 'fixture-dsp', { ...capabilities, remote_available: true }, profile), true);
 });
+
+
+test('内置证书配置无需外部路径，自定义配置仍必须提供两个路径', () => {
+  const builtin = { configured: true, source: 'builtin', label: '内置配套证书', client_certificate_path: null, trust_certificate_path: null, server_name: '11.22.33.44' };
+  assert.equal(canAttemptLogin('direct', undefined, capabilities, builtin), true);
+  assert.equal(canAttemptLogin('direct', undefined, capabilities, { ...builtin, configured: false }), false);
+  assert.equal(canAttemptLogin('direct', undefined, capabilities, { ...builtin, source: 'custom' }), false);
+  assert.equal(canAttemptLogin('direct', undefined, capabilities, { ...profile, source: 'custom', trust_certificate_path: null }), false);
+  assert.equal(canAttemptLogin('direct', undefined, capabilities, { ...profile, source: 'custom' }), true);
+  assert.equal(canAttemptLogin('direct', undefined, capabilities, { ...profile, trust_certificate_path: null }), false);
+});

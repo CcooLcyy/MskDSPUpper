@@ -1,0 +1,200 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import assert from 'node:assert/strict';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+
+// 真实 React / AntD + 内存 IPC fixture；只使用虚构账号、口令和证书路径，不连接设备。
+const root = fileURLToPath(new URL('../../', import.meta.url)).replaceAll('\\', '/').replace(/\/$/, '');
+const output = process.env.SECURITY_ACCESS_PATH_UI_OUTPUT || await fs.mkdtemp(path.join(os.tmpdir(), 'mskdsp-security-path-'));
+await fs.mkdir(output, { recursive: true });
+const { chromium } = await (process.env.MSKDSP_PLAYWRIGHT_MODULE ? import(pathToFileURL(process.env.MSKDSP_PLAYWRIGHT_MODULE)) : import('playwright'));
+const { createServer } = await import(pathToFileURL(root + '/node_modules/vite/dist/node/index.js'));
+const { default: react } = await import(pathToFileURL(root + '/node_modules/@vitejs/plugin-react/dist/index.js'));
+const entry = path.join(output, 'entry.tsx');
+await fs.writeFile(entry, `
+import React, { useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { App, ConfigProvider } from 'antd';
+import zhCN from 'antd/locale/zh_CN';
+import { darkTheme } from ${JSON.stringify('/@fs/' + root + '/src/theme/dark.ts')};
+import SecurityAccess from ${JSON.stringify('/@fs/' + root + '/src/pages/SecurityAccess/index.tsx')};
+function Fixture() {
+  const [visible, setVisible] = useState(true);
+  return <><nav><button onClick={() => setVisible(true)}>测试：访问页</button><button onClick={() => setVisible(false)}>测试：离开页面</button></nav>{visible && <SecurityAccess />}</>;
+}
+createRoot(document.getElementById('root')!).render(<React.StrictMode><ConfigProvider theme={darkTheme} locale={zhCN}><App><Fixture /></App></ConfigProvider></React.StrictMode>);
+`);
+const aliases = {};
+for (const name of ['react-dom', 'react', 'antd', '@tauri-apps/api', '@tauri-apps/plugin-dialog', '@ant-design/icons']) aliases[name] = root + '/node_modules/' + name;
+const server = await createServer({ configFile: false, root, plugins: [react(), {
+  name: 'security-access-path-fixture', configureServer(vite) {
+    vite.middlewares.use('/__security-path', (_req, res) => {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.end(`<!doctype html><html><head><meta charset="utf-8"><script type="module">import RefreshRuntime from '/@react-refresh';RefreshRuntime.injectIntoGlobalHook(window);window.$RefreshReg$=()=>{};window.$RefreshSig$=()=>type=>type;window.__vite_plugin_react_preamble_installed__=true;</script><style>body{margin:0;background:#1e1e1e;color:white;font-family:Microsoft YaHei,sans-serif}</style></head><body><div id="root"></div><script type="module" src=${JSON.stringify('/@fs/' + entry.replaceAll('\\', '/'))}></script></body></html>`);
+    });
+  },
+}], resolve: { alias: aliases }, server: { host: '127.0.0.1', port: 0, fs: { allow: [root, output] }, watch: null, hmr: false }, logLevel: 'error' });
+await server.listen();
+const address = server.httpServer.address();
+const url = `http://127.0.0.1:${address.port}/__security-path`;
+let browser;
+let page;
+const failures = [];
+const results = [];
+
+async function openFixture(options = {}) {
+  await page?.close();
+  page = await browser.newPage({ viewport: { width: 1360, height: 1100 } });
+  page.setDefaultTimeout(10000);
+  page.on('pageerror', error => failures.push(error.message));
+  await page.addInitScript(initial => {
+    const mock = window.__securityPathMock = { calls: [], pathResolve: null, pathReject: null, profileFailure: initial.profileFailure === true, source: initial.source || 'builtin' };
+    const profile = () => ({ configured: true, source: mock.source, label: mock.source === 'builtin' ? '内置配套证书（fixture）' : '虚构自定义证书', client_certificate_path: mock.source === 'builtin' ? null : 'C:\\fixture\\client.p12', trust_certificate_path: mock.source === 'builtin' ? null : 'C:\\fixture\\trust.pem', server_name: '11.22.33.44' });
+    let callback = 0;
+    window.__TAURI_INTERNALS__ = {
+      transformCallback: () => ++callback, unregisterCallback: () => {},
+      invoke: async (command, args) => {
+        mock.calls.push({ command, args });
+        if (command === 'get_vertical_security_access_capabilities') return { remote_ip_available: false, remote_ip_reason: '远程网络通道待接入（fixture）' };
+        if (command === 'remote_list_devices') return [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true }];
+        if (command === 'get_vertical_security_login_capabilities') return { direct_available: true, remote_available: false, password_change_available: false, reason: '虚构 TLS 能力，仅用于 UI 测试' };
+        if (command === 'get_vertical_security_certificate_profile') { if (mock.profileFailure) throw new Error('fixture profile failure'); return profile(); }
+        if (command === 'configure_vertical_security_access_path') return new Promise((resolve, reject) => { mock.pathResolve = resolve; mock.pathReject = reject; });
+        if (command === 'use_builtin_vertical_security_certificates') { mock.source = 'builtin'; return profile(); }
+        if (command === 'configure_vertical_security_certificate_profile') { mock.source = 'custom'; return profile(); }
+        if (command === 'plugin:dialog|open') return args.options.title.includes('PKCS12') ? 'C:\\fixture\\client.p12' : 'C:\\fixture\\trust.pem';
+        if (command === 'login_vertical_security') return { ...args.request, state: 'unverified_response', target_ip: '11.22.33.44', device_id: null, session_id: null, challenge_id: null, code: 'fixture', message: '虚构未验证应答', lock_seconds: null, last_login_at: null, device_version: null, steps: [] };
+        if (command === 'cancel_vertical_security_login' || command === 'logout_vertical_security') return;
+        throw new Error(`未配置的 fixture IPC：${command}`);
+      },
+    };
+  }, options);
+  await page.goto(url);
+  await page.getByRole('heading', { name: '登录纵密装置', exact: true }).waitFor();
+  await page.waitForFunction(() => window.__securityPathMock.calls.some(call => call.command === 'get_vertical_security_certificate_profile'));
+}
+const calls = command => page.evaluate(name => window.__securityPathMock.calls.filter(call => call.command === name), command);
+const sensitiveCalls = () => page.evaluate(() => window.__securityPathMock.calls.filter(call => /^(configure_vertical_security_access_path|check_vertical_security_access|login_vertical_security)$/.test(call.command)));
+const dialog = () => page.getByRole('dialog', { name: /配置纵密访问通路/ });
+async function openPath() { await page.getByRole('button', { name: /配置纵密访问通路/ }).click(); await dialog().waitFor(); }
+async function fillPath() { await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).fill('fixture@fixture-host:10022'); await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).fill('fixture-ssh-secret'); }
+async function resolvePath(applied = true) {
+  await page.evaluate(value => window.__securityPathMock.pathResolve({ target_ip: '11.22.33.44', applied: value, exit_code: value ? 0 : 1, message: value ? 'fixture 配置完成；目标连通性尚未检查' : 'fixture 预检查拒绝，未完成配置', steps: [{ id: 'preflight', name: '系统预检查', state: value ? 'success' : 'failed', message: value ? 'fixture 检查通过' : 'fixture 固定地址冲突' }] }), applied);
+}
+async function check(name, run) { await run(); results.push(name); }
+
+try {
+  browser = await chromium.launch({ headless: true, args: ['--no-proxy-server'], ...(process.env.MSKDSP_BROWSER_EXECUTABLE ? { executablePath: process.env.MSKDSP_BROWSER_EXECUTABLE } : {}) });
+  await check('内置证书自动加载，不手选证书即可尝试登录；加载页面不自动配置/检查/登录', async () => {
+    await openFixture();
+    await page.getByText('内置配套证书 · 自动加载', { exact: true }).waitFor();
+    assert.equal((await sensitiveCalls()).length, 0);
+    await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-user');
+    await page.getByLabel('纵密密码', { exact: true }).fill('fixture-login-secret');
+    await page.getByRole('button', { name: /登录纵密/ }).click();
+    await page.getByText('装置应答尚未验证，未建立登录会话', { exact: true }).waitFor();
+    assert.equal((await calls('login_vertical_security')).length, 1);
+    assert.equal((await calls('configure_vertical_security_certificate_profile')).length, 0);
+    assert.equal(await page.getByLabel('纵密密码', { exact: true }).inputValue(), '');
+  });
+  await check('配置按钮独立，打开窗口不应用；无目录或六业务地址，关闭清秘密', async () => {
+    await openFixture(); await openPath();
+    assert.equal((await sensitiveCalls()).length, 0);
+    assert.equal(await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).inputValue(), '');
+    assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '');
+    assert.equal(await dialog().getByRole('textbox', { name: /目录|本端|对端|RTU/ }).count(), 0);
+    await dialog().getByText('仅当前运行态有效，设备重启后需要重新配置', { exact: true }).waitFor();
+    await fillPath(); await dialog().getByRole('button', { name: /关\s*闭/ }).click();
+    await openPath(); assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '');
+  });
+  await check('显式应用提交最小payload，立即清秘密，执行中锁界面且不能关闭，无自动后续动作', async () => {
+    await openFixture(); await openPath(); await fillPath();
+    await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click();
+    await dialog().getByText('正在应用访问通路，请等待设备返回结果', { exact: true }).waitFor();
+    assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '');
+    const [call] = await calls('configure_vertical_security_access_path');
+    assert.deepEqual(call.args.request, { upload_account: 'fixture@fixture-host:10022', auth: { method: 'password', password: 'fixture-ssh-secret' }, sudo_password: 'fixture-ssh-secret' });
+    assert.equal(await page.getByRole('radio', { name: /平台远程/ }).isDisabled(), true);
+    assert.equal(await page.getByLabel('纵密登录角色', { exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /检查直连/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /登录纵密/ }).isDisabled(), true);
+    assert.equal(await dialog().getByRole('button', { name: /关\s*闭/ }).count(), 0);
+    assert.equal(await dialog().getByRole('button', { name: /取消/ }).count(), 0);
+    await page.keyboard.press('Escape'); assert.equal(await dialog().isVisible(), true);
+    await resolvePath(); await dialog().getByText('访问通路已应用', { exact: true }).waitFor();
+    assert.equal((await calls('check_vertical_security_access')).length, 0);
+    assert.equal((await calls('login_vertical_security')).length, 0);
+    assert.equal(await page.getByRole('radio', { name: /平台远程/ }).isDisabled(), false);
+    await page.screenshot({ path: path.join(output, 'path-applied.png'), fullPage: true });
+  });
+  await check('真实失败结果显示步骤和退出码，不宣称已应用', async () => {
+    await openFixture(); await openPath(); await fillPath();
+    await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click(); await resolvePath(false);
+    await dialog().getByText('访问通路配置未完成', { exact: true }).waitFor();
+    assert.equal(await dialog().getByText('访问通路已应用', { exact: true }).count(), 0);
+    await dialog().getByText('fixture 固定地址冲突', { exact: true }).waitFor();
+    assert.equal(await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).isDisabled(), false);
+  });
+  await check('完成标记与退出码或步骤冲突时拒绝宣称已应用', async () => {
+    await openFixture(); await openPath(); await fillPath();
+    await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click();
+    await page.evaluate(() => window.__securityPathMock.pathResolve({ target_ip: '11.22.33.44', applied: true, exit_code: 1, message: 'fixture contradictory', steps: [{ id: 'verification', name: '配置核验', state: 'failed', message: 'fixture 配置未完成' }] }));
+    await dialog().getByText('配置结果的完成标记与执行状态不一致，不能确认已应用，请检查设备实际网络状态。', { exact: true }).waitFor();
+    assert.equal(await dialog().getByText('访问通路已应用', { exact: true }).count(), 0);
+    assert.equal((await calls('check_vertical_security_access')).length, 0);
+    assert.equal((await calls('login_vertical_security')).length, 0);
+  });
+  await check('证书SSH认证只携带独立sudo密码；与纵密TLS证书分离', async () => {
+    await openFixture(); await openPath();
+    await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).fill('fixture@fixture-host:10022');
+    await dialog().locator('.ant-segmented-item').filter({ hasText: '证书' }).click();
+    await dialog().getByLabel('访问通路独立 sudo 密码', { exact: true }).fill('fixture-sudo-secret');
+    await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click();
+    await dialog().getByText('正在应用访问通路，请等待设备返回结果', { exact: true }).waitFor();
+    assert.deepEqual((await calls('configure_vertical_security_access_path'))[0].args.request, { upload_account: 'fixture@fixture-host:10022', auth: { method: 'certificate' }, sudo_password: 'fixture-sudo-secret' });
+    assert.equal(await dialog().getByLabel('访问通路独立 sudo 密码', { exact: true }).inputValue(), '');
+    await resolvePath();
+  });
+  await check('远程模式不把平台DSP选择冒充SSH配置目标', async () => {
+    await openFixture(); await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
+    assert.equal(await page.getByRole('button', { name: /配置纵密访问通路/ }).isDisabled(), true);
+    await page.getByText('访问通路配置当前仅支持 SSH 直连。', { exact: true }).waitFor();
+    assert.equal((await calls('configure_vertical_security_access_path')).length, 0);
+  });
+  await check('高级自定义证书可显式恢复内置，恢复时清口令', async () => {
+    await openFixture({ source: 'custom' });
+    await page.locator('.security-login-certificate > summary').click();
+    await page.getByLabel('纵密证书口令', { exact: true }).fill('fixture-certificate-secret');
+    await page.getByRole('button', { name: '使用内置配套证书', exact: true }).click();
+    await page.getByText('内置配套证书 · 自动加载', { exact: true }).waitFor();
+    assert.equal((await calls('use_builtin_vertical_security_certificates')).length, 1);
+    assert.equal(await page.getByLabel('纵密证书口令', { exact: true }).inputValue(), '');
+    assert.equal((await calls('configure_vertical_security_certificate_profile')).length, 0);
+  });
+  await check('证书读取失败不能伪造内置ready', async () => {
+    await openFixture({ profileFailure: true });
+    await page.getByText('读取纵密登录能力或证书配置失败，请离开此页后重试。', { exact: true }).waitFor();
+    await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-user'); await page.getByLabel('纵密密码', { exact: true }).fill('fixture-secret');
+    assert.equal(await page.getByRole('button', { name: /登录纵密/ }).isDisabled(), true);
+    assert.equal(await page.getByText('内置配套证书 · 自动加载', { exact: true }).count(), 0);
+  });
+  await check('卸载不声称撤销运行中的配置，迟到结果不自动登录或检查', async () => {
+    await openFixture(); await openPath(); await fillPath(); await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click();
+    await dialog().getByText('正在应用访问通路，请等待设备返回结果', { exact: true }).waitFor();
+    // 测试宿主触发组件卸载，模拟应用导航/关闭；不把模态遮罩当作可取消入口。
+    await page.getByRole('button', { name: '测试：离开页面', exact: true }).evaluate(button => button.click());
+    await resolvePath();
+    assert.equal(await page.getByText('访问通路已应用', { exact: true }).count(), 0);
+    assert.equal((await calls('cancel_vertical_security_login')).length, 0);
+    assert.equal((await calls('check_vertical_security_access')).length, 0);
+    assert.equal((await calls('login_vertical_security')).length, 0);
+  });
+  assert.deepEqual(failures, []);
+  await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ results, failures }, null, 2));
+  console.log(JSON.stringify({ output, passed: results.length, results }, null, 2));
+} catch (error) {
+  await page?.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});
+  await fs.writeFile(path.join(output, 'failure.json'), JSON.stringify({ message: String(error), results, failures }, null, 2));
+  throw error;
+} finally { await browser?.close(); await server.close(); }

@@ -24,6 +24,7 @@ pub mod platform_login;
 pub mod platform_templates;
 pub mod remote;
 pub mod security_access;
+pub mod security_access_path;
 pub mod security_login;
 pub mod template_apply;
 pub mod workspace;

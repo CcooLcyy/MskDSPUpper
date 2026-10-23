@@ -21,6 +21,11 @@
 .security-login-session { display: grid; grid-template-columns: auto 1fr; gap: 12px 20px; margin: 20px 0; }
 .security-login-session dt { color: rgba(255,255,255,.6); }
 .security-login-session dd { margin: 0; overflow-wrap: anywhere; }
+.security-login-custom-certificate[open] > summary { margin-bottom: 14px; }
+.security-path-preview { padding: 16px; margin: 16px 0; border: 1px solid rgba(255,255,255,.12); border-radius: 6px; }
+.security-path-preview p { margin: 8px 0 0; font-size: 12px; color: rgba(255,255,255,.65); overflow-wrap: anywhere; }
+.security-path-form { margin-top: 20px; }
+.security-path-result { margin-top: 20px; }
 .security-workbench-heading { margin-bottom: 24px; }
 .security-workbench-heading h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.4; }
 .security-workbench-heading p { margin: 0; color: rgba(255,255,255,.65); }
