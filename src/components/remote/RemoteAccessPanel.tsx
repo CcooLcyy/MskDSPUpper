@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Input, Modal, Select, Space, Tag, Typography, message } from 'antd';
+import { Alert, Badge, Button, Card, Input, Modal, Select, Space, Tag, Typography, message } from 'antd';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -217,7 +217,14 @@ export default function RemoteAccessPanel({ directAddress, onModeChange, onConne
       <Space wrap>
         <Select style={{ minWidth: 300 }} placeholder="选择授权设备" value={selected} disabled={busy}
           onChange={value => { closeSsh(); setSelected(value); }}
-          options={devices.map(d => ({ value: d.device_id, label: `${d.display_name || d.device_id} · ${d.online ? '在线' : '离线'}` }))} />
+          options={devices.map(d => ({
+            value: d.device_id,
+            title: `${d.display_name || d.device_id} · ${d.online ? '在线' : '离线'}`,
+            label: <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <Badge status={d.online ? 'success' : 'error'} aria-label={d.online ? '在线' : '离线'} style={{ flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.display_name || d.device_id}</span>
+            </span>,
+          }))} />
         <Button onClick={() => void load().catch(error => messages.error(String(error)))}>刷新设备</Button>
         <Button type="primary" loading={busy} disabled={!device?.online} onClick={() => void connectDevice()}>连接所选设备</Button>
         <Button disabled={!status.remote || busy} onClick={() => void returnToDirect()}>返回现场直连</Button>
