@@ -1,18 +1,16 @@
 workflow:
+  auto_cancel:
+    on_new_commit: interruptible
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE =~ /^(push|web)$/'
     - when: never
 
-stages: [build]
+stages: [build, publish]
 
-upper-ci:
-  stage: build
+.upper-windows:
   tags: [windows, amd64, shell]
   timeout: 2h
   resource_group: upper-ci-publish
-  interruptible: false
-  environment:
-    name: ci
   variables:
     GIT_SUBMODULE_STRATEGY: none
     GIT_DEPTH: "20"
@@ -31,10 +29,18 @@ upper-ci:
     # 已有工作区可能仍保留属性变更前的 CRLF，按当前提交重新检出验签输入。
     - git restore --source=HEAD --worktree -- src-tauri/testdata/updater/fixture.bin
     - if ($LASTEXITCODE -ne 0) { throw '恢复验签夹具原始字节失败' }
+
+upper-ci:
+  extends: .upper-windows
+  stage: build
+  interruptible: true
+  environment:
+    name: ci
+    action: prepare
   script:
+    - Write-Host '上位机校验与打包作业开始，允许新提交自动取消'
     - ./scripts/gitlab/pipeline.ps1 -Stage verify
     - ./scripts/gitlab/pipeline.ps1 -Stage package
-    - ./scripts/gitlab/pipeline.ps1 -Stage publish
   artifacts:
     when: always
     expire_in: 14 days
@@ -42,3 +48,19 @@ upper-ci:
       - package/platform/
       - package/metadata/
       - package/logs/
+
+upper-publish:
+  extends: .upper-windows
+  stage: publish
+  interruptible: false
+  environment:
+    name: ci
+  needs:
+    - job: upper-ci
+      artifacts: true
+  before_script:
+    - if ($env:RUNNER_ENV_PATH) { . $env:RUNNER_ENV_PATH }
+    - '$ErrorActionPreference = "Stop"'
+  script:
+    - Write-Host '上位机发布作业开始，完成前不自动取消'
+    - ./scripts/gitlab/pipeline.ps1 -Stage publish
