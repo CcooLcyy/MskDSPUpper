@@ -333,3 +333,303 @@ test('核验结束记录期间阻止并发查询与新任务，结束后允许�
   await f.controller.start(input());
   assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
 });
+
+function pendingRecord() {
+  const data = input();
+  return {
+    operation_id: '00000000-0000-4000-8000-000000000001', remote_target: data.connection.remote_target,
+    upload_account: data.connection.upload_account, install_dir: data.connection.install_dir,
+    package_name: data.packageResult.package_name, package_sha256: data.packageResult.sha256,
+    expected_image_id: image, version: data.manifest.version,
+  };
+}
+function fakeClock() {
+  let now = 0;
+  const timers = new Set();
+  return {
+    now: () => now,
+    scheduleTimeout: (callback, ms) => {
+      const timer = { at: now + ms, callback };
+      timers.add(timer);
+      return () => timers.delete(timer);
+    },
+    advance: ms => {
+      now += ms;
+      for (const timer of [...timers].sort((a, b) => a.at - b.at)) {
+        if (timers.has(timer) && timer.at <= now) { timers.delete(timer); timer.callback(); }
+      }
+    },
+    pending: () => timers.size,
+  };
+}
+async function flush() { for (let index = 0; index < 25; index++) await Promise.resolve(); }
+const recoveryAuth = { method: 'password', password: 'recovery-secret' };
+
+test('手工恢复仅查询一次，首个认证或通信错误立即去密显示并保留原记录', async () => {
+  for (const detail of ['SSH认证失败 recovery-secret', '平台授权被拒绝', '指纹不匹配', '会话通道超时', '任务响应格式错误']) {
+    let queries = 0;
+    let sleeps = 0;
+    const logs = [];
+    const f = fixture({ loadPending: pendingRecord, queryTask: async () => { queries++; throw Error(detail); }, sleep: async () => { sleeps++; }, log: message => logs.push(message) });
+    await f.controller.resumeRemote(recoveryAuth, 'sudo-recovery');
+    assert.equal(queries, 1);
+    assert.equal(sleeps, 0);
+    const snapshot = f.controller.getSnapshot();
+    assert.equal(snapshot.isRunning, false);
+    assert.equal(snapshot.task.stage, 'remote_unknown');
+    assert.equal(snapshot.task.error, detail.replace('recovery-secret', '[已隐藏]'));
+    assert.equal(JSON.stringify([snapshot, logs]).includes('recovery-secret'), false);
+    assert.equal(f.calls.some(([name]) => name === 'persist'), false);
+    await assert.rejects(f.controller.start(input()), /原任务/);
+  }
+});
+
+test('手工恢复执行中任务显示已知宿主阶段并结束本轮本地等待', async () => {
+  for (const phase of ['accepted', 'preparing', 'installing', 'verifying', 'rolling_back']) {
+    let queries = 0;
+    const f = fixture({ loadPending: pendingRecord, queryTask: async request => { queries++; return { ...status(request, phase), message: '宿主进度 recovery-secret' }; } });
+    await f.controller.resumeRemote(recoveryAuth, 'sudo-recovery');
+    assert.equal(queries, 1);
+    assert.equal(f.controller.getSnapshot().isRunning, false);
+    assert.equal(f.controller.getSnapshot().canStopWaiting, false);
+    assert.equal(f.controller.getSnapshot().task.stage, 'remote_unknown');
+    assert.match(f.controller.getSnapshot().task.status, /宿主机/);
+    assert.match(f.controller.getSnapshot().task.verificationMessage, new RegExp(phase));
+    assert.equal(f.calls.some(([name]) => name === 'persist'), false);
+    assert.equal(JSON.stringify(f.controller.getSnapshot()).includes('recovery-secret'), false);
+  }
+});
+
+test('无回执的只读IPC在35秒结束本地等待，迟到终态不得清除原记录', async () => {
+  const clock = fakeClock();
+  let resolveQuery;
+  const query = new Promise(resolve => { resolveQuery = resolve; });
+  const f = fixture({ ...clock, loadPending: pendingRecord, queryTask: () => query });
+  const observing = f.controller.resumeRemote(recoveryAuth, 'sudo-recovery');
+  await flush();
+  assert.equal(f.controller.getSnapshot().canStopWaiting, true);
+  clock.advance(34_999);
+  await flush();
+  assert.equal(f.controller.getSnapshot().isRunning, true);
+  clock.advance(1);
+  await observing;
+  assert.match(f.controller.getSnapshot().task.error, /35.*秒/);
+  assert.equal(f.controller.getSnapshot().isRunning, false);
+  assert.equal(f.controller.getSnapshot().canStopWaiting, false);
+  const snapshot = f.controller.getSnapshot();
+  resolveQuery(status(pendingRecord()));
+  await flush();
+  assert.deepEqual(f.controller.getSnapshot(), snapshot);
+  assert.equal(f.calls.some(([name]) => name === 'persist'), false);
+  assert.equal(clock.pending(), 0);
+});
+
+test('自动观测只有正常执行中才继续，首个错误立即结束', async () => {
+  let queries = 0;
+  let sleeps = 0;
+  const f = fixture({ queryTask: async request => {
+    if (++queries === 1) return status(request, 'installing');
+    throw Error('平台隧道无法连接 ssh-secret');
+  }, sleep: async () => { sleeps++; } });
+  await f.controller.start(input());
+  assert.equal(queries, 2);
+  assert.equal(sleeps, 1);
+  assert.equal(f.controller.getSnapshot().task.error, '平台隧道无法连接 [已隐藏]');
+  assert.equal(f.controller.getSnapshot().isRunning, false);
+  assert.ok(f.saved());
+});
+
+test('自动观测180秒总预算包含查询和轮询等待', async () => {
+  const clock = fakeClock();
+  let queries = 0;
+  const f = fixture({ ...clock,
+    queryTask: async request => { queries++; clock.advance(10_000); return status(request, 'installing'); },
+    sleep: async ms => { clock.advance(ms); },
+  });
+  await f.controller.start(input());
+  assert.ok(clock.now() >= 180_000 && clock.now() <= 185_000);
+  assert.ok(queries < 20);
+  assert.equal(f.controller.getSnapshot().isRunning, false);
+  assert.match(f.controller.getSnapshot().task.verificationMessage, /180.*秒/);
+  assert.ok(f.saved());
+  assert.equal(clock.pending(), 0);
+});
+
+test('自动观测末轮无响应受剩余总预算限制', async () => {
+  const clock = fakeClock();
+  let queries = 0;
+  const f = fixture({ ...clock,
+    queryTask: async request => {
+      if (++queries === 14) return new Promise(() => {});
+      clock.advance(10_000);
+      return status(request, 'installing');
+    }, sleep: async ms => { clock.advance(ms); },
+  });
+  const deployment = f.controller.start(input());
+  for (let index = 0; index < 20 && queries < 14; index++) await flush();
+  assert.equal(queries, 14);
+  assert.equal(clock.now(), 169_000);
+  clock.advance(10_999);
+  await flush();
+  assert.equal(f.controller.getSnapshot().isRunning, true);
+  clock.advance(1);
+  await deployment;
+  assert.equal(clock.now(), 180_000);
+  assert.match(f.controller.getSnapshot().task.error, /180.*秒/);
+  assert.equal(clock.pending(), 0);
+});
+
+test('自动轮询间隔也可立即停止等待，不提交或删除原任务', async () => {
+  const clock = fakeClock();
+  let sleeping = false;
+  const f = fixture({ ...clock, queryTask: async request => status(request, 'installing'),
+    sleep: async () => { sleeping = true; return new Promise(() => {}); },
+  });
+  const deployment = f.controller.start(input());
+  await flush();
+  assert.equal(sleeping, true);
+  assert.equal(f.controller.getSnapshot().canStopWaiting, true);
+  f.controller.stopObservingRemote();
+  await deployment;
+  assert.equal(f.controller.getSnapshot().isRunning, false);
+  assert.equal(f.calls.filter(([name]) => name === 'submit').length, 1);
+  assert.equal(f.calls.filter(([name]) => name === 'persist').length, 1);
+  assert.ok(f.saved());
+  assert.equal(clock.pending(), 0);
+});
+
+test('结束记录的只读复核也有35秒兜底，超时不能进入写入阶段', async () => {
+  const clock = fakeClock();
+  let queries = 0;
+  let rejectLate;
+  const late = new Promise((_, reject) => { rejectLate = reject; });
+  const f = await missingFixture({ ...clock, queryTask: async () => {
+    if (++queries === 1) throw Error('LOWER_UPDATE_TASK_NOT_FOUND: 原任务不存在');
+    return late;
+  } });
+  const closing = f.controller.closeMissingRemote(recoveryAuth, 'sudo-recovery');
+  await flush();
+  assert.equal(f.controller.getSnapshot().canStopWaiting, false);
+  clock.advance(35_000);
+  await closing;
+  assert.equal(f.controller.getSnapshot().task.stage, 'task_missing');
+  assert.match(f.controller.getSnapshot().task.error, /35.*秒/);
+  const snapshot = f.controller.getSnapshot();
+  rejectLate(Error('LOWER_UPDATE_TASK_NOT_FOUND: 原任务不存在'));
+  await flush();
+  assert.deepEqual(f.controller.getSnapshot(), snapshot);
+  assert.equal(f.calls.some(([name]) => ['archive', 'close', 'persist'].includes(name)), false);
+  assert.equal(clock.pending(), 0);
+});
+
+test('结束记录的运行状态核验35秒无回执时保留记录，迟到成功不触发写入', async () => {
+  const clock = fakeClock();
+  let resolveRuntime;
+  const runtime = new Promise(resolve => { resolveRuntime = resolve; });
+  const f = await missingFixture({ ...clock, queryRuntime: () => runtime });
+  const closing = f.controller.closeMissingRemote(recoveryAuth, 'sudo-recovery');
+  let ended = false;
+  void closing.then(() => { ended = true; });
+  await flush();
+  assert.equal(f.controller.getSnapshot().canStopWaiting, false);
+  clock.advance(35_000);
+  await flush();
+  assert.equal(ended, true);
+  await closing;
+  assert.equal(f.controller.getSnapshot().task.stage, 'task_missing');
+  assert.match(f.controller.getSnapshot().task.error, /运行状态.*35.*秒/);
+  const snapshot = f.controller.getSnapshot();
+  resolveRuntime({ exists: true, running: true, image_id: image });
+  await flush();
+  assert.deepEqual(f.controller.getSnapshot(), snapshot);
+  assert.equal(f.calls.some(([name]) => ['archive', 'close', 'persist'].includes(name)), false);
+  await assert.rejects(f.controller.start(input()), /原任务/);
+  assert.equal(clock.pending(), 0);
+});
+
+test('停止等待立即释放本轮查询，迟到成功或失败不能影响下一轮', async () => {
+  for (const lateFailure of [false, true]) {
+    const clock = fakeClock();
+    let resolveFirst;
+    let rejectFirst;
+    const first = new Promise((resolve, reject) => { resolveFirst = resolve; rejectFirst = reject; });
+    let resolveSecond;
+    const second = new Promise(resolve => { resolveSecond = resolve; });
+    let queries = 0;
+    const f = fixture({ ...clock, loadPending: pendingRecord, queryTask: () => ++queries === 1 ? first : second });
+    const waiting = f.controller.resumeRemote(recoveryAuth, 'sudo-recovery');
+    await flush();
+    assert.equal(f.controller.getSnapshot().canStopWaiting, true);
+    f.controller.stopObservingRemote();
+    await waiting;
+    assert.equal(f.controller.getSnapshot().isRunning, false);
+    assert.match(f.controller.getSnapshot().task.verificationMessage, /未取消|不取消/);
+    await assert.rejects(f.controller.start(input()), /原任务/);
+    const again = f.controller.resumeRemote({ method: 'password', password: 'second-secret' }, 'second-sudo');
+    await flush();
+    const snapshot = f.controller.getSnapshot();
+    if (lateFailure) rejectFirst(Error('迟到错误 recovery-secret'));
+    else resolveFirst(status(pendingRecord()));
+    await flush();
+    assert.deepEqual(f.controller.getSnapshot(), snapshot);
+    assert.equal(f.calls.some(([name]) => name === 'persist'), false);
+    resolveSecond(status(pendingRecord(), 'verifying'));
+    await again;
+    assert.equal(f.controller.getSnapshot().isRunning, false);
+    assert.match(f.controller.getSnapshot().task.verificationMessage, /verifying/);
+    assert.equal(clock.pending(), 0);
+  }
+});
+
+test('立即停止尚未派发的查询，不发送请求或借用下一轮凭据', async () => {
+  const clock = fakeClock();
+  const requests = [];
+  const f = fixture({ ...clock, loadPending: pendingRecord, queryTask: async request => { requests.push(request); return status(request, 'verifying'); } });
+  const first = f.controller.resumeRemote(recoveryAuth, 'sudo-recovery');
+  f.controller.stopObservingRemote();
+  const second = f.controller.resumeRemote({ method: 'password', password: 'second-secret' }, 'second-sudo');
+  await Promise.all([first, second]);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].auth.password, 'second-secret');
+  assert.match(f.controller.getSnapshot().task.verificationMessage, /verifying/);
+  assert.equal(clock.pending(), 0);
+});
+
+test('终态开始消费持久记录后不能停止，提交与显式关闭阶段也不能停止', async () => {
+  let clearPending;
+  const clearing = new Promise(resolve => { clearPending = resolve; });
+  const f = fixture({ loadPending: pendingRecord, savePending: async record => { f.calls.push(['persist', record]); await clearing; } });
+  const waiting = f.controller.resumeRemote(recoveryAuth, 'sudo-recovery');
+  await flush();
+  assert.equal(f.calls.filter(([name]) => name === 'persist').length, 1);
+  assert.equal(f.controller.getSnapshot().canStopWaiting, false);
+  f.controller.stopObservingRemote();
+  assert.equal(f.controller.getSnapshot().isRunning, true);
+  clearPending();
+  await waiting;
+  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
+
+  let finishSubmit;
+  const submitted = new Promise(resolve => { finishSubmit = resolve; });
+  const submitting = fixture({ submitTask: () => submitted, queryTask: async () => { throw Error('通信失败'); } });
+  const deployment = submitting.controller.start(input());
+  await flush();
+  assert.equal(submitting.controller.getSnapshot().task.stage, 'installing');
+  assert.equal(submitting.controller.getSnapshot().canStopWaiting, false);
+  submitting.controller.stopObservingRemote();
+  assert.equal(submitting.controller.getSnapshot().isRunning, true);
+  finishSubmit();
+  await deployment;
+
+  let finishClose;
+  const closed = new Promise(resolve => { finishClose = resolve; });
+  const closing = await missingFixture({ closeTask: () => closed });
+  const closure = closing.controller.closeMissingRemote(recoveryAuth, 'sudo-recovery');
+  await flush();
+  assert.equal(closing.controller.getSnapshot().canStopWaiting, false);
+  closing.controller.stopObservingRemote();
+  assert.equal(closing.controller.getSnapshot().isRunning, true);
+  finishClose();
+  await closure;
+  assert.equal(closing.controller.getSnapshot().task.stage, 'task_closed');
+});

@@ -19,7 +19,7 @@ const STAGE_LABELS: Record<DeploymentTask['stage'], string> = {
   remote_unknown: '暂时无法确认更新结果',
   task_missing: '原任务不存在，待核验结束记录',
   task_closed: '本地记录已结束',
-  waiting_reconnect: '等待设备重新上线',
+  waiting_reconnect: '正在查询原任务',
   rolling_back: '正在自动回退',
   rolled_back: '更新失败，已自动恢复上一版本',
   rollback_failed: '自动回退失败，需要人工处理',
@@ -52,7 +52,7 @@ function formatBytes(bytes: number): string {
 function getResultTitle(task: DeploymentTask): string {
   if (task.stage === 'task_missing') return '原任务不存在，本地记录待核验';
   if (task.stage === 'task_closed') return '本地记录已结束，未执行安装';
-  if (task.stage === 'remote_unknown') return '下位机更新结果待确认';
+  if (task.stage === 'remote_unknown') return task.status;
   if (task.stage === 'rolled_back') return '更新失败，已自动恢复上一版本';
   if (task.stage === 'rollback_failed') return '自动回退失败，需要人工处理';
   if (task.stage !== 'succeeded') {
@@ -77,7 +77,7 @@ export function LowerUpdateDeploymentHeader() {
       : <WarningOutlined />;
   const label = task.runtimeRefreshError && succeeded ? '更新完成，连接待恢复'
     : task.cleanupError && succeeded ? '更新完成，清理失败'
-    : task.alreadyCurrent && succeeded ? '已是指定版本' : STAGE_LABELS[task.stage];
+    : task.alreadyCurrent && succeeded ? '已是指定版本' : task.stage === 'remote_unknown' ? task.status : STAGE_LABELS[task.stage];
 
   return (
     <Button size="small" icon={icon} onClick={openDetails} title={`目标下位机：${task.remoteTarget ? `${task.remoteTarget.device_id} · ${task.remoteTarget.endpoint}` : task.uploadAccount}`}>
@@ -90,7 +90,7 @@ export function LowerUpdateDeploymentUi() {
   const { message } = App.useApp();
   const [sshPassword, setSshPassword] = useState('');
   const [sudoPassword, setSudoPassword] = useState('');
-  const { task, isRunning, detailOpen, resultOpen, retry, resumeRemote, closeMissingRemote, openDetails, closeDetails, dismissResult } =
+  const { task, isRunning, canStopWaiting, detailOpen, resultOpen, retry, resumeRemote, stopObservingRemote, closeMissingRemote, openDetails, closeDetails, dismissResult } =
     useLowerUpdateDeployment();
   if (!task) return null;
 
@@ -98,6 +98,7 @@ export function LowerUpdateDeploymentUi() {
   const closed = task.stage === 'task_closed';
   const missing = task.stage === 'task_missing';
   const uncertain = task.stage === 'remote_unknown' || missing;
+  const stageLabel = task.stage === 'remote_unknown' ? task.status : STAGE_LABELS[task.stage];
   const failed = !isRunning && !succeeded && !uncertain && !closed;
   const hasWarning = Boolean(task.cleanupError || task.runtimeRefreshError);
   const statusColor = uncertain ? 'warning' : isRunning ? 'processing' : closed ? 'default' : succeeded ? hasWarning ? 'warning' : 'success' : 'error';
@@ -143,6 +144,10 @@ export function LowerUpdateDeploymentUi() {
         styles={{ body: { maxHeight: '72vh', overflowY: 'auto' } }}
       >
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+          {canStopWaiting ? <Space orientation="vertical" style={{ width: '100%' }}>
+            <Alert type="info" showIcon title="正在只读查询原任务。停止等待会保留本地记录，不会取消设备安装；之后可重新查询。" />
+            <Button onClick={stopObservingRemote}>停止等待</Button>
+          </Space> : null}
           {isRunning ? (
             <Alert type="info" showIcon icon={<CloudUploadOutlined />} title={task.remoteTarget ? '宿主机任务已提交后，断线或关闭上位机不影响执行；重新打开可恢复查询。' : '收起窗口或切换页面后，任务会继续执行。请保持上位机运行。'} />
           ) : null}
@@ -156,7 +161,7 @@ export function LowerUpdateDeploymentUi() {
             <Descriptions.Item label="远端路径">{task.remotePath || '-'}</Descriptions.Item>
             <Descriptions.Item label="已上传">{formatBytes(task.uploadedBytes)} / {formatBytes(task.totalBytes)}</Descriptions.Item>
             {task.operationId ? <Descriptions.Item label="宿主机任务编号">{task.operationId}</Descriptions.Item> : null}
-            <Descriptions.Item label="任务阶段"><Tag color={statusColor}>{STAGE_LABELS[task.stage]}</Tag></Descriptions.Item>
+            <Descriptions.Item label="任务阶段"><Tag color={statusColor}>{stageLabel}</Tag></Descriptions.Item>
             <Descriptions.Item label="上传状态">{uploadStatus}</Descriptions.Item>
             <Descriptions.Item label="安装状态">{installStatus}</Descriptions.Item>
             <Descriptions.Item label="确认目标">mskdsp 容器</Descriptions.Item>
@@ -177,7 +182,7 @@ export function LowerUpdateDeploymentUi() {
           {succeeded && task.runtimeRefreshError ? <Button size="small" icon={<ReloadOutlined />} disabled={isRunning} onClick={() => void retryTask('reconnect')}>只重试业务连接</Button> : null}
           {task.remoteTarget && (task.stage === 'remote_unknown' || task.stage === 'rollback_failed' || missing) ? (
             <Space orientation="vertical" style={{ width: '100%' }}>
-              <Alert type="warning" title={missing ? '原任务不存在。结束前将再次核验原设备无安装任务且业务容器正常运行，并备份本地记录。结束会阻止原任务后续提交；不安装、不删除设备包或恢复材料，也不代表旧版本升级成功。' : task.stage === 'rollback_failed' ? '自动回退失败，原任务和恢复材料已保留。请人工检查设备后查询原任务，不能继续新建更新。' : '结果尚未确认，请查询原任务；不要重复安装。首次连接请先在远程 SSH 终端确认设备指纹。'} />
+              <Alert type="warning" title={missing ? '原任务不存在。结束前将再次核验原设备无安装任务且业务容器正常运行，并备份本地记录。结束会阻止原任务后续提交；不安装、不删除设备包或恢复材料，也不代表旧版本升级成功。' : task.stage === 'rollback_failed' ? '自动回退失败，原任务和恢复材料已保留。请人工检查设备后查询原任务，不能继续新建更新。' : '每次恢复只查询一次，执行中可稍后再次查询。出现通信错误请先检查具体原因；不要重复安装。首次连接请先在远程 SSH 终端确认设备指纹。'} />
               <Input.Password aria-label="恢复查询 SSH 密码" placeholder="重新输入原设备 SSH 密码" value={sshPassword} onChange={event => setSshPassword(event.target.value)} />
               <Input.Password aria-label="恢复查询 sudo 密码" placeholder="重新输入原设备 sudo 密码" value={sudoPassword} onChange={event => setSudoPassword(event.target.value)} />
               <Button disabled={isRunning || !sshPassword || !sudoPassword} onClick={() => {
@@ -223,7 +228,7 @@ export function LowerUpdateDeploymentUi() {
           <Alert
             type={uncertain ? 'warning' : closed ? 'info' : succeeded ? hasWarning ? 'warning' : 'success' : 'error'}
             showIcon
-            title={task.alreadyCurrent && succeeded ? '目标下位机已运行指定构建，已跳过重复上传和安装。' : STAGE_LABELS[task.stage]}
+            title={task.alreadyCurrent && succeeded ? '目标下位机已运行指定构建，已跳过重复上传和安装。' : stageLabel}
           />
           <Descriptions size="small" column={1} styles={{ content: wrapStyle }}>
             <Descriptions.Item label="目标下位机">{task.remoteTarget ? `${task.remoteTarget.device_id} · ${task.remoteTarget.endpoint} · ${task.uploadAccount.split('@')[0]}` : task.uploadAccount}</Descriptions.Item>

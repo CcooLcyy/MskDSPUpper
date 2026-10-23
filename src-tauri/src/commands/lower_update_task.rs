@@ -1,8 +1,11 @@
 //! 提交独立宿主机更新任务；传输失败时保留任务结果未知的语义。
+#[cfg(test)]
+use super::lower_update::complete_without_waiting_for_disconnect;
 use super::lower_update::{
-    execute_root_ssh_command, is_safe_file_name, normalize_image_id, normalize_install_dir,
-    remote_package_path, resolve_update_target, shell_quote, LowerUpdateRemoteTargetDto,
-    LowerUpdateRuntimeInfoRequestDto, LowerUpdateSshAuthDto,
+    execute_root_ssh_command_observed, is_safe_file_name, normalize_image_id,
+    normalize_install_dir, remote_package_path, resolve_update_target, shell_quote,
+    LowerUpdateRemoteTargetDto, LowerUpdateRuntimeInfoRequestDto, LowerUpdateSshAuthDto,
+    UpdateSshObserver,
 };
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
@@ -13,6 +16,10 @@ use tauri::State;
 
 const HELPER: &[u8] = include_bytes!("lower_update_task.py");
 const MAX_LOG_BYTES: usize = 32 * 1024;
+const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(30);
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
+const SUBMIT_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Deserialize)]
 pub struct SubmitLowerUpdateTaskRequest {
@@ -187,7 +194,16 @@ else:
     Ok(command)
 }
 
+#[cfg(test)]
 fn parse_status(value: &str, operation_id: &str) -> Result<LowerUpdateTaskStatus, String> {
+    parse_status_observed(value, operation_id, None)
+}
+
+fn parse_status_observed(
+    value: &str,
+    operation_id: &str,
+    observer: Option<&UpdateSshObserver>,
+) -> Result<LowerUpdateTaskStatus, String> {
     if value.len() > 256 * 1024 {
         return Err("更新任务响应过大".into());
     }
@@ -211,6 +227,11 @@ fn parse_status(value: &str, operation_id: &str) -> Result<LowerUpdateTaskStatus
     {
         return Err("宿主机返回未知更新阶段".into());
     }
+    // 完整秘密必须在裁剪前匹配，避免跨裁剪边界留下认证信息后缀。
+    if let Some(observer) = observer {
+        status.log_tail = observer.redact(&status.log_tail);
+        status.message = observer.redact(&status.message);
+    }
     if status.log_tail.len() > MAX_LOG_BYTES {
         let mut begin = status.log_tail.len() - MAX_LOG_BYTES;
         while !status.log_tail.is_char_boundary(begin) {
@@ -219,6 +240,44 @@ fn parse_status(value: &str, operation_id: &str) -> Result<LowerUpdateTaskStatus
         status.log_tail = status.log_tail[begin..].to_string();
     }
     Ok(status)
+}
+
+fn task_observer(
+    operation_id: &str,
+    action: &str,
+    remote: Option<&LowerUpdateRemoteTargetDto>,
+    auth: &LowerUpdateSshAuthDto,
+    sudo_password: &str,
+) -> UpdateSshObserver {
+    let password = match auth {
+        LowerUpdateSshAuthDto::Password { password } => password.as_str(),
+        _ => "",
+    };
+    UpdateSshObserver::new(
+        operation_id,
+        action,
+        remote
+            .map(|target| target.device_id.as_str())
+            .unwrap_or("直连设备"),
+        &[password, sudo_password],
+    )
+}
+
+/// 时限覆盖目标解析和全部 SSH 等待；失败只结束本地观测，不改变宿主机任务。
+async fn with_update_deadline<T>(
+    observer: &UpdateSshObserver,
+    budget: Duration,
+    future: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let result = tokio::time::timeout(budget, future)
+        .await
+        .unwrap_or_else(|_| {
+            Err(format!(
+                "通信总时限 {} 秒已超时，结果暂时未知；保留原任务，请核验连接后查询，不要重新安装",
+                budget.as_secs()
+            ))
+        });
+    result.map_err(|error| observer.failure(&error))
 }
 
 async fn invoke_helper(
@@ -230,67 +289,63 @@ async fn invoke_helper(
     operation_id: &str,
     arguments: &[&str],
 ) -> Result<LowerUpdateTaskStatus, String> {
-    let target = resolve_update_target(state, upload_account, remote, auth).await?;
-    let command = if arguments.first() == Some(&"query") {
-        readonly_command("query", Some(operation_id))?
-    } else {
-        helper_command(arguments)?
-    };
-    // 提交前复制并校验大包可能较慢；查询保持较短的观测超时。
-    let timeout = if arguments.first() == Some(&"submit") {
-        600
-    } else {
-        90
-    };
-    let output = tokio::time::timeout(
-        Duration::from_secs(timeout),
-        execute_root_ssh_command(&target, auth, sudo_password, &command),
+    let query = arguments.first() == Some(&"query");
+    let observer = task_observer(
+        operation_id,
+        if query {
+            "更新任务查询"
+        } else {
+            "更新任务提交"
+        },
+        remote,
+        auth,
+        sudo_password,
+    );
+    with_update_deadline(
+        &observer,
+        if query { QUERY_TIMEOUT } else { SUBMIT_TIMEOUT },
+        async {
+            observer.stage("目标解析");
+            let target = resolve_update_target(state, upload_account, remote, auth).await?;
+            observer.stage("命令编码");
+            let command = if query {
+                readonly_command("query", Some(operation_id))?
+            } else {
+                helper_command(arguments)?
+            };
+            let output = execute_root_ssh_command_observed(
+                &target,
+                auth,
+                sudo_password,
+                &command,
+                &observer,
+            )
+            .await?;
+            observer.stage("响应解析");
+            if output.exit_code != Some(0) {
+                let detail = observer
+                    .redact(&output.stderr)
+                    .chars()
+                    .take(2048)
+                    .collect::<String>();
+                for marker in [
+                    "LOWER_UPDATE_TASK_REJECTED:",
+                    "LOWER_UPDATE_TASK_NOT_FOUND:",
+                ] {
+                    if let Some(start) = detail.find(marker) {
+                        return Err(detail[start..].to_string());
+                    }
+                }
+                return Err(format!(
+                    "宿主机更新任务接口未确认成功，请查询原任务：{detail}"
+                ));
+            }
+            let status = parse_status_observed(&output.stdout, operation_id, Some(&observer))?;
+            observer.stage("观测完成");
+            Ok(status)
+        },
     )
     .await
-    .map_err(|_| {
-        "更新任务观测超时，结果暂时未知；请恢复连接后查询原任务，不要重新安装".to_string()
-    })??;
-    if output.exit_code != Some(0) {
-        // 返回错误和日志尾部不得携带认证秘密。
-        let mut detail = output.stderr.chars().take(2048).collect::<String>();
-        for secret in [
-            sudo_password,
-            match auth {
-                LowerUpdateSshAuthDto::Password { password } => password,
-                _ => "",
-            },
-        ] {
-            if !secret.is_empty() {
-                detail = detail.replace(secret, "[已隐藏]");
-            }
-        }
-        tracing::warn!(operation_id, detail = %detail, exit_code = ?output.exit_code, "宿主机更新任务接口返回错误");
-        for marker in [
-            "LOWER_UPDATE_TASK_REJECTED:",
-            "LOWER_UPDATE_TASK_NOT_FOUND:",
-        ] {
-            if let Some(start) = detail.find(marker) {
-                return Err(detail[start..].to_string());
-            }
-        }
-        return Err(format!(
-            "宿主机更新任务接口未确认成功，请查询原任务：{detail}"
-        ));
-    }
-    let mut status = parse_status(&output.stdout, operation_id)?;
-    for secret in [
-        sudo_password,
-        match auth {
-            LowerUpdateSshAuthDto::Password { password } => password,
-            _ => "",
-        },
-    ] {
-        if !secret.is_empty() {
-            status.log_tail = status.log_tail.replace(secret, "[已隐藏]");
-            status.message = status.message.replace(secret, "[已隐藏]");
-        }
-    }
-    Ok(status)
 }
 
 #[tauri::command]
@@ -298,38 +353,50 @@ pub async fn preflight_lower_update_task(
     state: State<'_, AppState>,
     request: LowerUpdateRuntimeInfoRequestDto,
 ) -> Result<(), String> {
-    let target = resolve_update_target(
-        &state,
-        &request.upload_account,
+    let observer = task_observer(
+        "",
+        "更新环境预检",
         request.remote_target.as_ref(),
         &request.auth,
-    )
-    .await?;
-    let command = readonly_command("preflight", None)?;
-    let output = tokio::time::timeout(
-        Duration::from_secs(90),
-        execute_root_ssh_command(&target, &request.auth, &request.sudo_password, &command),
-    )
-    .await
-    .map_err(|_| "更新环境预检超时，未上传安装包".to_string())??;
-    if output.exit_code != Some(0) {
-        let mut detail = output.stderr.chars().take(2048).collect::<String>();
-        for secret in [
+        &request.sudo_password,
+    );
+    with_update_deadline(&observer, PREFLIGHT_TIMEOUT, async {
+        observer.stage("目标解析");
+        let target = resolve_update_target(
+            &state,
+            &request.upload_account,
+            request.remote_target.as_ref(),
+            &request.auth,
+        )
+        .await?;
+        observer.stage("命令编码");
+        let command = readonly_command("preflight", None)?;
+        let output = execute_root_ssh_command_observed(
+            &target,
+            &request.auth,
             &request.sudo_password,
-            match &request.auth {
-                LowerUpdateSshAuthDto::Password { password } => password,
-                _ => "",
-            },
-        ] {
-            if !secret.is_empty() {
-                detail = detail.replace(secret, "[已隐藏]");
-            }
+            &command,
+            &observer,
+        )
+        .await?;
+        observer.stage("响应解析");
+        if output.exit_code != Some(0) {
+            let detail = observer
+                .redact(&output.stderr)
+                .chars()
+                .take(2048)
+                .collect::<String>();
+            return Err(format!("更新环境预检失败，未上传安装包：{detail}"));
         }
-        tracing::warn!(detail = %detail, "宿主机更新环境预检失败，未上传安装包");
-        return Err(format!("更新环境预检失败，未上传安装包：{detail}"));
-    }
-    tracing::info!("宿主机更新环境只读预检通过");
-    Ok(())
+        let response: serde_json::Value =
+            serde_json::from_str(output.stdout.trim()).map_err(|_| "更新环境预检未返回有效确认")?;
+        if response.get("ok").and_then(|value| value.as_bool()) != Some(true) {
+            return Err("宿主机未确认更新环境预检通过".into());
+        }
+        observer.stage("观测完成");
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -337,51 +404,59 @@ pub async fn close_lower_update_task(
     state: State<'_, AppState>,
     request: CloseLowerUpdateTaskRequest,
 ) -> Result<(), String> {
-    validate_operation_id(&request.operation_id)?;
-    validate_digest(&request.package_sha256)?;
-    let expected =
-        normalize_image_id(&request.expected_image_id).ok_or("原任务期望镜像 ID 不合法")?;
-    let target = resolve_update_target(
-        &state,
-        &request.upload_account,
+    let observer = task_observer(
+        &request.operation_id,
+        "结束更新记录",
         request.remote_target.as_ref(),
         &request.auth,
-    )
-    .await?;
-    let command = close_command(
-        &request.operation_id,
-        &request.package_sha256.to_ascii_lowercase(),
-        &expected,
-    )?;
-    let output = tokio::time::timeout(
-        Duration::from_secs(90),
-        execute_root_ssh_command(&target, &request.auth, &request.sudo_password, &command),
-    )
-    .await
-    .map_err(|_| "关闭任务结果暂时未知，请重试核验；本地记录仍需保留".to_string())??;
-    if output.exit_code != Some(0) {
-        let mut detail = output.stderr.chars().take(2048).collect::<String>();
-        for secret in [
+        &request.sudo_password,
+    );
+    with_update_deadline(&observer, CLOSE_TIMEOUT, async {
+        observer.stage("请求校验");
+        validate_operation_id(&request.operation_id)?;
+        validate_digest(&request.package_sha256)?;
+        let expected =
+            normalize_image_id(&request.expected_image_id).ok_or("原任务期望镜像 ID 不合法")?;
+        observer.stage("目标解析");
+        let target = resolve_update_target(
+            &state,
+            &request.upload_account,
+            request.remote_target.as_ref(),
+            &request.auth,
+        )
+        .await?;
+        observer.stage("命令编码");
+        let command = close_command(
+            &request.operation_id,
+            &request.package_sha256.to_ascii_lowercase(),
+            &expected,
+        )?;
+        let output = execute_root_ssh_command_observed(
+            &target,
+            &request.auth,
             &request.sudo_password,
-            match &request.auth {
-                LowerUpdateSshAuthDto::Password { password } => password,
-                _ => "",
-            },
-        ] {
-            if !secret.is_empty() {
-                detail = detail.replace(secret, "[已隐藏]");
-            }
+            &command,
+            &observer,
+        )
+        .await?;
+        observer.stage("响应解析");
+        if output.exit_code != Some(0) {
+            let detail = observer
+                .redact(&output.stderr)
+                .chars()
+                .take(2048)
+                .collect::<String>();
+            return Err(format!("无法结束原任务，本地记录仍需保留：{detail}"));
         }
-        tracing::warn!(operation_id = %request.operation_id, detail = %detail, "宿主机拒绝关闭更新任务，本地记录需保留");
-        return Err(format!("无法结束原任务，本地记录仍需保留：{detail}"));
-    }
-    let response: serde_json::Value = serde_json::from_str(output.stdout.trim())
-        .map_err(|_| "关闭任务未返回有效确认，本地记录仍需保留")?;
-    if response.get("ok").and_then(|value| value.as_bool()) != Some(true) {
-        return Err("宿主机未确认原任务关闭，本地记录仍需保留".into());
-    }
-    tracing::info!(operation_id = %request.operation_id, "已确认原任务不存在并保存拒绝迟到安装的关闭记录");
-    Ok(())
+        let response: serde_json::Value = serde_json::from_str(output.stdout.trim())
+            .map_err(|_| "关闭任务未返回有效确认，本地记录仍需保留")?;
+        if response.get("ok").and_then(|value| value.as_bool()) != Some(true) {
+            return Err("宿主机未确认原任务关闭，本地记录仍需保留".into());
+        }
+        observer.stage("观测完成");
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]

@@ -8,6 +8,9 @@ use std::{
 };
 
 use super::lower_update_runtime;
+#[path = "lower_update_ssh_diagnostics.rs"]
+mod ssh_diagnostics;
+pub(super) use ssh_diagnostics::{complete_without_waiting_for_disconnect, UpdateSshObserver};
 use crate::remote_access::{self, RemoteConnection};
 use super::remote::RemoteSshManager;
 #[cfg(test)]
@@ -482,7 +485,32 @@ async fn connect_password_ssh(
     target: &LowerUpdateUploadTarget,
     password: &str,
 ) -> Result<russh::client::Handle<PasswordSshHandler>, String> {
-    if target.remote.as_ref().is_some_and(|remote| !remote.connection.active()) {
+    let observer = ssh_observer(target, &[password]);
+    connect_password_ssh_observed(target, password, &observer)
+        .await
+        .map_err(|error| observer.failure(&error))
+}
+
+fn ssh_observer(target: &LowerUpdateUploadTarget, secrets: &[&str]) -> UpdateSshObserver {
+    let identity = target
+        .remote
+        .as_ref()
+        .map(|remote| remote.connection.device.device_id.as_str())
+        .unwrap_or("直连设备");
+    UpdateSshObserver::new("", "SSH命令", identity, secrets)
+}
+
+async fn connect_password_ssh_observed(
+    target: &LowerUpdateUploadTarget,
+    password: &str,
+    observer: &UpdateSshObserver,
+) -> Result<russh::client::Handle<PasswordSshHandler>, String> {
+    observer.stage("SSH连接");
+    if target
+        .remote
+        .as_ref()
+        .is_some_and(|remote| !remote.connection.active())
+    {
         return Err("平台远程连接已失效，请恢复原平台登录后查询原任务".into());
     }
     if password.is_empty() {
@@ -493,19 +521,33 @@ async fn connect_password_ssh(
         ..Default::default()
     };
     let trust_error = Arc::new(parking_lot::Mutex::new(None));
-    let mut session = tokio::time::timeout(Duration::from_secs(15), russh::client::connect(
-        Arc::new(config),
-        (target.host.as_str(), target.port),
-        PasswordSshHandler {
-            host: target.host.clone(),
-            port: target.port,
-            remote: target.remote.clone(),
-            trust_error: trust_error.clone(),
-        },
-    ))
+    let mut session = tokio::time::timeout(
+        Duration::from_secs(15),
+        russh::client::connect(
+            Arc::new(config),
+            (target.host.as_str(), target.port),
+            PasswordSshHandler {
+                host: target.host.clone(),
+                port: target.port,
+                remote: target.remote.clone(),
+                trust_error: trust_error.clone(),
+            },
+        ),
+    )
     .await
-    .map_err(|_| trust_error.lock().clone().unwrap_or_else(|| "SSH 连接超时，请恢复原设备连接后查询原任务".to_string()))?
-    .map_err(|e| trust_error.lock().clone().unwrap_or_else(|| format!("SSH 密码连接失败: {e}")))?;
+    .map_err(|_| {
+        trust_error
+            .lock()
+            .clone()
+            .unwrap_or_else(|| "SSH 连接超时，请恢复原设备连接后查询原任务".to_string())
+    })?
+    .map_err(|e| {
+        trust_error
+            .lock()
+            .clone()
+            .unwrap_or_else(|| format!("SSH 密码连接失败: {e}"))
+    })?;
+    observer.stage("SSH密码认证");
     let auth = session
         .authenticate_password(target.user.clone(), password.to_string())
         .await
@@ -676,17 +718,41 @@ async fn execute_password_ssh_command(
     remote_command: &str,
     stdin: Option<&[u8]>,
 ) -> Result<RemoteCommandOutput, String> {
-    let session = connect_password_ssh(target, password).await?;
+    let observer = ssh_observer(target, &[password]);
+    execute_password_ssh_command_observed(
+        target,
+        password,
+        remote_command,
+        stdin,
+        "命令输入",
+        &observer,
+    )
+    .await
+    .map_err(|error| observer.failure(&error))
+}
+
+async fn execute_password_ssh_command_observed(
+    target: &LowerUpdateUploadTarget,
+    password: &str,
+    remote_command: &str,
+    stdin: Option<&[u8]>,
+    input_stage: &'static str,
+    observer: &UpdateSshObserver,
+) -> Result<RemoteCommandOutput, String> {
+    let session = connect_password_ssh_observed(target, password, observer).await?;
+    observer.stage("SSH会话通道");
     let mut channel = session
         .channel_open_session()
         .await
         .map_err(|e| format!("打开 SSH 命令通道失败: {e}"))?;
+    observer.stage("SSH命令发送");
     channel
         .exec(true, remote_command)
         .await
         .map_err(|e| format!("执行 SSH 命令失败: {e}"))?;
 
     if let Some(stdin) = stdin {
+        observer.stage(input_stage);
         channel
             .data_bytes(stdin.to_vec())
             .await
@@ -697,6 +763,7 @@ async fn execute_password_ssh_command(
             .map_err(|e| format!("结束远端命令输入失败: {e}"))?;
     }
 
+    observer.stage("SSH响应接收");
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut exit_code = None;
@@ -710,14 +777,22 @@ async fn execute_password_ssh_command(
             _ => {}
         }
     }
-    let _ = session
-        .disconnect(russh::Disconnect::ByApplication, "", "English")
-        .await;
-    Ok(RemoteCommandOutput {
+    observer.stage("SSH响应已接收");
+    let output = RemoteCommandOutput {
         exit_code,
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
         stderr: String::from_utf8_lossy(&stderr).into_owned(),
-    })
+    };
+    Ok(complete_without_waiting_for_disconnect(
+        output,
+        async move {
+            session
+                .disconnect(russh::Disconnect::ByApplication, "", "English")
+                .await
+                .map_err(|_| "SSH 连接清理失败".to_string())
+        },
+        observer,
+    ))
 }
 
 async fn execute_certificate_ssh_command(
@@ -725,6 +800,21 @@ async fn execute_certificate_ssh_command(
     remote_command: &str,
     stdin: Option<&[u8]>,
 ) -> Result<RemoteCommandOutput, String> {
+    let observer = ssh_observer(target, &[]);
+    execute_certificate_ssh_command_observed(target, remote_command, stdin, "命令输入", &observer)
+        .await
+        .map_err(|error| observer.failure(&error))
+}
+
+async fn execute_certificate_ssh_command_observed(
+    target: &LowerUpdateUploadTarget,
+    remote_command: &str,
+    stdin: Option<&[u8]>,
+    input_stage: &'static str,
+    observer: &UpdateSshObserver,
+) -> Result<RemoteCommandOutput, String> {
+    // OpenSSH 子进程负责握手、证书认证、会话与命令发送，只报告可观测的组合阶段。
+    observer.stage("SSH连接与证书认证及命令发送");
     let remote_target = format!("{}@{}", target.user, target.host);
     let mut child = Command::new("ssh")
         .arg("-T")
@@ -750,6 +840,7 @@ async fn execute_certificate_ssh_command(
         .take()
         .ok_or_else(|| "创建 SSH 命令输入流失败".to_string())?;
     if let Some(stdin) = stdin {
+        observer.stage(input_stage);
         child_stdin
             .write_all(stdin)
             .await
@@ -761,11 +852,12 @@ async fn execute_certificate_ssh_command(
         .map_err(|e| format!("结束远端命令输入失败: {e}"))?;
     drop(child_stdin);
 
+    observer.stage("SSH响应接收");
     let output = child
         .wait_with_output()
         .await
         .map_err(|e| format!("等待 SSH 命令结果失败: {e}"))?;
-
+    observer.stage("SSH响应已接收");
     Ok(RemoteCommandOutput {
         exit_code: output.status.code().map(|value| value as u32),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -810,14 +902,46 @@ pub(super) async fn execute_root_ssh_command(
     sudo_password: &str,
     command: &str,
 ) -> Result<RemoteCommandOutput, String> {
+    let password = match auth {
+        LowerUpdateSshAuthDto::Password { password } => password.as_str(),
+        _ => "",
+    };
+    let observer = ssh_observer(target, &[password, sudo_password]);
+    execute_root_ssh_command_observed(target, auth, sudo_password, command, &observer)
+        .await
+        .map_err(|error| observer.failure(&error))
+}
+
+pub(super) async fn execute_root_ssh_command_observed(
+    target: &LowerUpdateUploadTarget,
+    auth: &LowerUpdateSshAuthDto,
+    sudo_password: &str,
+    command: &str,
+    observer: &UpdateSshObserver,
+) -> Result<RemoteCommandOutput, String> {
     let sudo_stdin = sudo_password_stdin(sudo_password)?;
     let remote_command = build_password_root_shell_command(command);
     match auth {
         LowerUpdateSshAuthDto::Password { password } => {
-            execute_password_ssh_command(target, password, &remote_command, Some(&sudo_stdin)).await
+            execute_password_ssh_command_observed(
+                target,
+                password,
+                &remote_command,
+                Some(&sudo_stdin),
+                "sudo输入",
+                observer,
+            )
+            .await
         }
         LowerUpdateSshAuthDto::Certificate => {
-            execute_certificate_ssh_command(target, &remote_command, Some(&sudo_stdin)).await
+            execute_certificate_ssh_command_observed(
+                target,
+                &remote_command,
+                Some(&sudo_stdin),
+                "sudo输入",
+                observer,
+            )
+            .await
         }
     }
 }

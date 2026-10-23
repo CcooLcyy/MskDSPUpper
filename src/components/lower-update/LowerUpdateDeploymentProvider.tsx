@@ -83,6 +83,7 @@ export function LowerUpdateDeploymentProvider({ children, controller: suppliedCo
     start: controller.start,
     retry: controller.retry,
     resumeRemote: controller.resumeRemote,
+    stopObservingRemote: controller.stopObservingRemote,
     closeMissingRemote: controller.closeMissingRemote,
     openDetails: controller.openDetails,
     closeDetails: controller.closeDetails,

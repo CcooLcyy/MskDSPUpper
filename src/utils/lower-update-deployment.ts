@@ -83,6 +83,7 @@ export interface LowerUpdateDeploymentSnapshot {
   isRunning: boolean;
   detailOpen: boolean;
   resultOpen: boolean;
+  canStopWaiting: boolean;
 }
 
 export interface LowerUpdateDeploymentOperations {
@@ -101,14 +102,18 @@ export interface LowerUpdateDeploymentOperations {
   credentialRevision(account: string): number;
   reconnectRuntime(request: LowerUpdateReconnectRequest): Promise<boolean>;
   sleep(duration: number): Promise<void>;
+  now?(): number;
+  scheduleTimeout?(callback: () => void, duration: number): () => void;
   log?(message: string): void;
 }
 
 const runningStages = new Set<LowerUpdateDeploymentStage>(['checking', 'uploading', 'installing', 'verifying', 'cleaning', 'reconnecting', 'waiting_reconnect', 'rolling_back']);
+const observationStopped = Symbol('原任务本地观测已停止');
+const remoteTerminalPhases = new Set<LowerUpdateTaskStatus['phase']>(['succeeded', 'rolled_back', 'rollback_failed', 'failed']);
 
 /** 流程独立于 React 和路由；私有输入仅保留在内存，公开快照不包含连接凭据。 */
 export function createLowerUpdateDeploymentController(operations: LowerUpdateDeploymentOperations) {
-  let snapshot: LowerUpdateDeploymentSnapshot = { task: null, isRunning: false, detailOpen: false, resultOpen: false };
+  let snapshot: LowerUpdateDeploymentSnapshot = { task: null, isRunning: false, detailOpen: false, resultOpen: false, canStopWaiting: false };
   let privateInput: LowerUpdateDeploymentInput | null = null;
   const loadedPending = operations.loadPending?.();
   let pendingRemote = readLowerUpdatePendingTask(loadedPending);
@@ -119,6 +124,14 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
   let recoveredCredentials: { auth: LowerUpdateSshAuth; sudo_password: string } | null = null;
   let credentialRevision = 0;
   let sequence = 0;
+  let observationSequence = 0;
+  type Observation = { id: number; interrupted: Promise<typeof observationStopped>; stop(): void };
+  let activeObservation: Observation | null = null;
+  const now = operations.now ?? (() => performance.now());
+  const scheduleTimeout = operations.scheduleTimeout ?? ((callback: () => void, duration: number) => {
+    const timer = globalThis.setTimeout(callback, duration);
+    return () => globalThis.clearTimeout(timer);
+  });
   const listeners = new Set<() => void>();
 
   const redact = (value: string): string => {
@@ -140,7 +153,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
   };
   const finish = (changes: Partial<LowerUpdateDeploymentTask>): void => {
     update(changes);
-    publish({ detailOpen: false, resultOpen: true });
+    publish({ detailOpen: false, resultOpen: true, canStopWaiting: false });
   };
   const connection = () => {
     const value = privateInput!.connection;
@@ -249,7 +262,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
   const applyRemoteStatus = async (result: LowerUpdateTaskStatus): Promise<boolean> => {
     if (result.operation_id !== pendingRemote!.operation_id || compareLowerUpdateImages(result.expected_image_id, pendingRemote!.expected_image_id) !== 'same') throw new Error('远程任务编号或期望镜像不一致，已停止接收结果');
     if (result.phase === 'succeeded' && compareLowerUpdateImages(result.actual_image_id, pendingRemote!.expected_image_id) !== 'same') throw new Error('宿主机返回成功，但实际运行镜像不匹配，保留原任务待确认');
-    const terminal = ['succeeded', 'rolled_back', 'rollback_failed', 'failed'].includes(result.phase);
+    const terminal = remoteTerminalPhases.has(result.phase);
     const stage: LowerUpdateDeploymentStage = result.phase === 'failed' ? 'install_failed'
       : result.phase === 'accepted' || result.phase === 'preparing' ? 'installing' : result.phase;
     const statuses: Record<string, string> = { succeeded: '升级完成', rolled_back: '更新失败，已自动恢复上一版本', rollback_failed: '自动回退失败，需要人工处理', failed: '更新任务失败', rolling_back: '正在自动恢复上一版本' };
@@ -280,26 +293,71 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     }
     return true;
   };
-  const observeRemote = async (): Promise<void> => {
-    let lastError = '';
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      try {
+  const isCurrentObservation = (observation: Observation): boolean => activeObservation === observation && observation.id === observationSequence;
+  const boundedRead = async <T>(read: () => Promise<T>, duration: number, timeoutMessage: string, observation?: Observation): Promise<T> => {
+    let cancelTimeout = () => {};
+    const timeout = new Promise<never>((_, reject) => { cancelTimeout = scheduleTimeout(() => reject(new Error(timeoutMessage)), duration); });
+    try {
+      const result = await Promise.race([Promise.resolve().then(() => {
+        if (observation && !isCurrentObservation(observation)) throw observationStopped;
+        return read();
+      }), timeout, ...(observation ? [observation.interrupted] : [])]);
+      if (result === observationStopped || (observation && !isCurrentObservation(observation))) throw observationStopped;
+      return result as T;
+    } finally { cancelTimeout(); }
+  };
+  const observeRemote = async (once = false): Promise<void> => {
+    let stop = () => {};
+    const interrupted = new Promise<typeof observationStopped>(resolve => { stop = () => resolve(observationStopped); });
+    const observation: Observation = { id: ++observationSequence, interrupted, stop };
+    activeObservation = observation;
+    const startedAt = now();
+    const deadline = startedAt + 180_000;
+    const budgetMessage = '自动观测已达 180 秒，本轮本地等待已结束；请稍后查询原任务，不要重复安装';
+    publish({ canStopWaiting: true });
+    try {
+      while (isCurrentObservation(observation)) {
+        const remaining = deadline - now();
+        if (!once && remaining <= 0) throw new Error(budgetMessage);
         const request = remoteRequest();
-        const result = await operations.queryTask!(request);
+        const result = await boundedRead(() => operations.queryTask!(request), once ? 35_000 : Math.min(35_000, remaining),
+          !once && remaining <= 35_000 ? budgetMessage : '原任务查询等待已达 35 秒，未收到完整响应，请检查连接后重试', observation);
+        if (!isCurrentObservation(observation)) return;
+        // 终态消费会写本地恢复记录；关闭停止入口后才能进入该异步事务。
+        if (remoteTerminalPhases.has(result.phase)) publish({ canStopWaiting: false });
+        if (!isCurrentObservation(observation)) return;
         if (await applyRemoteStatus(result)) return;
-      } catch (error) {
-        if (errorText(error).includes('LOWER_UPDATE_TASK_NOT_FOUND:')) {
-          finish({ stage: 'task_missing', status: '原任务不存在', error: null,
-            verificationMessage: '宿主机未找到原任务，尚未确认旧版本安装成功；可重新核验后结束本地记录。查询不会重新安装。',
-            cleanupMessage: '保留本地原任务、设备安装包与恢复材料' });
+        if (!isCurrentObservation(observation)) return;
+        if (once) {
+          const phases: Partial<Record<LowerUpdateTaskStatus['phase'], string>> = {
+            accepted: '已受理', preparing: '准备中', installing: '安装中', verifying: '验证中', rolling_back: '回退中',
+          };
+          finish({ stage: 'remote_unknown', status: `宿主机任务${phases[result.phase] ?? result.phase}，可稍后查询`, error: null,
+            verificationMessage: `本次查询宿主机阶段：${result.phase}。${redact(result.message)}。本轮本地等待已结束，可稍后再次查询原任务。` });
           return;
         }
-        lastError = errorText(error);
-        update({ stage: 'waiting_reconnect', status: '等待设备重新上线', verificationMessage: '连接中断，宿主机任务继续执行；正在查询原任务', error: null });
+        const waitBudget = deadline - now();
+        if (waitBudget <= 0) throw new Error(budgetMessage);
+        await boundedRead(() => operations.sleep(Math.min(3000, waitBudget)), waitBudget, budgetMessage, observation);
       }
-      if (attempt < 59) await operations.sleep(3000);
+    } catch (error) {
+      if (!isCurrentObservation(observation) || error === observationStopped) return;
+      if (errorText(error).includes('LOWER_UPDATE_TASK_NOT_FOUND:')) {
+        finish({ stage: 'task_missing', status: '原任务不存在', error: null,
+          verificationMessage: '宿主机未找到原任务，尚未确认旧版本安装成功；可重新核验后结束本地记录。查询不会重新安装。',
+          cleanupMessage: '保留本地原任务、设备安装包与恢复材料' });
+        return;
+      }
+      const detail = errorText(error);
+      operations.log?.(`原任务查询结束：任务 ${pendingRemote?.operation_id ?? '-'}，耗时 ${Math.round(now() - startedAt)} 毫秒，${detail}`);
+      finish({ stage: 'remote_unknown', status: '原任务查询未完成，请检查后重试', error: detail,
+        verificationMessage: `本轮查询未确认更新结果：${detail}。已保留原任务，请检查后再次查询，不要重复安装。`, cleanupMessage: '保留原任务及恢复材料' });
+    } finally {
+      if (isCurrentObservation(observation)) {
+        activeObservation = null;
+        publish({ canStopWaiting: false });
+      }
     }
-    finish({ stage: 'remote_unknown', status: '暂时无法确认更新结果', error: null, verificationMessage: `请恢复查询原任务，不要重复安装。${lastError}`, cleanupMessage: '保留原任务及恢复材料' });
   };
   const executeRemote = async (): Promise<void> => {
     if (!operations.submitTask || !operations.queryTask || !operations.savePending) throw new Error('远程更新任务接口未初始化');
@@ -326,7 +384,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
       installDir: pendingRemote.install_dir, authMethod: 'password', stage: 'remote_unknown', status: '有待确认的远程更新任务', progress: 65,
       uploadedBytes: 0, totalBytes: 0, remotePath: '-', uploadResult: null, installResult: null, expectedImageId: pendingRemote.expected_image_id,
       actualImageId: '-', verificationMessage: '请重新输入认证信息后查询原任务', cleanupMessage: '保留原任务及恢复材料', error: null,
-      cleanupError: null, alreadyCurrent: false, connectionWarning: null, runtimeRefreshMessage: '未执行', runtimeRefreshError: null }, isRunning: false, detailOpen: false, resultOpen: false };
+      cleanupError: null, alreadyCurrent: false, connectionWarning: null, runtimeRefreshMessage: '未执行', runtimeRefreshError: null }, isRunning: false, detailOpen: false, resultOpen: false, canStopWaiting: false };
   }
 
   const execute = async (mode: LowerUpdateDeploymentRetryMode | 'start'): Promise<void> => {
@@ -436,7 +494,16 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
       if (privateInput) { privateInput.connection.auth = { ...auth }; privateInput.connection.sudo_password = sudoPassword; }
       update({ stage: 'waiting_reconnect', status: '正在恢复查询原任务', error: null });
       publish({ detailOpen: true, resultOpen: false });
-      await observeRemote();
+      await observeRemote(true);
+    },
+    stopObservingRemote(): void {
+      if (!snapshot.canStopWaiting || !activeObservation) return;
+      const observation = activeObservation;
+      observationSequence++;
+      activeObservation = null;
+      observation.stop();
+      finish({ stage: 'remote_unknown', status: '已停止本地等待', error: null,
+        verificationMessage: '已停止本轮本地查询，未取消设备上的安装。更新结果尚未确认，原任务记录已保留，可稍后重新查询。', cleanupMessage: '保留原任务及恢复材料' });
     },
     async closeMissingRemote(auth: LowerUpdateSshAuth, sudoPassword: string): Promise<void> {
       if (snapshot.isRunning) throw new Error('原任务正在核验中');
@@ -449,7 +516,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
         if (!operations.queryTask || !operations.archivePending || !operations.closeTask || !operations.savePending) throw new Error('原任务查询、关闭或归档接口未初始化，已保留本地记录');
         const request = remoteRequest();
         try {
-          await operations.queryTask(request);
+          await boundedRead(() => operations.queryTask!(request), 35_000, '原任务查询等待已达 35 秒，已保留记录，请检查连接后重试');
           finish({ stage: 'remote_unknown', status: '原任务已存在，请恢复查询', error: null,
             verificationMessage: '二次核验发现宿主机原任务已存在，已停止结束操作；请恢复查询原任务。', cleanupMessage: '保留原任务及恢复材料' });
           return;
@@ -457,10 +524,11 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
           // 后端仅在同时排除其他执行中、回退失败任务和安装进程后返回不存在。
           if (!errorText(error).includes('LOWER_UPDATE_TASK_NOT_FOUND:')) throw error;
         }
-        const runtime = await operations.queryRuntime({
+        const runtimeRequest: LowerUpdateRuntimeInfoRequest = {
           remote_target: { ...pendingRemote.remote_target }, upload_account: pendingRemote.upload_account,
           auth: { ...auth }, sudo_password: sudoPassword,
-        });
+        };
+        const runtime = await boundedRead(() => operations.queryRuntime(runtimeRequest), 35_000, '原设备运行状态核验等待已达 35 秒，已保留记录，请检查连接后重试');
         const actualImageId = runtime.image_id?.trim() ?? '';
         if (!runtime.exists || !runtime.running || !/^sha256:[0-9a-f]{64}$/i.test(actualImageId)) {
           throw new Error('原设备业务容器未正常运行或镜像 ID 无效，已保留本地记录，请检查设备后重试');
