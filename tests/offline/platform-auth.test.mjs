@@ -387,3 +387,87 @@ test('password autofill rejects reads during login and delayed results across lo
   assert.equal(await pending.controller.getSavedPassword('alice'), 'saved-secret');
   assert.equal(calls.filter(call => call[0] === 'login').length, 0);
 });
+
+// 切换账号先关闭自动登录并退出，再重启清理内存；重启前不能跨账号恢复草稿。
+test('account switching disables automatic login before logout and restart', async () => {
+  const { controller, calls } = fixture({ getSettings: async () => ({ ...settings, remember_password: true }) });
+  await controller.start();
+  await controller.login('alice', 'secret', true, true);
+  await controller.logout();
+  calls.length = 0;
+  assert.equal(await controller.switchAccount(async () => { calls.push(['restart']); }), true);
+  assert.deepEqual(calls, [
+    ['settings', { ...settings, remember_password: true, auto_login: false }],
+    ['logout'], ['restart'],
+  ]);
+  assert.equal(controller.getSnapshot().owner, 'alice');
+  assert.equal(controller.getSnapshot().workspaceReady, true);
+  assert.equal(controller.getSnapshot().switchingAccount, true);
+  await controller.login('bob', 'secret', false);
+  assert.equal(calls.filter(call => call[0] === 'login').length, 0);
+});
+
+// 各阶段失败都保留原账号草稿，不能提前重启或开放其他账号，且可以重试。
+test('failed account switching retains locked drafts and permits retry', async () => {
+  for (const stage of ['settings', 'logout', 'restart']) {
+    let fail = false;
+    const { controller, calls } = fixture({
+      saveSettings: async value => { calls.push(['settings', value]); if (fail && stage === 'settings') throw Error('private'); return value; },
+      logout: async () => { calls.push(['logout']); if (fail && stage === 'logout') throw Error('private'); return signedOut; },
+    });
+    const restart = async () => { calls.push(['restart']); if (fail && stage === 'restart') throw Error('private'); };
+    await controller.start();
+    await controller.login('alice', 'secret', false);
+    await controller.logout();
+    calls.length = 0;
+    fail = true;
+    assert.equal(await controller.switchAccount(restart), false);
+    const snapshot = controller.getSnapshot();
+    assert.equal(snapshot.phase, 'locked');
+    assert.equal(snapshot.owner, 'alice');
+    assert.equal(snapshot.workspaceReady, true);
+    assert.equal(snapshot.endingSession, false);
+    assert.equal(snapshot.switchingAccount, false);
+    assert.ok(snapshot.error && !snapshot.error.includes('private'));
+    assert.deepEqual(calls.map(call => call[0]), stage === 'settings' ? ['settings'] : stage === 'logout' ? ['settings', 'logout'] : ['settings', 'logout', 'restart']);
+    fail = false;
+    assert.equal(await controller.switchAccount(restart), true);
+  }
+});
+
+// 普通登录页及已解锁工作台不能绕过确认流程切换，进行中的切换不能重复提交。
+test('account switching requires locked drafts and suppresses concurrent requests', async () => {
+  let finish;
+  const { controller, calls } = fixture({ saveSettings: value => new Promise(resolve => { finish = () => resolve(value); }) });
+  const restart = async () => { calls.push(['restart']); };
+  await controller.start();
+  assert.equal(await controller.switchAccount(restart), false);
+  await controller.login('alice', 'secret', false);
+  assert.equal(await controller.switchAccount(restart), false);
+  await controller.logout();
+  const switching = controller.switchAccount(restart);
+  assert.equal(await controller.switchAccount(restart), false);
+  await controller.login('alice', 'secret', false);
+  assert.equal(await controller.saveSettings(settings), false);
+  assert.equal(await controller.getSavedPassword('alice'), null);
+  assert.equal(calls.filter(call => call[0] === 'login').length, 1);
+  finish();
+  assert.equal(await switching, true);
+  assert.equal(calls.filter(call => call[0] === 'restart').length, 1);
+});
+
+// 切换开始使旧凭据读取失效，即使切换失败也不能回填晚到的旧密码。
+test('account switching invalidates delayed saved passwords even when restart fails', async () => {
+  let finishPassword;
+  const { controller } = fixture({
+    getSettings: async () => ({ ...settings, remember_password: true }),
+    getSavedPassword: () => new Promise(resolve => { finishPassword = resolve; }),
+  });
+  await controller.start();
+  await controller.login('alice', 'secret', false, true);
+  await controller.logout();
+  const password = controller.getSavedPassword('alice');
+  await controller.switchAccount(async () => { throw Error('restart'); });
+  finishPassword('saved-secret');
+  assert.equal(await password, null);
+});
