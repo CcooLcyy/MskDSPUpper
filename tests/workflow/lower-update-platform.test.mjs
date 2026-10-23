@@ -42,17 +42,24 @@ test('lower update architecture rules reject unsupported manifests and normalize
   rules.assertLowerUpdateManifest({ platform: 'linux-x64', channel: 'ci' }, 'linux-x64', 'ci');
 });
 
-// 实际渲染设置组件：固定地址可见，且不能读取旧设置或提供编辑、保存入口。
-test('software platform settings show the fixed endpoint without editable controls or storage access', () => {
+// 实际渲染更多页：保留本地数据和配置导入导出，不再显示软件平台及地址。
+test('settings retain local data and config actions without software platform details', () => {
   const require = createRequire(import.meta.url);
   const load = (file) => {
     const code = ts.transpileModule(source(file), {
-      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
     }).outputText;
     const module = { exports: {} };
     const imports = (name) => {
-      if (name === '../../../utils/software-platform') return load('src/utils/software-platform.ts');
-      assert.ok(['react', 'react/jsx-runtime', 'antd'].includes(name), `只读展示不得依赖设置存储：${name}`);
+      if (name === '../../adapters') return { api: {} };
+      if (name === '../../utils/config-export') return {
+        getConfigImportModeOptions: () => [],
+        getConfigSectionOptions: () => [],
+      };
+      if (name === '../../offline/use-capability.ts') return { useCapability: () => false };
+      if (name === '../../offline/ui/CapabilityGate.tsx') return { default: () => null, __esModule: true };
+      if (name === './components/ConfigSectionPickerModal') return { default: () => null, __esModule: true };
+      assert.ok(['react', 'react/jsx-runtime', 'antd', '@ant-design/icons'].includes(name), `未预期的设置页依赖：${name}`);
       return require(name);
     };
     new Function('require', 'module', 'exports', code)(imports, module, module.exports);
@@ -60,10 +67,11 @@ test('software platform settings show the fixed endpoint without editable contro
   };
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
-  const Settings = load('src/pages/Settings/components/SoftwarePlatformSettings.tsx').default;
+  const Settings = load('src/pages/Settings/index.tsx').default;
   const html = renderToStaticMarkup(React.createElement(Settings));
-  assert.match(html, /http:\/\/60\.208\.15\.90:50000/);
-  assert.doesNotMatch(html, /<input\b|<textarea\b|<button\b|contenteditable="true"/i);
+  assert.match(html, /本地数据/);
+  assert.match(html, /配置导入/);
+  assert.doesNotMatch(html, /软件平台|60\.208\.15\.90|安装包均从此平台获取/);
 });
 
 function providerHarness(api, version = '0.8.0-ci.1') {
