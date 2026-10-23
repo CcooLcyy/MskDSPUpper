@@ -8,6 +8,7 @@ use std::{
 };
 
 use super::lower_update_runtime;
+use super::lower_update_architecture::{self, LowerUpdateArchitectureDto};
 #[path = "lower_update_ssh_diagnostics.rs"]
 mod ssh_diagnostics;
 pub(super) use ssh_diagnostics::{complete_without_waiting_for_disconnect, UpdateSshObserver};
@@ -353,6 +354,7 @@ pub struct LowerUpdateUploadRequestDto {
     pub package_path: String,
     pub package_size: u64,
     pub package_sha256: String,
+    pub platform: String,
     pub upload_account: String,
     pub install_dir: String,
     pub auth: LowerUpdateSshAuthDto,
@@ -980,6 +982,29 @@ async fn execute_user_ssh_command(
             execute_certificate_ssh_command(target, remote_command, None).await
         }
     }
+}
+
+async fn query_lower_update_architecture(
+    target: &LowerUpdateUploadTarget,
+    auth: &LowerUpdateSshAuthDto,
+) -> Result<LowerUpdateArchitectureDto, String> {
+    tracing::info!(target = %log_detail(&credential_target(target)), "开始检测下位机系统与 CPU 架构");
+    let output = tokio::time::timeout(
+        LOWER_UPDATE_PRECHECK_TIMEOUT,
+        execute_user_ssh_command(target, auth, lower_update_architecture::PROBE_COMMAND),
+    )
+    .await
+    .map_err(|_| "检测下位机架构超时，已停止下发".to_string())??;
+    if output.exit_code != Some(0) {
+        return Err(format_remote_command_error("检测下位机架构失败，已停止下发", &output));
+    }
+    let result = lower_update_architecture::parse_probe_output(&output.stdout)?;
+    tracing::info!(
+        target = %log_detail(&credential_target(target)),
+        os = %result.os, architecture = %result.architecture, platform = %result.platform,
+        "下位机架构检测完成"
+    );
+    Ok(result)
 }
 
 async fn execute_user_ssh_command_with_stdin(
@@ -3006,6 +3031,23 @@ pub async fn check_lower_update(
 }
 
 #[tauri::command]
+pub async fn get_lower_update_architecture(
+    state: State<'_, AppState>,
+    request: LowerUpdateRuntimeInfoRequestDto,
+) -> Result<LowerUpdateArchitectureDto, String> {
+    let result = tokio::time::timeout(LOWER_UPDATE_PRECHECK_TIMEOUT, async {
+        let target = resolve_update_target(
+            &state, &request.upload_account, request.remote_target.as_ref(), &request.auth,
+        ).await?;
+        query_lower_update_architecture(&target, &request.auth).await
+    }).await.map_err(|_| "检测下位机架构超时，已停止下发".to_string())?;
+    if let Err(error) = &result {
+        tracing::warn!(target = %log_detail(&request.upload_account), error = %log_detail(error), "下位机架构预检失败");
+    }
+    result
+}
+
+#[tauri::command]
 pub async fn get_lower_update_runtime_info(
     state: State<'_, AppState>,
     request: LowerUpdateRuntimeInfoRequestDto,
@@ -3311,7 +3353,18 @@ async fn upload_lower_update_package_inner(
             request.package_sha256, actual_sha256
         ));
     }
-    validate_compressed_package_format(&package_path).await?;
+    // 从已校验 SHA256 的实际包读取平台，不能信任名称或调用方传入的平台。
+    let actual_platform = lower_update_architecture::inspect_upload_platform(
+        package_path.clone(), request.platform.clone(),
+    ).await?;
+    let device = query_lower_update_architecture(&target, &request.auth).await?;
+    if let Err(error) = lower_update_architecture::verify_platforms(&device.platform, &actual_platform) {
+        tracing::warn!(target = %log_detail(&request.upload_account), device_platform = %device.platform,
+            package_platform = %actual_platform, "下位机架构与安装包不匹配，已阻止上传");
+        return Err(error);
+    }
+    tracing::info!(target = %log_detail(&request.upload_account), package_platform = %actual_platform,
+        "下位机与安装包架构核对通过");
     let mut file = fs::File::open(&package_path)
         .await
         .map_err(|e| format!("打开上位机更新包失败: {e}"))?;

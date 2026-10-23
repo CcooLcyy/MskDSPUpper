@@ -4,6 +4,8 @@ import type { LowerUpdateDeploymentInput, LowerUpdateDeploymentRetryMode, LowerU
 
 export interface LowerUpdateDeploymentContextValue extends LowerUpdateDeploymentSnapshot {
   start(input: LowerUpdateDeploymentInput): Promise<void>;
+  matchesArchitectureContext(input: Pick<LowerUpdateDeploymentInput, 'connection' | 'manifest' | 'packageResult'>): boolean;
+  clearArchitectureResult(): void;
   resumeRemote(auth: LowerUpdateSshAuth, sudoPassword: string, options?: LowerUpdateRecoveryOptions): Promise<void>;
   stopObservingRemote(): void;
   closeMissingRemote(auth: LowerUpdateSshAuth, sudoPassword: string, options?: LowerUpdateRecoveryOptions): Promise<void>;

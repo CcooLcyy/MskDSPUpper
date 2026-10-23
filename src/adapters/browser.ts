@@ -70,6 +70,7 @@ import type {
   LowerUpdatePackageCleanupResult,
   LowerUpdateRuntimeInfo,
   LowerUpdateRuntimeInfoRequest,
+  LowerUpdateArchitecture,
   LowerUpdateReconnectRequest,
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
@@ -1218,6 +1219,10 @@ export const browserApi: typeof tauriApi = {
     running: true,
     image_id: browserRunningLowerImageId,
   }),
+  getLowerUpdateArchitecture: async (request: LowerUpdateRuntimeInfoRequest): Promise<LowerUpdateArchitecture> => {
+    if (request.remote_target) throw new Error('远程更新需要桌面版上位机');
+    return { os: 'Linux', architecture: 'aarch64', platform: 'linux-arm64' };
+  },
   downloadLowerUpdate: async (): Promise<LowerUpdateDownloadResult> => {
     throw new Error('浏览器开发模式不支持平台 gRPC 下载，请使用桌面上位机');
   },
@@ -1225,6 +1230,8 @@ export const browserApi: typeof tauriApi = {
     request: LowerUpdateUploadRequest,
     onProgress?: (progress: LowerUpdateUploadProgress) => void,
   ): Promise<LowerUpdateUploadResult> => {
+    if (request.remote_target) throw new Error('远程更新需要桌面版上位机');
+    if (request.platform !== 'linux-arm64') throw new Error(`设备架构 linux-arm64 与安装包架构 ${request.platform} 不匹配，请选择匹配版本`);
     const remotePath = buildRemotePackagePath(request.install_dir, request.package_name);
     const totalBytes = request.package_size;
     onProgress?.({

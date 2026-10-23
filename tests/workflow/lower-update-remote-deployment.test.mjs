@@ -26,6 +26,7 @@ function fixture(overrides = {}) {
   const calls = [];
   let saved = null;
   const operations = {
+    queryArchitecture: async request => { calls.push(['architecture', request]); return { os: 'Linux', architecture: 'x86_64', platform: 'linux-x64' }; },
     queryRuntime: async request => {
       calls.push(['runtime', request]);
       return { exists: true, running: true, image_id: 'old' };
@@ -48,6 +49,25 @@ function fixture(overrides = {}) {
     ...overrides,
   };
   return { controller: createLowerUpdateDeploymentController(operations), calls, saved: () => saved };
+}
+
+for (const mode of ['resumeRemote', 'closeMissingRemote']) {
+  test(`${mode} 更换认证时作废先前架构检测，不以新密码复用旧结果`, async () => {
+    const f = fixture({ queryTask: async () => {
+      throw Error(mode === 'resumeRemote' ? '设备离线' : 'LOWER_UPDATE_TASK_NOT_FOUND: 原任务不存在');
+    } });
+    await f.controller.start(input());
+    const changed = input();
+    changed.connection.auth.password = 'recovered-secret';
+    changed.connection.sudo_password = 'recovered-sudo';
+    assert.equal(f.controller.matchesArchitectureContext(input()), true);
+    assert.equal(f.controller.matchesArchitectureContext(changed), false);
+    await f.controller[mode](changed.connection.auth, changed.connection.sudo_password);
+    assert.equal(f.controller.matchesArchitectureContext(changed), false, mode);
+    assert.equal(f.controller.getSnapshot().task.devicePlatform, undefined, mode);
+    assert.equal(f.controller.getSnapshot().task.deviceArchitecture, undefined, mode);
+    assert.equal(f.calls.filter(([name]) => name === 'architecture').length, 1);
+  });
 }
 
 // 验证平台更新成功和原任务恢复成功后均恢复固定目标，重连请求不携带凭据。
@@ -234,14 +254,31 @@ test('只消费首次提交的明确未受理，查询拒绝保留原记录', as
 test('远程环境预检在上传前执行，拒绝及缺少接口时不上传不保存任务', async () => {
   const ok = fixture();
   await ok.controller.start(input());
-  assert.deepEqual(ok.calls.slice(0, 3).map(([name]) => name), ['runtime', 'preflight', 'upload']);
-  assert.deepEqual(ok.calls[1][1].remote_target, input().connection.remote_target);
+  assert.deepEqual(ok.calls.slice(0, 4).map(([name]) => name), ['architecture', 'runtime', 'preflight', 'upload']);
+  assert.deepEqual(ok.calls[0][1].remote_target, input().connection.remote_target);
+  assert.deepEqual(ok.calls[2][1].remote_target, input().connection.remote_target);
   for (const preflightTask of [undefined, async () => { throw Error('/usr/local 组可写 sudo-secret'); }]) {
     const f = fixture({ preflightTask });
     await f.controller.start(input());
     assert.equal(f.controller.getSnapshot().task.stage, 'check_failed');
     assert.equal(f.calls.some(([name]) => ['upload', 'submit', 'persist'].includes(name)), false);
     assert.ok(!JSON.stringify(f.controller.getSnapshot()).includes('sudo-secret'));
+  }
+});
+
+test('平台固定设备先核对架构，不匹配和探测失败均不上传或提交安装', async () => {
+  for (const queryArchitecture of [
+    async request => {
+      assert.deepEqual(request.remote_target, input().connection.remote_target);
+      return { os: 'Linux', architecture: 'aarch64', platform: 'linux-arm64' };
+    },
+    async () => { throw Error('隧道不可用'); },
+  ]) {
+    const f = fixture({ queryArchitecture });
+    await f.controller.start(input());
+    assert.equal(f.controller.getSnapshot().task.stage, 'check_failed');
+    assert.equal(f.calls.some(([name]) => ['runtime', 'preflight', 'upload', 'submit', 'persist'].includes(name)), false);
+    assert.equal(f.saved(), null);
   }
 });
 

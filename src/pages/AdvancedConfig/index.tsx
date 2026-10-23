@@ -536,8 +536,23 @@ const AdvancedConfigPage: React.FC = () => {
     isRunning: isDeployingLowerUpdate,
     hasPendingRemote,
     start: startDeployment,
+    matchesArchitectureContext,
+    clearArchitectureResult,
     openDetails: openDeploymentDetails,
   } = useLowerUpdateDeployment();
+  const hasCurrentArchitecture = Boolean(activeManifest && effectiveDownloadResult && platform === activeManifest.platform && matchesArchitectureContext({
+    manifest: activeManifest,
+    packageResult: effectiveDownloadResult,
+    connection: {
+      upload_account: effectiveUploadAccount, remote_target: remoteTarget, install_dir: targetInstallDir,
+      auth: lowerUpdateAuthMethod === 'password' ? { method: 'password', password: targetSshPassword } : { method: 'certificate' },
+      sudo_password: resolvedSudoPassword,
+    },
+  }));
+  const hasArchitectureResult = deploymentTask?.devicePlatform !== undefined;
+  React.useEffect(() => {
+    if (hasArchitectureResult && !hasCurrentArchitecture) clearArchitectureResult();
+  }, [hasArchitectureResult, hasCurrentArchitecture, clearArchitectureResult]);
   // 只把同一目标与构建的任务结果用于当前表单，其他任务仍在独立入口展示。
   const hasCurrentDeploymentTask = Boolean(deploymentTask && activeManifest
     && lowerUpdateCredentialAccountKey(deploymentTask.uploadAccount) === lowerUpdateCredentialAccountKey(effectiveUploadAccount)
@@ -1377,6 +1392,11 @@ const AdvancedConfigPage: React.FC = () => {
                       console.info('已切换下位机更新目标架构', { platform: value });
                     }}
                   />
+                  <Text type={hasCurrentArchitecture && deploymentTask?.devicePlatform !== platform ? 'danger' : 'secondary'}>
+                    {hasCurrentArchitecture
+                      ? `设备检测：${deploymentTask!.deviceArchitecture} (${deploymentTask!.devicePlatform}) · 安装包：${activeManifest!.platform}`
+                      : '下发前自动检测设备架构，匹配后才上传安装包'}
+                  </Text>
                 </Form.Item>
                 <Form.Item label="版本来源">
                   <Select<LowerUpdateChannel | 'local'>

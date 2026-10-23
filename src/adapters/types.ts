@@ -159,6 +159,7 @@ export interface LowerUpdateReconnectRequest {
 
 export interface LowerUpdateUploadRequest {
   remote_target?: LowerUpdateRemoteTarget;
+  platform: LowerUpdatePlatform;
   package_name: string;
   package_path: string;
   package_size: number;
@@ -220,6 +221,12 @@ export interface LowerUpdateRuntimeInfoRequest extends LowerUpdateRecoveryOption
   upload_account: string;
   auth: LowerUpdateSshAuth;
   sudo_password: string;
+}
+
+export interface LowerUpdateArchitecture {
+  os: string;
+  architecture: string;
+  platform: LowerUpdatePlatform;
 }
 
 export interface LowerUpdateTaskSubmitRequest extends LowerUpdateInstallRequest {

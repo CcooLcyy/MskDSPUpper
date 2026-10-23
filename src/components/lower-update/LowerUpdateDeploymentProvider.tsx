@@ -43,6 +43,7 @@ function createApplicationController(): LowerUpdateDeploymentController {
       } else localStorage.removeItem(LOWER_UPDATE_PENDING_KEY);
     },
     queryRuntime: api.getLowerUpdateRuntimeInfo,
+    queryArchitecture: api.getLowerUpdateArchitecture,
     upload: api.uploadLowerUpdatePackage,
     install: api.installLowerUpdatePackage,
     cleanup: api.cleanupLowerUpdatePackages,
@@ -84,6 +85,8 @@ export function LowerUpdateDeploymentProvider({ children, controller: suppliedCo
   const value = useMemo(() => ({
     ...snapshot,
     start: controller.start,
+    matchesArchitectureContext: controller.matchesArchitectureContext,
+    clearArchitectureResult: controller.clearArchitectureResult,
     retry: controller.retry,
     resumeRemote: controller.resumeRemote,
     stopObservingRemote: controller.stopObservingRemote,

@@ -21,6 +21,7 @@ export type {
   LowerUpdatePackageCleanupResult,
   LowerUpdateManifest,
   LowerUpdateRuntimeInfo,
+  LowerUpdateArchitecture,
   LowerUpdateRuntimeInfoRequest,
   LowerUpdateRecoveryOptions,
   LowerUpdateReconnectRequest,

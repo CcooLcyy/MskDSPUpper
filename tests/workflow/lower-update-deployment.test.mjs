@@ -17,6 +17,7 @@ function fixture(overrides = {}) {
   const calls = [];
   let queries = 0;
   const ops = {
+    queryArchitecture: async request => { calls.push(['architecture', request]); return { os: 'Linux', architecture: 'x86_64', platform: 'linux-x64' }; },
     queryRuntime: async (request) => { calls.push(['query', request]); return { container_name: 'mskdsp', exists: true, running: true, image_id: queries++ === 0 ? previous : expected }; },
     upload: async (request, progress) => { calls.push(['upload', request]); progress({ percent: 50, uploaded_bytes: 5, total_bytes: 10, remote_path: '/home/user/package', stage: 'uploading', package_name: 'package' }); return { package_name: 'package', remote_path: '/home/user/package', uploaded_bytes: 10 }; },
     install: async (request) => { calls.push(['install', request]); return { success: true, already_current: false, exit_code: 0, stdout: '', stderr: '', command: 'install', remote_path: '/home/user/package', package_name: 'package' }; },
@@ -30,6 +31,108 @@ function fixture(overrides = {}) {
   };
   return { controller: createLowerUpdateDeploymentController(ops), calls };
 }
+
+test('设备架构不匹配或探测失败时不查询镜像、不上传安装', async () => {
+  for (const queryArchitecture of [
+    async () => ({ os: 'Linux', architecture: 'aarch64', platform: 'linux-arm64' }),
+    async () => { throw Error('架构探测超时 ssh-secret'); },
+  ]) {
+    const { controller, calls } = fixture({ queryArchitecture });
+    await controller.start(input());
+    assert.equal(controller.getSnapshot().task.stage, 'check_failed');
+    assert.equal(calls.some(([name]) => ['query', 'upload', 'install'].includes(name)), false);
+    assert.equal(JSON.stringify(controller.getSnapshot()).includes('ssh-secret'), false);
+  }
+  const mismatch = fixture({ queryArchitecture: async () => ({ os: 'Linux', architecture: 'aarch64', platform: 'linux-arm64' }) });
+  await mismatch.controller.start(input());
+  assert.match(mismatch.controller.getSnapshot().task.error, /linux-arm64.*linux-x64.*匹配/);
+});
+
+test('开始和每种安装重试先检测固定连接，上传携带包平台，重新确认不检测架构', async () => {
+  for (const mode of ['retry', 'reupload', 'reinstall']) {
+    const f = fixture();
+    const value = input();
+    await f.controller.start(value);
+    assert.deepEqual(f.calls.filter(([name]) => ['architecture', 'query', 'upload', 'install'].includes(name)).map(([name]) => name), ['architecture', 'query', 'upload', 'install', 'query']);
+    assert.equal(f.calls.find(([name]) => name === 'upload')[1].platform, 'linux-x64');
+    value.connection.upload_account = 'changed@host:22';
+    await f.controller.retry(mode);
+    assert.equal(f.calls.filter(([name]) => name === 'architecture').length, 2);
+    assert.equal(f.calls.filter(([name]) => name === 'architecture')[1][1].upload_account, 'user@host:22');
+    await f.controller.retry('reverify');
+    assert.equal(f.calls.filter(([name]) => name === 'architecture').length, 2);
+  }
+});
+
+test('已上传包重新安装仍拒绝后来不匹配的设备', async () => {
+  let platform = 'linux-x64';
+  const f = fixture({ queryArchitecture: async () => ({ os: 'Linux', architecture: platform === 'linux-x64' ? 'x86_64' : 'aarch64', platform }) });
+  await f.controller.start(input());
+  const before = f.calls.filter(([name]) => ['query', 'upload', 'install'].includes(name)).length;
+  platform = 'linux-arm64';
+  await f.controller.retry('reinstall');
+  assert.equal(f.controller.getSnapshot().task.stage, 'check_failed');
+  assert.equal(f.calls.filter(([name]) => ['query', 'upload', 'install'].includes(name)).length, before);
+});
+
+test('设备检测展示仅适用于同一连接认证和安装包', async () => {
+  const f = fixture();
+  await f.controller.start(input());
+  assert.equal(f.controller.matchesArchitectureContext(input()), true);
+  for (const change of [
+    value => { value.connection.upload_account = 'other@host:22'; },
+    value => { value.connection.auth.password = 'changed'; },
+    value => { value.connection.auth = { method: 'certificate' }; },
+    value => { value.connection.sudo_password = 'changed'; },
+    value => { value.connection.remote_target = { endpoint: 'https://other', device_id: 'device' }; },
+    value => { value.manifest.platform = 'linux-arm64'; },
+    value => { value.manifest.asset.sha256 = 'd'.repeat(64); },
+    value => { value.packageResult.package_path = 'C:/other'; },
+  ]) {
+    const value = input(); change(value);
+    assert.equal(f.controller.matchesArchitectureContext(value), false);
+  }
+});
+
+test('表单上下文变化清除检测结果，切回原输入不能复用，重试需重新检测', async () => {
+  const f = fixture();
+  await f.controller.start(input());
+  assert.equal(f.controller.matchesArchitectureContext(input()), true);
+  f.controller.clearArchitectureResult();
+  assert.equal(f.controller.matchesArchitectureContext(input()), false);
+  assert.equal(f.controller.getSnapshot().task.devicePlatform, undefined);
+  assert.equal(f.controller.getSnapshot().task.deviceArchitecture, undefined);
+  await f.controller.retry('retry');
+  assert.equal(f.calls.filter(([name]) => name === 'architecture').length, 2);
+  assert.equal(f.controller.matchesArchitectureContext(input()), true);
+});
+
+test('ARM64 本地导入包和证书连接同样在上传前检测，固定结果不受输入修改影响', async () => {
+  let release;
+  let reached;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { reached = resolve; });
+  let request;
+  const f = fixture({ queryArchitecture: async value => {
+    request = value; reached(); await gate;
+    return { os: 'Linux', architecture: 'arm64', platform: 'linux-arm64' };
+  } });
+  const value = input();
+  value.manifest.platform = 'linux-arm64';
+  value.manifest.local_import = true;
+  value.connection.auth = { method: 'certificate' };
+  const pending = f.controller.start(value);
+  await started;
+  assert.equal(f.controller.getSnapshot().task.status, '检查设备架构');
+  assert.equal(f.controller.getSnapshot().task.devicePlatform, undefined);
+  value.connection.upload_account = 'other@host:22';
+  release(); await pending;
+  assert.equal(request.upload_account, 'user@host:22');
+  assert.deepEqual(request.auth, { method: 'certificate' });
+  assert.equal(f.controller.getSnapshot().task.devicePlatform, 'linux-arm64');
+  assert.equal(f.calls.find(([name]) => name === 'upload')[1].platform, 'linux-arm64');
+  assert.equal(f.controller.matchesArchitectureContext(value), false);
+});
 
 // 验证更新完成先恢复业务连接，且传入连接目标不包含 SSH 或 sudo 凭据。
 test('更新成功后先自动重连再显示最终结果', { timeout: 5000 }, async () => {

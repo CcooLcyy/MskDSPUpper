@@ -13,6 +13,7 @@ import type {
   LowerUpdatePackageCleanupResult,
   LowerUpdateRuntimeInfo,
   LowerUpdateRuntimeInfoRequest,
+  LowerUpdateArchitecture,
   LowerUpdateSshAuth,
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
@@ -60,6 +61,8 @@ export interface LowerUpdateDeploymentTask {
   uploadAccount: string;
   installDir: string;
   authMethod: LowerUpdateSshAuth['method'];
+  devicePlatform?: LowerUpdateArchitecture['platform'];
+  deviceArchitecture?: string;
   stage: LowerUpdateDeploymentStage;
   status: string;
   progress: number;
@@ -99,6 +102,7 @@ export interface LowerUpdateDeploymentOperations {
   loadPending?(): unknown;
   savePending?(task: LowerUpdatePendingTask | null): Promise<void>;
   queryRuntime(request: LowerUpdateRuntimeInfoRequest): Promise<LowerUpdateRuntimeInfo>;
+  queryArchitecture(request: LowerUpdateRuntimeInfoRequest): Promise<LowerUpdateArchitecture>;
   upload(request: LowerUpdateUploadRequest, progress: (value: LowerUpdateUploadProgress) => void): Promise<LowerUpdateUploadResult>;
   install(request: LowerUpdateInstallRequest): Promise<LowerUpdateInstallResult>;
   cleanup(request: LowerUpdateInstallRequest): Promise<LowerUpdatePackageCleanupResult>;
@@ -403,6 +407,12 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
         await verifyAndCleanup();
         return;
       }
+      update({ stage: 'checking', status: '检查设备架构', devicePlatform: undefined, deviceArchitecture: undefined, verificationMessage: '正在核对设备与安装包架构' });
+      const device = await operations.queryArchitecture(connection());
+      update({ devicePlatform: device.platform, deviceArchitecture: redact(device.architecture) });
+      operations.log?.(redact(`目标 ${privateInput!.connection.upload_account}：设备 ${device.os}/${device.architecture} (${device.platform})，安装包 ${privateInput!.manifest.platform}`));
+      if (device.platform !== privateInput!.manifest.platform) throw new Error(`设备架构 ${device.platform} (${device.architecture}) 与安装包架构 ${privateInput!.manifest.platform} 不匹配，请选择匹配版本`);
+      update({ status: '下发前预检中', verificationMessage: `设备与安装包架构匹配：${device.platform}；正在查询运行镜像` });
       const runtime = await operations.queryRuntime(connection());
       const actualImageId = runtime.image_id?.trim() || '-';
       update({ actualImageId: redact(actualImageId) });
@@ -428,7 +438,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
         let acceptProgress = true;
         let result: LowerUpdateUploadResult;
         try {
-          result = await operations.upload({ ...connection(), package_name: packageResult.package_name, package_path: packageResult.package_path, package_size: packageResult.downloaded_bytes, package_sha256: packageResult.sha256 }, (progress) => {
+          result = await operations.upload({ ...connection(), platform: privateInput!.manifest.platform as LowerUpdateArchitecture['platform'], package_name: packageResult.package_name, package_path: packageResult.package_path, package_size: packageResult.downloaded_bytes, package_sha256: packageResult.sha256 }, (progress) => {
             if (!acceptProgress || progress.package_name !== packageResult.package_name
               || (progress.remote_path && progress.remote_path !== expectedRemotePath)) return;
             update({ progress: Math.max(0, Math.min(60, progress.percent * 0.6)), uploadedBytes: progress.uploaded_bytes, totalBytes: progress.total_bytes || packageResult.downloaded_bytes, remotePath: redact(progress.remote_path || '-') });
@@ -469,6 +479,34 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
 
   return {
     getSnapshot: (): LowerUpdateDeploymentSnapshot => snapshot,
+    clearArchitectureResult(): void {
+      if (snapshot.task?.devicePlatform !== undefined || snapshot.task?.deviceArchitecture !== undefined) {
+        update({ devicePlatform: undefined, deviceArchitecture: undefined });
+      }
+    },
+    // 在私有输入中比较凭据，公开任务不保存密码、凭据摘要或可被误用的检测缓存。
+    matchesArchitectureContext(input: Pick<LowerUpdateDeploymentInput, 'connection' | 'manifest' | 'packageResult'>): boolean {
+      if (!privateInput || !snapshot.task?.devicePlatform) return false;
+      const fixed = privateInput;
+      return input.connection.upload_account.trim() === fixed.connection.upload_account
+        && (input.connection.install_dir.trim().replace(/\/+$/, '') || '/') === fixed.connection.install_dir
+        && input.connection.remote_target?.endpoint === fixed.connection.remote_target?.endpoint
+        && input.connection.remote_target?.device_id === fixed.connection.remote_target?.device_id
+        && input.connection.auth.method === fixed.connection.auth.method
+        && (input.connection.auth.method !== 'password' || (fixed.connection.auth.method === 'password' && input.connection.auth.password === fixed.connection.auth.password))
+        && input.connection.sudo_password === fixed.connection.sudo_password
+        && input.manifest.platform === fixed.manifest.platform
+        && input.manifest.channel === fixed.manifest.channel
+        && input.manifest.version === fixed.manifest.version
+        && input.manifest.image_id === fixed.manifest.image_id
+        && input.manifest.asset.name === fixed.manifest.asset.name
+        && input.manifest.asset.sha256 === fixed.manifest.asset.sha256
+        && input.manifest.asset.size === fixed.manifest.asset.size
+        && input.packageResult.package_path === fixed.packageResult.package_path
+        && input.packageResult.package_name === fixed.packageResult.package_name
+        && input.packageResult.sha256 === fixed.packageResult.sha256
+        && input.packageResult.downloaded_bytes === fixed.packageResult.downloaded_bytes;
+    },
     subscribe(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; },
     async start(input: LowerUpdateDeploymentInput): Promise<void> {
       if (snapshot.isRunning) throw new Error('已有下位机更新任务正在执行，请查看当前任务');
@@ -502,7 +540,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
       const recoveryOptions = normalizeLowerUpdateRecoveryOptions(options, pendingRemote.upload_account);
       recoveredCredentials = { auth: { ...auth }, sudo_password: sudoPassword };
       if (privateInput) { privateInput.connection.auth = { ...auth }; privateInput.connection.sudo_password = sudoPassword; }
-      update({ stage: 'waiting_reconnect', status: '正在恢复查询原任务', error: null });
+      update({ stage: 'waiting_reconnect', status: '正在恢复查询原任务', error: null, devicePlatform: undefined, deviceArchitecture: undefined });
       publish({ detailOpen: true, resultOpen: false });
       await observeRemote(true, recoveryOptions);
     },
@@ -522,7 +560,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
       const recoveryOptions = normalizeLowerUpdateRecoveryOptions(options, pendingRemote.upload_account);
       recoveredCredentials = { auth: { ...auth }, sudo_password: sudoPassword };
       if (privateInput) { privateInput.connection.auth = { ...auth }; privateInput.connection.sudo_password = sudoPassword; }
-      update({ stage: 'checking', status: '正在核验原任务和设备运行状态', error: null });
+      update({ stage: 'checking', status: '正在核验原任务和设备运行状态', error: null, devicePlatform: undefined, deviceArchitecture: undefined });
       try {
         if (!operations.queryTask || !operations.archivePending || !operations.closeTask || !operations.savePending) throw new Error('原任务查询、关闭或归档接口未初始化，已保留本地记录');
         const request = remoteRecoveryRequest(recoveryOptions);
