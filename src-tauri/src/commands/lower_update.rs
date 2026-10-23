@@ -16,6 +16,9 @@ use super::remote::RemoteSshManager;
 #[cfg(test)]
 #[path = "lower_update_remote_tests.rs"]
 mod remote_update_tests;
+#[cfg(test)]
+#[path = "lower_update_recovery_direct_tests.rs"]
+mod recovery_direct_tests;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -285,7 +288,64 @@ pub(super) async fn resolve_update_target(
     Ok(target)
 }
 
+/// 只改变恢复通信路径，仍以原平台和设备已持久信任的主机密钥确认身份。
+fn recovery_direct_target(
+    original_account: &str,
+    remote: Option<&LowerUpdateRemoteTargetDto>,
+    auth: &LowerUpdateSshAuthDto,
+    recovery_account: &str,
+    verifier: Arc<RemoteSshManager>,
+) -> Result<LowerUpdateUploadTarget, String> {
+    let remote = remote.ok_or("直连恢复必须保留原平台及设备身份")?;
+    if !matches!(auth, LowerUpdateSshAuthDto::Password { .. }) {
+        return Err("直连恢复仅支持 SSH 密码认证".into());
+    }
+    crate::platform_software::validate_endpoint(&remote.endpoint)?;
+    if remote.device_id.trim().is_empty() || remote.device_id.len() > 256 {
+        return Err("原远程设备身份无效，已拒绝直连恢复".into());
+    }
+    let original = parse_upload_account(original_account)?;
+    let mut target = parse_upload_account(recovery_account)?;
+    if target.user != original.user {
+        return Err("直连恢复必须使用原任务的 SSH 用户".into());
+    }
+    if target
+        .host
+        .trim_end_matches('.')
+        .eq_ignore_ascii_case("remote")
+    {
+        return Err("请填写原设备的实际直连主机地址，不能使用 remote 占位地址".into());
+    }
+    target.recovery_trust = Some(RecoverySshIdentity {
+        endpoint: remote.endpoint.clone(),
+        device_id: remote.device_id.clone(),
+        verifier,
+    });
+    Ok(target)
+}
+
+pub(super) async fn resolve_recovery_target(
+    state: &AppState,
+    original_account: &str,
+    remote: Option<&LowerUpdateRemoteTargetDto>,
+    auth: &LowerUpdateSshAuthDto,
+    recovery_account: Option<&str>,
+) -> Result<LowerUpdateUploadTarget, String> {
+    if let Some(account) = recovery_account {
+        // 这里不访问当前平台登录、设备在线列表或当前界面所选设备。
+        return recovery_direct_target(
+            original_account,
+            remote,
+            auth,
+            account,
+            state.remote_ssh.clone(),
+        );
+    }
+    resolve_update_target(state, original_account, remote, auth).await
+}
+
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LowerUpdateUploadRequestDto {
     #[serde(default)]
     pub remote_target: Option<LowerUpdateRemoteTargetDto>,
@@ -358,6 +418,8 @@ struct LowerUpdatePackageCleanupStats {
 pub struct LowerUpdateRuntimeInfoRequestDto {
     #[serde(default)]
     pub remote_target: Option<LowerUpdateRemoteTargetDto>,
+    #[serde(default)]
+    pub recovery_direct_account: Option<String>,
     pub upload_account: String,
     pub auth: LowerUpdateSshAuthDto,
     pub sudo_password: String,
@@ -432,6 +494,14 @@ pub(super) struct LowerUpdateUploadTarget {
     pub(super) host: String,
     port: u16,
     remote: Option<RemoteUpdateIdentity>,
+    recovery_trust: Option<RecoverySshIdentity>,
+}
+
+#[derive(Clone)]
+struct RecoverySshIdentity {
+    endpoint: String,
+    device_id: String,
+    verifier: Arc<RemoteSshManager>,
 }
 
 #[derive(Clone)]
@@ -444,6 +514,7 @@ struct PasswordSshHandler {
     host: String,
     port: u16,
     remote: Option<RemoteUpdateIdentity>,
+    recovery_trust: Option<RecoverySshIdentity>,
     trust_error: Arc<parking_lot::Mutex<Option<String>>>,
 }
 
@@ -454,15 +525,36 @@ impl russh::client::Handler for PasswordSshHandler {
         &mut self,
         server_public_key: &russh::keys::ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        if let Some(remote) = &self.remote {
-            if !remote.connection.active() {
-                *self.trust_error.lock() = Some("平台远程连接已失效，请恢复原平台登录后查询原任务".into());
+        if let Some(recovery) = &self.recovery_trust {
+            // 必须在密码认证前验证原 pin；失败绝不回落到普通直连的自动信任分支。
+            let result = recovery
+                .verifier
+                .verify_update_host_key(&recovery.endpoint, &recovery.device_id, server_public_key)
+                .await;
+            if let Err(error) = result {
+                *self.trust_error.lock() = Some(error);
                 return Ok(false);
             }
-            let result = remote.verifier.verify_update_host_key(
-                &remote.connection.endpoint, &remote.connection.device.device_id, server_public_key,
-            ).await;
-            if let Err(error) = result { *self.trust_error.lock() = Some(error); return Ok(false); }
+            return Ok(true);
+        }
+        if let Some(remote) = &self.remote {
+            if !remote.connection.active() {
+                *self.trust_error.lock() =
+                    Some("平台远程连接已失效，请恢复原平台登录后查询原任务".into());
+                return Ok(false);
+            }
+            let result = remote
+                .verifier
+                .verify_update_host_key(
+                    &remote.connection.endpoint,
+                    &remote.connection.device.device_id,
+                    server_public_key,
+                )
+                .await;
+            if let Err(error) = result {
+                *self.trust_error.lock() = Some(error);
+                return Ok(false);
+            }
             return Ok(true);
         }
         match russh::keys::check_known_hosts(&self.host, self.port, server_public_key) {
@@ -496,6 +588,12 @@ fn ssh_observer(target: &LowerUpdateUploadTarget, secrets: &[&str]) -> UpdateSsh
         .remote
         .as_ref()
         .map(|remote| remote.connection.device.device_id.as_str())
+        .or_else(|| {
+            target
+                .recovery_trust
+                .as_ref()
+                .map(|trust| trust.device_id.as_str())
+        })
         .unwrap_or("直连设备");
     UpdateSshObserver::new("", "SSH命令", identity, secrets)
 }
@@ -506,6 +604,9 @@ async fn connect_password_ssh_observed(
     observer: &UpdateSshObserver,
 ) -> Result<russh::client::Handle<PasswordSshHandler>, String> {
     observer.stage("SSH连接");
+    if target.recovery_trust.is_some() {
+        observer.stage("直连原设备 SSH 连接与身份核验");
+    }
     if target
         .remote
         .as_ref()
@@ -530,6 +631,7 @@ async fn connect_password_ssh_observed(
                 host: target.host.clone(),
                 port: target.port,
                 remote: target.remote.clone(),
+                recovery_trust: target.recovery_trust.clone(),
                 trust_error: trust_error.clone(),
             },
         ),
@@ -919,6 +1021,9 @@ pub(super) async fn execute_root_ssh_command_observed(
     command: &str,
     observer: &UpdateSshObserver,
 ) -> Result<RemoteCommandOutput, String> {
+    if target.recovery_trust.is_some() && !matches!(auth, LowerUpdateSshAuthDto::Password { .. }) {
+        return Err("直连恢复不允许使用绕过原主机指纹核验的认证方式".into());
+    }
     let sudo_stdin = sudo_password_stdin(sudo_password)?;
     let remote_command = build_password_root_shell_command(command);
     match auth {
@@ -951,12 +1056,29 @@ async fn query_lower_update_runtime_info(
     auth: &LowerUpdateSshAuthDto,
     sudo_password: &str,
 ) -> Result<LowerUpdateRuntimeInfoDto, String> {
+    let password = match auth {
+        LowerUpdateSshAuthDto::Password { password } => password.as_str(),
+        _ => "",
+    };
+    let observer = ssh_observer(target, &[password, sudo_password]);
+    query_lower_update_runtime_info_observed(target, auth, sudo_password, &observer)
+        .await
+        .map_err(|error| observer.failure(&error))
+}
+
+async fn query_lower_update_runtime_info_observed(
+    target: &LowerUpdateUploadTarget,
+    auth: &LowerUpdateSshAuthDto,
+    sudo_password: &str,
+    observer: &UpdateSshObserver,
+) -> Result<LowerUpdateRuntimeInfoDto, String> {
     tokio::time::timeout(LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT, async {
-        let output = execute_root_ssh_command(
+        let output = execute_root_ssh_command_observed(
             target,
             auth,
             sudo_password,
             LOWER_UPDATE_RUNTIME_QUERY_COMMAND,
+            observer,
         )
         .await?;
         if output.exit_code != Some(0) {
@@ -965,6 +1087,7 @@ async fn query_lower_update_runtime_info(
                 &output,
             ));
         }
+        observer.stage("运行镜像解析");
         let (state, inspection) = lower_update_runtime::split_probe_output(&output.stdout);
         let mut runtime = parse_runtime_query_output(state)?;
         let Some(raw_image_id) = runtime.image_id.clone() else {
@@ -986,7 +1109,9 @@ async fn query_lower_update_runtime_info(
             shell_quote(lower_update_runtime::CONFIG_DIGEST_SCRIPT),
             shell_quote(&raw_image_id),
         );
-        let resolved = execute_root_ssh_command(target, auth, sudo_password, &command).await?;
+        let resolved =
+            execute_root_ssh_command_observed(target, auth, sudo_password, &command, observer)
+                .await?;
         if resolved.exit_code != Some(0) {
             return Err(format_remote_command_error(
                 "解析运行镜像配置摘要失败",
@@ -1006,11 +1131,12 @@ async fn query_lower_update_runtime_info(
             elapsed_ms = started_at.elapsed().as_millis() as u64,
             "已验证运行镜像引用与配置摘要关联"
         );
-        let current = execute_root_ssh_command(
+        let current = execute_root_ssh_command_observed(
             target,
             auth,
             sudo_password,
             LOWER_UPDATE_RUNTIME_QUERY_COMMAND,
+            observer,
         )
         .await?;
         if current.exit_code != Some(0) {
@@ -1207,6 +1333,7 @@ pub(super) fn parse_upload_account(value: &str) -> Result<LowerUpdateUploadTarge
         host: host.to_string(),
         port,
         remote: None,
+        recovery_trust: None,
     })
 }
 
@@ -2885,6 +3012,21 @@ pub async fn get_lower_update_runtime_info(
 ) -> Result<LowerUpdateRuntimeInfoDto, String> {
     let started_at = Instant::now();
     let auth_method = auth_method(&request.auth);
+    let identity = request
+        .remote_target
+        .as_ref()
+        .map(|remote| remote.device_id.as_str())
+        .unwrap_or("直连设备");
+    let password = match &request.auth {
+        LowerUpdateSshAuthDto::Password { password } => password.as_str(),
+        _ => "",
+    };
+    let observer = UpdateSshObserver::new(
+        "",
+        "运行镜像核验",
+        identity,
+        &[password, &request.sudo_password],
+    );
     tracing::info!(
         operation = "runtime",
         auth_method,
@@ -2893,11 +3035,29 @@ pub async fn get_lower_update_runtime_info(
         "开始查询下位机运行镜像"
     );
 
-    let result = async {
-        let target = resolve_update_target(&state, &request.upload_account, request.remote_target.as_ref(), &request.auth).await?;
-        query_lower_update_runtime_info(&target, &request.auth, &request.sudo_password).await
-    }
-    .await;
+    let result = tokio::time::timeout(LOWER_UPDATE_RUNTIME_QUERY_TIMEOUT, async {
+        observer.stage("目标解析");
+        let target = resolve_recovery_target(
+            &state,
+            &request.upload_account,
+            request.remote_target.as_ref(),
+            &request.auth,
+            request.recovery_direct_account.as_deref(),
+        )
+        .await?;
+        let runtime = query_lower_update_runtime_info_observed(
+            &target,
+            &request.auth,
+            &request.sudo_password,
+            &observer,
+        )
+        .await?;
+        observer.stage("观测完成");
+        Ok(runtime)
+    })
+    .await
+    .unwrap_or_else(|_| Err("运行镜像核验总时限 30 秒已超时，保留原任务记录".into()))
+    .map_err(|error: String| observer.failure(&error));
 
     match result {
         Ok(runtime) => {

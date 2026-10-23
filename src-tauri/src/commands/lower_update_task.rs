@@ -3,9 +3,9 @@
 use super::lower_update::complete_without_waiting_for_disconnect;
 use super::lower_update::{
     execute_root_ssh_command_observed, is_safe_file_name, normalize_image_id,
-    normalize_install_dir, remote_package_path, resolve_update_target, shell_quote,
-    LowerUpdateRemoteTargetDto, LowerUpdateRuntimeInfoRequestDto, LowerUpdateSshAuthDto,
-    UpdateSshObserver,
+    normalize_install_dir, remote_package_path, resolve_recovery_target, resolve_update_target,
+    shell_quote, LowerUpdateRemoteTargetDto, LowerUpdateRuntimeInfoRequestDto,
+    LowerUpdateSshAuthDto, UpdateSshObserver,
 };
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,7 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
 const SUBMIT_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SubmitLowerUpdateTaskRequest {
     pub upload_account: String,
     pub auth: LowerUpdateSshAuthDto,
@@ -42,6 +43,8 @@ pub struct GetLowerUpdateTaskRequest {
     pub sudo_password: String,
     #[serde(default)]
     pub remote_target: Option<LowerUpdateRemoteTargetDto>,
+    #[serde(default)]
+    pub recovery_direct_account: Option<String>,
     pub operation_id: String,
 }
 
@@ -52,6 +55,8 @@ pub struct CloseLowerUpdateTaskRequest {
     pub sudo_password: String,
     #[serde(default)]
     pub remote_target: Option<LowerUpdateRemoteTargetDto>,
+    #[serde(default)]
+    pub recovery_direct_account: Option<String>,
     pub operation_id: String,
     pub package_sha256: String,
     pub expected_image_id: String,
@@ -286,6 +291,7 @@ async fn invoke_helper(
     auth: &LowerUpdateSshAuthDto,
     sudo_password: &str,
     remote: Option<&LowerUpdateRemoteTargetDto>,
+    recovery_direct_account: Option<&str>,
     operation_id: &str,
     arguments: &[&str],
 ) -> Result<LowerUpdateTaskStatus, String> {
@@ -306,7 +312,21 @@ async fn invoke_helper(
         if query { QUERY_TIMEOUT } else { SUBMIT_TIMEOUT },
         async {
             observer.stage("目标解析");
-            let target = resolve_update_target(state, upload_account, remote, auth).await?;
+            let target = if query {
+                resolve_recovery_target(
+                    state,
+                    upload_account,
+                    remote,
+                    auth,
+                    recovery_direct_account,
+                )
+                .await?
+            } else {
+                if recovery_direct_account.is_some() {
+                    return Err("普通更新提交不支持恢复直连地址".into());
+                }
+                resolve_update_target(state, upload_account, remote, auth).await?
+            };
             observer.stage("命令编码");
             let command = if query {
                 readonly_command("query", Some(operation_id))?
@@ -361,6 +381,13 @@ pub async fn preflight_lower_update_task(
         &request.sudo_password,
     );
     with_update_deadline(&observer, PREFLIGHT_TIMEOUT, async {
+        observer.stage("请求校验");
+        if request.recovery_direct_account.is_some() {
+            return Err(
+                "更新上传前预检不支持恢复直连地址；该地址仅用于查询、运行镜像核验和结束原记录"
+                    .into(),
+            );
+        }
         observer.stage("目标解析");
         let target = resolve_update_target(
             &state,
@@ -418,11 +445,12 @@ pub async fn close_lower_update_task(
         let expected =
             normalize_image_id(&request.expected_image_id).ok_or("原任务期望镜像 ID 不合法")?;
         observer.stage("目标解析");
-        let target = resolve_update_target(
+        let target = resolve_recovery_target(
             &state,
             &request.upload_account,
             request.remote_target.as_ref(),
             &request.auth,
+            request.recovery_direct_account.as_deref(),
         )
         .await?;
         observer.stage("命令编码");
@@ -496,6 +524,7 @@ pub async fn submit_lower_update_task(
         &request.auth,
         &request.sudo_password,
         request.remote_target.as_ref(),
+        None,
         &request.operation_id,
         &[
             "submit",
@@ -538,6 +567,7 @@ pub async fn get_lower_update_task(
         &request.auth,
         &request.sudo_password,
         request.remote_target.as_ref(),
+        request.recovery_direct_account.as_deref(),
         &request.operation_id,
         &["query", "--operation-id", &request.operation_id],
     )

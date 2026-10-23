@@ -211,7 +211,11 @@ export interface LowerUpdatePackageCleanupResult {
   reclaimed_bytes: number;
 }
 
-export interface LowerUpdateRuntimeInfoRequest {
+export interface LowerUpdateRecoveryOptions {
+  recovery_direct_account?: string;
+}
+
+export interface LowerUpdateRuntimeInfoRequest extends LowerUpdateRecoveryOptions {
   remote_target?: LowerUpdateRemoteTarget;
   upload_account: string;
   auth: LowerUpdateSshAuth;

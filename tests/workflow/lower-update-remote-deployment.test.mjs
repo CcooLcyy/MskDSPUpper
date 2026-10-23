@@ -633,3 +633,159 @@ test('终态开始消费持久记录后不能停止，提交与显式关闭阶�
   await closure;
   assert.equal(closing.controller.getSnapshot().task.stage, 'task_closed');
 });
+
+test('待处理记录标志包含持久恢复与损坏记录，停止超时不释放，清除成功后才释放', async () => {
+  assert.equal(fixture().controller.getSnapshot().hasPendingRemote, false);
+  for (const value of [pendingRecord(), { invalid: true }]) {
+    const f = fixture({ loadPending: () => value });
+    assert.equal(f.controller.getSnapshot().hasPendingRemote, true);
+    await assert.rejects(f.controller.start(input()), /原任务|恢复记录/);
+  }
+  const f = fixture({ loadPending: pendingRecord });
+  await f.controller.resumeRemote(recoveryAuth, 'sudo-recovery');
+  assert.equal(f.controller.getSnapshot().hasPendingRemote, false);
+});
+
+test('直连恢复附加连接地址但不改写原任务平台、设备、账号、包或任务身份', async () => {
+  const requests = [];
+  const f = fixture({ loadPending: pendingRecord, queryTask: async request => {
+    requests.push(request); throw Error('LOWER_UPDATE_TASK_NOT_FOUND: 任务不存在');
+  } });
+  const original = structuredClone(pendingRecord());
+  await f.controller.resumeRemote(recoveryAuth, 'sudo-recovery', { recovery_direct_account: ' user@192.168.1.219:010022 ' });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].recovery_direct_account, 'user@192.168.1.219:10022');
+  for (const key of ['operation_id', 'upload_account', 'package_sha256', 'expected_image_id', 'package_name', 'remote_target']) {
+    assert.deepEqual(requests[0][key], original[key]);
+  }
+  assert.equal(f.controller.getSnapshot().hasPendingRemote, true);
+  assert.equal(f.controller.getSnapshot().task.stage, 'task_missing');
+  assert.equal(f.calls.some(([name]) => ['persist', 'submit', 'upload'].includes(name)), false);
+  assert.deepEqual(pendingRecord(), original);
+  await f.controller.resumeRemote(recoveryAuth, 'sudo-recovery');
+  assert.equal(requests[1].recovery_direct_account, undefined);
+});
+
+test('直连用户不一致或地址无效在任何查询前拒绝且保留原记录', async () => {
+  for (const address of ['other@192.168.1.219:10022', 'user@remote:22', 'user@host:0', 'user@host:65536', 'user@host/path:22', '']) {
+    const f = fixture({ loadPending: pendingRecord });
+    await assert.rejects(f.controller.resumeRemote(recoveryAuth, 'sudo-recovery', { recovery_direct_account: address }), /直连|原任务/);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.controller.getSnapshot().hasPendingRemote, true);
+  }
+});
+
+test('切换恢复路径后结束必须重新核验同一路径，原记录归档且直连地址不持久化', async () => {
+  const f = await missingFixture();
+  assert.equal(f.controller.getSnapshot().hasPendingRemote, true);
+  await f.controller.closeMissingRemote(recoveryAuth, 'sudo-recovery', { recovery_direct_account: 'user@192.168.1.219:10022' });
+  assert.deepEqual(f.calls.map(([name]) => name), ['query', 'query', 'runtime', 'archive', 'close', 'persist']);
+  assert.equal(f.calls[0][1].recovery_direct_account, undefined);
+  for (const name of ['query', 'runtime', 'close']) {
+    const request = f.calls.filter(([call]) => call === name).at(-1)[1];
+    assert.equal(request.recovery_direct_account, 'user@192.168.1.219:10022');
+    assert.deepEqual(request.remote_target, pendingRecord().remote_target);
+    assert.equal(request.upload_account, pendingRecord().upload_account);
+  }
+  const archived = f.calls.find(([name]) => name === 'archive')[1];
+  assert.equal(JSON.stringify(archived).includes('192.168.1.219'), false);
+  assert.equal(JSON.stringify(archived).includes('secret'), false);
+  assert.equal(f.controller.getSnapshot().hasPendingRemote, false);
+  assert.equal(f.controller.getSnapshot().task.stage, 'task_closed');
+});
+
+test('直连指纹或连接错误原样去密展示，地址选择不改变待确认记录', async () => {
+  const f = fixture({ loadPending: pendingRecord, queryTask: async request => {
+    assert.equal(request.recovery_direct_account, 'user@192.168.1.219:10022');
+    throw Error('原设备已信任主机指纹不匹配 recovery-secret');
+  } });
+  await f.controller.resumeRemote(recoveryAuth, 'sudo-recovery', { recovery_direct_account: 'user@192.168.1.219:10022' });
+  assert.equal(f.controller.getSnapshot().hasPendingRemote, true);
+  assert.equal(f.controller.getSnapshot().task.error, '原设备已信任主机指纹不匹配 [已隐藏]');
+  assert.equal(f.calls.some(([name]) => ['persist', 'submit', 'close'].includes(name)), false);
+});
+
+test('直连确认原任务成功后释放记录，不依赖平台或重连当前其他设备', async () => {
+  const f = fixture({ loadPending: pendingRecord });
+  await f.controller.resumeRemote(recoveryAuth, 'sudo-recovery', { recovery_direct_account: 'user@192.168.1.219:10022' });
+  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
+  assert.equal(f.controller.getSnapshot().hasPendingRemote, false);
+  assert.match(f.controller.getSnapshot().task.runtimeRefreshMessage, /直连.*平台.*刷新/);
+  assert.equal(f.calls.some(([name]) => name === 'reconnect'), false);
+});
+
+test('直连停止或35秒超时后旧结果不能影响新平台路径查询或清除记录', async () => {
+  for (const stop of [true, false]) {
+    const clock = fakeClock();
+    let resolveDirect;
+    const direct = new Promise(resolve => { resolveDirect = resolve; });
+    const requests = [];
+    let resolvePlatform;
+    const platform = new Promise(resolve => { resolvePlatform = resolve; });
+    const f = fixture({ ...clock, loadPending: pendingRecord, queryTask: request => {
+      requests.push(request); return request.recovery_direct_account ? direct : platform;
+    } });
+    const first = f.controller.resumeRemote(recoveryAuth, 'sudo-recovery', { recovery_direct_account: 'user@192.168.1.219:10022' });
+    await flush();
+    if (stop) f.controller.stopObservingRemote(); else clock.advance(35_000);
+    await first;
+    assert.equal(f.controller.getSnapshot().hasPendingRemote, true);
+    const second = f.controller.resumeRemote(recoveryAuth, 'sudo-recovery');
+    await flush();
+    const snapshot = f.controller.getSnapshot();
+    resolveDirect(status(pendingRecord()));
+    await flush();
+    assert.deepEqual(f.controller.getSnapshot(), snapshot);
+    assert.equal(requests[1].recovery_direct_account, undefined);
+    assert.equal(f.calls.some(([name]) => name === 'persist'), false);
+    resolvePlatform(status(pendingRecord(), 'installing'));
+    await second;
+    assert.equal(f.controller.getSnapshot().hasPendingRemote, true);
+  }
+});
+
+test('结束原记录也拒绝不同用户直连，切换路径发现任务已受理则停止结束', async () => {
+  const f = await missingFixture();
+  await assert.rejects(f.controller.closeMissingRemote(recoveryAuth, 'sudo-recovery', { recovery_direct_account: 'other@192.168.1.219:10022' }), /原任务/);
+  assert.deepEqual(f.calls.map(([name]) => name), ['query']);
+  assert.equal(f.controller.getSnapshot().hasPendingRemote, true);
+  let queries = 0;
+  const accepted = await missingFixture({ queryTask: async request => {
+    if (++queries === 1) throw Error('LOWER_UPDATE_TASK_NOT_FOUND: 原任务不存在');
+    assert.equal(request.recovery_direct_account, 'user@192.168.1.219:10022');
+    return status(request, 'accepted');
+  } });
+  await accepted.controller.closeMissingRemote(recoveryAuth, 'sudo-recovery', { recovery_direct_account: 'user@192.168.1.219:10022' });
+  assert.equal(accepted.controller.getSnapshot().hasPendingRemote, true);
+  assert.equal(accepted.controller.getSnapshot().task.stage, 'remote_unknown');
+  assert.equal(accepted.calls.some(([name]) => ['archive', 'close', 'persist', 'runtime'].includes(name)), false);
+});
+
+test('直连关闭旧记录后新设备更新不继承恢复地址或旧身份', async () => {
+  let newDeployment = false;
+  const f = await missingFixture({ queryRuntime: async () => ({ exists: true, running: true, image_id: newDeployment ? 'old' : image }) });
+  await f.controller.closeMissingRemote(recoveryAuth, 'sudo-recovery', { recovery_direct_account: 'user@192.168.1.219:10022' });
+  assert.equal(f.controller.getSnapshot().hasPendingRemote, false);
+  f.calls.length = 0;
+  newDeployment = true;
+  const next = input();
+  next.connection.upload_account = 'daniel@remote:22';
+  next.connection.remote_target.device_id = 'different-x64';
+  next.connection.install_dir = '/home/daniel/devTest';
+  await f.controller.start(next);
+  const request = f.calls.find(([name]) => name === 'submit')[1];
+  assert.equal(request.remote_target.device_id, 'different-x64');
+  assert.equal(request.upload_account, 'daniel@remote:22');
+  assert.equal(request.recovery_direct_account, undefined);
+  assert.equal(f.calls.find(([name]) => name === 'upload')[1].recovery_direct_account, undefined);
+  assert.equal(f.calls.filter(([name]) => name === 'submit').length, 1);
+});
+
+test('直连确认成功但本地清除失败时继续保留阻拦记录', async () => {
+  const f = fixture({ loadPending: pendingRecord, savePending: async () => { throw Error('本地存储写入失败'); } });
+  await f.controller.resumeRemote(recoveryAuth, 'sudo-recovery', { recovery_direct_account: 'user@192.168.1.219:10022' });
+  assert.equal(f.controller.getSnapshot().hasPendingRemote, true);
+  assert.equal(f.controller.getSnapshot().task.stage, 'remote_unknown');
+  assert.match(f.controller.getSnapshot().task.error, /本地存储写入失败/);
+  assert.equal(f.calls.some(([name]) => name === 'reconnect'), false);
+});

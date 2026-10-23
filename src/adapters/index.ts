@@ -22,6 +22,7 @@ export type {
   LowerUpdateManifest,
   LowerUpdateRuntimeInfo,
   LowerUpdateRuntimeInfoRequest,
+  LowerUpdateRecoveryOptions,
   LowerUpdateReconnectRequest,
   LowerUpdateSshAuth,
   LowerUpdateUploadProgress,

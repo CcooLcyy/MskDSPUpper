@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { App, Alert, Button, Descriptions, Input, Modal, Progress, Space, Tag, Typography } from 'antd';
+import { App, Alert, Button, Descriptions, Input, Modal, Progress, Select, Space, Tag, Typography } from 'antd';
 import {
   CheckCircleOutlined,
   CloudUploadOutlined,
@@ -11,6 +11,8 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { useLowerUpdateDeployment } from './lower-update-deployment-context';
+import { normalizeLowerUpdateRecoveryOptions } from '../../utils/lower-update-recovery';
+import type { LowerUpdateRecoveryOptions } from '../../adapters/types';
 
 const { Text } = Typography;
 type DeploymentTask = NonNullable<ReturnType<typeof useLowerUpdateDeployment>['task']>;
@@ -87,12 +89,29 @@ export function LowerUpdateDeploymentHeader() {
 }
 
 export function LowerUpdateDeploymentUi() {
+  const { task } = useLowerUpdateDeployment();
+  return <LowerUpdateDeploymentTaskUi key={task?.operationId ?? task?.id ?? 'no-task'} />;
+}
+
+/** 原任务改变时重建恢复表单，避免旧地址或凭据串入新任务。 */
+function LowerUpdateDeploymentTaskUi() {
   const { message } = App.useApp();
   const [sshPassword, setSshPassword] = useState('');
   const [sudoPassword, setSudoPassword] = useState('');
+  const [recoveryMode, setRecoveryMode] = useState<'platform' | 'direct'>('platform');
+  const [recoveryDirectAccount, setRecoveryDirectAccount] = useState('');
   const { task, isRunning, canStopWaiting, detailOpen, resultOpen, retry, resumeRemote, stopObservingRemote, closeMissingRemote, openDetails, closeDetails, dismissResult } =
     useLowerUpdateDeployment();
   if (!task) return null;
+
+  let recoveryOptions: LowerUpdateRecoveryOptions = {};
+  let recoveryConnectionError = '';
+  try {
+    recoveryOptions = normalizeLowerUpdateRecoveryOptions(recoveryMode === 'direct'
+      ? { recovery_direct_account: recoveryDirectAccount } : undefined, task.uploadAccount);
+  } catch (error) {
+    recoveryConnectionError = error instanceof Error ? error.message : String(error);
+  }
 
   const succeeded = task.stage === 'succeeded';
   const closed = task.stage === 'task_closed';
@@ -153,6 +172,9 @@ export function LowerUpdateDeploymentUi() {
           ) : null}
           <Descriptions size="small" column={1} styles={{ content: wrapStyle }}>
             <Descriptions.Item label="目标下位机">{task.remoteTarget ? `${task.remoteTarget.device_id} · ${task.remoteTarget.endpoint} · ${task.uploadAccount.split('@')[0]}` : task.uploadAccount}</Descriptions.Item>
+            {task.remoteTarget ? <Descriptions.Item label="原任务平台">{task.remoteTarget.endpoint}</Descriptions.Item> : null}
+            {task.remoteTarget ? <Descriptions.Item label="原任务设备 ID">{task.remoteTarget.device_id}</Descriptions.Item> : null}
+            {task.remoteTarget ? <Descriptions.Item label="原任务 SSH 用户">{task.uploadAccount.split('@')[0]}</Descriptions.Item> : null}
             <Descriptions.Item label="目标版本">{task.version}</Descriptions.Item>
             <Descriptions.Item label="SSH 认证方式">{task.authMethod === 'password' ? '密码' : '证书'}</Descriptions.Item>
             <Descriptions.Item label="安装目录">{task.installDir}</Descriptions.Item>
@@ -183,17 +205,34 @@ export function LowerUpdateDeploymentUi() {
           {task.remoteTarget && (task.stage === 'remote_unknown' || task.stage === 'rollback_failed' || missing) ? (
             <Space orientation="vertical" style={{ width: '100%' }}>
               <Alert type="warning" title={missing ? '原任务不存在。结束前将再次核验原设备无安装任务且业务容器正常运行，并备份本地记录。结束会阻止原任务后续提交；不安装、不删除设备包或恢复材料，也不代表旧版本升级成功。' : task.stage === 'rollback_failed' ? '自动回退失败，原任务和恢复材料已保留。请人工检查设备后查询原任务，不能继续新建更新。' : '每次恢复只查询一次，执行中可稍后再次查询。出现通信错误请先检查具体原因；不要重复安装。首次连接请先在远程 SSH 终端确认设备指纹。'} />
+              <Select
+                aria-label="原任务恢复连接方式"
+                value={recoveryMode}
+                disabled={isRunning}
+                options={[{ value: 'platform', label: '平台隧道' }, { value: 'direct', label: '直连原设备' }]}
+                onChange={(value) => { setRecoveryMode(value); setSshPassword(''); setSudoPassword(''); }}
+              />
+              {recoveryMode === 'direct' ? <>
+                <Alert type="info" showIcon title="直连必须匹配原平台、原设备已信任的 SSH 主机指纹；无信任记录或指纹变化会拒绝连接。只改变本轮连接路径，不改变原任务身份。" />
+                <Input
+                  aria-label="原任务直连 SSH 账号"
+                  placeholder={`${task.uploadAccount.split('@')[0]}@原设备IP或主机名:端口`}
+                  value={recoveryDirectAccount}
+                  onChange={event => setRecoveryDirectAccount(event.target.value)}
+                />
+                {recoveryConnectionError ? <Text type="danger">{recoveryConnectionError}</Text> : null}
+              </> : null}
               <Input.Password aria-label="恢复查询 SSH 密码" placeholder="重新输入原设备 SSH 密码" value={sshPassword} onChange={event => setSshPassword(event.target.value)} />
               <Input.Password aria-label="恢复查询 sudo 密码" placeholder="重新输入原设备 sudo 密码" value={sudoPassword} onChange={event => setSudoPassword(event.target.value)} />
-              <Button disabled={isRunning || !sshPassword || !sudoPassword} onClick={() => {
+              <Button disabled={isRunning || !sshPassword || !sudoPassword || Boolean(recoveryConnectionError)} onClick={() => {
                 const auth = { method: 'password' as const, password: sshPassword };
                 const sudo = sudoPassword; setSshPassword(''); setSudoPassword('');
-                void resumeRemote(auth, sudo).catch(error => message.error(String(error)));
+                void resumeRemote(auth, sudo, recoveryOptions).catch(error => message.error(String(error)));
               }}>恢复查询原任务</Button>
-              {missing ? <Button disabled={isRunning || !sshPassword || !sudoPassword} onClick={() => {
+              {missing ? <Button disabled={isRunning || !sshPassword || !sudoPassword || Boolean(recoveryConnectionError)} onClick={() => {
                 const auth = { method: 'password' as const, password: sshPassword };
                 const sudo = sudoPassword; setSshPassword(''); setSudoPassword('');
-                void closeMissingRemote(auth, sudo).catch(error => message.error(String(error)));
+                void closeMissingRemote(auth, sudo, recoveryOptions).catch(error => message.error(String(error)));
               }}>核验并结束本地记录</Button> : null}
             </Space>
           ) : null}

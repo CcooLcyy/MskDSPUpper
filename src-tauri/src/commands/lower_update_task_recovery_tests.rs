@@ -205,3 +205,13 @@ fn log_redaction_precedes_tail_truncation() {
     assert_eq!(status.message, "[已隐藏]");
     assert!(status.log_tail.len() <= MAX_LOG_BYTES);
 }
+
+// 恢复地址只能传给恢复入口，普通提交不能悄悄接受此覆盖字段。
+#[test]
+fn ordinary_submission_rejects_recovery_direct_override() {
+    let request = serde_json::json!({"upload_account":"megsky@remote:22","auth":{"method":"password","password":"example"},
+        "sudo_password":"example","remote_target":{"endpoint":"https://original.example","device_id":"original-device"},
+        "install_dir":"/home/megsky","package_name":"package","operation_id":ID,"package_sha256":"a".repeat(64),
+        "expected_image_id":format!("sha256:{}", "b".repeat(64)),"recovery_direct_account":"megsky@192.168.1.219:10022"});
+    assert!(serde_json::from_value::<SubmitLowerUpdateTaskRequest>(request).is_err());
+}

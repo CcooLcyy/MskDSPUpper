@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { usePlatformAuth } from '../../auth/platform-auth-context';
 import {
   AutoComplete,
+  Alert,
   Button,
   Card,
   Descriptions,
@@ -533,6 +534,7 @@ const AdvancedConfigPage: React.FC = () => {
   const {
     task: deploymentTask,
     isRunning: isDeployingLowerUpdate,
+    hasPendingRemote,
     start: startDeployment,
     openDetails: openDeploymentDetails,
   } = useLowerUpdateDeployment();
@@ -1019,8 +1021,9 @@ const AdvancedConfigPage: React.FC = () => {
     cachedPackage,
   }: { cachedPackage?: LowerUpdateCachedPackage } = {}): Promise<void> => {
     if (!deploymentPageMountedRef.current) return;
-    if (isDeployingLowerUpdate) {
-      openDeploymentDetails();
+    if (isDeployingLowerUpdate || hasPendingRemote) {
+      if (deploymentTask) openDeploymentDetails();
+      else messageApi.warning('原任务恢复记录无效，请先检查本地恢复记录');
       return;
     }
     const selectedManifest = cachedPackage?.manifest ?? activeManifest;
@@ -1403,6 +1406,15 @@ const AdvancedConfigPage: React.FC = () => {
                   ? 'Stable 上位机仅支持 Stable 发布包，本地导入不可用；x64 当前只有 CI 包，暂不支持。'
                   : '可从平台下载，也可导入本地 mskdsp-版本 安装包，再手动下发到下位机。'}
               </Text>
+              {hasPendingRemote ? <Alert
+                type="warning"
+                showIcon
+                title={isDeployingLowerUpdate ? '原任务正在执行，请查看进度' : '原任务尚未确认，请先处理原任务'}
+                description={deploymentTask?.remoteTarget
+                  ? `原设备：${deploymentTask.remoteTarget.device_id} · ${deploymentTask.remoteTarget.endpoint} · ${deploymentTask.uploadAccount}。请先查询原任务并确认结果；平台通道不可用时可在任务详情中选择直连原设备核验。`
+                  : '原任务恢复记录无效，已暂停新安装，请检查本地恢复记录。'}
+                action={deploymentTask ? <Button onClick={openDeploymentDetails}>处理原任务</Button> : undefined}
+              /> : null}
               <div className="advanced-config-cached-package">
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   <Space wrap>
@@ -1450,6 +1462,7 @@ const AdvancedConfigPage: React.FC = () => {
                               || isSelectingLowerUpdate
                               || isDownloadTaskActive
                               || isDeployingLowerUpdate
+                              || hasPendingRemote
                             }
                           >
                             下发此缓存版本
@@ -1509,6 +1522,7 @@ const AdvancedConfigPage: React.FC = () => {
                     || isSelectingLowerUpdate
                     || isDownloadTaskActive
                     || isDeployingLowerUpdate
+                    || hasPendingRemote
                   }
                   loading={isDeployingLowerUpdate}
                 >
@@ -1518,16 +1532,18 @@ const AdvancedConfigPage: React.FC = () => {
               {deploymentTask ? (
                 <div className="advanced-config-background-download">
                   <Space wrap size={8}>
-                    <Tag color={isDeployingLowerUpdate ? 'processing' : deploymentTask.stage === 'succeeded' ? deploymentTask.cleanupError ? 'warning' : 'success' : 'error'}>
+                    <Tag color={isDeployingLowerUpdate ? 'processing' : deploymentTask.stage === 'task_closed' ? 'default' : deploymentTask.stage === 'succeeded' ? deploymentTask.cleanupError ? 'warning' : 'success' : 'error'}>
                       {deploymentTask.status}
                     </Tag>
-                    <Text type="secondary">{deploymentTask.uploadAccount} · {deploymentTask.version}</Text>
+                    <Text type="secondary" style={{ overflowWrap: 'anywhere' }}>{deploymentTask.remoteTarget
+                      ? `${deploymentTask.remoteTarget.device_id} · ${deploymentTask.remoteTarget.endpoint} · `
+                      : ''}{deploymentTask.uploadAccount} · {deploymentTask.version}</Text>
                     <Button size="small" onClick={openDeploymentDetails}>查看下发安装任务</Button>
                   </Space>
                   <Progress
                     percent={Number(deploymentTask.progress.toFixed(1))}
                     size="small"
-                    status={isDeployingLowerUpdate ? 'active' : deploymentTask.stage === 'succeeded' ? 'success' : 'exception'}
+                    status={isDeployingLowerUpdate ? 'active' : deploymentTask.stage === 'task_closed' ? 'normal' : deploymentTask.stage === 'succeeded' ? 'success' : 'exception'}
                   />
                 </div>
               ) : null}
