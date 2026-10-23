@@ -262,6 +262,31 @@ impl ConnectionManager {
         }
         self.remote_channels.lock().await.clear();
     }
+    pub async fn select_remote_if_current(
+        &self,
+        expected_generation: u64,
+        remote: Arc<RemoteConnection>,
+    ) -> Result<()> {
+        {
+            // 与退出清理共用设备选择锁，检查和发布之间不能插入一次注销。
+            let mut current = self.remote.write();
+            if self.runtime_generation() != expected_generation || !remote.active() {
+                remote.cancel();
+                tracing::info!(
+                    expected_generation,
+                    current_generation = self.runtime_generation(),
+                    "设备选择请求已过期或原连接已失效，已拒绝发布"
+                );
+                return Err(anyhow!("设备连接已切换或平台登录已失效，请重新选择设备"));
+            }
+            if let Some(old) = current.replace(remote) {
+                old.cancel();
+            }
+            self.clear_runtime_cache();
+        }
+        self.remote_channels.lock().await.clear();
+        Ok(())
+    }
     async fn remote_channel(&self, service: &str) -> Result<Channel> {
         let (generation, remote) = {
             let current = self.remote.read();
@@ -304,7 +329,102 @@ fn same_remote(
 #[cfg(test)]
 mod tests {
     use super::ConnectionManager;
+    use crate::{
+        platform_auth::PlatformAuthManager,
+        remote_access::{RemoteConnection, RemoteDevice},
+    };
     use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn remote(device_id: &str) -> Arc<RemoteConnection> {
+        RemoteConnection::new(
+            RemoteDevice {
+                device_id: device_id.into(),
+                display_name: device_id.into(),
+                online: true,
+                allow_grpc: true,
+                allow_ssh: true,
+                services: vec!["ModuleManager".into()],
+                agent_version: "test".into(),
+            },
+            Arc::new(PlatformAuthManager::test_session(
+                "http://127.0.0.1:1".into(),
+            )),
+        )
+        .unwrap()
+    }
+
+    // 注销或切换发生后，旧选择请求不得覆盖当前设备及其缓存。
+    #[tokio::test]
+    async fn remote_selection_rejects_stale_generation_without_changing_current_device() {
+        let manager = ConnectionManager::new("device:17000".into());
+        let stale_generation = manager.runtime_generation();
+        let candidate = remote("old");
+        let current = remote("current");
+        manager.select_remote(Some(current.clone())).await;
+        manager.update_module_addr("current", "device:17001");
+        let current_generation = manager.runtime_generation();
+
+        assert!(manager
+            .select_remote_if_current(stale_generation, candidate.clone())
+            .await
+            .is_err());
+        assert!(Arc::ptr_eq(&manager.remote_connection().unwrap(), &current));
+        assert_eq!(manager.runtime_generation(), current_generation);
+        assert_eq!(
+            manager.get_module_addr("current").as_deref(),
+            Some("device:17001")
+        );
+        assert!(!candidate.active());
+        assert!(current.active());
+    }
+
+    // 即使设备代次未变化，已失效的原账号连接也不能重新发布。
+    #[tokio::test]
+    async fn remote_selection_rejects_inactive_connection() {
+        let manager = ConnectionManager::new("device:17000".into());
+        let generation = manager.runtime_generation();
+        let candidate = remote("old");
+        candidate.cancel();
+        assert!(manager
+            .select_remote_if_current(generation, candidate)
+            .await
+            .is_err());
+        assert!(manager.remote_connection().is_none());
+        assert_eq!(manager.runtime_generation(), generation);
+    }
+
+    // 当前有效选择正常替换设备，取消原连接并清空两类连接缓存。
+    #[tokio::test]
+    async fn remote_selection_accepts_current_active_connection_and_clears_caches() {
+        let manager = ConnectionManager::new("device:17000".into());
+        let old = remote("old");
+        manager.select_remote(Some(old.clone())).await;
+        manager.update_module_addr("old", "device:17001");
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
+        manager
+            .channels
+            .write()
+            .insert("old".into(), channel.clone());
+        manager
+            .remote_channels
+            .lock()
+            .await
+            .insert((manager.runtime_generation(), "old".into()), channel);
+        let generation = manager.runtime_generation();
+        let current = remote("current");
+        manager
+            .select_remote_if_current(generation, current.clone())
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&manager.remote_connection().unwrap(), &current));
+        assert!(!old.active());
+        assert!(current.active());
+        assert!(manager.get_module_addr("old").is_none());
+        assert!(manager.channels.read().is_empty());
+        assert!(manager.remote_channels.lock().await.is_empty());
+        assert!(manager.runtime_generation() > generation);
+    }
 
     // 刷新成功时保留管理端口，同时替换模块地址和两类旧业务 Channel 缓存。
     #[tokio::test]

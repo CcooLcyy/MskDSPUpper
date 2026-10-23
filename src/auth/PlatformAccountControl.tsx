@@ -4,7 +4,7 @@ import { usePlatformAuth } from './platform-auth-context.ts';
 
 export function PlatformAccountControl() {
   const { snapshot, controller } = usePlatformAuth();
-  const { modal } = App.useApp();
+  const { modal, message } = App.useApp();
   const status = snapshot.phase === 'authenticated' ? snapshot.status : null;
   const online = status?.connection_state === 'online';
   if (!status?.authenticated) return null;
@@ -17,9 +17,11 @@ export function PlatformAccountControl() {
       <Button size="small" type="text" icon={<LogoutOutlined />} onClick={() => {
         modal.confirm({
           title: '退出平台账号？',
-          content: '请先保存当前页面和工作区中的修改。退出后工作台将锁定，本次运行中的页面草稿保留，使用原账号重新登录可继续；关闭程序可能丢失未保存内容。',
-          okText: '退出并锁定', cancelText: '返回保存',
-          onOk: () => controller.logout(),
+          content: '请先保存当前页面和工作区中的修改。退出后将清理工作台，未保存的内容会丢失，并返回登录页，可直接使用其他账号登录。',
+          okText: '退出登录', cancelText: '返回保存',
+          onOk: async () => {
+            if (!await controller.logout()) void message.error(controller.getSnapshot().error || '退出登录未完成，请稍后重试。');
+          },
         });
       }}>退出</Button>
     </Space>

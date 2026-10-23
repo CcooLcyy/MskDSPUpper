@@ -37,7 +37,11 @@ export interface PlatformAuthSnapshot {
   error: string | null;
   savingSettings: boolean;
   endingSession: boolean;
-  switchingAccount: boolean;
+}
+
+export interface PlatformAuthLifecycle {
+  prepareLogout?: () => void;
+  resetWorkspace?: () => Promise<void>;
 }
 
 /** 只保留不含秘密的界面状态，密码直接交给桌面认证接口。 */
@@ -45,10 +49,11 @@ export function createPlatformAuthController(
   api: PlatformAuthApi,
   initializeWorkspace: () => Promise<void>,
   now: () => number = Date.now,
+  lifecycle: PlatformAuthLifecycle = {},
 ) {
   let snapshot: PlatformAuthSnapshot = {
     phase: 'booting', settings: null, status: null, workspaceReady: false,
-    owner: null, error: null, savingSettings: false, endingSession: false, switchingAccount: false,
+    owner: null, error: null, savingSettings: false, endingSession: false,
   };
   const listeners = new Set<() => void>();
   let startPromise: Promise<void> | null = null;
@@ -85,7 +90,7 @@ export function createPlatformAuthController(
       return;
     }
     if (snapshot.owner && snapshot.owner !== status.username) {
-      lock('当前保留了其他账号的配置草稿，请点击“切换账号”后重新登录。');
+      lock('当前保留了其他账号的配置草稿，请点击“退出并更换账号”后重新登录。');
       return;
     }
     update({ status, error: null });
@@ -132,7 +137,7 @@ export function createPlatformAuthController(
     if (['booting', 'authenticating', 'initializing'].includes(snapshot.phase) || snapshot.savingSettings || snapshot.endingSession) return;
     const account = normalizedUsername(username);
     if (snapshot.owner && account !== snapshot.owner) {
-      update({ error: `配置草稿属于 ${snapshot.owner}，请使用原账号重新登录，或点击“切换账号”。` });
+      update({ error: `配置草稿属于 ${snapshot.owner}，请使用原账号重新登录，或点击“退出并更换账号”。` });
       return;
     }
     const epoch = ++generation;
@@ -149,39 +154,29 @@ export function createPlatformAuthController(
   }
 
   async function logout() {
-    if (snapshot.endingSession) return;
-    // 先同步锁定界面，再请求服务端退出，避免未完成的旧请求重新打开工作台。
-    lock('已退出登录。保留的页面草稿可在本次程序运行中使用原账号登录后恢复。');
-    update({ endingSession: true });
+    if (snapshot.endingSession || snapshot.savingSettings) return false;
     try {
-      await api.logout();
-    } catch {
-      update({ error: '已锁定工作台，退出请求未完成。请检查平台连接；服务端会话将按有效期失效。' });
-    } finally {
-      update({ endingSession: false });
+      // 必须在锁定前检查不可中断的任务，拦截时保留完整工作台资格。
+      lifecycle.prepareLogout?.();
+    } catch (error) {
+      update({ error: error instanceof Error ? error.message : '当前任务尚未完成，请稍后退出登录。' });
+      return false;
     }
-  }
-
-  async function switchAccount(restartWorkspace: () => Promise<void>) {
-    if (snapshot.phase !== 'locked' || !snapshot.workspaceReady || !snapshot.owner || !snapshot.settings
-      || snapshot.savingSettings || snapshot.endingSession) return false;
-    generation += 1;
-    update({ endingSession: true, switchingAccount: true, status: null, error: null });
-    let failure = '关闭自动登录失败，请重试后再切换账号。';
+    // 先同步锁定界面，使晚到的会话和凭据响应失效。
+    lock('正在退出登录并清理工作台。');
+    update({ endingSession: true, error: null });
     try {
-      // 保留已保存的账号和凭据，仅关闭自动登录，防止重启后重新进入旧账号。
-      const settings = await api.saveSettings({ ...snapshot.settings!, auto_login: false });
-      update({ settings: normalizeSettings(settings) });
-      failure = '退出原账号失败，草稿仍保留。请重试切换账号。';
+      if (snapshot.settings?.auto_login) {
+        const settings = await api.saveSettings({ ...snapshot.settings, auto_login: false });
+        update({ settings: normalizeSettings(settings) });
+      }
       await api.logout();
-      failure = '重启上位机失败，草稿仍保留。请重试切换账号，或手动重启上位机。';
-      console.info('正在重启上位机以切换账号并清理未保存草稿。');
-      await restartWorkspace();
-      // 重启成功后维持锁定，不能在旧进程退出前恢复旧工作台。
+      // 生产环境重载页面后不会返回；重建完成前持续锁定旧工作台。
+      await lifecycle.resetWorkspace?.();
+      update({ phase: 'signed_out', owner: null, workspaceReady: false, status: null, endingSession: false, error: null });
       return true;
     } catch {
-      console.warn(failure);
-      update({ phase: 'locked', endingSession: false, switchingAccount: false, error: failure });
+      update({ endingSession: false, error: '退出登录未完成，当前工作台仍保持锁定。请重试退出并更换账号。' });
       return false;
     }
   }
@@ -216,7 +211,7 @@ export function createPlatformAuthController(
   async function saveSettings(settings: PlatformLoginSettings) {
     if (snapshot.savingSettings || snapshot.endingSession || ['booting', 'authenticating', 'initializing', 'authenticated'].includes(snapshot.phase)) return false;
     if (snapshot.workspaceReady && settings.grpc_endpoint.trim() !== snapshot.settings?.grpc_endpoint) {
-      update({ error: '当前保留了原平台账号的配置草稿，更换平台地址前请重启程序。' });
+      update({ error: '当前保留了原平台账号的配置草稿，更换平台地址前请先退出并更换账号。' });
       return false;
     }
     update({ savingSettings: true, error: null });
@@ -235,11 +230,12 @@ export function createPlatformAuthController(
   async function hasSavedPassword(username: string) {
     const account = normalizedUsername(username);
     const settings = snapshot.settings;
-    if (!account || !settings?.remember_password || account !== settings.username) return false;
+    const epoch = generation;
+    if (snapshot.endingSession || !account || !settings?.remember_password || account !== settings.username) return false;
     try {
       const saved = await api.hasSavedPassword(account);
       // 平台、账号或保存选项变化后，不采用旧查询结果。
-      return saved && snapshot.settings === settings;
+      return saved && snapshot.settings === settings && epoch === generation && !snapshot.endingSession;
     } catch {
       return false;
     }
@@ -265,7 +261,7 @@ export function createPlatformAuthController(
   return {
     getSnapshot: () => snapshot,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    start, login, logout, switchAccount, poll, tick, saveSettings, hasSavedPassword, getSavedPassword,
+    start, login, logout, poll, tick, saveSettings, hasSavedPassword, getSavedPassword,
     retryInitialization: async () => {
       if (snapshot.phase === 'initialization_failed' && snapshot.status) await initialize(snapshot.status, generation);
     },

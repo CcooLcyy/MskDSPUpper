@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../../adapters';
 import { createLowerUpdateDeploymentController } from '../../utils/lower-update-deployment';
@@ -19,6 +19,7 @@ import {
 import { LOWER_UPDATE_PENDING_KEY, readLowerUpdatePendingTask } from '../../utils/lower-update-pending';
 import { appendLowerUpdateArchive, LOWER_UPDATE_ARCHIVE_KEY } from '../../utils/lower-update-archive';
 import { LowerUpdateDeploymentContext } from './lower-update-deployment-context';
+import { registerPlatformLogoutGuard } from '../../auth/platform-workspace-lifecycle';
 
 function createApplicationController(): LowerUpdateDeploymentController {
   return createLowerUpdateDeploymentController({
@@ -78,6 +79,8 @@ function createApplicationController(): LowerUpdateDeploymentController {
 export function LowerUpdateDeploymentProvider({ children, controller: suppliedController }: { children: ReactNode; controller?: LowerUpdateDeploymentController }) {
   const [controller] = useState(() => suppliedController ?? createApplicationController());
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  useEffect(() => registerPlatformLogoutGuard(() => controller.getSnapshot().isRunning
+    ? '下位机更新正在执行，请等待完成或停止本地等待后再退出。' : null), [controller]);
   const value = useMemo(() => ({
     ...snapshot,
     start: controller.start,

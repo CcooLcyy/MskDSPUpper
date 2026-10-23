@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { api } from '../../adapters';
 import type { AppUpdateDownloadEvent, AppUpdateInfo, AppUpdateStatus } from '../../adapters';
 import { AppUpdateContext } from './app-update-context';
+import { registerPlatformLogoutGuard } from '../../auth/platform-workspace-lifecycle';
 import type {
   AppUpdateCheckOptions,
   AppUpdateContextValue,
@@ -84,6 +85,8 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
   const supersededUpdateRef = useRef<AppUpdateInfo | null>(null);
   const isDownloadingUpdateRef = useRef(false);
   const isInstallingUpdateRef = useRef(false);
+  useEffect(() => registerPlatformLogoutGuard(() => isInstallingUpdateRef.current
+    ? '客户端更新正在安装，请等待完成后再退出。' : null), []);
 
   const downloadUpdate = useCallback(async (
     update?: AppUpdateInfo,

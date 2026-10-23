@@ -3,7 +3,7 @@
 .platform-login-screen {
   position: fixed;
   inset: 0;
-  z-index: 2147483647;
+  z-index: 2147483646;
   overflow-y: auto;
   background: #22252b;
 }
@@ -52,8 +52,8 @@
 .platform-login-connection .ant-collapse-header { padding-left: 0 !important; }
 .platform-login-connection .ant-collapse-body { padding-inline: 0 !important; }
 .platform-login-initializing { display: block; margin-top: 16px; }
-/* 业务弹窗通过 portal 挂在工作台外，锁定时也必须隐藏。 */
-body[data-platform-auth-locked] :is(.ant-modal-root, .ant-drawer, .ant-popover, .ant-tooltip, .ant-dropdown, .ant-select-dropdown, .ant-picker-dropdown, .ant-message, .ant-notification) { display: none !important; }
+/* 业务弹窗通过 portal 挂在工作台外，锁定时隐藏，仅允许登录页的退出确认。 */
+body[data-platform-auth-locked] :is(.ant-modal-root:not(.platform-auth-confirm), .ant-drawer, .ant-popover, .ant-tooltip, .ant-dropdown, .ant-select-dropdown, .ant-picker-dropdown, .ant-message, .ant-notification) { display: none !important; }
 @media (max-width: 680px) {
   .platform-login-panel { grid-template-columns: minmax(0, 1fr); }
   .platform-login-brand { padding: 24px; border-right: 0; border-bottom: 1px solid #3e424b; }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
+import { assertPlatformLogoutAllowed, registerPlatformLogoutGuard } from '../../src/auth/platform-workspace-lifecycle.ts';
 
 const read = (file) => readFileSync(new URL(`../../${file}`, import.meta.url), 'utf8');
 function loadAdapter(invoke, listen = async () => () => {}) {
@@ -81,13 +82,15 @@ function appProviderHarness(api) {
   }).outputText.replace(/^import[\s\S]*?from ['"][^'"]+['"];\s*$/gm, '').replace(/export /g, '');
   const values = new Map();
   const window = { localStorage: { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: (key) => values.delete(key) }, setInterval: () => 1, clearInterval: () => {} };
-  const Provider = new Function('React', 'api', 'AppUpdateContext', 'window',
-    'const { useState, useRef, useMemo, useCallback, useEffect } = React;\n' + code + '\nreturn AppUpdateProvider;')(React, api, { Provider: {} }, window);
-  return () => { cursor = 0; const value = Provider({ children: null }); const pending = effects; effects = []; pending.forEach((fn) => fn()); return value; };
+  const Provider = new Function('React', 'api', 'AppUpdateContext', 'window', 'registerPlatformLogoutGuard',
+    'const { useState, useRef, useMemo, useCallback, useEffect } = React;\n' + code + '\nreturn AppUpdateProvider;')(React, api, { Provider: {} }, window, registerPlatformLogoutGuard);
+  const render = () => { cursor = 0; const value = Provider({ children: null }); const pending = effects; effects = []; pending.forEach((fn) => fn()); return value; };
+  render.unmount = () => { slots.forEach((slot) => slot?.cleanup?.()); };
+  return render;
 }
 const settle = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 
-test('app provider keeps old verified package after same-version replacement fails', async () => {
+test('app provider keeps old verified package after same-version replacement fails', async (t) => {
   const first = { currentVersion: '1', version: '2', rawJson: { packageId: 'first', sha256: 'aaa', channel: 'ci', platform: 'windows-x86_64-nsis' } };
   const second = { ...first, rawJson: { ...first.rawJson, packageId: 'second', sha256: 'bbb' } };
   let candidate = first; let fail = false; let downloads = 0; let installs = 0;
@@ -95,6 +98,7 @@ test('app provider keeps old verified package after same-version replacement fai
     downloadAppUpdate: async () => { downloads++; if (fail) throw new Error('断流'); return candidate; },
     installAppUpdate: async () => { installs++; return first; }, disposePendingAppUpdate: async () => {} };
   const render = appProviderHarness(api);
+  t.after(render.unmount);
   render(); await settle(); let value = render();
   assert.equal(value.downloadedUpdate, first); assert.equal(installs, 0);
   await value.checkForUpdate(); value = render(); assert.equal(downloads, 1, '同包复用');
@@ -103,4 +107,22 @@ test('app provider keeps old verified package after same-version replacement fai
   assert.equal(downloads, 2); assert.equal(value.downloadedUpdate, first);
   assert.equal((await value.installUpdate()).kind, 'needs-choice'); assert.equal(installs, 0);
   value = render(); assert.equal((await value.installDownloadedUpdate()).update, first); assert.equal(installs, 1);
+});
+
+// 安装占用从真实 Provider 的同步引用读取，完成或卸载后允许主动退出。
+test('app installation blocks logout until it finishes', async (t) => {
+  let finish;
+  const update = { currentVersion: '1', version: '2', rawJson: {} };
+  const render = appProviderHarness({ getAppVersion: async () => '1', checkAppUpdate: async () => update,
+    downloadAppUpdate: async () => update, installAppUpdate: () => new Promise(resolve => { finish = resolve; }),
+    disposePendingAppUpdate: async () => {} });
+  t.after(render.unmount);
+  render(); await settle();
+  const installing = render().installDownloadedUpdate();
+  assert.throws(assertPlatformLogoutAllowed, /客户端更新正在安装/);
+  finish(update);
+  await installing;
+  assert.doesNotThrow(assertPlatformLogoutAllowed);
+  render.unmount();
+  assert.doesNotThrow(assertPlatformLogoutAllowed);
 });

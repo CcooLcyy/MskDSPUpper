@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import type { ControlGroupRoutesError } from '../../utils/control-auto-routing';
+import { isPlatformWorkspaceResetting } from '../../auth/platform-workspace-lifecycle.ts';
 
 // 在页面切换后保留部分成功计划，防止重试时重复创建控制组。
 const pendingPlans = new Map<string, ControlGroupRoutesError>();
@@ -29,7 +30,11 @@ export default function usePendingControlRoutes(moduleName: 'AGC' | 'AVC') {
   }, [moduleName]);
   useEffect(() => {
     if (!error) return;
-    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    const warn = (event: BeforeUnloadEvent) => {
+      if (isPlatformWorkspaceResetting()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [error]);

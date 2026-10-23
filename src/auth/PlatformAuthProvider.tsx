@@ -4,8 +4,12 @@ import { platformAuthApi } from './platform-auth-api.ts';
 import { createPlatformAuthController, type PlatformAuthController } from './platform-auth-controller.ts';
 import { PlatformAuthContext } from './platform-auth-context.ts';
 import { expandConfigurationWindow } from './platform-window';
+import { assertPlatformLogoutAllowed, reloadPlatformWorkspace } from './platform-workspace-lifecycle';
 
-const defaultController = createPlatformAuthController(platformAuthApi, initializeAppSettings);
+const defaultController = createPlatformAuthController(platformAuthApi, initializeAppSettings, Date.now, {
+  prepareLogout: assertPlatformLogoutAllowed,
+  resetWorkspace: reloadPlatformWorkspace,
+});
 
 export function PlatformAuthProvider({ children, controller = defaultController }: {
   children: ReactNode;
@@ -16,6 +20,14 @@ export function PlatformAuthProvider({ children, controller = defaultController 
   useEffect(() => {
     if (!snapshot.workspaceReady || snapshot.phase !== 'authenticated' || expanded.current) return;
     expanded.current = true;
+    try {
+      // 退出只重建界面，同一窗口内后续登录保留用户手动调整的大小。
+      const key = 'mskdsp.configuration-window-expanded';
+      if (window.sessionStorage.getItem(key) === '1') return;
+      window.sessionStorage.setItem(key, '1');
+    } catch {
+      console.warn('无法记录工作台窗口状态，将按首次登录调整窗口。');
+    }
     void expandConfigurationWindow().catch(() => {
       console.warn('自动调整工作台窗口大小失败，可手动调整窗口。');
     });

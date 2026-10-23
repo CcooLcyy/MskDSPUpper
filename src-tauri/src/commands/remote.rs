@@ -47,6 +47,7 @@ pub async fn remote_select_device(
     state: State<'_, AppState>,
     device_id: String,
 ) -> Result<(), String> {
+    let generation = state.conn_manager.runtime_generation();
     let device = remote_access::list_devices(&state.platform_auth)
         .await
         .map_err(|e| e.to_string())?
@@ -58,8 +59,12 @@ pub async fn remote_select_device(
     }
     let remote =
         RemoteConnection::new(device, state.platform_auth.clone()).map_err(|e| e.to_string())?;
+    state
+        .conn_manager
+        .select_remote_if_current(generation, remote)
+        .await
+        .map_err(|e| e.to_string())?;
     state.remote_ssh.close_all();
-    state.conn_manager.select_remote(Some(remote)).await;
     tracing::info!(device_id, "已选择平台远程设备，旧连接已取消");
     Ok(())
 }

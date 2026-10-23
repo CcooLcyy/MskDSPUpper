@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Checkbox, Collapse, Form, Input, Space, Spin, Typography } from 'antd';
+import { useEffect, useRef } from 'react';
+import { Alert, App, Button, Checkbox, Collapse, Form, Input, Space, Spin, Typography } from 'antd';
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
-import { relaunch } from '@tauri-apps/plugin-process';
 import { SOFTWARE_PLATFORM_ENDPOINT } from '../utils/software-platform';
 import { isPlatformDesktop } from './platform-auth-api.ts';
 import { usePlatformAuth } from './platform-auth-context.ts';
@@ -21,7 +20,7 @@ export function PlatformLogin() {
   const savedRemember = snapshot.settings?.remember_password ?? false;
   const savedAutoLogin = snapshot.settings?.auto_login ?? false;
   const passwordEdited = useRef(false);
-  const [confirmSwitch, setConfirmSwitch] = useState(false);
+  const { modal } = App.useApp();
 
   useEffect(() => {
     form.setFieldsValue({ username: snapshot.owner || settingsUsername, password: '' });
@@ -77,18 +76,16 @@ export function PlatformLogin() {
         <div className="platform-login-form-panel">
         <Typography.Title level={3} className="platform-login-form-title">登录平台</Typography.Title>
         <Typography.Paragraph type="secondary" className="platform-login-form-description">登录后进入配置工作台</Typography.Paragraph>
-        {snapshot.workspaceReady ? <Alert type="info" showIcon title="工作台已锁定" description={`页面草稿保留在本次程序内存中，请使用 ${snapshot.owner} 重新登录后继续。如需使用其他账号，请点击“切换账号”。`} action={<Button disabled={busy || snapshot.savingSettings || !desktop} onClick={() => setConfirmSwitch(true)}>切换账号</Button>} style={{ marginBottom: 18 }} /> : null}
-        {snapshot.workspaceReady && confirmSwitch ? (
-          <Alert type="warning" showIcon title="切换账号并放弃未保存草稿？" description="确认后将关闭自动登录并重启上位机，清除当前未保存的页面草稿和连接状态。已保存的配置不受影响；重新打开后可修改账号登录。" action={
-            <Space wrap>
-              <Button danger type="primary" disabled={busy || snapshot.savingSettings || !desktop} loading={snapshot.switchingAccount} onClick={() => {
-                form.setFieldValue('password', '');
-                void controller.switchAccount(relaunch);
-              }}>确认切换</Button>
-              <Button disabled={busy} onClick={() => setConfirmSwitch(false)}>取消</Button>
-            </Space>
-          } style={{ marginBottom: 18 }} />
-        ) : null}
+        {snapshot.workspaceReady ? <Alert type="info" showIcon title="工作台已锁定" description={`页面草稿仍保留，请使用 ${snapshot.owner} 重新登录后继续。退出后可使用其他账号登录。`} action={<Button disabled={busy || snapshot.savingSettings || !desktop} onClick={() => {
+          modal.confirm({
+            rootClassName: 'platform-auth-confirm',
+            zIndex: 2147483647,
+            title: '退出并更换账号？',
+            content: '退出后将清理工作台，未保存的内容会丢失，并返回可更换账号的登录页。请先确认需要保留的内容已保存。',
+            okText: '退出并更换账号', cancelText: '取消',
+            onOk: async () => { form.setFieldValue('password', ''); await controller.logout(); },
+          });
+        }}>退出并更换账号</Button>} style={{ marginBottom: 18 }} /> : null}
         {desktop && snapshot.error ? <Alert type="error" showIcon title={snapshot.error} style={{ marginBottom: 18 }} /> : null}
         {snapshot.phase === 'initialization_failed' ? (
           <Space wrap>
@@ -116,7 +113,7 @@ export function PlatformLogin() {
               </Form.Item>
             </Space>
             <Button type="primary" htmlType="submit" block size="large" loading={busy}>
-              {snapshot.switchingAccount ? '正在切换账号' : snapshot.endingSession ? '正在退出登录' : snapshot.phase === 'booting' ? '正在读取登录设置' : snapshot.phase === 'initializing' ? '正在加载工作台' : snapshot.phase === 'authenticating' ? '正在验证账号' : '登录'}
+              {snapshot.endingSession ? '正在退出登录' : snapshot.phase === 'booting' ? '正在读取登录设置' : snapshot.phase === 'initializing' ? '正在加载工作台' : snapshot.phase === 'authenticating' ? '正在验证账号' : '登录'}
             </Button>
           </Form>
         )}
@@ -130,7 +127,7 @@ export function PlatformLogin() {
               </Form.Item>
               <Button htmlType="submit" loading={snapshot.savingSettings}>保存连接设置</Button>
               <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0', fontSize: 12 }}>HTTP/HTTPS 表示 gRPC 的传输地址，请填写平台的 gRPC 服务端口。</Typography.Paragraph>
-              {snapshot.workspaceReady ? <Typography.Paragraph type="secondary" style={{ margin: '8px 0 0', fontSize: 12 }}>工作台草稿保留期间不可更换平台。请先点击“切换账号”，确认清理草稿并重启后再更换平台。</Typography.Paragraph> : null}
+              {snapshot.workspaceReady ? <Typography.Paragraph type="secondary" style={{ margin: '8px 0 0', fontSize: 12 }}>工作台草稿保留期间不可更换平台。请先点击“退出并更换账号”，清理草稿后再更换平台。</Typography.Paragraph> : null}
             </Form>
           ),
         }]} />
