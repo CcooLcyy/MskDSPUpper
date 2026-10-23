@@ -1,3 +1,5 @@
+import type { ModbusTemplateContext } from '../../adapters/types';
+import type { TemplateCommit } from '../../features/modbus-templates/bindings';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Typography } from 'antd';
 import { useSearchParams } from 'react-router-dom';
@@ -16,8 +18,7 @@ import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-rest
 import ConnectionConfig from './components/ConnectionConfig';
 import PointTable from './components/PointTable';
 import TemplateModal from '../../features/modbus-templates/TemplateModal';
-import { saveTemplatePoints } from '../../features/modbus-templates/save-template';
-import { saveTemplateReadPlanAndPoints } from '../../features/modbus-templates/read-plan-save';
+import { saveBoundTemplatePoints, pointRenameSaveOptions } from '../../features/modbus-templates/save-template';
 import MqttConfigPanel from './components/MqttConfigPanel';
 import { useProtocolRealtime } from '../../components/protocol/protocol-realtime';
 import {
@@ -152,6 +153,9 @@ const ModbusRTU: React.FC = () => {
   const [linkSubmitting, setLinkSubmitting] = useState(false);
   const [pointModalOpen, setPointModalOpen] = useState(false);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templateContext, setTemplateContext] = useState<ModbusTemplateContext<ModbusLinkInfo> | null>(null);
+  const templateSelectedConn = useRef(selectedConn);
+  templateSelectedConn.current = selectedConn;
   const [editingPointIndex, setEditingPointIndex] = useState<number | null>(null);
   const [pointSubmitting, setPointSubmitting] = useState(false);
   const [readPlanSaving, setReadPlanSaving] = useState(false);
@@ -573,13 +577,21 @@ const ModbusRTU: React.FC = () => {
 
       let pointCopyError: unknown = null;
       try {
-        const pointTable = await api.modbusRtuGetPointTable(sourceConnName);
-        if (pointTable.points.length > 0) {
-          await api.modbusRtuUpsertPointTable(
-            nextConnName,
-            pointTable.points.map(normalizeModbusPointEngineeringFields),
-            true,
-          );
+        const sourceContext = await api.getModbusRtuTemplateContext(sourceConnName);
+        const pointTable = sourceContext.table;
+        if (pointTable.points.length > 0 || pointTable.template_bindings_json) {
+          if (pointTable.template_bindings_json) {
+            const destination = await api.getModbusRtuTemplateContext(nextConnName);
+            if (sourceContext.runtime_generation !== destination.runtime_generation || !destination.link.config || !destination.table.revision || destination.table.revision === '0') {
+              throw Error('复制目标已变化或不支持模板来源记录，未复制点表');
+            }
+            await api.applyModbusRtuTemplate(nextConnName, pointTable.points.map(normalizeModbusPointEngineeringFields), {
+              expected_revision: destination.table.revision,
+              template_bindings_json: pointTable.template_bindings_json,
+            }, destination.link.config, destination.runtime_generation);
+          } else {
+            await api.modbusRtuUpsertPointTable(nextConnName, pointTable.points.map(normalizeModbusPointEngineeringFields), true);
+          }
         }
       } catch (error) {
         if (!isNotFoundError(error)) {
@@ -770,7 +782,24 @@ const ModbusRTU: React.FC = () => {
       const newPoints = editingPointIndex !== null
         ? points.map((point, index) => (index === editingPointIndex ? newPoint : point))
         : [...points, newPoint];
-      const restartResult = await runSelectedLinkStopped(() => api.modbusRtuUpsertPointTable(selectedConn, newPoints, true));
+      const renameContext = editingPointIndex !== null && points[editingPointIndex].tag !== newPoint.tag
+        ? await api.getModbusRtuTemplateContext(selectedConn) : null;
+      const metadata = renameContext && editingPointIndex !== null ? await pointRenameSaveOptions({
+        expectedPoints: points, oldTag: points[editingPointIndex].tag, newTag: newPoint.tag,
+        read: async () => renameContext.table,
+      }) : undefined;
+      const restartResult = metadata && renameContext?.link.config
+        ? await api.applyModbusRtuTemplate(selectedConn, newPoints, metadata, renameContext.link.config, renameContext.runtime_generation)
+          .then(result => ({ restartError: result.restart_error, stoppedBeforeRun: renameContext.link.state === 2 }))
+        : await runSelectedLinkStopped(() => api.modbusRtuUpsertPointTable(selectedConn, newPoints, true));
+      if (metadata && renameContext) {
+        const current = await api.getModbusRtuTemplateContext(selectedConn).catch(() => null);
+        if (current?.runtime_generation !== renameContext.runtime_generation || templateSelectedConn.current !== selectedConn) {
+          messageApi.success('原下位机点位及模板来源已保存，当前设备页面未刷新');
+          setPointModalOpen(false);
+          return;
+        }
+      }
       setPoints(newPoints);
       setPointModalOpen(false);
       messageApi.success(editingPointIndex !== null ? '点位已更新' : '点位已添加');
@@ -808,44 +837,48 @@ const ModbusRTU: React.FC = () => {
     }
   }, [messageApi, pointSubmitting, points, selectedConn, runSelectedLinkStopped]);
 
-  const handleTemplateApply = async (additions: ModbusPoint[]): Promise<boolean> => {
-    if (!selectedConn || pointSubmitting) return false;
+  const openTemplateModal = async () => {
+    if (!selectedConn || pointSubmitting) return;
     setPointSubmitting(true);
-    let readPlanExtended = false;
     try {
-      const saved = await saveTemplatePoints({ expected: points, additions,
-        verifyConnection: async () => {
-          const latest = await api.modbusRtuGetLink(selectedConn);
-          if (latest.config?.address_base !== selectedLink?.config?.address_base) {
-            await refreshLinks({ silent: true });
-            throw new Error('连接地址基准已变化，请重新核对模板地址后添加');
-          }
+      const context = await api.getModbusRtuTemplateContext(selectedConn);
+      if (templateSelectedConn.current !== selectedConn) return;
+      if (!context.link.config) throw Error('连接配置不存在');
+      setTemplateContext(context);
+      setPoints(context.table.points);
+      setTemplateModalOpen(true);
+    } catch (error) { messageApi.error(`读取设备点表失败：${String(error)}`); }
+    finally { setPointSubmitting(false); }
+  };
+
+  const handleTemplateApply = async (commit: TemplateCommit): Promise<boolean> => {
+    if (!selectedConn || pointSubmitting || !templateContext?.link.config) return false;
+    const context = templateContext;
+    const expectedConfig = context.link.config!;
+    setPointSubmitting(true);
+    try {
+      const saved = await saveBoundTemplatePoints({ ...commit,
+        read: async () => {
+          const actual = await api.getModbusRtuTemplateContext(selectedConn);
+          if (actual.runtime_generation !== context.runtime_generation) throw Error('下位机连接已切换，请关闭窗口重新读取');
+          return actual.table;
         },
-        read: async () => (await api.modbusRtuGetPointTable(selectedConn)).points,
-        save: async (nextPoints) => {
-          const initialState = await getLinkState(selectedConn);
-          return runSelectedLinkStopped(async () => {
-            const latest = await api.modbusRtuGetLink(selectedConn);
-            if (!latest.config || latest.config.address_base !== selectedLink?.config?.address_base) {
-              await refreshLinks({ silent: true });
-              throw new Error('连接配置已变化，请重新核对模板后添加');
-            }
-            readPlanExtended = await saveTemplateReadPlanAndPoints({
-              config: latest.config, additions, points: nextPoints,
-              saveConfig: (config) => api.modbusRtuUpsertLink(config, false).then(() => undefined),
-              savePoints: (updatedPoints) => api.modbusRtuUpsertPointTable(selectedConn, updatedPoints, true),
-            });
-          }, { initialState });
-        },
-        onChanged: setPoints,
+        save: (nextPoints, metadata) => api.applyModbusRtuTemplate(selectedConn, nextPoints, metadata, expectedConfig, context.runtime_generation),
       });
-      setPoints(saved.points);
-      messageApi.success(`模板已应用，添加 ${additions.length} 个点位`);
-      if (readPlanExtended) messageApi.success('已补齐新增点位的批量读取区间');
-      if (saved.result.restartError) messageApi.warning(`点表已保存，但重新启动连接失败：${formatErrorText(saved.result.restartError)}`);
-      await refreshLinks({ silent: true });
+      let currentTarget = false;
+      try {
+        const current = await api.getModbusRtuTemplateContext(selectedConn);
+        currentTarget = current.runtime_generation === context.runtime_generation && templateSelectedConn.current === selectedConn;
+      } catch { /* 目标已断开或切换时保留新页面。 */ }
+      if (currentTarget) {
+        setPoints(saved.points);
+        await refreshLinks({ silent: true });
+        messageApi.success('平台点表及模板来源已保存');
+      } else { messageApi.success('原下位机的点表及模板来源已保存，当前设备页面未刷新'); }
+      if (saved.result.read_plan_extended) messageApi.success('已补齐点位的批量读取区间');
+      if (saved.result.restart_error) messageApi.warning(saved.result.restart_error);
       return true;
-    } catch (error) { console.error('Modbus RTU 应用模板失败', error); messageApi.error(`应用模板失败：${String(error)}`); return false; }
+    } catch (error) { console.error('Modbus RTU 应用平台点表失败', error); messageApi.error(`应用模板失败：${String(error)}`); return false; }
     finally { setPointSubmitting(false); }
   };
 
@@ -1386,7 +1419,7 @@ const ModbusRTU: React.FC = () => {
             onReadPlanSave={handleReadPlanSave}
             onReadPlanDirtyChange={handleReadPlanDirtyChange}
             onAdd={openCreatePoint}
-            onApplyTemplate={() => setTemplateModalOpen(true)}
+            onApplyTemplate={() => void openTemplateModal()}
             onEdit={(index) => openEditPoint(index)}
             onCopy={(index) => openCopyPoint(index)}
             onDelete={(index) => void handleDeletePoint(index)}
@@ -1411,7 +1444,7 @@ const ModbusRTU: React.FC = () => {
       {renderLinkModal()}
       {renderPointModal()}
       {selectedConn && <TemplateModal key={selectedConn} open={templateModalOpen} connectionName={selectedConn} protocol="RTU"
-        addressBase={selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO} existingPoints={points} busy={pointSubmitting}
+        addressBase={templateContext?.link.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO} table={templateContext?.table ?? null} busy={pointSubmitting}
         onClose={() => setTemplateModalOpen(false)} onApply={handleTemplateApply} />}
     </div>
   );

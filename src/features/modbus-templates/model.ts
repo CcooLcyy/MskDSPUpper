@@ -5,8 +5,6 @@ import { getDecimalTextError } from '../../utils/decimal-input.ts';
 
 export const MAX_TEMPLATE_POINTS = 10000;
 export const MAX_TEMPLATE_FILE_BYTES = 10 * 1024 * 1024;
-export const MAX_PERSONAL_TEMPLATES = 100;
-export const MAX_PERSONAL_TEMPLATE_BYTES = 50 * 1024 * 1024;
 export type TemplateDataType = keyof typeof MODBUS_DATA_TYPE;
 export type TemplateFunctionCode = 1 | 3 | 4 | 5 | 6 | 16;
 export interface ModbusTemplatePoint {
@@ -149,7 +147,7 @@ export function planTemplateApplication(template: ModbusTemplate, options: Templ
     else if (options.existingPoints.some(old => old.tag === finalTag)) conflict = '标签与已有点位重复';
     else if (point.address + point.reg_count - 1 > 65535) conflict = '转换后的地址范围超出上位机支持的 65535 上限';
     else if (options.existingPoints.some(old => overlaps(point, old))) conflict = '地址范围与已有点位重叠';
-    return { id: source.id, source, point, finalTag, conflict, selected: selected ? selected.has(source.id) : !isTemplateWritePoint(source) && source.default_selected !== false };
+    return { id: source.id, source, point, finalTag, conflict, selected: selected ? selected.has(source.id) : !isTemplateWritePoint(source) && !source.condition && source.default_selected !== false };
   });
   const chosen = rows.filter(row => row.selected && !row.conflict);
   for (const row of rows) {

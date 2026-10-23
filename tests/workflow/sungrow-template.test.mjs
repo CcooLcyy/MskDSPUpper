@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { validateModbusTemplate, planTemplateApplication, isTemplateWritePoint } from '../../src/features/modbus-templates/model.ts';
 import { buildReadPlanBlocks } from '../../src/pages/ModbusRTU/modbus-form-rules.ts';
 
-const load = () => validateModbusTemplate(JSON.parse(readFileSync(new URL('../../src/features/modbus-templates/builtin/sungrow-pv-v1-1-78.json', import.meta.url), 'utf8')));
+const load = () => validateModbusTemplate(JSON.parse(readFileSync(new URL('../fixtures/modbus-templates/sungrow-pv-v1-1-78.json', import.meta.url), 'utf8')));
 const states = [[0, '运行'], [0x8000, '停机'], [0x1200, '初始待机'], [0x1300, '按键关机'], [0x1400, '待机'],
   [0x1500, '紧急停机'], [0x1600, '启动中'], [0x5500, '故障停机'], [0x9100, '告警运行'], [0x8100, '降额运行'], [0x8200, '调度运行'], [0x2500, '通讯故障']];
 

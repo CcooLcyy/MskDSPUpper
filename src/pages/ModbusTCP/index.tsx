@@ -1,3 +1,5 @@
+import type { ModbusTemplateContext, ModbusPointTableSaveOptions } from '../../adapters/types';
+import type { TemplateCommit } from '../../features/modbus-templates/bindings';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Typography } from 'antd';
 import { useSearchParams } from 'react-router-dom';
@@ -20,7 +22,7 @@ import {
 } from '../../utils/runtime-restart';
 import PointTable from '../ModbusRTU/components/PointTable';
 import TemplateModal from '../../features/modbus-templates/TemplateModal';
-import { saveTemplatePoints } from '../../features/modbus-templates/save-template';
+import { saveBoundTemplatePoints, pointRenameSaveOptions } from '../../features/modbus-templates/save-template';
 import {
   MODBUS_ADDRESS_BASE,
   MODBUS_DATA_TYPE,
@@ -118,6 +120,9 @@ const ModbusTCP: React.FC = () => {
   const [linkSubmitting, setLinkSubmitting] = useState(false);
   const [pointModalOpen, setPointModalOpen] = useState(false);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templateContext, setTemplateContext] = useState<ModbusTemplateContext<ModbusTcpLinkInfo> | null>(null);
+  const templateSelectedConn = useRef(selectedConn);
+  templateSelectedConn.current = selectedConn;
   const [editingPointIndex, setEditingPointIndex] = useState<number | null>(null);
   const [pointSubmitting, setPointSubmitting] = useState(false);
   const [runtimeAction, setRuntimeAction] = useState<'start' | 'stop' | null>(null);
@@ -268,6 +273,7 @@ const ModbusTCP: React.FC = () => {
   const savePointTablePreservingRuntime = useCallback(async (
     nextPoints: ModbusPoint[],
     restartAfterRun = true,
+    metadata?: ModbusPointTableSaveOptions,
   ): Promise<RuntimeOperationResult> => {
     if (!selectedConn) {
       return {
@@ -281,7 +287,7 @@ const ModbusTCP: React.FC = () => {
     const initialState = await getLinkState(selectedConn);
     const originallyRunning = initialState === 2;
     const result = await runSelectedLinkStopped(
-      () => api.modbusTcpUpsertPointTable(selectedConn, nextPoints, true),
+      () => api.modbusTcpUpsertPointTable(selectedConn, nextPoints, true, metadata),
       { initialState, restartAfterRun: originallyRunning && restartAfterRun && nextPoints.length > 0 },
     );
 
@@ -459,14 +465,22 @@ const ModbusTCP: React.FC = () => {
       await api.modbusTcpUpsertLink(copiedConfig, true);
       let pointCopyError: unknown = null;
       try {
-        const table = await api.modbusTcpGetPointTable(sourceConnName);
-        if (table.points.length > 0) {
-          await api.modbusTcpUpsertPointTable(
-            nextConnName,
-            table.points.map(normalizeModbusPointEngineeringFields),
-            true,
-          );
-          await api.modbusTcpStopLink(nextConnName);
+        const sourceContext = await api.getModbusTcpTemplateContext(sourceConnName);
+        const table = sourceContext.table;
+        if (table.points.length > 0 || table.template_bindings_json) {
+          if (table.template_bindings_json) {
+            const destination = await api.getModbusTcpTemplateContext(nextConnName);
+            if (sourceContext.runtime_generation !== destination.runtime_generation || !destination.link.config || !destination.table.revision || destination.table.revision === '0') {
+              throw Error('复制目标已变化或不支持模板来源记录，未复制点表');
+            }
+            await api.applyModbusTcpTemplate(nextConnName, table.points.map(normalizeModbusPointEngineeringFields), {
+              expected_revision: destination.table.revision,
+              template_bindings_json: table.template_bindings_json,
+            }, destination.link.config, destination.runtime_generation);
+          } else {
+            await api.modbusTcpUpsertPointTable(nextConnName, table.points.map(normalizeModbusPointEngineeringFields), true);
+          }
+          if (!table.template_bindings_json) await api.modbusTcpStopLink(nextConnName);
         }
       } catch (error) {
         if (!isNotFoundError(error)) {
@@ -640,7 +654,24 @@ const ModbusTCP: React.FC = () => {
 
     setPointSubmitting(true);
     try {
-      const result = await savePointTablePreservingRuntime(nextPoints);
+      const renameContext = editingPointIndex !== null && points[editingPointIndex].tag !== nextPoint.tag
+        ? await api.getModbusTcpTemplateContext(selectedConn) : null;
+      const metadata = renameContext && editingPointIndex !== null ? await pointRenameSaveOptions({
+        expectedPoints: points, oldTag: points[editingPointIndex].tag, newTag: nextPoint.tag,
+        read: async () => renameContext.table,
+      }) : undefined;
+      const result = metadata && renameContext?.link.config
+        ? await api.applyModbusTcpTemplate(selectedConn, nextPoints, metadata, renameContext.link.config, renameContext.runtime_generation)
+          .then(saved => ({ restartError: saved.restart_error }))
+        : await savePointTablePreservingRuntime(nextPoints);
+      if (metadata && renameContext) {
+        const current = await api.getModbusTcpTemplateContext(selectedConn).catch(() => null);
+        if (current?.runtime_generation !== renameContext.runtime_generation || templateSelectedConn.current !== selectedConn) {
+          messageApi.success('原下位机点位及模板来源已保存，当前设备页面未刷新');
+          setPointModalOpen(false);
+          return;
+        }
+      }
       setPoints(nextPoints);
       setPointModalOpen(false);
       messageApi.success(editingPointIndex === null ? '点位已添加' : '点位已更新');
@@ -673,27 +704,48 @@ const ModbusTCP: React.FC = () => {
     }
   }, [messageApi, pointSubmitting, points, refreshLinks, savePointTablePreservingRuntime, selectedConn]);
 
-  const handleTemplateApply = async (additions: ModbusPoint[]): Promise<boolean> => {
-    if (!selectedConn || pointSubmitting) return false;
+  const openTemplateModal = async () => {
+    if (!selectedConn || pointSubmitting) return;
     setPointSubmitting(true);
     try {
-      const saved = await saveTemplatePoints({ expected: points, additions,
-        verifyConnection: async () => {
-          const latest = await api.modbusTcpGetLink(selectedConn);
-          if (latest.config?.address_base !== selectedLink?.config?.address_base) {
-            await refreshLinks({ silent: true });
-            throw new Error('连接地址基准已变化，请重新核对模板地址后添加');
-          }
+      const context = await api.getModbusTcpTemplateContext(selectedConn);
+      if (templateSelectedConn.current !== selectedConn) return;
+      if (!context.link.config) throw Error('连接配置不存在');
+      setTemplateContext(context);
+      setPoints(context.table.points);
+      setTemplateModalOpen(true);
+    } catch (error) { messageApi.error(`读取设备点表失败：${String(error)}`); }
+    finally { setPointSubmitting(false); }
+  };
+
+  const handleTemplateApply = async (commit: TemplateCommit): Promise<boolean> => {
+    if (!selectedConn || pointSubmitting || !templateContext?.link.config) return false;
+    const context = templateContext;
+    const expectedConfig = context.link.config!;
+    setPointSubmitting(true);
+    try {
+      const saved = await saveBoundTemplatePoints({ ...commit,
+        read: async () => {
+          const actual = await api.getModbusTcpTemplateContext(selectedConn);
+          if (actual.runtime_generation !== context.runtime_generation) throw Error('下位机连接已切换，请关闭窗口重新读取');
+          return actual.table;
         },
-        read: async () => (await api.modbusTcpGetPointTable(selectedConn)).points,
-        save: (nextPoints) => savePointTablePreservingRuntime(nextPoints), onChanged: setPoints,
+        save: (nextPoints, metadata) => api.applyModbusTcpTemplate(selectedConn, nextPoints, metadata, expectedConfig, context.runtime_generation),
       });
-      setPoints(saved.points);
-      messageApi.success(`模板已应用，添加 ${additions.length} 个点位`);
-      if (saved.result.restartError) messageApi.warning(`点表已保存，但重新启动连接失败：${formatErrorText(saved.result.restartError)}`);
-      await refreshLinks({ silent: true });
+      let currentTarget = false;
+      try {
+        const current = await api.getModbusTcpTemplateContext(selectedConn);
+        currentTarget = current.runtime_generation === context.runtime_generation && templateSelectedConn.current === selectedConn;
+      } catch { /* 目标已断开或切换时保留新页面。 */ }
+      if (currentTarget) {
+        setPoints(saved.points);
+        await refreshLinks({ silent: true });
+        messageApi.success('平台点表及模板来源已保存');
+      } else { messageApi.success('原下位机的点表及模板来源已保存，当前设备页面未刷新'); }
+      if (saved.result.read_plan_extended) messageApi.success('已补齐点位的批量读取区间');
+      if (saved.result.restart_error) messageApi.warning(saved.result.restart_error);
       return true;
-    } catch (error) { console.error('Modbus TCP 应用模板失败', error); messageApi.error(`应用模板失败：${String(error)}`); return false; }
+    } catch (error) { console.error('Modbus TCP 应用平台点表失败', error); messageApi.error(`应用模板失败：${String(error)}`); return false; }
     finally { setPointSubmitting(false); }
   };
 
@@ -1155,7 +1207,7 @@ const ModbusTCP: React.FC = () => {
             showReadPlan={false}
             onReadPlanSave={async () => false}
             onAdd={openCreatePoint}
-            onApplyTemplate={() => setTemplateModalOpen(true)}
+            onApplyTemplate={() => void openTemplateModal()}
             onEdit={openEditPoint}
             onCopy={openCopyPoint}
             onDelete={(index) => void handleDeletePoint(index)}
@@ -1176,7 +1228,7 @@ const ModbusTCP: React.FC = () => {
       {renderLinkModal()}
       {renderPointModal()}
       {selectedConn && <TemplateModal key={selectedConn} open={templateModalOpen} connectionName={selectedConn} protocol="TCP"
-        addressBase={selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO} existingPoints={points} busy={pointSubmitting}
+        addressBase={templateContext?.link.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO} table={templateContext?.table ?? null} busy={pointSubmitting}
         onClose={() => setTemplateModalOpen(false)} onApply={handleTemplateApply} />}
     </div>
   );

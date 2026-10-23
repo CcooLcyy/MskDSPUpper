@@ -78,11 +78,13 @@ fn main() {
     // 平台软件协议独立生成到 OUT_DIR，不与设备协议命名或输出目录混用。
     let platform_root = PathBuf::from("../proto-platform");
     let platform_protocol = platform_root.join("platform/v1/software.proto");
+    let templates_protocol = platform_root.join("platform/v1/templates.proto");
     println!("cargo:rerun-if-changed={}", platform_protocol.display());
+    println!("cargo:rerun-if-changed={}", templates_protocol.display());
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .compile_protos(&[platform_protocol], &[platform_root])
+        .compile_protos(&[platform_protocol, templates_protocol], &[platform_root])
         .expect("生成平台软件仓库协议失败");
 
     let agent_root = PathBuf::from("proto-platform-agent");

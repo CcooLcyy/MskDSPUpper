@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { validateModbusTemplate, planTemplateApplication, isTemplateWritePoint } from '../../src/features/modbus-templates/model.ts';
 import { buildReadPlanBlocks } from '../../src/pages/ModbusRTU/modbus-form-rules.ts';
 
-const load = () => validateModbusTemplate(JSON.parse(readFileSync(new URL('../../src/features/modbus-templates/builtin/aiswei-inverter-v2-1-5.json', import.meta.url), 'utf8')));
+const load = () => validateModbusTemplate(JSON.parse(readFileSync(new URL('../fixtures/modbus-templates/aiswei-inverter-v2-1-5.json', import.meta.url), 'utf8')));
 
 // 验证批准的35点范围，保留有功绝对值并防止把储能、电表或组串控制混入逆变器模板。
 test('爱士惟模板保留35点及逆变器P/Q设定的真实单位', () => {

@@ -36,6 +36,12 @@ pub struct RuntimeRefreshSnapshot {
     remote: Option<Arc<RemoteConnection>>,
 }
 
+impl RuntimeRefreshSnapshot {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
 impl ConnectionManager {
     pub fn new(manager_addr: String) -> Self {
         Self {
@@ -105,6 +111,17 @@ impl ConnectionManager {
             manager_addr: manager_addr.clone(),
             remote: remote.clone(),
         }
+    }
+
+    /// 模板应用等多步骤操作固定模块地址和设备身份，避免切换设备后使用新的全局通道。
+    pub fn runtime_operation_snapshot(&self) -> Result<RuntimeRefreshSnapshot, String> {
+        let snapshot = self.runtime_refresh_snapshot();
+        *snapshot.connection.module_addrs.write() = self.module_addrs.read().clone();
+        *snapshot.connection.channels.write() = self.channels.read().clone();
+        if !self.runtime_refresh_is_current(&snapshot) {
+            return Err("设备连接已变化，请重新读取点表后操作".into());
+        }
+        Ok(snapshot)
     }
 
     pub fn runtime_refresh_is_current(&self, snapshot: &RuntimeRefreshSnapshot) -> bool {
@@ -335,6 +352,25 @@ mod tests {
     };
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    // 预览后的设备切换只使操作快照失效，不会把快照的模块地址替换成另一台设备。
+    #[test]
+    fn operation_snapshot_keeps_original_device_and_module_addresses() {
+        let manager = ConnectionManager::new("device-a:17000".into());
+        manager.update_module_addr("ModbusRTU", "device-a:17001");
+        let snapshot = manager.runtime_operation_snapshot().unwrap();
+        assert!(manager.runtime_refresh_is_current(&snapshot));
+        manager.set_manager_addr("device-b:17000".into());
+        manager.clear_runtime_cache();
+        manager.update_module_addr("ModbusRTU", "device-b:17001");
+        assert!(!manager.runtime_refresh_is_current(&snapshot));
+        assert_eq!(snapshot.connection.manager_addr(), "device-a:17000");
+        assert_eq!(
+            snapshot.connection.get_module_addr("ModbusRTU").as_deref(),
+            Some("device-a:17001")
+        );
+        assert!(manager.runtime_generation() > snapshot.generation());
+    }
 
     fn remote(device_id: &str) -> Arc<RemoteConnection> {
         RemoteConnection::new(

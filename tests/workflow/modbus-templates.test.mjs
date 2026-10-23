@@ -129,7 +129,7 @@ test('条件点默认不选且可显式选择，适用条件原文保留', () =>
 });
 
 test('全部内置JSON可校验、来源可追踪，目录ID唯一且实际功能码映射符合proto', () => {
-  const directory = new URL('../../src/features/modbus-templates/builtin/', import.meta.url);
+  const directory = new URL('../fixtures/modbus-templates/', import.meta.url);
   const files = fs.readdirSync(directory).filter(file => file.endsWith('.json'));
   assert.ok(files.length > 0);
   const ids = new Set();

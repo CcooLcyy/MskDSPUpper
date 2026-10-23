@@ -11,6 +11,7 @@ export async function saveTemplateReadPlanAndPoints(options: {
   points: ModbusPoint[];
   saveConfig: (config: ModbusLinkConfig) => Promise<void>;
   savePoints: (points: ModbusPoint[]) => Promise<void>;
+  readConfig?: () => Promise<ModbusLinkConfig>;
 }): Promise<boolean> {
   const original = options.config;
   const plan = original.read_plan;
@@ -34,6 +35,13 @@ export async function saveTemplateReadPlanAndPoints(options: {
     await options.savePoints(options.points);
   } catch (pointError) {
     try {
+      if (options.readConfig) {
+        const current = await options.readConfig();
+        const canonical = (value: unknown): string => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+        if (canonical(current) !== canonical(next)) {
+          throw Error('连接配置已被其他操作修改，保留当前配置，请重新加载核对读取策略');
+        }
+      }
       await options.saveConfig(original);
     } catch (rollbackError) {
       console.error('Modbus 模板点表保存失败，恢复原读取策略也失败', {

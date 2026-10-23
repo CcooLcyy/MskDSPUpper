@@ -1,3 +1,4 @@
+import type { ModbusPointTableSaveOptions, ModbusTemplateContext, ModbusTemplateApplyResult } from './types';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -318,8 +319,12 @@ export const api = {
     invoke<void>('modbus_rtu_start_link', { connName }),
   modbusRtuStopLink: (connName: string) =>
     invoke<void>('modbus_rtu_stop_link', { connName }),
-  modbusRtuUpsertPointTable: (connName: string, points: ModbusPoint[], replace: boolean) =>
-    invoke<void>('modbus_rtu_upsert_point_table', { connName, points, replace }),
+  getModbusRtuTemplateContext: (connName: string) =>
+    invoke<ModbusTemplateContext<ModbusLinkInfo>>('get_modbus_rtu_template_context', { connName }),
+  applyModbusRtuTemplate: (connName: string, points: ModbusPoint[], options: ModbusPointTableSaveOptions, expectedConfig: ModbusLinkConfig, runtimeGeneration: string) =>
+    invoke<ModbusTemplateApplyResult>('apply_modbus_rtu_template', { connName, points, options, expectedConfig, runtimeGeneration }),
+  modbusRtuUpsertPointTable: (connName: string, points: ModbusPoint[], replace: boolean, options?: ModbusPointTableSaveOptions) =>
+    invoke<void>('modbus_rtu_upsert_point_table', { connName, points, replace, expectedRevision: options?.expected_revision, templateBindingsJson: options?.template_bindings_json }),
   modbusRtuGetPointTable: (connName: string) =>
     invoke<ModbusPointTable>('modbus_rtu_get_point_table', { connName }),
 
@@ -336,8 +341,12 @@ export const api = {
     invoke<void>('modbus_tcp_start_link', { connName }),
   modbusTcpStopLink: (connName: string) =>
     invoke<void>('modbus_tcp_stop_link', { connName }),
-  modbusTcpUpsertPointTable: (connName: string, points: ModbusPoint[], replace: boolean) =>
-    invoke<void>('modbus_tcp_upsert_point_table', { connName, points, replace }),
+  getModbusTcpTemplateContext: (connName: string) =>
+    invoke<ModbusTemplateContext<ModbusTcpLinkInfo>>('get_modbus_tcp_template_context', { connName }),
+  applyModbusTcpTemplate: (connName: string, points: ModbusPoint[], options: ModbusPointTableSaveOptions, expectedConfig: ModbusTcpLinkConfig, runtimeGeneration: string) =>
+    invoke<ModbusTemplateApplyResult>('apply_modbus_tcp_template', { connName, points, options, expectedConfig, runtimeGeneration }),
+  modbusTcpUpsertPointTable: (connName: string, points: ModbusPoint[], replace: boolean, options?: ModbusPointTableSaveOptions) =>
+    invoke<void>('modbus_tcp_upsert_point_table', { connName, points, replace, expectedRevision: options?.expected_revision, templateBindingsJson: options?.template_bindings_json }),
   modbusTcpGetPointTable: (connName: string) =>
     invoke<ModbusPointTable>('modbus_tcp_get_point_table', { connName }),
 

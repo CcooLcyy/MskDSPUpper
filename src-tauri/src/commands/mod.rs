@@ -20,5 +20,7 @@ pub mod modbus_templates;
 pub mod module_ops;
 pub mod platform_access;
 pub mod platform_login;
+pub mod platform_templates;
 pub mod remote;
+pub mod template_apply;
 pub mod workspace;

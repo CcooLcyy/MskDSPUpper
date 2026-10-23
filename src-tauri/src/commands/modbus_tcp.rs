@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::commands::modbus_rtu::{ModbusPointDto, ModbusReadPlanDto};
+use crate::commands::modbus_rtu::{
+    ModbusPointDto, ModbusReadPlanDto, ModbusTemplateSaveOptionsDto,
+};
 use crate::grpc::modbus_tcp::ModbusTcpClient;
 use crate::proto::modbus_tcp_proto::{LinkConfig, LinkInfo, PointTable, TcpConfig};
 use crate::state::AppState;
@@ -36,6 +38,8 @@ pub struct ModbusTcpLinkInfoDto {
 pub struct ModbusTcpPointTableDto {
     pub conn_name: String,
     pub points: Vec<ModbusPointDto>,
+    pub revision: String,
+    pub template_bindings_json: String,
 }
 
 impl From<TcpConfig> for ModbusTcpConfigDto {
@@ -102,6 +106,8 @@ impl From<PointTable> for ModbusTcpPointTableDto {
         Self {
             conn_name: table.conn_name,
             points: table.points.into_iter().map(Into::into).collect(),
+            revision: table.revision.to_string(),
+            template_bindings_json: table.template_bindings_json,
         }
     }
 }
@@ -229,14 +235,22 @@ pub async fn modbus_tcp_upsert_point_table(
     conn_name: String,
     points: Vec<ModbusPointDto>,
     replace: bool,
+    options: Option<ModbusTemplateSaveOptionsDto>,
 ) -> Result<(), String> {
     tracing::info!(protocol = "ModbusTCP", conn_name = %conn_name, point_count = points.len(), replace, "开始保存协议点表");
     let client = ModbusTcpClient::new(&state.conn_manager);
+    let (expected_revision, template_bindings_json) = options
+        .as_ref()
+        .map(|value| value.to_fields(replace))
+        .transpose()?
+        .unwrap_or_default();
     client
         .upsert_point_table(
             conn_name.clone(),
             points.iter().map(ModbusPointDto::to_proto).collect(),
             replace,
+            expected_revision,
+            template_bindings_json,
         )
         .await
         .map_err(|error| {
@@ -261,4 +275,21 @@ pub async fn modbus_tcp_get_point_table(
             error.to_string()
         })?;
     Ok(table.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TCP 与 RTU 相同，点表版本不能经过浮点数，来源记录必须随查询返回。
+    #[test]
+    fn tcp_point_table_preserves_large_revision_and_source() {
+        let dto = ModbusTcpPointTableDto::from(PointTable {
+            revision: u64::MAX,
+            template_bindings_json: "{\"schema_version\":1,\"applications\":[]}".into(),
+            ..Default::default()
+        });
+        assert_eq!(dto.revision, "18446744073709551615");
+        assert!(dto.template_bindings_json.contains("applications"));
+    }
 }

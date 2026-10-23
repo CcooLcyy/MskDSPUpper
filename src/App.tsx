@@ -10,12 +10,14 @@ import { darkTheme } from './theme/dark';
 import { router } from './router';
 import { PlatformAuthProvider } from './auth/PlatformAuthProvider';
 import { PlatformAuthGate } from './auth/PlatformAuthGate';
+import { PlatformTemplateMonitor } from './features/modbus-templates/PlatformTemplateMonitor';
 
 function App() {
   return (
     <ConfigProvider theme={darkTheme} locale={zhCN}>
       <AntApp>
         <PlatformAuthProvider>
+          <PlatformTemplateMonitor />
           <PlatformAuthGate>
             <AppModeProvider>
               <AppUpdateProvider>

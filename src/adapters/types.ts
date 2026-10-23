@@ -656,6 +656,22 @@ export interface ModbusPoint {
 export interface ModbusPointTable {
   conn_name: string;
   points: ModbusPoint[];
+  /** uint64字符串；旧下位机缺省0，不允许模板来源操作。 */
+  revision?: string;
+  template_bindings_json?: string | null;
+}
+export interface ModbusPointTableSaveOptions {
+  expected_revision: string;
+  template_bindings_json: string;
+}
+export interface ModbusTemplateContext<TLink> {
+  table: ModbusPointTable;
+  link: TLink;
+  runtime_generation: string;
+}
+export interface ModbusTemplateApplyResult {
+  restart_error: string | null;
+  read_plan_extended: boolean;
 }
 
 export interface ModbusUpdateConfigResponse {
@@ -1169,6 +1185,7 @@ export interface ModbusRtuExportTask {
   point_table: {
     conn_name: string;
     points: ModbusPoint[];
+    template_bindings_json?: string | null;
     replace: true;
   };
 }
@@ -1180,6 +1197,7 @@ export interface ModbusTcpExportTask {
   point_table: {
     conn_name: string;
     points: ModbusPoint[];
+    template_bindings_json?: string | null;
     replace: true;
   };
 }

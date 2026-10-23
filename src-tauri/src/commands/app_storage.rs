@@ -17,6 +17,7 @@ const SETTINGS_SCHEMA_VERSION: u32 = 1;
 pub const MANAGER_ADDR_KEY: &str = "mskdsp_manager_addr";
 pub const MODBUS_MQTT_KEY: &str = "protocol.modbus_rtu.mqtt";
 pub const MODBUS_TEMPLATES_KEY: &str = "protocol.modbus.templates.personal";
+pub const PLATFORM_TEMPLATE_CACHE_KEY: &str = "protocol.modbus.templates.platform-cache";
 pub const DLT645_MQTT_KEY: &str = "protocol.dlt645.mqtt";
 /// 离线工作区：上次使用的运行模式（online / offline）。
 pub const APP_MODE_KEY: &str = "mskdsp_app_mode";
@@ -135,6 +136,7 @@ fn validate_setting_key(key: &str) -> Result<(), String> {
         MANAGER_ADDR_KEY
         | MODBUS_MQTT_KEY
         | MODBUS_TEMPLATES_KEY
+        | PLATFORM_TEMPLATE_CACHE_KEY
         | DLT645_MQTT_KEY
         | APP_MODE_KEY
         | LAST_WORKSPACE_KEY
@@ -273,6 +275,10 @@ fn backup_path(path: &Path) -> PathBuf {
 }
 
 fn sanitize_setting_for_disk(key: &str, mut value: Value) -> Result<Value, String> {
+    if key == PLATFORM_TEMPLATE_CACHE_KEY {
+        crate::platform_templates::validate_cache(&value)?;
+        return Ok(value);
+    }
     if key == MODBUS_TEMPLATES_KEY {
         super::modbus_templates::validate_personal_templates(&value)?;
         return Ok(value);
@@ -424,6 +430,27 @@ mod tests {
         read_settings_document, AppSettingsStore, APP_MODE_KEY, LAST_WORKSPACE_KEY,
         MANAGER_ADDR_KEY,
     };
+
+    // 桌面模板缓存使用固定白名单项，跨平台目录可保存，非法内容不能覆盖有效快照。
+    #[test]
+    fn platform_template_cache_persists_and_rejects_invalid_updates() {
+        let path = temp_settings_path("platform-template-cache");
+        let store = AppSettingsStore::new(path.clone());
+        let key = "protocol.modbus.templates.platform-cache";
+        let value = json!({"schema_version":1,"entries":{
+            "protocol.modbus.platform-cache.v1:http%3A%2F%2Fplatform-a:catalog":{"used_at":1,"value":[]},
+            "protocol.modbus.platform-cache.v1:http%3A%2F%2Fplatform-b:catalog":{"used_at":2,"value":[]}
+        }});
+        store.save_setting(key.into(), value.clone()).unwrap();
+        assert_eq!(store.load().unwrap()[key], value);
+        let bad = json!({"schema_version":1,"entries":{
+            "protocol.modbus.platform-cache.v1:http%3A%2F%2Fplatform-a:bad":{"used_at":3,"value":{
+                "id":"x","revision":"1","template_json":"{}","created_at":1,"updated_at":2
+            }}
+        }});
+        assert!(store.save_setting(key.into(), bad).is_err());
+        assert_eq!(AppSettingsStore::new(path).load().unwrap()[key], value);
+    }
 
     fn temp_settings_path(name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(

@@ -1,7 +1,7 @@
 export const MANAGER_ADDR_SETTING_KEY = 'mskdsp_manager_addr';
 export const MODBUS_MQTT_SETTING_KEY = 'protocol.modbus_rtu.mqtt';
-/** Modbus：用户持久化的个人点表模板，与软件内置模板隔离。 */
-export const MODBUS_TEMPLATES_SETTING_KEY = 'protocol.modbus.templates.personal';
+/** 仅保存已登录平台返回的点表缓存，最多50MiB，内部按平台身份隔离。 */
+export const MODBUS_PLATFORM_CACHE_SETTING_KEY = 'protocol.modbus.templates.platform-cache';
 export const DLT645_MQTT_SETTING_KEY = 'protocol.dlt645.mqtt';
 /** 离线工作区：上次使用的运行模式（online / offline）。 */
 export const APP_MODE_SETTING_KEY = 'mskdsp_app_mode';

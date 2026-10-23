@@ -110,3 +110,11 @@ test('点表保存和恢复策略同时失败时明确报告两项错误', async
   }), (error) => /点表写入失败/.test(error.message) && /恢复原读取策略失败/.test(error.message) && /连接断开，回滚失败/.test(error.message));
   assert.equal(configWrites, 2);
 });
+
+test('点表保存失败而连接已被并发修改时保留新配置，不覆盖回滚', async () => {
+ const original=config();let saves=0;
+ await assert.rejects(saveTemplateReadPlanAndPoints({config:original,additions:[point('新增',300)],points:[point('新增',300)],
+  saveConfig:async()=>{saves++;},readConfig:async()=>({...original,poll_interval_ms:777}),savePoints:async()=>{throw Error('ABORTED');}
+ }),/其他操作修改/);
+ assert.equal(saves,1);
+});

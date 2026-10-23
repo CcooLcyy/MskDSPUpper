@@ -95,6 +95,42 @@ pub struct ModbusPointDto {
 pub struct ModbusPointTableDto {
     pub conn_name: String,
     pub points: Vec<ModbusPointDto>,
+    pub revision: String,
+    pub template_bindings_json: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ModbusTemplateSaveOptionsDto {
+    pub expected_revision: String,
+    pub template_bindings_json: String,
+}
+
+impl ModbusTemplateSaveOptionsDto {
+    pub(crate) fn to_fields(&self, replace: bool) -> Result<(Option<u64>, Option<String>), String> {
+        if !replace {
+            return Err("模板更新必须完整保存点表及来源记录".into());
+        }
+        let revision = crate::platform_templates::validate_revision(&self.expected_revision)
+            .map_err(|_| "下位机点表版本无效，请升级下位机并重新读取点表".to_string())?;
+        if self.template_bindings_json.len() > 32 * 1024 * 1024 {
+            return Err("点表来源记录不能超过 32 MiB".into());
+        }
+        let value: serde_json::Value = serde_json::from_str(&self.template_bindings_json)
+            .map_err(|_| "点表来源记录不是合法 JSON".to_string())?;
+        if value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(1)
+            || value
+                .get("applications")
+                .and_then(serde_json::Value::as_array)
+                .is_none()
+        {
+            return Err("点表来源记录结构不合法".into());
+        }
+        Ok((Some(revision), Some(self.template_bindings_json.clone())))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -215,6 +251,8 @@ impl From<PointTable> for ModbusPointTableDto {
         Self {
             conn_name: table.conn_name,
             points: table.points.into_iter().map(|point| point.into()).collect(),
+            revision: table.revision.to_string(),
+            template_bindings_json: table.template_bindings_json,
         }
     }
 }
@@ -354,7 +392,11 @@ pub async fn modbus_rtu_get_config(
         tracing::error!(protocol = "ModbusRTU", error = %error, "查询 MQTT 配置失败");
         error.to_string()
     })?;
-    tracing::info!(protocol = "ModbusRTU", configured = resp.configured, "查询 MQTT 配置完成");
+    tracing::info!(
+        protocol = "ModbusRTU",
+        configured = resp.configured,
+        "查询 MQTT 配置完成"
+    );
     Ok(resp.into())
 }
 
@@ -490,14 +532,22 @@ pub async fn modbus_rtu_upsert_point_table(
     conn_name: String,
     points: Vec<ModbusPointDto>,
     replace: bool,
+    options: Option<ModbusTemplateSaveOptionsDto>,
 ) -> Result<(), String> {
     tracing::info!(protocol = "ModbusRTU", conn_name = %conn_name, point_count = points.len(), replace, "开始保存协议点表");
     let client = ModbusRtuClient::new(&state.conn_manager);
+    let (expected_revision, template_bindings_json) = options
+        .as_ref()
+        .map(|value| value.to_fields(replace))
+        .transpose()?
+        .unwrap_or_default();
     client
         .upsert_point_table(
             conn_name.clone(),
             points.into_iter().map(|point| point.to_proto()).collect(),
             replace,
+            expected_revision,
+            template_bindings_json,
         )
         .await
         .map_err(|error| {
@@ -528,6 +578,44 @@ pub async fn modbus_rtu_get_point_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 点表版本超过 JavaScript 安全整数时仍以精确字符串返回，来源 JSON 同时保留。
+    #[test]
+    fn point_table_provenance_survives_dto_conversion() {
+        let value = ModbusPointTableDto::from(PointTable {
+            revision: 9_007_199_254_740_993,
+            template_bindings_json: "{\"schema_version\":1,\"applications\":[]}".into(),
+            ..Default::default()
+        });
+        assert_eq!(value.revision, "9007199254740993");
+        assert!(value.template_bindings_json.contains("applications"));
+    }
+
+    // 模板保存必须带规范正版本和合法来源对象，拒绝非覆盖模式及不完整请求。
+    #[test]
+    fn template_save_options_require_atomic_revision_and_metadata() {
+        let valid = ModbusTemplateSaveOptionsDto {
+            expected_revision: "9007199254740993".into(),
+            template_bindings_json: "{\"schema_version\":1,\"applications\":[]}".into(),
+        };
+        assert_eq!(
+            valid.to_fields(true).unwrap().0,
+            Some(9_007_199_254_740_993)
+        );
+        assert!(valid.to_fields(false).is_err());
+        for invalid in ["0", "01", "18446744073709551616"] {
+            let value = ModbusTemplateSaveOptionsDto {
+                expected_revision: invalid.into(),
+                ..valid.clone()
+            };
+            assert!(value.to_fields(true).is_err());
+        }
+        let malformed = ModbusTemplateSaveOptionsDto {
+            template_bindings_json: "{}".into(),
+            ..valid
+        };
+        assert!(malformed.to_fields(true).is_err());
+    }
 
     // 旧JSON缺省等值字段仍能读取；枚举0通过桌面DTO与protobuf往返不丢存在性。
     #[test]

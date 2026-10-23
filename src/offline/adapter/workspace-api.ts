@@ -95,6 +95,11 @@ import { unsupported } from './unsupported.ts';
 
 /** 覆盖实现的全部接口名（顺序与 `adapters/tauri.ts` 一致）。 */
 export const WORKSPACE_OVERRIDE_METHODS = [
+  'getModbusRtuTemplateContext',
+  'getModbusTcpTemplateContext',
+  'applyModbusRtuTemplate',
+  'applyModbusTcpTemplate',
+
   'reconnectLowerUpdateRuntime',
   'setManagerAddr',
   'getModuleInfo',
@@ -388,6 +393,11 @@ function unsupportedApi(): Pick<typeof tauriApi, UnsupportedMethodName> {
 
 function workspaceOverrides(): OverriddenApi {
   return {
+    getModbusRtuTemplateContext: async () => unsupported('getModbusRtuTemplateContext')(),
+    getModbusTcpTemplateContext: async () => unsupported('getModbusTcpTemplateContext')(),
+    applyModbusRtuTemplate: async () => unsupported('applyModbusRtuTemplate')(),
+    applyModbusTcpTemplate: async () => unsupported('applyModbusTcpTemplate')(),
+
     reconnectLowerUpdateRuntime: async () => unsupported('reconnectLowerUpdateRuntime')(),
     setManagerAddr: async (): Promise<void> => {
       console.info('[离线工作区] 已忽略设置 ModuleManager 地址：离线模式不连接下位机');
@@ -1645,7 +1655,7 @@ function upsertModbusPointTable(
       : requireModbusTcpLink(connName);
     const nextPoints = (replace ? points : mergeByTag(entry.point_table.points, points)).map(normalizeModbusPoint);
 
-    entry.point_table = { conn_name: connName, points: nextPoints, replace: true };
+    entry.point_table = { ...entry.point_table, conn_name: connName, points: nextPoints, replace: true };
     syncConnTags(workspace, moduleName, connName, {
       module: moduleName === MODULE_MODBUS_RTU ? 'ModbusRTU' : 'ModbusTCP',
       points: nextPoints,

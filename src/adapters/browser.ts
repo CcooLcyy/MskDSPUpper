@@ -1,3 +1,4 @@
+import type { ModbusPointTableSaveOptions } from './types';
 import type { api as tauriApi } from './tauri';
 import { buildManualSimulationSnapshot } from '../pages/IEC104/manual-simulation.ts';
 import { createSimulationPeriodicMock } from '../pages/IEC104/simulation-periodic.ts';
@@ -1625,16 +1626,36 @@ export const browserApi: typeof tauriApi = {
   modbusRtuDeleteLink: async (connName: string) => deleteByName(modbusLinks, connName),
   modbusRtuStartLink: async (connName: string) => setLinkState(modbusLinks, connName, 2),
   modbusRtuStopLink: async (connName: string) => setLinkState(modbusLinks, connName, 1),
-  modbusRtuUpsertPointTable: async (connName: string, points: ModbusPoint[], replace: boolean) => {
+  getModbusRtuTemplateContext: async (connName) => ({
+    table: await browserApi.modbusRtuGetPointTable(connName),
+    link: await browserApi.modbusRtuGetLink(connName),
+    runtime_generation: 'browser',
+  }),
+  applyModbusRtuTemplate: async (connName, points, options, expectedConfig, runtimeGeneration) => {
+    if (runtimeGeneration !== 'browser') throw Error('下位机连接已变化');
+    const link = await browserApi.modbusRtuGetLink(connName);
+    if (JSON.stringify(link.config) !== JSON.stringify(expectedConfig)) throw Error('连接配置已变化');
+    const running = link.state === 2;
+    await browserApi.modbusRtuStopLink(connName);
+    try { await browserApi.modbusRtuUpsertPointTable(connName, points, true, options); }
+    finally { if (running) await browserApi.modbusRtuStartLink(connName); else await browserApi.modbusRtuStopLink(connName); }
+    return { restart_error: null, read_plan_extended: false };
+  },
+  modbusRtuUpsertPointTable: async (connName: string, points: ModbusPoint[], replace: boolean, options?: ModbusPointTableSaveOptions) => {
+    const oldTable = modbusTables.get(connName);
+    const oldRevision = oldTable?.revision ?? '1';
+    if (options && options.expected_revision !== oldRevision) throw Error('ABORTED: 点表版本已变化');
+    const provenance = { revision: (BigInt(oldRevision) + 1n).toString(), template_bindings_json: options?.template_bindings_json ?? oldTable?.template_bindings_json ?? '' };
     const previous = modbusTables.get(connName)?.points ?? [];
     const nextPoints = replace ? points : mergeByTag(previous, points);
     modbusTables.set(connName, {
       conn_name: connName,
       points: clone(nextPoints.map(normalizeBrowserModbusPoint)),
+      ...provenance,
     });
   },
   modbusRtuGetPointTable: async (connName: string) =>
-    clone(modbusTables.get(connName) ?? { conn_name: connName, points: [] }),
+    clone({ revision: '1', template_bindings_json: '', ...(modbusTables.get(connName) ?? { conn_name: connName, points: [] }) }),
 
   modbusTcpUpsertLink: async (config: ModbusTcpLinkConfig, createOnly: boolean) =>
     upsertByName(modbusTcpLinks, config.conn_name, createOnly, (connId, previous) => ({
@@ -1664,7 +1685,26 @@ export const browserApi: typeof tauriApi = {
   },
   modbusTcpStartLink: async (connName: string) => setLinkState(modbusTcpLinks, connName, 2),
   modbusTcpStopLink: async (connName: string) => setLinkState(modbusTcpLinks, connName, 1),
-  modbusTcpUpsertPointTable: async (connName: string, points: ModbusPoint[], replace: boolean) => {
+  getModbusTcpTemplateContext: async (connName) => ({
+    table: await browserApi.modbusTcpGetPointTable(connName),
+    link: await browserApi.modbusTcpGetLink(connName),
+    runtime_generation: 'browser',
+  }),
+  applyModbusTcpTemplate: async (connName, points, options, expectedConfig, runtimeGeneration) => {
+    if (runtimeGeneration !== 'browser') throw Error('下位机连接已变化');
+    const link = await browserApi.modbusTcpGetLink(connName);
+    if (JSON.stringify(link.config) !== JSON.stringify(expectedConfig)) throw Error('连接配置已变化');
+    const running = link.state === 2;
+    await browserApi.modbusTcpStopLink(connName);
+    try { await browserApi.modbusTcpUpsertPointTable(connName, points, true, options); }
+    finally { if (running) await browserApi.modbusTcpStartLink(connName); else await browserApi.modbusTcpStopLink(connName); }
+    return { restart_error: null, read_plan_extended: false };
+  },
+  modbusTcpUpsertPointTable: async (connName: string, points: ModbusPoint[], replace: boolean, options?: ModbusPointTableSaveOptions) => {
+    const oldTable = modbusTcpTables.get(connName);
+    const oldRevision = oldTable?.revision ?? '1';
+    if (options && options.expected_revision !== oldRevision) throw Error('ABORTED: 点表版本已变化');
+    const provenance = { revision: (BigInt(oldRevision) + 1n).toString(), template_bindings_json: options?.template_bindings_json ?? oldTable?.template_bindings_json ?? '' };
     const link = modbusTcpLinks.get(connName);
     if (!link) {
       throw new Error(`浏览器开发模式 mock 未找到: ${connName}`);
@@ -1674,13 +1714,13 @@ export const browserApi: typeof tauriApi = {
     }
     const previous = modbusTcpTables.get(connName)?.points ?? [];
     const nextPoints = (replace ? points : mergeByTag(previous, points)).map(normalizeBrowserModbusPoint);
-    modbusTcpTables.set(connName, { conn_name: connName, points: nextPoints });
+    modbusTcpTables.set(connName, { conn_name: connName, points: nextPoints, ...provenance });
     if (nextPoints.length > 0) {
       setLinkState(modbusTcpLinks, connName, 2);
     }
   },
   modbusTcpGetPointTable: async (connName: string) =>
-    clone(modbusTcpTables.get(connName) ?? { conn_name: connName, points: [] }),
+    clone({ revision: '1', template_bindings_json: '', ...(modbusTcpTables.get(connName) ?? { conn_name: connName, points: [] }) }),
 
   dlt645UpdateConfig: async (mqtt: Dlt645MqttConfig): Promise<Dlt645UpdateConfigResponse> => {
     dlt645Mqtt = clone(mqtt);

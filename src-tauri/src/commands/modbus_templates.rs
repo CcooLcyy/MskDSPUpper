@@ -431,11 +431,11 @@ mod tests {
         assert!(validate_personal_templates(&json!({})).is_err());
     }
 
-    // 所有随软件发布的内置模板都必须通过桌面端同一结构和参数校验。
+    // 历史模板仅作为测试夹具保留，继续验证平台下载 JSON 的结构和参数兼容性。
     #[test]
-    fn validates_all_bundled_templates() {
+    fn validates_platform_template_fixtures() {
         let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../src/features/modbus-templates/builtin");
+            .join("../tests/fixtures/modbus-templates");
         let mut count = 0;
         for entry in std::fs::read_dir(directory).unwrap() {
             let path = entry.unwrap().path();

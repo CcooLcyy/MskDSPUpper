@@ -1,3 +1,5 @@
+import { parseTemplateBindings, positiveRevision } from '../features/modbus-templates/bindings';
+import type { ModbusPointTable, ModbusPointTableSaveOptions } from '../adapters/types';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { api } from '../adapters';
 import type {
@@ -514,6 +516,7 @@ async function loadModbusRtuConfig(
         point_table: {
           conn_name: pointTable.conn_name,
           points: pointTable.points,
+          template_bindings_json: pointTable.template_bindings_json ?? null,
           replace: true as const,
         },
       };
@@ -540,6 +543,7 @@ async function loadModbusTcpConfig(
         point_table: {
           conn_name: pointTable.conn_name,
           points: pointTable.points,
+          template_bindings_json: pointTable.template_bindings_json ?? null,
           replace: true as const,
         },
       };
@@ -1151,6 +1155,19 @@ async function syncIec104(
   );
 }
 
+async function importedTemplateOptions(
+  json: string | null | undefined, replace: boolean, read: () => Promise<ModbusPointTable>,
+): Promise<ModbusPointTableSaveOptions | undefined> {
+  if (!replace && !json) return undefined;
+  if (json) parseTemplateBindings(json);
+  const actual = await read();
+  if (!positiveRevision(actual.revision)) {
+    if (json) throw Error('当前下位机不支持模板来源记录，无法恢复此点表');
+    return undefined;
+  }
+  return { expected_revision: actual.revision, template_bindings_json: json || '' };
+}
+
 async function syncModbusRtu(
   snapshot: FullConfigExportSnapshot,
   mode: ConfigImportMode,
@@ -1193,7 +1210,9 @@ async function syncModbusRtu(
 
       for (const task of snapshot.config.modbus_rtu.links) {
         await api.modbusRtuUpsertLink(task.link.config, false);
-        await api.modbusRtuUpsertPointTable(task.point_table.conn_name, task.point_table.points, replace);
+        const metadata = await importedTemplateOptions(task.point_table.template_bindings_json, replace,
+          () => api.modbusRtuGetPointTable(task.point_table.conn_name));
+        await api.modbusRtuUpsertPointTable(task.point_table.conn_name, task.point_table.points, replace || !!metadata, metadata);
       }
     },
   );
@@ -1233,10 +1252,13 @@ async function syncModbusTcp(
 
       for (const task of snapshot.config.modbus_tcp.links) {
         await api.modbusTcpUpsertLink(task.link.config, false);
+        const metadata = await importedTemplateOptions(task.point_table.template_bindings_json, replace,
+          () => api.modbusTcpGetPointTable(task.point_table.conn_name));
         await api.modbusTcpUpsertPointTable(
           task.point_table.conn_name,
           task.point_table.points,
-          replace,
+          replace || !!metadata,
+          metadata,
         );
         await api.modbusTcpStopLink(task.link.config.conn_name);
       }

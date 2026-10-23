@@ -6,7 +6,7 @@ import { validateModbusTemplate, planTemplateApplication } from '../../src/featu
 import { buildReadPlanBlocks } from '../../src/pages/ModbusRTU/modbus-form-rules.ts';
 import { saveTemplateReadPlanAndPoints } from '../../src/features/modbus-templates/read-plan-save.ts';
 
-const directory = new URL('../../src/features/modbus-templates/builtin/', import.meta.url);
+const directory = new URL('../fixtures/modbus-templates/', import.meta.url);
 
 // 验证随软件发布的所有正式模板均能加载、ID唯一并携带可追溯文档信息。
 test('正式模板库校验及默认采集点的协议枚举转换', () => {
@@ -169,16 +169,12 @@ test('华为写控制正确转换协议枚举且不会扩展自动读取区间',
 test('RTU/TCP 接入模板保存保护并使用正式模板弹窗', () => {
   for (const protocol of ['ModbusRTU', 'ModbusTCP']) {
     const source = readFileSync(new URL(`../../src/pages/${protocol}/index.tsx`, import.meta.url), 'utf8');
-    assert.match(source, /saveTemplatePoints\(\{ expected: points, additions/);
+    assert.match(source, /saveBoundTemplatePoints\(\{ \.\.\.commit/);
     assert.match(source, /onApply=\{handleTemplateApply\}/);
-    assert.match(source, /onApplyTemplate=\{\(\) => setTemplateModalOpen\(true\)\}/);
-    if (protocol === 'ModbusRTU') {
-      assert.match(source, /saveTemplateReadPlanAndPoints\(/);
-      assert.match(source, /return runSelectedLinkStopped\(async/);
-      assert.match(source, /\}, \{ initialState \}\)/);
-    } else {
-      assert.match(source, /save: \(nextPoints\) => savePointTablePreservingRuntime/);
-    }
-    assert.match(source, /const initialState = await getLinkState\(selectedConn\)/);
+    assert.match(source, /onApplyTemplate=\{\(\) => void openTemplateModal\(\)\}/);
+    const kind = protocol === 'ModbusRTU' ? 'Rtu' : 'Tcp';
+    assert.match(source, new RegExp(`api.getModbus${kind}TemplateContext`));
+    assert.match(source, new RegExp(`api.applyModbus${kind}Template`));
+    assert.match(source, /context.runtime_generation/);
   }
 });

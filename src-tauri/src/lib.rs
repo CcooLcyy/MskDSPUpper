@@ -4,6 +4,7 @@ pub mod logging;
 pub mod login_gate;
 pub mod platform_auth;
 pub mod platform_software;
+pub mod platform_templates;
 pub mod proto;
 pub mod remote_access;
 pub mod runtime_paths;
@@ -93,6 +94,12 @@ pub fn run() {
                 commands::app_storage::load_app_settings,
                 commands::app_storage::save_app_setting,
                 commands::modbus_templates::save_modbus_template_export,
+                commands::platform_templates::list_platform_modbus_templates,
+                commands::platform_templates::get_platform_modbus_template,
+                commands::template_apply::get_modbus_rtu_template_context,
+                commands::template_apply::get_modbus_tcp_template_context,
+                commands::template_apply::apply_modbus_rtu_template,
+                commands::template_apply::apply_modbus_tcp_template,
                 commands::app_storage::migrate_legacy_app_settings,
                 commands::app_storage::get_runtime_paths,
                 commands::app_storage::open_runtime_directory,

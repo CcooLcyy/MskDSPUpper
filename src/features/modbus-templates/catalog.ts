@@ -1,57 +1,84 @@
+import { invoke } from '@tauri-apps/api/core';
 import { getAppSetting, saveAppSetting } from '../../utils/app-settings';
-import { MODBUS_TEMPLATES_SETTING_KEY } from '../../utils/app-settings-core';
-import { MAX_TEMPLATE_FILE_BYTES, parseModbusTemplateJson, validateModbusTemplate } from './model';
-import type { ModbusTemplate } from './model';
-import { createPersonalTemplateStore } from './store-core';
-
-export interface TemplateCatalogEntry { template: ModbusTemplate; origin: 'builtin' | 'personal' }
-const builtinDocuments = import.meta.glob('./builtin/*.json', { eager: true, import: 'default' });
-const builtinTemplates = Object.entries(builtinDocuments).map(([file, raw]) => {
-  try { return validateModbusTemplate(raw); } catch (error) { throw new Error(`内置模板 ${file} 无效：${String(error)}`); }
-});
-if (new Set(builtinTemplates.map(template => template.id)).size !== builtinTemplates.length) throw new Error('内置模板 ID 重复');
-const personalStore = createPersonalTemplateStore(builtinTemplates, {
-  read: () => getAppSetting(MODBUS_TEMPLATES_SETTING_KEY),
-  write: templates => saveAppSetting(MODBUS_TEMPLATES_SETTING_KEY, templates),
-});
-
-export function listModbusTemplates(): TemplateCatalogEntry[] {
-  return [...builtinTemplates.map(template => ({ template, origin: 'builtin' as const })),
-    ...personalStore.list().map(template => ({ template, origin: 'personal' as const }))];
+import { MODBUS_PLATFORM_CACHE_SETTING_KEY } from '../../utils/app-settings-core';
+import { platformAuthApi } from '../../auth/platform-auth-api';
+import { createPlatformCatalog, normalizePlatformId, validateSummary } from './catalog-core';
+import type { PlatformTemplateRecord, PlatformTemplateSummary } from './catalog-core';
+interface CatalogCache {
+  schema_version: 1;
+  entries: Record<string, {
+    value: unknown;
+    used_at: number;
+  }>;
 }
-export async function savePersonalTemplate(template: ModbusTemplate): Promise<void> {
-  await personalStore.save(template);
-  console.info('Modbus 个人模板已保存', { templateId: template.id, points: template.points.length });
-}
-export async function removePersonalTemplate(id: string): Promise<void> {
-  await personalStore.remove(id);
-  console.info('Modbus 个人模板已删除', { templateId: id });
-}
-export function exportModbusTemplate(template: ModbusTemplate): string {
-  const json = JSON.stringify(validateModbusTemplate(template), null, 2) + '\n';
-  if (new TextEncoder().encode(json).length > MAX_TEMPLATE_FILE_BYTES) throw new Error('模板导出文件不能超过 10 MiB');
-  return json;
-}
-export async function importPersonalTemplate(json: string): Promise<ModbusTemplate> {
-  const template = parseModbusTemplateJson(json);
-  await savePersonalTemplate(template);
-  return template;
-}
-export async function saveModbusTemplateFile(template: ModbusTemplate): Promise<boolean> {
-  const contents = exportModbusTemplate(template);
-  const filename = `${template.id}.json`;
-  if ('__TAURI_INTERNALS__' in globalThis) {
-    const [{ save }, { invoke }] = await Promise.all([import('@tauri-apps/plugin-dialog'), import('@tauri-apps/api/core')]);
-    const path = await save({ defaultPath: filename, filters: [{ name: 'Modbus 点表模板', extensions: ['json'] }] });
-    if (!path) return false;
-    await invoke('save_modbus_template_export', { path, contents });
-  } else {
-    const url = URL.createObjectURL(new Blob([contents], { type: 'application/json;charset=utf-8' }));
-    const anchor = document.createElement('a');
-    anchor.href = url; anchor.download = filename;
-    document.body.append(anchor); anchor.click(); anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+let cacheWriteQueue = Promise.resolve();
+const readCache = (): CatalogCache => {
+  const value = getAppSetting<CatalogCache>(MODBUS_PLATFORM_CACHE_SETTING_KEY);
+  return value?.schema_version === 1 && value.entries && typeof value.entries === 'object' ? value : {
+    schema_version: 1,
+    entries: {}
+  };
+};
+export function cachedPlatformSummaries(platformId: string): PlatformTemplateSummary[] | null {
+  const key = `protocol.modbus.platform-cache.v1:${encodeURIComponent(normalizePlatformId(platformId))}:catalog`;
+  const value = readCache().entries[key]?.value;
+  try {
+    return Array.isArray(value) ? value.map(validateSummary) : null;
+  } catch {
+    return null;
   }
-  console.info('Modbus 点表模板已导出', { templateId: template.id, points: template.points.length });
-  return true;
+}
+function writeCache(key: string, value: unknown, verify: () => Promise<void>): Promise<void> {
+  const operation = cacheWriteQueue.catch(() => undefined).then(async () => {
+    await verify();
+    const cache = readCache();
+    const entries = {
+      ...cache.entries,
+      [key]: {
+        value,
+        used_at: Date.now()
+      }
+    };
+    const victims = Object.keys(entries).filter(item => item !== key).sort((a, b) => (entries[a].used_at ?? 0) - (entries[b].used_at ?? 0));
+    const document: CatalogCache = {
+      schema_version: 1,
+      entries
+    };
+    while (Object.keys(entries).length > 2001 || new TextEncoder().encode(JSON.stringify(document)).length > 50 * 1024 * 1024) {
+      const victim = victims.shift();
+      if (!victim) throw Error('平台点表缓存超过50MiB');
+      delete entries[victim];
+    }
+    await verify();
+    await saveAppSetting(MODBUS_PLATFORM_CACHE_SETTING_KEY, document);
+  });
+  cacheWriteQueue = operation.catch(error => {
+    console.warn('平台点表缓存保存失败', error);
+  });
+  return operation;
+}
+/** 不提供本地模板目录；缓存读取与远程读取均受现有登录会话限制。 */
+export function platformTemplateCatalog(platformId: string, username: string, isCurrent: () => boolean) {
+  const verify = async (expected: string) => {
+    if (!isCurrent()) throw Error('平台登录会话已变化，请重新打开模板窗口');
+    const [status, settings] = await Promise.all([platformAuthApi.getStatus(), platformAuthApi.getSettings()]);
+    if (!isCurrent() || !status.authenticated || status.username !== username || status.expires_at === null || status.expires_at <= Date.now() || normalizePlatformId(settings.grpc_endpoint) !== normalizePlatformId(expected) || normalizePlatformId(platformId) !== normalizePlatformId(expected)) throw Error('平台登录已失效或平台已切换，请重新登录');
+  };
+  return createPlatformCatalog({
+    read: key => readCache().entries[key]?.value,
+    write: async (key, value) => {
+      try {
+        await writeCache(key, value, () => verify(platformId));
+      } catch (error) {
+        await verify(platformId);
+        console.warn('平台点表已获取，但缓存未能持久化', error);
+      }
+    },
+    verify,
+    list: () => invoke<PlatformTemplateSummary[]>('list_platform_modbus_templates'),
+    get: (id, revision) => invoke<PlatformTemplateRecord>('get_platform_modbus_template', {
+      id,
+      revision
+    })
+  });
 }

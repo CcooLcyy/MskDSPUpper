@@ -131,6 +131,8 @@ pub struct ModbusRtuPointTableRequestDto {
     pub conn_name: String,
     pub points: Vec<ModbusPointDto>,
     pub replace: bool,
+    #[serde(default)]
+    pub template_bindings_json: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -154,6 +156,8 @@ pub struct ModbusTcpPointTableRequestDto {
     pub conn_name: String,
     pub points: Vec<ModbusPointDto>,
     pub replace: bool,
+    #[serde(default)]
+    pub template_bindings_json: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -564,6 +568,8 @@ impl ModbusRtuExportTaskDto {
             link: Some(crate::proto::modbus_rtu_proto::UpsertLinkRequest {
                 config: Some(self.link.config.to_proto()),
                 create_only: false,
+                expected_config: None,
+                expected_point_table_revision: None,
             }),
             point_table: Some(crate::proto::modbus_rtu_proto::UpsertPointTableRequest {
                 conn_name: self.point_table.conn_name.clone(),
@@ -574,6 +580,9 @@ impl ModbusRtuExportTaskDto {
                     .map(|point| point.to_proto())
                     .collect(),
                 replace: self.point_table.replace,
+                expected_revision: None,
+                template_bindings_json: self.point_table.template_bindings_json.clone(),
+                expected_link_config: None,
             }),
             start: false,
         }
@@ -597,11 +606,13 @@ impl ModbusRtuExportTaskDto {
                 },
                 points: point_table.points.into_iter().map(Into::into).collect(),
                 replace: point_table.replace,
+                template_bindings_json: point_table.template_bindings_json,
             },
             None => ModbusRtuPointTableRequestDto {
                 conn_name: fallback_conn_name,
                 points: Vec::new(),
                 replace: false,
+                template_bindings_json: None,
             },
         };
 
@@ -647,6 +658,8 @@ impl ModbusTcpExportTaskDto {
             link: Some(crate::proto::modbus_tcp_proto::UpsertLinkRequest {
                 config: Some(self.link.config.to_proto()),
                 create_only: false,
+                expected_config: None,
+                expected_point_table_revision: None,
             }),
             point_table: Some(crate::proto::modbus_tcp_proto::UpsertPointTableRequest {
                 conn_name: self.point_table.conn_name.clone(),
@@ -657,6 +670,9 @@ impl ModbusTcpExportTaskDto {
                     .map(ModbusPointDto::to_proto)
                     .collect(),
                 replace: self.point_table.replace,
+                expected_revision: None,
+                template_bindings_json: self.point_table.template_bindings_json.clone(),
+                expected_link_config: None,
             }),
             start: false,
         }
@@ -679,11 +695,13 @@ impl ModbusTcpExportTaskDto {
                 },
                 points: point_table.points.into_iter().map(Into::into).collect(),
                 replace: point_table.replace,
+                template_bindings_json: point_table.template_bindings_json,
             },
             None => ModbusTcpPointTableRequestDto {
                 conn_name: fallback_conn_name,
                 points: Vec::new(),
                 replace: false,
+                template_bindings_json: None,
             },
         };
 
@@ -1211,6 +1229,57 @@ pub async fn load_full_config_export(
 
 #[cfg(test)]
 mod tests {
+    // 备份往返保留模板来源，但目标设备保存版本不能沿用源设备的并发版本。
+    #[test]
+    fn modbus_exports_keep_provenance_without_source_device_revision() {
+        let source = "{\"schema_version\":1,\"applications\":[]}".to_string();
+        let rtu = super::ModbusRtuExportTaskDto::from_proto(
+            0,
+            crate::proto::config_pusher_proto::ModbusRtuLinkTask {
+                link: Some(crate::proto::modbus_rtu_proto::UpsertLinkRequest {
+                    config: Some(Default::default()),
+                    ..Default::default()
+                }),
+                point_table: Some(crate::proto::modbus_rtu_proto::UpsertPointTableRequest {
+                    expected_revision: Some(77),
+                    template_bindings_json: Some(source.clone()),
+                    replace: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let point_table = rtu.to_proto().point_table.unwrap();
+        assert_eq!(point_table.expected_revision, None);
+        assert_eq!(
+            point_table.template_bindings_json.as_deref(),
+            Some(source.as_str())
+        );
+        let tcp = super::ModbusTcpExportTaskDto::from_proto(
+            0,
+            crate::proto::config_pusher_proto::ModbusTcpLinkTask {
+                link: Some(crate::proto::modbus_tcp_proto::UpsertLinkRequest {
+                    config: Some(Default::default()),
+                    ..Default::default()
+                }),
+                point_table: Some(crate::proto::modbus_tcp_proto::UpsertPointTableRequest {
+                    expected_revision: Some(88),
+                    template_bindings_json: Some(source.clone()),
+                    replace: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let point_table = tcp.to_proto().point_table.unwrap();
+        assert_eq!(point_table.expected_revision, None);
+        assert_eq!(
+            point_table.template_bindings_json.as_deref(),
+            Some(source.as_str())
+        );
+    }
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
