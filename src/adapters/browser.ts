@@ -75,6 +75,16 @@ import type {
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
   LowerUpdateUploadResult,
+  VerticalSecurityAccessCapabilities,
+  VerticalSecurityAccessRequest,
+  VerticalSecurityAccessResult,
+  VerticalSecurityLoginCapabilities,
+  VerticalSecurityCertificateProfile,
+  VerticalSecurityCertificateRequest,
+  VerticalSecurityLoginRequest,
+  VerticalSecurityLoginResult,
+  VerticalSecurityPasswordChangeRequest,
+  VerticalSecurityPasswordChangeResult,
   VerticalSecurityDeployRequest,
   VerticalSecurityDeployResult,
   VerticalSecurityStatusResult,
@@ -2052,6 +2062,75 @@ export const browserApi: typeof tauriApi = {
     anchor.remove();
     URL.revokeObjectURL(url);
     return filePath;
+  },
+  getVerticalSecurityAccessCapabilities: async (): Promise<VerticalSecurityAccessCapabilities> => ({
+    remote_ip_available: false,
+    remote_ip_reason: '远程网络通道待接入；当前版本尚未提供到纵密目标 IP 的网络访问。',
+  }),
+  checkVerticalSecurityAccess: async (request: VerticalSecurityAccessRequest): Promise<VerticalSecurityAccessResult> => ({
+    mode: request.mode,
+    target_ip: '11.22.33.44',
+    device_id: request.mode === 'remote' ? request.device_id ?? null : null,
+    state: 'unsupported',
+    session_id: null,
+    steps: [{
+      id: request.mode === 'remote' ? 'remote_network' : 'computer_network',
+      name: request.mode === 'remote' ? '网络访问连接' : '电脑网络',
+      state: 'unsupported',
+      message: request.mode === 'remote'
+        ? '远程网络通道待接入，平台在线或 SSH 可达不代表纵密网络访问已建立。'
+        : '浏览器开发模式不能检查本机网络，请在 Windows 桌面版中执行直连检查。',
+    }],
+  }),
+  closeVerticalSecurityAccess: async (_sessionId: string): Promise<void> => {
+    void _sessionId;
+    throw new Error('当前版本没有可关闭的纵密网络访问会话');
+  },
+  getVerticalSecurityLoginCapabilities: async (): Promise<VerticalSecurityLoginCapabilities> => ({
+    direct_available: false,
+    remote_available: false,
+    password_change_available: false,
+    reason: '浏览器模式无法建立纵密证书连接，请使用桌面版上位机。',
+  }),
+  getVerticalSecurityCertificateProfile: async (): Promise<VerticalSecurityCertificateProfile> => ({
+    configured: false,
+    client_certificate_path: null,
+    trust_certificate_path: null,
+    server_name: null,
+  }),
+  configureVerticalSecurityCertificateProfile: async (request: VerticalSecurityCertificateRequest): Promise<VerticalSecurityCertificateProfile> => {
+    void request;
+    throw new Error('浏览器模式无法配置纵密客户端证书，请使用桌面版上位机。');
+  },
+  selectVerticalSecurityCertificate: async (kind: 'client' | 'trust'): Promise<string | null> => {
+    void kind;
+    throw new Error('浏览器模式不支持选择桌面端纵密证书。');
+  },
+  loginVerticalSecurity: async (request: VerticalSecurityLoginRequest): Promise<VerticalSecurityLoginResult> => ({
+    request_id: request.request_id,
+    state: 'unsupported',
+    code: 'browser_unsupported',
+    message: '浏览器模式没有建立纵密会话，请使用桌面版上位机。',
+    target_ip: '11.22.33.44',
+    mode: request.mode,
+    device_id: request.mode === 'remote' ? request.device_id ?? null : null,
+    session_id: null,
+    challenge_id: null,
+    username: null,
+    role: null,
+    lock_seconds: null,
+    last_login_at: null,
+    device_version: null,
+    steps: [],
+  }),
+  cancelVerticalSecurityLogin: async (requestId: string): Promise<void> => { void requestId; },
+  logoutVerticalSecurity: async (sessionId: string): Promise<void> => {
+    void sessionId;
+    throw new Error('浏览器模式没有可退出的纵密会话。');
+  },
+  changeVerticalSecurityPassword: async (request: VerticalSecurityPasswordChangeRequest): Promise<VerticalSecurityPasswordChangeResult> => {
+    void request;
+    return { changed: false, message: '浏览器模式不能修改纵密装置密码。' };
   },
   deployVerticalSecurityScript: async (
     request: VerticalSecurityDeployRequest,

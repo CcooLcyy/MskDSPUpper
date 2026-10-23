@@ -260,6 +260,101 @@ export interface LowerUpdateRuntimeInfo {
   image_id: string | null;
 }
 
+export type VerticalSecurityAccessMode = 'direct' | 'remote';
+
+export interface VerticalSecurityAccessCapabilities {
+  remote_ip_available: boolean;
+  remote_ip_reason: string | null;
+}
+
+export interface VerticalSecurityAccessRequest {
+  mode: VerticalSecurityAccessMode;
+  device_id?: string;
+}
+
+export interface VerticalSecurityAccessStep {
+  id: string;
+  name: string;
+  state: 'success' | 'failed' | 'unsupported';
+  message: string;
+}
+
+export interface VerticalSecurityAccessResult {
+  mode: VerticalSecurityAccessMode;
+  target_ip: string;
+  device_id: string | null;
+  state: 'ready' | 'failed' | 'unsupported';
+  session_id: string | null;
+  steps: VerticalSecurityAccessStep[];
+}
+
+export type VerticalSecurityRole = 1 | 2 | 3;
+
+export interface VerticalSecurityLoginCapabilities {
+  direct_available: boolean;
+  remote_available: boolean;
+  password_change_available: boolean;
+  reason: string | null;
+}
+
+export interface VerticalSecurityCertificateProfile {
+  configured: boolean;
+  client_certificate_path: string | null;
+  trust_certificate_path: string | null;
+  server_name: string | null;
+}
+
+export interface VerticalSecurityCertificateRequest {
+  client_certificate_path: string;
+  trust_certificate_path: string;
+  certificate_password: string;
+  server_name: string;
+}
+
+export interface VerticalSecurityLoginRequest {
+  request_id: string;
+  mode: VerticalSecurityAccessMode;
+  device_id?: string;
+  username: string;
+  password: string;
+  role: VerticalSecurityRole;
+}
+
+export interface VerticalSecurityLoginStep {
+  id: string;
+  name: string;
+  state: 'pending' | 'success' | 'failed' | 'unsupported';
+  message: string;
+}
+
+export interface VerticalSecurityLoginResult {
+  request_id: string;
+  state: 'authenticated' | 'password_change_required' | 'failed' | 'unsupported' | 'unverified_response';
+  code: string;
+  message: string;
+  target_ip: string;
+  mode: VerticalSecurityAccessMode;
+  device_id: string | null;
+  session_id: string | null;
+  challenge_id: string | null;
+  username: string | null;
+  role: VerticalSecurityRole | null;
+  lock_seconds: number | null;
+  last_login_at: string | null;
+  device_version: string | null;
+  steps: VerticalSecurityLoginStep[];
+}
+
+export interface VerticalSecurityPasswordChangeRequest {
+  challenge_id: string;
+  new_password: string;
+}
+
+export interface VerticalSecurityPasswordChangeResult {
+  changed: boolean;
+  message: string;
+}
+
 export interface VerticalSecurityDeployRequest {
   script_content: string;
   upload_account: string;

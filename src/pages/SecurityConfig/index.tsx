@@ -73,7 +73,6 @@ const DEVICE_CONNECTION_DEFAULTS: Record<string, Partial<SecurityConfigValues>> 
   MskDSP: {
     uploadAccount: 'megsky@192.168.1.219:10022',
     authMethod: 'password',
-    sshPassword: 'Meg@admin123',
     reuseSshPasswordForSudo: true,
   },
 };
@@ -175,6 +174,8 @@ const SecurityConfig: React.FC = () => {
   const [executionStatus, setExecutionStatus] = useState<VerticalSecurityStatusResult | null>(null);
   const [statusQueryError, setStatusQueryError] = useState<string | null>(null);
   const [isPollingStatus, setIsPollingStatus] = useState(false);
+  const [reviewValues, setReviewValues] = useState<SecurityConfigValues | null>(null);
+  const [connectionOptionsOpen, setConnectionOptionsOpen] = useState(false);
   const [scriptPreview, setScriptPreview] = useState<string | null>(null);
   const statusPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusPollGenerationRef = useRef(0);
@@ -272,7 +273,8 @@ const SecurityConfig: React.FC = () => {
     }
   };
 
-  const handleFinish = async (values: SecurityConfigValues) => {
+  const handleApply = async (values: SecurityConfigValues) => {
+    setReviewValues(null);
     setIsGenerating(true);
     stopStatusPolling();
     setDeployResult(null);
@@ -319,20 +321,16 @@ const SecurityConfig: React.FC = () => {
     setExecutionStatus(null);
     setStatusQueryError(null);
     setScriptPreview(null);
+    setReviewValues(null);
+    setConnectionOptionsOpen(false);
     messageApi.info('已重置地址输入');
   };
 
   return (
     <div className="security-config-page">
       {contextHolder}
-      <Card title="纵密配置" size="small" className="security-config-card">
-        <Alert
-          className="security-config-network-alert"
-          type="warning"
-          showIcon
-          message="执行前请确认电脑网段"
-          description="电脑需使用 11.22.33.0/24 网段内的地址访问 11.22.33.44。电脑地址不属于 RTU、网关或纵密配置字段。"
-        />
+      <header className="security-config-heading"><h1>纵密网络配置</h1><p>配置 DSP 上的纵密业务地址、路由与转发规则。</p></header>
+      <Card size="small" className="security-config-card">
         {deployResult ? (
           <Alert
             className="security-config-deploy-result"
@@ -423,9 +421,15 @@ const SecurityConfig: React.FC = () => {
             authMethod: 'password',
             reuseSshPasswordForSudo: true,
             installDir: '/home/megsky',
+            device: 'MskDSP',
           }}
-          onFinish={handleFinish}
+          disabled={isGenerating}
+          onFinish={values => setReviewValues(values)}
+          onFinishFailed={() => setConnectionOptionsOpen(true)}
         >
+          <section className="security-config-target">
+          <h2 className="security-config-section-title">配置目标</h2>
+          <div className="security-config-target-summary"><span>连接方式：SSH 直连 DSP</span><span>执行权限：设备 SSH 账号 + sudo</span></div>
           <div className="security-config-device">
             <Form.Item
               name="device"
@@ -440,8 +444,8 @@ const SecurityConfig: React.FC = () => {
               />
             </Form.Item>
           </div>
-          <section className="security-config-section" aria-labelledby="security-config-connection-title">
-            <h2 id="security-config-connection-title" className="security-config-section-title">目标设备连接</h2>
+          <details className="security-config-auth" open={connectionOptionsOpen} onToggle={event => setConnectionOptionsOpen(event.currentTarget.open)}>
+            <summary>连接认证与部署选项</summary>
             <div className="security-config-grid">
               <Form.Item
                 name="uploadAccount"
@@ -497,37 +501,44 @@ const SecurityConfig: React.FC = () => {
                 </Form.Item>
               ) : null}
             </div>
+          </details>
           </section>
+          <section className="security-config-business">
+          <div className="security-config-business-heading"><h2 className="security-config-section-title">纵密业务地址</h2><span>本端 / 对端表示业务两端</span></div>
+          <div className="security-config-address-columns">
           <section className="security-config-section" aria-labelledby="security-config-local-title">
-            <h2 id="security-config-local-title" className="security-config-section-title">本地侧</h2>
+            <h2 id="security-config-local-title" className="security-config-section-title">本端 · 现场</h2>
             <div className="security-config-grid">
-              <Form.Item name="localRtuAddress" label="本地 RTU 地址" rules={ADDRESS_RULES}>
+              <Form.Item name="localRtuAddress" label="本端 RTU 地址" rules={ADDRESS_RULES}>
                 <Input placeholder="请输入本地 RTU 地址" />
               </Form.Item>
-              <Form.Item name="localSecurityAddress" label="本地纵密地址" rules={ADDRESS_RULES}>
+              <Form.Item name="localSecurityAddress" label="本端纵密地址" rules={ADDRESS_RULES}>
                 <Input placeholder="请输入本地纵密地址" />
               </Form.Item>
-              <Form.Item name="localGatewayAddress" label="本地网关地址" rules={ADDRESS_RULES}>
+              <Form.Item name="localGatewayAddress" label="本端网关地址" rules={ADDRESS_RULES}>
                 <Input placeholder="请输入本地网关地址" />
               </Form.Item>
             </div>
           </section>
           <section className="security-config-section" aria-labelledby="security-config-remote-title">
-            <h2 id="security-config-remote-title" className="security-config-section-title">远程侧</h2>
+            <h2 id="security-config-remote-title" className="security-config-section-title">对端</h2>
             <div className="security-config-grid">
-              <Form.Item name="remoteRtuAddress" label="远程 RTU 地址" rules={ADDRESS_RULES}>
+              <Form.Item name="remoteRtuAddress" label="对端 RTU 地址" rules={ADDRESS_RULES}>
                 <Input placeholder="请输入远程 RTU 地址" />
               </Form.Item>
-              <Form.Item name="remoteSecurityAddress" label="远程纵密地址" rules={ADDRESS_RULES}>
+              <Form.Item name="remoteSecurityAddress" label="对端纵密地址" rules={ADDRESS_RULES}>
                 <Input placeholder="请输入远程纵密地址" />
               </Form.Item>
-              <Form.Item name="remoteGatewayAddress" label="远程网关地址" rules={ADDRESS_RULES}>
+              <Form.Item name="remoteGatewayAddress" label="对端网关地址" extra="当前脚本仅保存此字段，不参与网络命令。" rules={ADDRESS_RULES}>
                 <Input placeholder="请输入远程网关地址" />
               </Form.Item>
             </div>
           </section>
+          </div>
+          <details className="security-config-maintenance"><summary>101 / 108 维护访问参数</summary><dl><dt>101 口</dt><dd>11.22.33.1/32</dd><dt>108 口</dt><dd>11.22.33.2/32</dd><dt>纵密管理地址</dt><dd>11.22.33.44，端口不限</dd></dl></details>
           <div className="security-config-actions">
-            <Space>
+            <span>应用后修改设备网络，并设置开机自动应用。</span>
+            <Space wrap>
               <Button htmlType="button" onClick={handleReset}>
                 重置
               </Button>
@@ -545,19 +556,27 @@ const SecurityConfig: React.FC = () => {
                   loading={isGenerating}
                   disabled={!selectedDevice}
                 >
-                执行
+                预览网络变更
               </Button>
             </Space>
           </div>
+          </section>
         </Form>
       </Card>
+      <Modal title="网络变更预览" open={reviewValues !== null} onCancel={() => setReviewValues(null)} width={860} destroyOnHidden
+        footer={<Space><Button onClick={() => setReviewValues(null)}>返回修改</Button><Button type="primary" loading={isGenerating} onClick={() => { if (reviewValues) void handleApply(reviewValues); }}>应用网络配置</Button></Space>}
+      >
+        <Alert type="warning" showIcon title="应用后会修改设备网络并启动开机自启服务" description="将配置 101 / 108 维护地址、代理 ARP、SNAT、本端与对端业务路由，以及现有 PPP、DNAT 和连接跟踪规则。执行失败可能保留部分配置；当前脚本没有自动回滚。" />
+        <p>目标设备：{reviewValues?.device} · SSH：{reviewValues?.uploadAccount}</p>
+        <pre className="security-config-script-preview">{reviewValues ? buildVerticalSecurityScript({ ...reviewValues, device: reviewValues.device ?? '' }) : ''}</pre>
+      </Modal>
       <Modal
         title="纵密配置脚本预览"
         open={scriptPreview !== null}
         onCancel={() => setScriptPreview(null)}
         footer={null}
         width={860}
-        destroyOnClose
+        destroyOnHidden
       >
         <pre className="security-config-script-preview">{scriptPreview}</pre>
       </Modal>

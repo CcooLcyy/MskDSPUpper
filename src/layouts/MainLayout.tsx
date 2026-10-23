@@ -91,9 +91,14 @@ const menuItems: MenuItemConfig[] = [
     requires: 'orchestrator',
   },
   {
+    key: '/security-access',
+    icon: <SafetyCertificateOutlined />,
+    label: '纵密访问',
+  },
+  {
     key: '/security-config',
     icon: <SafetyCertificateOutlined />,
-    label: '纵密配置',
+    label: '纵密网络配置',
   },
   {
     key: '/software-update',

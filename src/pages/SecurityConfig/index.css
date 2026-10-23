@@ -1,17 +1,35 @@
 .security-config-page {
   display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 100%;
   overflow: auto;
+  padding: 24px;
 }
 
 .security-config-card {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 100%;
-  border-radius: 0;
+  max-width: 1200px;
 }
+
+.security-config-heading { margin-bottom: 24px; }
+.security-config-heading h1 { margin: 0 0 6px; font-size: 24px; }
+.security-config-heading p { margin: 0; color: rgba(255,255,255,.65); }
+.security-config-target { padding-bottom: 24px; }
+.security-config-target-summary { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.security-config-auth summary, .security-config-maintenance summary { cursor: pointer; color: rgba(255,255,255,.65); }
+.security-config-auth[open] summary { margin-bottom: 20px; }
+.security-config-business { border-top: 1px solid rgba(255,255,255,.12); padding-top: 24px; }
+.security-config-business-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.security-config-business-heading > span { font-size: 12px; color: rgba(255,255,255,.6); }
+.security-config-address-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.security-config-address-columns .security-config-grid { grid-template-columns: 1fr; }
+.security-config-address-columns .security-config-section + .security-config-section { margin: 0; padding: 0; border: 0; }
+.security-config-maintenance { margin: 8px 0 20px; }
+.security-config-maintenance dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 24px; font-size: 12px; }
+.security-config-maintenance dd { margin: 0; font-family: Consolas, monospace; }
 
 .security-config-device {
   width: min(100%, 360px);
@@ -150,9 +168,13 @@
 
 .security-config-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
   margin-top: 8px;
 }
+.security-config-actions > span { color: rgba(255,255,255,.6); font-size: 12px; }
 
 .security-config-script-preview {
   max-height: 65vh;
@@ -173,6 +195,8 @@
 }
 
 @media (max-width: 520px) {
+  .security-config-page { padding: 16px; }
+  .security-config-address-columns { grid-template-columns: 1fr; }
   .security-config-grid {
     grid-template-columns: minmax(0, 1fr);
   }

@@ -19,28 +19,27 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   const rustLibText = fs.readFileSync(path.join(repoRoot, 'src-tauri/src/lib.rs'), 'utf8');
 
   assert.match(layoutText, /key: '\/security-config'/);
-  assert.match(layoutText, /label: '纵密配置'/);
+  assert.match(layoutText, /label: '纵密网络配置'/);
   assert.match(routeComponentsText, /SecurityConfigPage = lazy\(\(\) => import\('\.\/pages\/SecurityConfig'\)\)/);
   assert.match(routeText, /path: 'security-config'/);
   assert.match(routeText, /<SecurityConfigPage \/>/);
-  assert.match(pageText, /<Card title="纵密配置"/);
-  assert.match(pageText, /电脑需使用 11\.22\.33\.0\/24 网段内的地址访问 11\.22\.33\.44/);
-  assert.match(pageText, /不属于 RTU、网关或纵密配置字段/);
+  assert.match(pageText, /纵密网络配置/);
+  assert.match(pageText, /101 \/ 108 维护访问参数/);
   assert.match(pageText, /label="目标设备"/);
   assert.match(pageText, /value: 'MskDSP', label: 'MskDSP'/);
   assert.match(pageText, /uploadAccount: 'megsky@192\.168\.1\.219:10022'/);
-  assert.match(pageText, /sshPassword: 'Meg@admin123'/);
+  assert.doesNotMatch(pageText, /sshPassword: '/);
   assert.match(pageText, /onChange=\{handleDeviceChange\}/);
   assert.match(pageText, /disabled=\{!selectedDevice\}/);
-  assert.match(pageText, /label="本地 RTU 地址"/);
+  assert.match(pageText, /label="本端 RTU 地址"/);
   assert.match(pageText, /isValidIpv4Address/);
   assert.match(pageText, /请输入合法 IPv4 地址/);
-  assert.match(pageText, /label="本地纵密地址"/);
-  assert.match(pageText, /label="本地网关地址"/);
-  assert.match(pageText, /label="远程 RTU 地址"/);
-  assert.match(pageText, /label="远程纵密地址"/);
-  assert.match(pageText, /label="远程网关地址"/);
-  assert.match(pageText, />\s*执行\s*<\/Button>/);
+  assert.match(pageText, /label="本端纵密地址"/);
+  assert.match(pageText, /label="本端网关地址"/);
+  assert.match(pageText, /label="对端 RTU 地址"/);
+  assert.match(pageText, /label="对端纵密地址"/);
+  assert.match(pageText, /label="对端网关地址"/);
+  assert.match(pageText, />\s*预览网络变更\s*<\/Button>/);
   assert.match(pageText, /buildVerticalSecurityScript/);
   assert.match(pageText, />\s*查看脚本\s*<\/Button>/);
   assert.match(pageText, /title="纵密配置脚本预览"/);
@@ -118,4 +117,23 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.doesNotMatch(scriptText, /iptables -t nat -A POSTROUTING .* -s 11\.22\.33\.41\/32/);
   assert.match(scriptText, /LOCAL_RTU_ADDRESS=\\\$\{LOCAL_RTU_ADDRESS\}/);
   assert.match(scriptText, /REMOTE_GATEWAY_ADDRESS=\\\$\{REMOTE_GATEWAY_ADDRESS\}/);
+});
+
+
+test('纵密访问使用独立工作台且不伪造远程通道', () => {
+  const read = file => fs.readFileSync(path.join(repoRoot, file), 'utf8');
+  const page = read('src/pages/SecurityAccess/index.tsx');
+  assert.match(read('src/layouts/MainLayout.tsx'), /key: '\/security-access'/);
+  assert.match(read('src/layouts/MainLayout.tsx'), /label: '纵密访问'/);
+  assert.match(read('src/router.tsx'), /path: 'security-access'/);
+  assert.match(read('src/route-components.tsx'), /SecurityAccessPage = lazy/);
+  assert.match(page, /api\.getVerticalSecurityAccessCapabilities/);
+  assert.match(page, /api\.checkVerticalSecurityAccess/);
+  assert.match(page, /远程网络通道待接入/);
+  assert.match(page, /11\.22\.33\.44/);
+  assert.match(page, /remote_list_devices/);
+  assert.match(page, /generationRef/);
+  assert.match(page, /ICMP/);
+  assert.doesNotMatch(page, /remote_select_device|HTTPS|443|管理服务|DSP 侧网络配置|返回纵密访问/);
+  assert.doesNotMatch(read('src/pages/SecurityConfig/index.tsx'), /返回纵密访问/);
 });

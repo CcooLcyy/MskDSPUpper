@@ -61,10 +61,11 @@ pub fn get_platform_auth_status(state: State<'_, AppState>) -> PlatformAuthStatu
 
 #[tauri::command]
 pub async fn platform_logout(state: State<'_, AppState>) -> Result<PlatformAuthStatus, String> {
+    state.security_login.cancel_all();
     let status = state.platform_auth.logout().await?;
     state.remote_ssh.close_all();
     state.conn_manager.select_remote(None).await;
-    tracing::info!("平台已退出登录，已清理远程终端、设备选择与运行时连接缓存");
+    tracing::info!("平台已退出登录，已清理纵密登录请求、远程终端、设备选择与运行时连接缓存");
     Ok(status)
 }
 

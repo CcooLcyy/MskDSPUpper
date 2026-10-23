@@ -1,0 +1,58 @@
+.security-access-page { padding: 24px; min-width: 0; }
+.security-access-connection-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; max-width: 1200px; }
+.security-access-device-picker { min-width: 260px; flex: 1; max-width: 460px; }
+.security-access-device-picker .ant-select { flex: 1; min-width: 0; }
+.security-access-network-heading { margin: 32px 0 16px; font-size: 18px; }
+.security-login-workbench { max-width: 1200px; }
+.security-login-workbench h2 { margin: 0 0 6px; font-size: 21px; }
+.security-login-context { padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 12px 32px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.1); border-radius: 6px; margin-bottom: 16px; }
+.security-login-context strong { margin-left: 12px; font-family: Consolas, monospace; }
+.security-login-fields { display: grid; gap: 14px; }
+.security-login-fields label { display: grid; gap: 7px; font-size: 13px; }
+.security-login-fields .ant-select { width: 100%; }
+.security-login-certificate { margin-top: 18px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.1); }
+.security-login-certificate summary, .security-login-advanced summary { cursor: pointer; }
+.security-login-certificate summary span { font-size: 12px; color: rgba(255,255,255,.55); margin-left: 8px; }
+.security-login-certificate p, .security-login-hint { color: rgba(255,255,255,.6); font-size: 12px; }
+.security-login-certificate .ant-space-compact .ant-input { min-width: 0; }
+.security-login-certificate .ant-space-compact .ant-btn { flex-shrink: 0; }
+.security-login-advanced { margin: 0 0 18px; }
+.security-login-advanced[open] summary { margin-bottom: 14px; }
+.security-login-session { display: grid; grid-template-columns: auto 1fr; gap: 12px 20px; margin: 20px 0; }
+.security-login-session dt { color: rgba(255,255,255,.6); }
+.security-login-session dd { margin: 0; overflow-wrap: anywhere; }
+.security-workbench-heading { margin-bottom: 24px; }
+.security-workbench-heading h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.4; }
+.security-workbench-heading p { margin: 0; color: rgba(255,255,255,.65); }
+.security-access-columns { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); gap: 18px; align-items: start; max-width: 1200px; }
+.security-access-notice { margin-top: 20px; }
+.security-access-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }
+.security-access-pair span, .security-access-target span { display: block; color: rgba(255,255,255,.65); font-size: 12px; margin-bottom: 6px; }
+.security-access-pair strong { font-weight: 500; }
+.security-access-remote { display: grid; gap: 12px; margin-top: 20px; }
+.security-access-remote label { font-size: 12px; color: rgba(255,255,255,.65); }
+.security-access-remote .ant-select { flex: 1; min-width: 0; }
+.security-access-target { border-top: 1px solid rgba(255,255,255,.12); margin-top: 28px; padding-top: 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.security-access-target strong { font: 600 24px/1.5 Consolas, monospace; }
+.security-access-scope { margin: 14px 0; }
+.security-access-details { margin-top: 22px; }
+.security-access-details summary { cursor: pointer; color: rgba(255,255,255,.65); margin-bottom: 12px; }
+.security-access-step { display: grid; grid-template-columns: 16px minmax(0,1fr) auto; align-items: baseline; gap: 10px; padding: 9px 0; }
+.security-access-step strong { font-weight: 500; font-size: 13px; }
+.security-access-step p { margin: 4px 0 0; font-size: 12px; color: rgba(255,255,255,.6); overflow-wrap: anywhere; }
+.security-access-step > span:last-child { font-size: 12px; color: rgba(255,255,255,.6); }
+.security-access-boundary { font-size: 12px; color: rgba(255,255,255,.5); margin: 14px 0 0; }
+.security-access-path ol { margin: 0; padding: 0 0 0 20px; list-style: none; }
+.security-access-path li { position: relative; padding: 0 0 24px 8px; border-left: 1px solid rgba(255,255,255,.18); }
+.security-access-path li:last-child { padding-bottom: 0; border-left-color: transparent; }
+.security-access-path li::before { content: ''; position: absolute; left: -5px; top: 5px; width: 7px; height: 7px; border: 2px solid #69b1ff; border-radius: 50%; background: #292a2d; }
+.security-access-path li strong { display: block; font-weight: 500; }
+.security-access-path li span { display: block; color: rgba(255,255,255,.65); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+.security-access-path dl { display: grid; grid-template-columns: auto 1fr; gap: 12px 16px; border-top: 1px solid rgba(255,255,255,.12); padding-top: 20px; margin: 22px 0 0; font-size: 12px; }
+.security-access-path dt { color: rgba(255,255,255,.6); }
+.security-access-path dd { margin: 0; overflow-wrap: anywhere; }
+.security-access-result { border-top: 1px solid rgba(255,255,255,.12); margin-top: 20px; padding-top: 20px; }
+.security-access-result p { color: rgba(255,255,255,.65); }
+.security-access-footer { color: rgba(255,255,255,.6); font-size: 12px; margin: 20px 0 0; }
+@media (max-width: 900px) { .security-access-columns { grid-template-columns: minmax(0,1fr); } }
+@media (max-width: 520px) { .security-access-page { padding: 16px; } .security-access-pair { grid-template-columns: 1fr; } .security-access-step { grid-template-columns: 16px minmax(0,1fr); } .security-access-step > span:last-child { grid-column: 2; } }

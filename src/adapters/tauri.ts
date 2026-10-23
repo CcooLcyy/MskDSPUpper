@@ -67,6 +67,16 @@ import type {
   LowerUpdateUploadProgress,
   LowerUpdateUploadRequest,
   LowerUpdateUploadResult,
+  VerticalSecurityAccessCapabilities,
+  VerticalSecurityAccessRequest,
+  VerticalSecurityAccessResult,
+  VerticalSecurityLoginCapabilities,
+  VerticalSecurityCertificateProfile,
+  VerticalSecurityCertificateRequest,
+  VerticalSecurityLoginRequest,
+  VerticalSecurityLoginResult,
+  VerticalSecurityPasswordChangeRequest,
+  VerticalSecurityPasswordChangeResult,
   VerticalSecurityDeployRequest,
   VerticalSecurityDeployResult,
   VerticalSecurityStatusRequest,
@@ -231,6 +241,35 @@ export const api = {
     invoke<void>('save_lower_update_connection', { settings, auth, sudoPassword }),
   clearLowerUpdateCredentials: (uploadAccount: string) =>
     invoke<void>('clear_lower_update_credentials', { uploadAccount }),
+  getVerticalSecurityAccessCapabilities: () =>
+    invoke<VerticalSecurityAccessCapabilities>('get_vertical_security_access_capabilities'),
+  checkVerticalSecurityAccess: (request: VerticalSecurityAccessRequest) =>
+    invoke<VerticalSecurityAccessResult>('check_vertical_security_access', { request }),
+  closeVerticalSecurityAccess: (sessionId: string) =>
+    invoke<void>('close_vertical_security_access', { sessionId }),
+  getVerticalSecurityLoginCapabilities: () =>
+    invoke<VerticalSecurityLoginCapabilities>('get_vertical_security_login_capabilities'),
+  getVerticalSecurityCertificateProfile: () =>
+    invoke<VerticalSecurityCertificateProfile>('get_vertical_security_certificate_profile'),
+  configureVerticalSecurityCertificateProfile: (request: VerticalSecurityCertificateRequest) =>
+    invoke<VerticalSecurityCertificateProfile>('configure_vertical_security_certificate_profile', { request }),
+  selectVerticalSecurityCertificate: async (kind: 'client' | 'trust'): Promise<string | null> => {
+    const selected = await open({
+      title: kind === 'client' ? '选择纵密客户端证书（PKCS12）' : '选择纵密装置信任证书（PEM / DER）',
+      directory: false,
+      multiple: false,
+      filters: [{ name: kind === 'client' ? '客户端证书' : '信任证书', extensions: kind === 'client' ? ['p12', 'pfx'] : ['pem', 'crt', 'cer', 'der'] }],
+    });
+    return typeof selected === 'string' ? selected : null;
+  },
+  loginVerticalSecurity: (request: VerticalSecurityLoginRequest) =>
+    invoke<VerticalSecurityLoginResult>('login_vertical_security', { request }),
+  cancelVerticalSecurityLogin: (requestId: string) =>
+    invoke<void>('cancel_vertical_security_login', { requestId }),
+  logoutVerticalSecurity: (sessionId: string) =>
+    invoke<void>('logout_vertical_security', { sessionId }),
+  changeVerticalSecurityPassword: (request: VerticalSecurityPasswordChangeRequest) =>
+    invoke<VerticalSecurityPasswordChangeResult>('change_vertical_security_password', { request }),
   deployVerticalSecurityScript: (request: VerticalSecurityDeployRequest) =>
     invoke<VerticalSecurityDeployResult>('deploy_vertical_security_script', { request }),
   getVerticalSecurityStatus: (request: VerticalSecurityStatusRequest) =>
