@@ -606,6 +606,81 @@ pub async fn iec104_clear_simulation_values(
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SimulationPeriodicStatusDto {
+    pub conn_name: String,
+    pub enabled: bool,
+    pub interval_seconds: u32,
+    pub running: bool,
+    pub last_sent_ms: i64,
+}
+
+impl From<crate::proto::iec104_proto::SimulationPeriodicStatus> for SimulationPeriodicStatusDto {
+    fn from(status: crate::proto::iec104_proto::SimulationPeriodicStatus) -> Self {
+        Self {
+            conn_name: status.conn_name,
+            enabled: status.enabled,
+            interval_seconds: status.interval_seconds,
+            running: status.running,
+            last_sent_ms: status.last_sent_ms,
+        }
+    }
+}
+
+fn validate_periodic_interval(interval_seconds: f64) -> Result<u32, String> {
+    if !interval_seconds.is_finite()
+        || interval_seconds.fract() != 0.0
+        || !(1.0..=3600.0).contains(&interval_seconds)
+    {
+        return Err("周期上报间隔必须是 1～3600 秒的整数".to_string());
+    }
+    Ok(interval_seconds as u32)
+}
+
+fn periodic_simulation_error(error: &anyhow::Error) -> String {
+    if error.downcast_ref::<tonic::Status>().is_some_and(|status| {
+        status.code() == tonic::Code::Unimplemented
+    }) {
+        return "当前下位机 IEC104 模块版本不支持模拟值周期上报，请升级下位机；生成、手动发送和清除模拟值仍可使用".to_string();
+    }
+    format!("模拟值周期上报操作失败：{error}")
+}
+
+#[tauri::command]
+pub async fn iec104_set_simulation_periodic_report(
+    state: State<'_, AppState>,
+    conn_name: String,
+    enabled: bool,
+    interval_seconds: f64,
+) -> Result<SimulationPeriodicStatusDto, String> {
+    // 在访问下位机前完成范围校验，无效输入不改变运行态配置。
+    let interval_seconds = validate_periodic_interval(interval_seconds).map_err(|error| {
+        tracing::warn!(protocol = "IEC104", conn_name = %conn_name, error = %error, "模拟值周期上报配置校验失败");
+        error
+    })?;
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, enabled, interval_seconds, "开始设置模拟值周期上报");
+    let client = Iec104Client::new(&state.conn_manager);
+    let status = client.set_simulation_periodic_report(conn_name.clone(), enabled, interval_seconds)
+        .await.map_err(|error| {
+            tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "设置模拟值周期上报失败");
+            periodic_simulation_error(&error)
+        })?;
+    tracing::info!(protocol = "IEC104", conn_name = %conn_name, enabled = status.enabled, running = status.running, "设置模拟值周期上报完成");
+    Ok(status.into())
+}
+
+#[tauri::command]
+pub async fn iec104_get_simulation_periodic_status(
+    state: State<'_, AppState>,
+    conn_name: String,
+) -> Result<SimulationPeriodicStatusDto, String> {
+    let client = Iec104Client::new(&state.conn_manager);
+    client.get_simulation_periodic_status(conn_name.clone()).await.map(Into::into).map_err(|error| {
+        tracing::error!(protocol = "IEC104", conn_name = %conn_name, error = %error, "查询模拟值周期上报状态失败");
+        periodic_simulation_error(&error)
+    })
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SoeQueryDto {
     pub conn_name: String,
     pub start_ts_ms: Option<i64>,
@@ -678,6 +753,53 @@ pub async fn iec104_query_soe(
         total_count: response.total_count,
         unacknowledged_count: response.unacknowledged_count,
     })
+}
+
+#[cfg(test)]
+mod periodic_simulation_tests {
+    use super::{periodic_simulation_error, validate_periodic_interval, SimulationPeriodicStatusDto};
+    use crate::proto::iec104_proto::SimulationPeriodicStatus;
+
+    #[test]
+    fn periodic_interval_accepts_integer_boundaries_and_default() {
+        for seconds in [1.0, 5.0, 3600.0] {
+            assert_eq!(validate_periodic_interval(seconds).unwrap(), seconds as u32);
+        }
+    }
+
+    #[test]
+    fn periodic_interval_rejects_non_integer_out_of_range_and_non_finite_values() {
+        for seconds in [-1.0, 0.0, 1.5, 3600.5, 3601.0, f64::NAN, f64::INFINITY] {
+            assert!(validate_periodic_interval(seconds).unwrap_err().contains("1～3600"));
+        }
+    }
+
+    #[test]
+    fn periodic_status_preserves_paused_and_last_sent_fields() {
+        let dto = SimulationPeriodicStatusDto::from(SimulationPeriodicStatus {
+            conn_name: "测试连接".to_string(),
+            enabled: true,
+            interval_seconds: 5,
+            running: false,
+            last_sent_ms: 1_793_000_000_123,
+        });
+        assert_eq!(serde_json::to_value(dto).unwrap(), serde_json::json!({
+            "conn_name": "测试连接", "enabled": true, "interval_seconds": 5,
+            "running": false, "last_sent_ms": 1_793_000_000_123_i64,
+        }));
+    }
+
+    #[test]
+    fn old_module_error_explains_compatibility_without_hiding_other_failures() {
+        let unsupported = anyhow::Error::new(tonic::Status::unimplemented("unknown method"))
+            .context("调用周期上报接口失败");
+        let message = periodic_simulation_error(&unsupported);
+        assert!(message.contains("版本不支持"));
+        assert!(message.contains("手动发送"));
+        let invalid = anyhow::Error::new(tonic::Status::invalid_argument("模拟快照为空"));
+        assert!(periodic_simulation_error(&invalid).contains("模拟快照为空"));
+        assert!(!periodic_simulation_error(&invalid).contains("版本不支持"));
+    }
 }
 
 #[cfg(test)]

@@ -129,6 +129,8 @@ pub fn run() {
                 commands::iec104::iec104_get_simulation_snapshot,
                 commands::iec104::iec104_apply_simulation_values,
                 commands::iec104::iec104_clear_simulation_values,
+                commands::iec104::iec104_set_simulation_periodic_report,
+                commands::iec104::iec104_get_simulation_periodic_status,
                 commands::iec104::iec104_query_soe,
                 commands::iec61850::iec61850_import_scl,
                 commands::iec61850::iec61850_get_model_summary,

@@ -51,6 +51,7 @@ export type {
   Iec104SimulationPoint,
   Iec104ManualSimulationPoint,
   Iec104SimulationSnapshot,
+  Iec104SimulationPeriodicStatus,
   Iec104SimulationGenerateOptions,
   Iec104SimulationMode,
   Iec104SimulationBoolMode,

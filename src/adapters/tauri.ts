@@ -34,6 +34,7 @@ import type {
   Iec104Point,
   Iec104PointTable,
   Iec104SimulationSnapshot,
+  Iec104SimulationPeriodicStatus,
   Iec104ManualSimulationPoint,
   Iec104SimulationGenerateOptions,
   Iec104SoeQuery,
@@ -264,6 +265,10 @@ export const api = {
     invoke<void>('iec104_apply_simulation_values', { connName }),
   iec104ClearSimulationValues: (connName: string) =>
     invoke<void>('iec104_clear_simulation_values', { connName }),
+  iec104SetSimulationPeriodicReport: (connName: string, enabled: boolean, intervalSeconds: number) =>
+    invoke<Iec104SimulationPeriodicStatus>('iec104_set_simulation_periodic_report', { connName, enabled, intervalSeconds }),
+  iec104GetSimulationPeriodicStatus: (connName: string) =>
+    invoke<Iec104SimulationPeriodicStatus>('iec104_get_simulation_periodic_status', { connName }),
   iec104QuerySoe: (query: Iec104SoeQuery) =>
     invoke<Iec104SoePage>('iec104_query_soe', { query }),
 

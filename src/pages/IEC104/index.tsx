@@ -44,6 +44,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import Iec104PointTable from './PointTable';
 import ManualSimulationEditor from './ManualSimulationEditor';
+import SimulationPeriodicControl from './SimulationPeriodicControl';
 import { api } from '../../adapters';
 import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
@@ -3528,6 +3529,12 @@ const IEC104: React.FC = () => {
               : '遥测随机模式按原逻辑生成固定值，遥信按右侧模式生成。模拟值仅在 IEC104 内存中生效，不进入 DataCenter 路由；再次生成才会替换当前值。'}
           style={{ marginBottom: 12 }}
         />
+        <CapabilityGate need="runtime.control">
+          {selectedConn && <SimulationPeriodicControl key={selectedConn} connName={selectedConn}
+            visible={simulationModalOpen} supported={isSimulationSupported(selectedLink?.config)}
+            pointCount={activeSimulationSnapshot?.points.length ?? 0} disabled={actionsDisabled}
+            onBusyChange={setSimulationLoading} />}
+        </CapabilityGate>
         <Table
           size="small"
           rowKey="tag"

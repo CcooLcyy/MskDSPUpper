@@ -116,6 +116,8 @@ export const WORKSPACE_OVERRIDE_METHODS = [
   'iec104GenerateSimulationValues',
   'iec104ApplySimulationValues',
   'iec104ClearSimulationValues',
+  'iec104SetSimulationPeriodicReport',
+  'iec104GetSimulationPeriodicStatus',
   'iec104QuerySoe',
   'modbusRtuUpdateConfig',
   'modbusRtuGetConfig',
@@ -448,6 +450,10 @@ function workspaceOverrides(): OverriddenApi {
     }),
     iec104ApplySimulationValues: async (): Promise<void> => {},
     iec104ClearSimulationValues: async (): Promise<void> => {},
+    iec104SetSimulationPeriodicReport: async () => unsupported('iec104SetSimulationPeriodicReport')(),
+    iec104GetSimulationPeriodicStatus: async (connName: string) => ({
+      conn_name: connName, enabled: false, interval_seconds: 5, running: false, last_sent_ms: 0,
+    }),
     iec104QuerySoe: async (): Promise<Iec104SoePage> => emptySoePage(),
 
     modbusRtuUpdateConfig: async (mqtt: ModbusMqttConfig): Promise<ModbusUpdateConfigResponse> =>

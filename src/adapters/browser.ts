@@ -1,5 +1,6 @@
 import type { api as tauriApi } from './tauri';
 import { buildManualSimulationSnapshot } from '../pages/IEC104/manual-simulation.ts';
+import { createSimulationPeriodicMock } from '../pages/IEC104/simulation-periodic.ts';
 import type {
   AgcControlProfile,
   AgcDefaultPointInfo,
@@ -241,6 +242,22 @@ const boardDoConnId = 98;
 const iec104Links = new Map<string, Iec104LinkInfo>();
 const iec104Tables = new Map<string, Iec104PointTable>();
 const iec104Simulation = new Map<string, Iec104SimulationSnapshot>();
+const iec104Periodic = createSimulationPeriodicMock({
+  now: () => Date.now(),
+  context: (connName) => {
+    const link = iec104Links.get(connName);
+    if (!link) return undefined;
+    return {
+      slave: link.config?.station_role === 2 || (!link.config?.station_role && link.config?.role === 1),
+      hasSimulation: Boolean(iec104Simulation.get(connName)?.points.length),
+      active: link.state === IEC104_LINK_STATE.RUNNING && link.connection_state === 3,
+    };
+  },
+  schedule: (callback, intervalMs) => {
+    const timer = window.setInterval(callback, intervalMs);
+    return () => window.clearInterval(timer);
+  },
+});
 const iec104SoeEvents = new Map<string, Iec104SoeRecord[]>();
 const modbusLinks = new Map<string, ModbusLinkInfo>();
 const modbusTables = new Map<string, ModbusPointTable>();
@@ -1166,6 +1183,14 @@ export const browserApi: typeof tauriApi = {
     if (moduleInfo.module_name !== 'ModuleManager') {
       runningModules.delete(moduleInfo.module_name);
     }
+    if (moduleInfo.module_name === 'IEC104') {
+      for (const [connName, link] of iec104Links) {
+        iec104Periodic.remove(connName);
+        iec104Simulation.delete(connName);
+        link.state = IEC104_LINK_STATE.STOPPED;
+        link.connection_state = 1;
+      }
+    }
   },
 
   getAppVersion: async () => '0.6.0-browser-dev',
@@ -1310,15 +1335,32 @@ export const browserApi: typeof tauriApi = {
       connection_state: previous?.connection_state ?? 1,
       last_error: '',
     })),
-  iec104RenameLink: async (oldConnName: string, newConnName: string) =>
-    renameByName(iec104Links, oldConnName, newConnName),
+  iec104RenameLink: async (oldConnName: string, newConnName: string) => {
+    const renamed = renameByName(iec104Links, oldConnName, newConnName);
+    const table = iec104Tables.get(oldConnName);
+    if (table) {
+      iec104Tables.set(newConnName, { ...table, conn_name: newConnName });
+      iec104Tables.delete(oldConnName);
+    }
+    const snapshot = iec104Simulation.get(oldConnName);
+    if (snapshot) {
+      iec104Simulation.set(newConnName, { ...snapshot, conn_name: newConnName });
+      iec104Simulation.delete(oldConnName);
+    }
+    iec104Periodic.rename(oldConnName, newConnName);
+    return renamed;
+  },
   iec104GetLink: async (connName: string) => {
     const value = iec104Links.get(connName);
     if (!value) throw new Error(`浏览器开发模式 mock 未找到: ${connName}`);
     return clone(value);
   },
   iec104ListLinks: async () => clone([...iec104Links.values()]),
-  iec104DeleteLink: async (connName: string) => deleteByName(iec104Links, connName),
+  iec104DeleteLink: async (connName: string) => {
+    deleteByName(iec104Links, connName);
+    iec104Periodic.remove(connName);
+    iec104Simulation.delete(connName);
+  },
   iec104StartLink: async (connName: string) => {
     const value = iec104Links.get(connName);
     if (!value) throw new Error(`浏览器开发模式 mock 未找到 IEC104 连接: ${connName}`);
@@ -1421,7 +1463,16 @@ export const browserApi: typeof tauriApi = {
   iec104ApplySimulationValues: async (connName: string) => {
     if (!iec104Simulation.has(connName)) throw new Error('浏览器开发模式 mock 没有模拟值');
   },
-  iec104ClearSimulationValues: async (connName: string) => { iec104Simulation.delete(connName); },
+  iec104ClearSimulationValues: async (connName: string) => {
+    iec104Simulation.delete(connName);
+    iec104Periodic.clear(connName);
+  },
+  iec104SetSimulationPeriodicReport: async (connName: string, enabled: boolean, intervalSeconds: number) => {
+    const status = iec104Periodic.set(connName, enabled, intervalSeconds);
+    console.info('IEC104 浏览器开发模式已设置模拟值周期上报', status);
+    return status;
+  },
+  iec104GetSimulationPeriodicStatus: async (connName: string) => iec104Periodic.get(connName),
   iec104QuerySoe: async (query: Iec104SoeQuery): Promise<Iec104SoePage> => {
     const connName = query.conn_name.trim();
     if (!connName) throw new Error('SOE 查询必须指定连接');

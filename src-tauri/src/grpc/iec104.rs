@@ -4,7 +4,8 @@ use crate::grpc::connection::ConnectionManager;
 use crate::proto::iec104_proto::{
     iec104_service_client::Iec104ServiceClient, DeleteLinkRequest, Empty, GetLinkRequest,
     GetPointTableRequest, LinkConfig, LinkInfo, Point, PointTable, RenameLinkRequest,
-    SendTimeSyncRequest, SetSimulationValuesRequest, SimulationPoint, SimulationRequest, SimulationSnapshot, StartLinkRequest, StopLinkRequest, UpsertLinkRequest,
+    SendTimeSyncRequest, SetSimulationValuesRequest, SimulationPeriodicReportRequest,
+    SimulationPeriodicStatus, SimulationPoint, SimulationRequest, SimulationSnapshot, StartLinkRequest, StopLinkRequest, UpsertLinkRequest,
     UpsertPointTableRequest, QuerySoeRequest, QuerySoeResponse,
 };
 
@@ -161,6 +162,31 @@ impl<'a> Iec104Client<'a> {
         let mut client = Iec104ServiceClient::new(channel);
         client.clear_simulation_values(SimulationRequest { conn_name, mode: 0, bool_mode: 0 }).await?;
         Ok(())
+    }
+
+    pub async fn set_simulation_periodic_report(
+        &self,
+        conn_name: String,
+        enabled: bool,
+        interval_seconds: u32,
+    ) -> Result<SimulationPeriodicStatus> {
+        let channel = self.conn.module_channel("IEC104").await?;
+        let mut client = Iec104ServiceClient::new(channel);
+        Ok(client.set_simulation_periodic_report(SimulationPeriodicReportRequest {
+            conn_name,
+            enabled,
+            interval_seconds,
+        }).await?.into_inner())
+    }
+
+    pub async fn get_simulation_periodic_status(&self, conn_name: String) -> Result<SimulationPeriodicStatus> {
+        let channel = self.conn.module_channel("IEC104").await?;
+        let mut client = Iec104ServiceClient::new(channel);
+        Ok(client.get_simulation_periodic_status(SimulationRequest {
+            conn_name,
+            mode: 0,
+            bool_mode: 0,
+        }).await?.into_inner())
     }
 
     pub async fn query_soe(&self, request: QuerySoeRequest) -> Result<QuerySoeResponse> {

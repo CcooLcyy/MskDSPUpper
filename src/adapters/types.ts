@@ -555,6 +555,15 @@ export interface Iec104SimulationSnapshot {
   points: Iec104SimulationPoint[];
 }
 
+/** 下位机保存的临时周期上报状态，不落盘。 */
+export interface Iec104SimulationPeriodicStatus {
+  conn_name: string;
+  enabled: boolean;
+  interval_seconds: number;
+  running: boolean;
+  last_sent_ms: number;
+}
+
 export type Iec104SimulationMode = 'random' | 'increment';
 
 export type Iec104SimulationBoolMode = 'random' | 'all_false' | 'all_true' | 'invert_current';
