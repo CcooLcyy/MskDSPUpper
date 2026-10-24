@@ -1,3 +1,5 @@
+import { useWorkbench } from '../../../workbench/workbench-context';
+import { protocolPointTableView, workbenchViewFromPointTable } from '../../../components/protocol/protocol-view';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -129,7 +131,12 @@ const PointTable: React.FC<Props> = ({
   const [functionFilter, setFunctionFilter] = useState<number>();
   const [dataTypeFilter, setDataTypeFilter] = useState<number>();
   const [tagSearch, setTagSearch] = useState('');
-  const [tableView, setTableView] = useState<PointTableView>('config');
+  const { view: workbenchView, setView: setWorkbenchView, runtimeAvailable } = useWorkbench();
+  const tableView = protocolPointTableView(workbenchView);
+  const setTableView = (nextView: PointTableView) => {
+    console.info('协议点表已切换工作台视图', { view: nextView });
+    setWorkbenchView(workbenchViewFromPointTable(nextView));
+  };
   const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
   const [filterExpanded, setFilterExpanded] = useState(false);
   const savedReadPlan = useMemo<ModbusReadPlan>(
@@ -521,12 +528,12 @@ const PointTable: React.FC<Props> = ({
     if (tableView === 'runtime') {
       return [
         tagColumn,
-        functionColumn,
+        realtimeValueColumn,
+        realtimeQualityColumn,
+        realtimeTimestampColumn,
         addressColumn,
         dataTypeColumn,
-        realtimeValueColumn,
-        realtimeTimestampColumn,
-        realtimeQualityColumn,
+        functionColumn,
       ];
     }
 
@@ -591,7 +598,7 @@ const PointTable: React.FC<Props> = ({
     <Card
       title={(
         <Space size={8} wrap>
-          <span>点表配置</span>
+          <span>{tableView === 'runtime' ? '实时点表' : '点表配置'}</span>
           {selectedConn ? <Text type="secondary">{selectedConn} · 显示 {visiblePoints.length}/{points.length} 个点位</Text> : null}
           {realtimeLoading && selectedConn ? <Text type="secondary">实时数据连接中</Text> : null}
         </Space>
@@ -606,7 +613,7 @@ const PointTable: React.FC<Props> = ({
             value={tableView}
             options={[
               { label: '配置视图', value: 'config' },
-              { label: '运行视图', value: 'runtime' },
+              { label: '运行视图', value: 'runtime', disabled: !runtimeAvailable },
             ]}
             onChange={setTableView}
           />
@@ -635,6 +642,7 @@ const PointTable: React.FC<Props> = ({
           >
             筛选{filterCount > 0 ? ` (${filterCount})` : ''}
           </Button>
+          <Space className="protocol-engineering-actions" hidden={tableView !== 'config'} wrap>
           <Popconfirm
             title="确认删除全部点位？"
             description={`当前连接的 ${points.length} 个点位将被清空。运行中的连接会先停止，清空后不会自动恢复；如需继续采集，请重新配置点位后手动启动。`}
@@ -660,6 +668,7 @@ const PointTable: React.FC<Props> = ({
           >
             添加点位
           </Button>
+          </Space>
         </Space>
       )}
     >
@@ -706,7 +715,7 @@ const PointTable: React.FC<Props> = ({
           </Button>
         </div>
       ) : null}
-      {showReadPlan ? <div className="protocol-read-plan-toolbar">
+      {showReadPlan ? <div className="protocol-read-plan-toolbar" hidden={tableView !== 'config'}>
         <div className="protocol-read-plan-heading">
           <Text strong>读取策略</Text>
           {readPlanMode === 1 ? (

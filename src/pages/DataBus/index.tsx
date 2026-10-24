@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   App as AntApp,
@@ -31,7 +31,9 @@ import type { ColumnsType } from 'antd/es/table';
 import { api } from '../../adapters';
 import type { DcConnectionInfo, DcPointUpdate, DcRoute } from '../../adapters';
 import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
-import { DATA_BUS_VIEW_QUERY_KEY, normalizeDataBusView } from '../../components/data-bus/data-bus-view';
+import { DATA_BUS_VIEW_QUERY_KEY } from '../../components/data-bus/data-bus-view';
+import { useWorkbench } from '../../workbench/workbench-context';
+import { applyDataBusQueryView, dataBusViewForWorkbench } from '../../components/control/workbench-control';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import { usePointerReorder } from '../../components/interaction/use-pointer-reorder';
 import './index.css';
@@ -160,7 +162,16 @@ const DataBus: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [realtimeLoading, setRealtimeLoading] = useState(false);
   const [routeModalOpen, setRouteModalOpen] = useState(false);
-  const view = normalizeDataBusView(searchParams.get(DATA_BUS_VIEW_QUERY_KEY));
+  const { view: workbenchView, setView: setWorkbenchView } = useWorkbench();
+  const view = dataBusViewForWorkbench(workbenchView);
+  const requestedView = searchParams.get(DATA_BUS_VIEW_QUERY_KEY);
+  const handledRequestedView = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    applyDataBusQueryView(requestedView, handledRequestedView, setWorkbenchView);
+  }, [requestedView, setWorkbenchView]);
+  useEffect(() => {
+    console.info('数据总线工作视图已切换，保留连接选择、筛选和路由草稿', { 视图: workbenchView });
+  }, [workbenchView]);
   const [monitorConnId, setMonitorConnId] = useState<number | 'all'>('all');
   const [monitorSearch, setMonitorSearch] = useState('');
   const [autoRefresh, setAutoRefresh] = useState(true);

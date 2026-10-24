@@ -1,3 +1,4 @@
+import { useWorkbench } from '../../../workbench/workbench-context';
 import React from 'react';
 import { Alert, Button, Card, Descriptions, Popconfirm, Space, Tag, Typography } from 'antd';
 import { DisconnectOutlined, EditOutlined, LinkOutlined } from '@ant-design/icons';
@@ -64,6 +65,7 @@ const ConnectionConfig: React.FC<Props> = ({
   onStart,
   onStop,
 }) => {
+  const { view: workbenchView } = useWorkbench();
   const config = link?.config;
   const state = STATE_MAP[link?.state ?? 0] ?? STATE_MAP[0];
   const isStopped = link?.state === 1;
@@ -131,6 +133,8 @@ const ConnectionConfig: React.FC<Props> = ({
     >
       {config ? (
         <>
+          <details className="protocol-connection-parameters" open={workbenchView === 'engineering'}>
+            <summary>通信参数</summary>
           <div className="dlt645-connection-section">
             <div className="dlt645-connection-section-title">基础信息</div>
             <Descriptions
@@ -197,6 +201,7 @@ const ConnectionConfig: React.FC<Props> = ({
               </Descriptions>
             </div>
           ) : null}
+          </details>
           {isPendingDelete ? (
             <Alert
               className="dlt645-last-error"

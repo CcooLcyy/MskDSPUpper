@@ -29,6 +29,9 @@ import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
+import { useWorkbench } from '../../workbench/workbench-context';
+import { selectControlMemberColumns, startControlDisplayClock } from '../../components/control/workbench-control';
+import '../Control/workbench.css';
 import type {
   AgcDefaultPointInfo,
   AgcDerivedOutputs,
@@ -66,6 +69,7 @@ import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/real
 import {
   mergeControlRuntimeUpdates,
   readControlRuntimeBool,
+  summarizeControlRuntime,
 } from '../../utils/control-runtime-values';
 import {
   calculateControlAllocationShares,
@@ -507,6 +511,17 @@ const AGC: React.FC = () => {
     && option.endpoint.conn_name === String(watchedGroup?.group_name ?? '').trim()
   ));
   const currentView = normalizeControlView(searchParams.get(CONTROL_VIEW_QUERY_KEY));
+  const { view: workbenchView, setView: setWorkbenchView } = useWorkbench();
+  const runtimeView = workbenchView === 'runtime';
+  const [runtimeDisplayNow, setRuntimeDisplayNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!runtimeView) return;
+    return startControlDisplayClock(setRuntimeDisplayNow);
+  }, [runtimeView]);
+
+  useEffect(() => {
+    console.info('AGC 工作视图已切换，保留所选控制组与编辑草稿', { 视图: workbenchView });
+  }, [workbenchView]);
 
   const selectedGroup = useMemo(
     () => groups.find((item) => item.config?.group_name === selectedGroupName) ?? null,
@@ -1382,6 +1397,22 @@ const AGC: React.FC = () => {
     },
   ];
 
+  const visibleMemberColumns = selectControlMemberColumns<NonNullable<ColumnsType<AgcMemberConfig>>[number]>([
+    ...memberColumns,
+    {
+      title: '数据状态', key: 'runtime_quality', width: 180,
+      render: (_, member: AgcMemberConfig) => {
+        if (runtimeOffline) return <Tag color="error">连接异常，保留末值</Tag>;
+        const tags = [member.p_meas?.tag, member.controllable ? member.p_set?.signal?.tag : undefined].filter((tag): tag is string => Boolean(tag));
+        const summary = summarizeControlRuntime(runtimeUpdates, tags, runtimeDisplayNow, Math.max(30000,
+          (selectedGroup?.config?.calculation_execution_period_seconds || 1) * 3000,
+          (selectedGroup?.config?.command_control_period_seconds || 4) * 3000));
+        const labels = { waiting: '等待数据', ok: '数据正常', stale: '数据陈旧', quality: '质量异常', missing: '点值缺失' };
+        return <Tag color={summary.state === 'ok' ? 'success' : summary.state === 'waiting' ? 'default' : 'warning'}>{labels[summary.state]}</Tag>;
+      },
+    },
+  ], workbenchView);
+
   const modalMemberColumns: ColumnsType<AgcMemberConfig> = [
     {
       title: '成员',
@@ -1568,9 +1599,13 @@ const AGC: React.FC = () => {
   );
 
   return (
-    <div className="protocol-page">
+    <div className={`protocol-page control-workbench-page control-workbench-page--${workbenchView}`}>
       {contextHolder}
       {modalContextHolder}
+      <div className="control-workbench-notice">
+        <Text type="secondary">{runtimeView ? '运行监视：查看控制状态、目标与反馈。' : '工程配置：配置控制组、成员与点位绑定。'}</Text>
+        {runtimeView ? <Button onClick={() => setWorkbenchView('engineering')}>查看配置</Button> : <CapabilityGate need="runtime.control"><Button onClick={() => setWorkbenchView('runtime')}>查看运行监视</Button></CapabilityGate>}
+      </div>
       <ControlRouteRetry error={pendingRouteError} onComplete={() => setPendingRouteError(null)} onFailure={setPendingRouteError} />
 
       {currentView === 'strategy' ? (
@@ -1691,7 +1726,7 @@ const AGC: React.FC = () => {
               </Card>
 
               <Card
-                title="运行状态"
+                title={`${selectedConfig.group_name} · 运行监视`}
                 size="small"
                 bordered
                 className="protocol-log-card control-runtime-card"
@@ -1771,16 +1806,15 @@ const AGC: React.FC = () => {
                         </Space>
                       </CapabilityGate>
                     </div>
-                    {runtimeRows.map((item) => (
-                      <div key={item.label}>
-                        <Text type="secondary" style={{ display: 'block' }}>{item.label}</Text>
-                        <Text>
-                          {item.signal?.tag || '-'} | {formatPointValue(
-                            item.signal?.tag ? runtimeUpdates[item.signal.tag] : null,
-                          )}
-                        </Text>
-                      </div>
-                    ))}
+                    <div className="control-runtime-metrics">
+                      {runtimeRows.map((item) => (
+                        <div key={item.label} className="control-runtime-metric">
+                          <Text type="secondary">{item.label}</Text>
+                          <Text strong className="control-runtime-metric__value">{formatPointValue(item.signal?.tag ? runtimeUpdates[item.signal.tag] : null)}</Text>
+                          <Text type="secondary" className="control-runtime-metric__tag">{item.signal?.tag || '未配置点位'}</Text>
+                        </div>
+                      ))}
+                    </div>
                     <div>
                       <Text type="secondary" style={{ display: 'block' }}>最近错误</Text>
                       <Text>{selectedGroup?.last_error || '无错误'}</Text>
@@ -1791,7 +1825,7 @@ const AGC: React.FC = () => {
             </div>
 
             <Card
-              title="成员配置"
+              title={runtimeView ? '成员运行监视' : '成员配置'}
               size="small"
               bordered
               className="protocol-point-card"
@@ -1799,10 +1833,11 @@ const AGC: React.FC = () => {
               <div className="protocol-table-scroll">
                 <Table
                   rowKey={(record, index) => `${record.member_name}-${index}`}
-                  columns={memberColumns}
+                  columns={visibleMemberColumns}
                   dataSource={selectedConfig?.members ?? []}
                   pagination={false}
                   size="small"
+                  scroll={{ x: runtimeView ? 760 : 980 }}
                   locale={{ emptyText: selectedConfig ? '暂无成员配置' : '请先选择控制组' }}
                 />
               </div>
@@ -1861,10 +1896,7 @@ const AGC: React.FC = () => {
         >
           <div className="protocol-log-scroll">
             <div className="protocol-log-console">
-              <div>[AGC] --:--:--.--- {selectedGroupName ?? '<group>'} - 控制日志 — 接入实时数据后渲染</div>
-              <div className="protocol-log-line--hint">
-                等待实时控制回路、状态回写与告警事件接入后显示详细日志...
-              </div>
+              <Alert type="info" showIcon title="控制日志暂未接入" description="当前版本尚不能查看实时控制日志，请在运行监视中查看控制状态、数据质量与最近错误。" />
             </div>
           </div>
         </Card>
