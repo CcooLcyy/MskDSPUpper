@@ -24,6 +24,9 @@ import { useAppMode } from '../offline/app-mode-context.ts';
 import type { Capability } from '../offline/capabilities.ts';
 import OfflineModeControls from '../offline/ui/OfflineModeControls.tsx';
 import { PlatformAccountControl } from '../auth/PlatformAccountControl';
+import { DeviceContextBar } from '../workbench/DeviceContextBar';
+import { WorkbenchViewSwitcher } from '../workbench/WorkbenchViewSwitcher';
+import { useWorkbench } from '../workbench/workbench-context';
 import './MainLayout.css';
 import '../components/protocol/protocol-page.css';
 
@@ -44,7 +47,6 @@ const menuItems: MenuItemConfig[] = [
     key: '/',
     icon: <DashboardOutlined />,
     label: '系统总览',
-    requires: 'runtime.read',
   },
   {
     key: '/module-ops',
@@ -67,7 +69,7 @@ const menuItems: MenuItemConfig[] = [
   {
     key: '/alerts-logs',
     icon: <AlertOutlined />,
-    label: '告警日志',
+    label: '告警日志（暂未接入）',
   },
   {
     key: '/calc',
@@ -108,7 +110,7 @@ const menuItems: MenuItemConfig[] = [
   {
     key: '/settings',
     icon: <EllipsisOutlined />,
-    label: '更多',
+    label: '工程文件与设置',
   },
 ];
 
@@ -117,9 +119,10 @@ const MainLayout: React.FC = () => {
   const location = useLocation();
   const { hasAvailableUpdate } = useAppUpdate();
   const { can } = useAppMode();
+  const { view } = useWorkbench();
   const [collapsed, setCollapsed] = useState(false);
-  // Protocol remains a navigation group; page-level view switchers live in the header.
-  const parentMenuKeys = new Set(['/protocol', '/alerts-logs']);
+  // 只有包含子页面的入口才拦截导航；功能占位入口仍可打开明确说明。
+  const parentMenuKeys = new Set(['/protocol']);
   const renderedMenuItems = useMemo(
     () =>
       menuItems
@@ -143,6 +146,18 @@ const MainLayout: React.FC = () => {
   );
 
   const selectedKey = location.pathname;
+  const groupedMenuItems = [
+    ...renderedMenuItems.filter(item => item.key === '/'),
+    ...[
+      { key: 'engineering', label: '工程配置', paths: ['/protocol', '/data-bus', '/calc', '/control', '/control-orchestrator'] },
+      { key: 'diagnostics', label: '运行诊断', paths: ['/alerts-logs'] },
+      { key: 'maintenance', label: '设备维护', paths: ['/module-ops', '/security-access', '/security-config', '/software-update'] },
+      { key: 'files', label: '工程文件', paths: ['/settings'] },
+    ].flatMap(section => {
+      const children = section.paths.flatMap(path => renderedMenuItems.filter(item => item.key === path));
+      return children.length ? [{ key: section.key, type: 'group' as const, label: section.label, children }] : [];
+    }),
+  ];
   const navigableKeys = useMemo(
     () =>
       renderedMenuItems.flatMap((item) =>
@@ -180,11 +195,10 @@ const MainLayout: React.FC = () => {
   const isControlPage = location.pathname === '/control' || location.pathname.startsWith('/control/');
   const isDataBusPage = location.pathname.startsWith('/data-bus');
   const isSoftwareUpdatePage = location.pathname.startsWith('/software-update');
-  const suppressHeaderTitle = isProtocolPage || isControlPage;
   const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage || isControlPage || location.pathname.startsWith('/calc') || location.pathname.startsWith('/control-orchestrator') ? 'hidden' : 'auto';
 
   return (
-    <Layout style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
+    <Layout data-workbench-view={view} style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
       <Sider
         collapsible
         collapsed={collapsed}
@@ -216,7 +230,7 @@ const MainLayout: React.FC = () => {
             mode="inline"
             selectedKeys={[selectedKey]}
             defaultOpenKeys={openKeys}
-            items={renderedMenuItems}
+            items={groupedMenuItems}
             className="main-layout-sider-menu"
             onClick={({ key }) => {
               if (!parentMenuKeys.has(key)) {
@@ -227,33 +241,27 @@ const MainLayout: React.FC = () => {
         </div>
       </Sider>
       <Layout style={{ minWidth: 0, minHeight: 0 }}>
-        <Header
-          style={{
-            padding: '0 24px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            borderBottom: '1px solid #3e3e42',
-            height: 48,
-          }}
-        >
-          <div className={`protocol-header-main${suppressHeaderTitle ? ' is-protocol' : ''}`}>
-            {!suppressHeaderTitle ? (
-              <Text strong className="protocol-header-title-text">
-                {currentLabel}
-              </Text>
-            ) : null}
-            {isProtocolPage && !isIec61850Page ? <ProtocolHeaderViewSwitcher includeSoe={isIec104Page && can('soe')} /> : null}
-            {isControlPage ? <ControlHeaderViewSwitcher /> : null}
-            {isDataBusPage ? <DataBusHeaderViewSwitcher /> : null}
-            {isSoftwareUpdatePage ? <SoftwareUpdateHeaderViewSwitcher /> : null}
+        <Header className="workbench-global-header">
+          <div className="workbench-global-primary">
+            <DeviceContextBar />
+            <WorkbenchViewSwitcher />
           </div>
-          <Space size={12} align="center">
+          <Space size={8} align="center" wrap className="workbench-global-actions">
             <LowerUpdateDeploymentHeader />
             <OfflineModeControls />
             <PlatformAccountControl />
           </Space>
         </Header>
+        <div className="workbench-page-header">
+          <div className="protocol-header-main">
+            <Text strong className="protocol-header-title-text">{currentLabel}</Text>
+            {isProtocolPage && !isIec61850Page ? <ProtocolHeaderViewSwitcher includeSoe={isIec104Page && can('soe')} /> : null}
+            {isControlPage ? <ControlHeaderViewSwitcher /> : null}
+            {isDataBusPage ? <DataBusHeaderViewSwitcher /> : null}
+            {isSoftwareUpdatePage ? <SoftwareUpdateHeaderViewSwitcher /> : null}
+          </div>
+          <span className="workbench-view-hint">{view === 'engineering' ? '配置与绑定 · 切换视图保留草稿' : '实时数据与状态 · 以设备当前运行配置为准'}</span>
+        </div>
         <Content
           style={{
             padding: 0,

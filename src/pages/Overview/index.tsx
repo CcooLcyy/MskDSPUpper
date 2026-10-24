@@ -30,6 +30,9 @@ import { loadDashboardAfterRunningModules } from '../../utils/dashboard-loading'
 import { startOverviewPolling } from '../../utils/overview-polling';
 import { subscribeManagerRuntimeRefreshed } from '../../utils/manager-runtime-events';
 import { getStoredManagerAddress } from '../../utils/app-settings';
+import { useWorkbench } from '../../workbench/workbench-context';
+import { useAppMode } from '../../offline/app-mode-context';
+import { EngineeringStart } from '../../workbench/EngineeringStart';
 import './index.css';
 
 const { Text, Title } = Typography;
@@ -40,7 +43,7 @@ type SyncState = 'idle' | 'loading' | 'success' | 'partial' | 'error';
 
 type SummaryCard = {
   title: string;
-  value: number;
+  value: number | string;
   icon: React.ReactNode;
   path: string;
   hint: string;
@@ -223,8 +226,9 @@ function buildThroughputChartGeometry(samples: DataBusThroughputSample[]): Throu
   return { areaPath, linePath, points, xTicks, yTicks };
 }
 
-const Overview: React.FC = () => {
+const OnlineOverview: React.FC = () => {
   const navigate = useNavigate();
+  const { view } = useWorkbench();
   const [dashboardData, setDashboardData] = useState<DashboardData>({
     modules: [],
     runningModules: [],
@@ -415,7 +419,7 @@ const Overview: React.FC = () => {
     () => [
       {
         title: '发现模块',
-        value: dashboardData.modules.length,
+        value: failedSections.includes('模块清单') || syncState === 'error' || !lastSyncedAt ? '-' : dashboardData.modules.length,
         icon: <AppstoreOutlined />,
         path: '/module-ops',
         hint: '进入模块运维',
@@ -423,7 +427,7 @@ const Overview: React.FC = () => {
       },
       {
         title: '运行模块',
-        value: dashboardData.runningModules.length,
+        value: failedSections.includes('运行状态') || syncState === 'error' || !lastSyncedAt ? '-' : dashboardData.runningModules.length,
         icon: <PlayCircleOutlined />,
         path: '/module-ops',
         hint: '查看运行状态',
@@ -432,15 +436,15 @@ const Overview: React.FC = () => {
       },
       {
         title: '协议连接',
-        value: dashboardData.protocolLinkCount,
+        value: failedSections.some(section => section.endsWith('链路')) || syncState === 'error' || !lastSyncedAt ? '-' : dashboardData.protocolLinkCount,
         icon: <ApiOutlined />,
         path: '/protocol/iec104',
-        hint: '进入协议接入',
+        hint: '已配置 IEC104 / Modbus RTU、TCP / DLT645',
         iconColor: '#36cfc9',
       },
       {
         title: 'AGC 控制组',
-        value: dashboardData.agcGroupCount,
+        value: failedSections.includes('AGC 控制组') || syncState === 'error' || !lastSyncedAt ? '-' : dashboardData.agcGroupCount,
         icon: <ControlOutlined />,
         path: '/control?module=agc',
         hint: '查看控制策略',
@@ -448,14 +452,14 @@ const Overview: React.FC = () => {
       },
       {
         title: '数据路由',
-        value: dashboardData.routeCount,
+        value: failedSections.includes('数据路由') || syncState === 'error' || !lastSyncedAt ? '-' : dashboardData.routeCount,
         icon: <NodeIndexOutlined />,
         path: '/data-bus',
         hint: '进入数据总线',
         iconColor: '#69b1ff',
       },
     ],
-    [dashboardData],
+    [dashboardData, failedSections, syncState, lastSyncedAt],
   );
 
   const syncBadgeStatus = loading
@@ -501,7 +505,7 @@ const Overview: React.FC = () => {
         <div className="overview-heading">
           <Text className="overview-eyebrow">MSKDSP / RUNTIME</Text>
           <Title level={2} className="overview-title">
-            系统总览
+            {view === 'engineering' ? '工程总览' : '运行总览'}
           </Title>
         </div>
         <div className="overview-header-actions">
@@ -519,6 +523,8 @@ const Overview: React.FC = () => {
           </Button>
         </div>
       </header>
+
+      {view === 'engineering' ? <EngineeringStart /> : <div className="workbench-runtime-intro"><Text strong>运行监视</Text><Text type="secondary">模块、协议数量表示配置规模；链路健康、实时品质及控制状态请进入对应对象查看。</Text><Space wrap><Button onClick={() => navigate('/data-bus')}>查看实时数据</Button><Button onClick={() => navigate('/control')}>查看控制状态</Button></Space></div>}
 
       {failedSections.length > 0 && (
         <div className="overview-sync-warning" role="status">
@@ -631,13 +637,13 @@ const Overview: React.FC = () => {
         <div className="overview-throughput-summary">
           <Statistic
             title="当前速率"
-            value={throughput?.source === 'unavailable' ? '-' : throughput?.current_points_per_second ?? 0}
+            value={!throughput || throughput.source === 'unavailable' ? '-' : throughput?.current_points_per_second ?? 0}
             suffix={throughput?.source === 'unavailable' ? undefined : '点/s'}
             valueStyle={{ fontSize: 26, color: throughput?.source === 'backend' ? '#52c41a' : undefined }}
           />
           <Statistic
             title="窗口峰值"
-            value={throughput?.source === 'unavailable' ? '-' : throughput?.peak_points_per_second ?? 0}
+            value={!throughput || throughput.source === 'unavailable' ? '-' : throughput?.peak_points_per_second ?? 0}
             suffix={throughput?.source === 'unavailable' ? undefined : '点/s'}
             valueStyle={{ fontSize: 20 }}
           />
@@ -732,6 +738,11 @@ const Overview: React.FC = () => {
       </Card>
     </div>
   );
+};
+
+const Overview: React.FC = () => {
+  const { mode } = useAppMode();
+  return mode === 'offline' ? <div className="overview-page"><EngineeringStart /></div> : <OnlineOverview />;
 };
 
 export default Overview;

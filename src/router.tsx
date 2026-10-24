@@ -151,7 +151,7 @@ export const router = createBrowserRouter([
         path: 'alerts-logs',
         element: (
           <div style={{ color: '#aaa', fontSize: 16, padding: 0, textAlign: 'center' }}>
-            {'\u544a\u8b66\u4e0e\u65e5\u5fd7\u529f\u80fd\u5f00\u53d1\u4e2d'}
+            <p style={{ padding: 24 }}>告警中心暂未接入。通信排查请进入对应协议的报文日志，IEC104 事件请查看 SOE 历史。</p>
           </div>
         ),
       },

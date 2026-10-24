@@ -11,7 +11,7 @@ export function PlatformAccountControl() {
   return (
     <Space size={8} style={{ flexShrink: 0 }}>
       <Tooltip title={status?.message || (online ? '平台在线' : '平台正在重连，会话到期前可继续本地配置')}>
-        <Badge status={online ? 'success' : 'warning'} text={<Typography.Text style={{ fontSize: 13 }}>{status?.display_name || status?.username || '平台账号'}</Typography.Text>} />
+        <Badge status={online ? 'success' : 'warning'} text={<Typography.Text style={{ fontSize: 13 }}>平台{online ? '在线' : '重连中'} · {status?.display_name || status?.username || '平台账号'}</Typography.Text>} />
       </Tooltip>
       {status.role && <Tag style={{ marginInlineEnd: 0 }}>{status.role === 'admin' ? '管理员' : '运维人员'}</Tag>}
       <Button size="small" type="text" icon={<LogoutOutlined />} onClick={() => {
