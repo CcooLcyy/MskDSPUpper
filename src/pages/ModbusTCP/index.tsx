@@ -9,8 +9,6 @@ import ResizableSplit from '../../components/layout/ResizableSplit';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import { PARAMETER_HELP } from '../../components/help/parameter-help';
 import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
-import { useWorkbench } from '../../workbench/workbench-context';
-import '../../components/protocol/workbench-protocol.css';
 import { useProtocolRealtime } from '../../components/protocol/protocol-realtime';
 import { buildDuplicateConnectionName, isNotFoundError } from '../../utils/connection-copy';
 import {
@@ -112,7 +110,6 @@ interface LinkFormValues {
 }
 
 const ModbusTCP: React.FC = () => {
-  const { view: workbenchView } = useWorkbench();
   const [links, setLinks] = useState<ModbusTcpLinkInfo[]>([]);
   const [selectedConn, setSelectedConn] = useState<string | null>(null);
   const [points, setPoints] = useState<ModbusPoint[]>([]);
@@ -1146,12 +1143,12 @@ const ModbusTCP: React.FC = () => {
 
       {currentView === 'config' ? (
         <ResizableSplit
-          className={`protocol-config-view protocol-workbench-split protocol-workbench-split--${workbenchView}`}
+          className="protocol-config-view"
           orientation="vertical"
-          defaultSize={240}
-          minSize={160}
+          defaultSize={360}
+          minSize={240}
           maxSize={620}
-          storageKey="mskdsp.layout.modbus-tcp.config.compact"
+          storageKey="mskdsp.layout.modbus-tcp.config"
         >
           <ResizableSplit
             className="protocol-top-row"

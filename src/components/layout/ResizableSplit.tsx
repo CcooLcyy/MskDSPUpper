@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './resizable-split.css';
-import { readSplitSize } from './split-size';
 
 interface ResizableSplitProps {
   children: React.ReactNode;
@@ -21,7 +20,8 @@ const readStoredSize = (storageKey: string | undefined, defaultSize: number, min
   }
 
   try {
-    return readSplitSize(window.localStorage, storageKey, defaultSize, minSize, maxSize);
+    const stored = Number(window.localStorage.getItem(storageKey));
+    return Number.isFinite(stored) ? clamp(stored, minSize, maxSize) : clamp(defaultSize, minSize, maxSize);
   } catch {
     return clamp(defaultSize, minSize, maxSize);
   }

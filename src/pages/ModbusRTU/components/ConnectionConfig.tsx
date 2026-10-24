@@ -1,4 +1,3 @@
-import { useWorkbench } from '../../../workbench/workbench-context';
 import React from 'react';
 import { Alert, Button, Card, Descriptions, Popconfirm, Space, Tag, Typography } from 'antd';
 import { DisconnectOutlined, EditOutlined, LinkOutlined } from '@ant-design/icons';
@@ -61,7 +60,6 @@ const ConnectionConfig: React.FC<Props> = ({
   onStart,
   onStop,
 }) => {
-  const { view: workbenchView } = useWorkbench();
   const config = link?.config;
   const state = STATE_MAP[link?.state ?? 0] ?? STATE_MAP[0];
   const isStopped = link?.state === 1;
@@ -126,8 +124,6 @@ const ConnectionConfig: React.FC<Props> = ({
     >
       {config ? (
         <>
-          <details className="protocol-connection-parameters" open={workbenchView === 'engineering'}>
-            <summary>通信参数</summary>
           <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }} colon={false}>
             <Descriptions.Item label="传输方式">
               {TRANSPORT_TYPE_LABELS[config.transport_type] ?? '未指定'}
@@ -177,7 +173,6 @@ const ConnectionConfig: React.FC<Props> = ({
               </>
             ) : null}
           </Descriptions>
-          </details>
           {!pointTableReady && isStopped ? (
             <Alert
               className="modbus-last-error"

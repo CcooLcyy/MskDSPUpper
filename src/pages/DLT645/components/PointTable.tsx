@@ -1,5 +1,3 @@
-import { useWorkbench } from '../../../workbench/workbench-context';
-import { protocolPointTableView, workbenchViewFromPointTable } from '../../../components/protocol/protocol-view';
 import React, { useMemo, useState } from 'react';
 import {
   Button,
@@ -99,12 +97,7 @@ const PointTable: React.FC<Props> = ({
   onEditBlock,
   onDeleteBlock,
 }) => {
-  const { view: workbenchView, setView: setWorkbenchView, runtimeAvailable } = useWorkbench();
-  const tableView = protocolPointTableView(workbenchView);
-  const setTableView = (nextView: PointTableView) => {
-    console.info('协议点表已切换工作台视图', { view: nextView });
-    setWorkbenchView(workbenchViewFromPointTable(nextView));
-  };
+  const [tableView, setTableView] = useState<PointTableView>('config');
   const [filterExpanded, setFilterExpanded] = useState(false);
   const [tagSearch, setTagSearch] = useState('');
   const [diSearch, setDiSearch] = useState('');
@@ -295,7 +288,7 @@ const PointTable: React.FC<Props> = ({
     };
 
     if (tableView === 'runtime') {
-      return [tagColumn, realtimeValueColumn, realtimeQualityColumn, realtimeTimestampColumn, { ...diColumn, fixed: undefined }, dataTypeColumn];
+      return [tagColumn, diColumn, dataTypeColumn, realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
     }
     return [
       tagColumn,
@@ -384,7 +377,7 @@ const PointTable: React.FC<Props> = ({
       render: (_value: unknown, record: Dlt645BlockItem) => renderRealtimeQuality(record.tag),
     };
     if (tableView === 'runtime') {
-      return [tagColumn, realtimeValueColumn, realtimeQualityColumn, realtimeTimestampColumn, dataTypeColumn];
+      return [tagColumn, dataTypeColumn, realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
     }
     return [
       tagColumn,
@@ -558,7 +551,7 @@ const PointTable: React.FC<Props> = ({
     <Card
       title={(
         <Space size={8} wrap>
-          <span>{tableView === 'runtime' ? '实时点表 (Tag → DI)' : '点表配置 (Tag → DI)'}</span>
+          <span>点表配置 (Tag -&gt; DI)</span>
           {selectedConn ? (
             <Text type="secondary">
               显示 {visiblePoints.length}/{points.length} 个点位 · {visibleBlocks.length}/{blocks.length} 个数据块
@@ -576,7 +569,7 @@ const PointTable: React.FC<Props> = ({
               <Segmented<PointTableView>
                 size="small"
                 value={tableView}
-                options={[{ label: '配置视图', value: 'config' }, { label: '运行视图', value: 'runtime', disabled: !runtimeAvailable }]}
+                options={[{ label: '配置视图', value: 'config' }, { label: '运行视图', value: 'runtime' }]}
                 onChange={setTableView}
               />
             </Space>
@@ -594,8 +587,7 @@ const PointTable: React.FC<Props> = ({
             </Space>
           </div>
           <Space
-            className="dlt645-point-secondary-actions dlt645-point-toolbar__group dlt645-point-toolbar__bulk-actions protocol-engineering-actions"
-            hidden={tableView !== 'config'}
+            className="dlt645-point-secondary-actions dlt645-point-toolbar__group dlt645-point-toolbar__bulk-actions"
             size={8}
             wrap
           >
@@ -618,7 +610,7 @@ const PointTable: React.FC<Props> = ({
               添加数据块
             </Button>
           </Space>
-          <Space className="dlt645-point-primary-actions dlt645-point-toolbar__group protocol-engineering-actions" hidden={tableView !== 'config'} size={8} wrap>
+          <Space className="dlt645-point-primary-actions dlt645-point-toolbar__group" size={8} wrap>
             <Button
               type="primary"
               size="small"

@@ -1,7 +1,6 @@
 import React from 'react';
 import { Tabs } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useWorkbench } from '../../workbench/workbench-context';
 import {
   CONTROL_VIEW_OPTIONS,
   CONTROL_VIEW_QUERY_KEY,
@@ -18,7 +17,6 @@ import {
 const ControlHeaderViewSwitcher: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { view } = useWorkbench();
 
   const value = normalizeControlView(new URLSearchParams(location.search).get(CONTROL_VIEW_QUERY_KEY));
   const module = normalizeControlModule(new URLSearchParams(location.search).get(CONTROL_MODULE_QUERY_KEY));
@@ -68,9 +66,7 @@ const ControlHeaderViewSwitcher: React.FC = () => {
         animated={false}
         items={CONTROL_VIEW_OPTIONS.map((option) => ({
           key: option.value,
-          label: option.value === 'logs' ? '控制日志（暂未接入）'
-            : option.value === 'strategy' && view === 'runtime' ? '运行监视' : option.label,
-          disabled: option.value === 'logs',
+          label: option.label,
           children: null,
         }))}
         onChange={handleChange}

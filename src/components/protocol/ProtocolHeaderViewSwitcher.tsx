@@ -1,4 +1,3 @@
-import { useWorkbench } from '../../workbench/workbench-context';
 import React from 'react';
 import { Tabs } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -14,7 +13,6 @@ interface ProtocolHeaderViewSwitcherProps {
 }
 
 const ProtocolHeaderViewSwitcher: React.FC<ProtocolHeaderViewSwitcherProps> = ({ includeSoe = false }) => {
-  const { view: workbenchView } = useWorkbench();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -50,7 +48,7 @@ const ProtocolHeaderViewSwitcher: React.FC<ProtocolHeaderViewSwitcherProps> = ({
         animated={false}
         items={options.map((option) => ({
           key: option.value,
-          label: option.value === 'config' ? (workbenchView === 'runtime' ? '实时点表' : '连接与点表') : option.label,
+          label: option.label,
           children: null,
         }))}
         onChange={handleChange}

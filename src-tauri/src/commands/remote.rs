@@ -25,8 +25,6 @@ use tokio::{
 pub struct ConnectionStatus {
     remote: bool,
     device_id: Option<String>,
-    display_name: Option<String>,
-    manager_addr: String,
     active: bool,
 }
 #[tauri::command]
@@ -37,14 +35,10 @@ pub async fn remote_list_devices(state: State<'_, AppState>) -> Result<Vec<Remot
 }
 #[tauri::command]
 pub fn remote_connection_status(state: State<'_, AppState>) -> ConnectionStatus {
-    // 工作台只读取一致的目标快照，不发起连接或改变当前设备。
-    let snapshot = state.conn_manager.runtime_refresh_snapshot();
-    let remote = snapshot.connection.remote_connection();
+    let remote = state.conn_manager.remote_connection();
     ConnectionStatus {
         remote: remote.is_some(),
         device_id: remote.as_ref().map(|r| r.device.device_id.clone()),
-        display_name: remote.as_ref().map(|r| r.device.display_name.clone()),
-        manager_addr: snapshot.connection.manager_addr(),
         active: remote.as_ref().is_some_and(|r| r.active()),
     }
 }

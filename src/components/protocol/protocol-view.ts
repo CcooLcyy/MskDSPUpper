@@ -1,14 +1,4 @@
 export type ProtocolViewKey = 'config' | 'soe' | 'logs';
-export type ProtocolPointTableView = 'config' | 'runtime';
-
-// 点表沿用现有列定义；工作台视图只决定展示，不触发保存或运行操作。
-export function protocolPointTableView(view: 'engineering' | 'runtime'): ProtocolPointTableView {
-  return view === 'runtime' ? 'runtime' : 'config';
-}
-
-export function workbenchViewFromPointTable(view: ProtocolPointTableView): 'engineering' | 'runtime' {
-  return view === 'runtime' ? 'runtime' : 'engineering';
-}
 
 export const PROTOCOL_VIEW_QUERY_KEY = 'view';
 export const DEFAULT_PROTOCOL_VIEW: ProtocolViewKey = 'config';

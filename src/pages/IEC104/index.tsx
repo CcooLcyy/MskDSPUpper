@@ -51,9 +51,7 @@ import ProtocolConnectionList from '../../components/protocol/ProtocolConnection
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import { PARAMETER_HELP } from '../../components/help/parameter-help';
 import { usePointerReorder } from '../../components/interaction/use-pointer-reorder';
-import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY, protocolPointTableView, workbenchViewFromPointTable } from '../../components/protocol/protocol-view';
-import { useWorkbench } from '../../workbench/workbench-context';
-import '../../components/protocol/workbench-protocol.css';
+import { normalizeProtocolView, PROTOCOL_VIEW_QUERY_KEY } from '../../components/protocol/protocol-view';
 import {
   renderProtocolRealtimeQualityCell,
   renderProtocolRealtimeTimestampCell,
@@ -557,7 +555,6 @@ const isSimulationSupported = (config: Iec104LinkConfig | null | undefined): boo
 // ── Component ──
 
 const IEC104: React.FC = () => {
-  const { view: workbenchView, setView: setWorkbenchView, runtimeAvailable } = useWorkbench();
   const [links, setLinks] = useState<Iec104LinkInfo[]>([]);
   const [selectedConn, setSelectedConn] = useState<string | null>(null);
   const [points, setPoints] = useState<Iec104Point[]>([]);
@@ -570,11 +567,7 @@ const IEC104: React.FC = () => {
   const [pointTypeFilter, setPointTypeFilter] = useState<number>();
   const [ioaCategoryFilter, setIoaCategoryFilter] = useState<IoaCategoryFilterKey>();
   const [pointSearch, setPointSearch] = useState('');
-  const pointTableView = protocolPointTableView(workbenchView);
-  const setPointTableView = (nextView: 'config' | 'runtime') => {
-    console.info('IEC104 点表已切换工作台视图', { view: nextView });
-    setWorkbenchView(workbenchViewFromPointTable(nextView));
-  };
+  const [pointTableView, setPointTableView] = useState<'config' | 'runtime'>('config');
   const [ioaInputHex, setIoaInputHex] = useState(false);
   const [selectedPointTags, setSelectedPointTags] = useState<string[]>([]);
   const [pointDeleteConfirmMode, setPointDeleteConfirmMode] = useState<PointDeleteMode | null>(null);
@@ -2845,7 +2838,7 @@ const IEC104: React.FC = () => {
     };
 
     if (pointTableView === 'runtime') {
-      return [tagColumn, realtimeValueColumn, realtimeQualityColumn, realtimeTimestampColumn, ioaColumn, typeColumn];
+      return [tagColumn, ioaColumn, typeColumn, businessTypeColumn, remoteControlColumn, ...(selectedSlaveStation ? [fixedValueColumn] : []), realtimeValueColumn, realtimeTimestampColumn, realtimeQualityColumn];
     }
 
     return [
@@ -3148,12 +3141,12 @@ const IEC104: React.FC = () => {
 
       {currentView === 'config' ? (
         <ResizableSplit
-          className={`protocol-config-view protocol-workbench-split protocol-workbench-split--${workbenchView}`}
+          className="protocol-config-view"
           orientation="vertical"
-          defaultSize={240}
-          minSize={160}
+          defaultSize={360}
+          minSize={240}
           maxSize={620}
-          storageKey="mskdsp.layout.iec104.config.compact"
+          storageKey="mskdsp.layout.iec104.config"
         >
           <ResizableSplit
             className="protocol-top-row"
@@ -3244,8 +3237,6 @@ const IEC104: React.FC = () => {
               >
                 {selectedLink?.config ? (
                   <>
-                    <details className="protocol-connection-parameters" open={workbenchView === 'engineering'}>
-                      <summary>通信参数</summary>
                     <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }} colon={false} className="iec104-connection-descriptions">
                       <Descriptions.Item label="站点角色">{STATION_ROLE_LABELS[selectedLink.config.station_role] ?? selectedLink.config.station_role}</Descriptions.Item>
                       <Descriptions.Item label="公共地址 (CA)">{selectedLink.config.ca}</Descriptions.Item>
@@ -3257,7 +3248,6 @@ const IEC104: React.FC = () => {
                       <Descriptions.Item label="对时标签">{selectedLink.config.time_sync_tag || '-'}</Descriptions.Item>
                       <Descriptions.Item label="点位状态">{points.length > 0 ? <Tag color="success">已配置 {points.length} 个点位</Tag> : <Tag color="warning">未配置</Tag>}</Descriptions.Item>
                     </Descriptions>
-                    </details>
                     {selectedLink.last_error ? <Alert className="iec104-last-error" type="error" showIcon message="最近错误" description={selectedLink.last_error} /> : null}
                   </>
                 ) : (
@@ -3270,7 +3260,7 @@ const IEC104: React.FC = () => {
           <Card
             title={(
               <Space size={8} wrap>
-                <span>{pointTableView === 'runtime' ? '实时点表 (Tag ↔ IOA)' : '点表配置 (Tag ↔ IOA)'}</span>
+                <span>点表配置 (Tag ↔ IOA)</span>
                 {selectedConn ? <Text type="secondary">显示 {visiblePoints.length}/{points.length} 个点位</Text> : null}
                 {pointTableView === 'runtime' && realtimeLoading && selectedConn ? <Text type="secondary">实时数据连接中</Text> : null}
               </Space>
@@ -3291,7 +3281,7 @@ const IEC104: React.FC = () => {
                 <Segmented<'config' | 'runtime'>
                   size="small"
                   value={pointTableView}
-                  options={[{ label: '配置视图', value: 'config' }, { label: '运行视图', value: 'runtime', disabled: !runtimeAvailable }]}
+                  options={[{ label: '配置视图', value: 'config' }, { label: '运行视图', value: 'runtime' }]}
                   onChange={setPointTableView}
                 />
                 <Button
@@ -3303,7 +3293,6 @@ const IEC104: React.FC = () => {
                 >
                   筛选{pointFilterCount > 0 ? ` (${pointFilterCount})` : ''}
                 </Button>
-                <Space className="protocol-engineering-actions" hidden={pointTableView !== 'config'} wrap>
                 <Popconfirm
                   title={pointDeleteConfirmMode === 'all' ? '确认删除全部点位？' : '确认删除选中点位？'}
                   description={pointDeleteConfirmMode === 'all'
@@ -3352,7 +3341,6 @@ const IEC104: React.FC = () => {
                     添加点位
                   </Button>
                 </Dropdown>
-                </Space>
               </Space>
             )}
           >

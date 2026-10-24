@@ -11,7 +11,6 @@ import { router } from './router';
 import { PlatformAuthProvider } from './auth/PlatformAuthProvider';
 import { PlatformAuthGate } from './auth/PlatformAuthGate';
 import { PlatformTemplateMonitor } from './features/modbus-templates/PlatformTemplateMonitor';
-import { WorkbenchProvider } from './workbench/WorkbenchProvider';
 
 function App() {
   return (
@@ -21,16 +20,14 @@ function App() {
           <PlatformTemplateMonitor />
           <PlatformAuthGate>
             <AppModeProvider>
-              <WorkbenchProvider>
-                <AppUpdateProvider>
-                  <LowerUpdateAutoProvider>
-                    <LowerUpdateDeploymentProvider>
-                      <RouterProvider router={router} />
-                      <LowerUpdateDeploymentUi />
-                    </LowerUpdateDeploymentProvider>
-                  </LowerUpdateAutoProvider>
-                </AppUpdateProvider>
-              </WorkbenchProvider>
+              <AppUpdateProvider>
+                <LowerUpdateAutoProvider>
+                  <LowerUpdateDeploymentProvider>
+                    <RouterProvider router={router} />
+                    <LowerUpdateDeploymentUi />
+                  </LowerUpdateDeploymentProvider>
+                </LowerUpdateAutoProvider>
+              </AppUpdateProvider>
             </AppModeProvider>
           </PlatformAuthGate>
         </PlatformAuthProvider>
