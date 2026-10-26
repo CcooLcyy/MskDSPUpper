@@ -47,12 +47,21 @@ async fn read_named_command(peer: &mut tokio::io::DuplexStream, command: i32, ex
 }
 
 async fn serve_file(peer: &mut tokio::io::DuplexStream, name: &str, body: &[u8]) {
+    serve_returned_file(peer, name, name, body).await;
+}
+
+async fn serve_returned_file(
+    peer: &mut tokio::io::DuplexStream,
+    name: &str,
+    returned_name: &str,
+    body: &[u8],
+) {
     read_named_command(peer, 4, name).await;
     peer.write_i32(4).await.unwrap();
     peer.write_i32(0).await.unwrap();
-    peer.write_u8(name.len() as u8).await.unwrap();
-    peer.write_all(name.as_bytes()).await.unwrap();
-    read_named_command(peer, 5, name).await;
+    peer.write_u8(returned_name.len() as u8).await.unwrap();
+    peer.write_all(returned_name.as_bytes()).await.unwrap();
+    read_named_command(peer, 5, returned_name).await;
     peer.write_i32(5).await.unwrap();
     peer.write_i32(body.len() as i32).await.unwrap();
     peer.write_all(body).await.unwrap();
@@ -262,4 +271,44 @@ async fn security_login_flow_certificate_switch_cancels_inflight_change() {
     assert!(outcome.message.contains("核实装置密码状态"));
     assert!(!manager.connection_active(&id));
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
+}
+
+// 复现现场返回 /log 路径及账号行末逗号；初始化完成后必须创建真实会话并可退出。
+#[tokio::test]
+async fn security_login_flow_initializes_log_paths_and_java_trailing_columns() {
+    let manager = Arc::new(SecurityLoginManager::default());
+    let (_cancel, _guard) = manager.begin("fixture-flow").unwrap();
+    let (client, mut peer) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move {
+        serve_returned_file(
+            &mut peer,
+            "account.txt",
+            "/log/account.txt",
+            b"fixture,1,fixture account,0,opaque,0,0,1,\r\n",
+        )
+        .await;
+        serve_returned_file(
+            &mut peer,
+            "version.txt",
+            "/log/version.txt",
+            b"V1.1.fixture\n",
+        )
+        .await;
+        assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
+    });
+    let response = complete_login(
+        &manager,
+        result(),
+        credentials(false),
+        client,
+        accepted(false),
+    )
+    .await;
+    assert_eq!(response.state, "authenticated");
+    assert!(response.steps.iter().all(|step| step.state == "success"));
+    assert_eq!(response.device_version.as_deref(), Some("V1.1.fixture"));
+    let id = response.session_id.unwrap();
+    assert!(manager.connection_active(&id));
+    manager.close_session(&id).unwrap();
+    server.await.unwrap();
 }

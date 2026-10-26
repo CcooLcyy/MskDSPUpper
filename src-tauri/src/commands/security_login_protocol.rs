@@ -327,10 +327,21 @@ async fn read_fixed_file<S: AsyncRead + AsyncWrite + Unpin>(
         .map_err(|_| "登录资料元信息不完整")?;
     // 原客户端状态1允许用户另选备份，本流程始终读取当前固定文件。
     if !matches!(status, 0 | 1) {
+        tracing::warn!(
+            requested = filename,
+            status,
+            "纵密固定资料元信息状态不受支持"
+        );
         return Err("装置拒绝读取固定登录资料");
     }
     let length = stream.read_u8().await.map_err(|_| "登录资料文件名不完整")? as usize;
     if length == 0 || length > 127 {
+        tracing::warn!(
+            requested = filename,
+            bytes = length,
+            status,
+            "纵密固定资料返回名长度无效"
+        );
         return Err("登录资料文件名长度无效");
     }
     let mut name = vec![0; length];
@@ -338,10 +349,30 @@ async fn read_fixed_file<S: AsyncRead + AsyncWrite + Unpin>(
         .read_exact(&mut name)
         .await
         .map_err(|_| "登录资料文件名不完整")?;
-    if name != filename.as_bytes() {
-        return Err("登录资料文件名与固定请求不一致");
-    }
-    send_read_command(stream, 5, filename).await?;
+    // 仅接受实测及原程序共同确认的四项固定映射，不解析或规范化任意路径。
+    let resolved = match (filename, name.as_slice()) {
+        ("account.txt", b"account.txt") => "account.txt",
+        ("account.txt", b"/log/account.txt") => "/log/account.txt",
+        ("version.txt", b"version.txt") => "version.txt",
+        ("version.txt", b"/log/version.txt") => "/log/version.txt",
+        _ => {
+            tracing::warn!(
+                requested = filename,
+                bytes = length,
+                status,
+                "纵密固定资料返回名不在本文件白名单内"
+            );
+            return Err("登录资料文件名与固定请求不一致");
+        }
+    };
+    tracing::info!(
+        requested = filename,
+        resolved,
+        bytes = length,
+        status,
+        "纵密固定资料返回名已通过精确白名单校验"
+    );
+    send_read_command(stream, 5, resolved).await?;
     let mut body = Zeroizing::new(Vec::new());
     loop {
         let command = stream
@@ -409,7 +440,12 @@ fn validate_account(data: &[u8], username: &str, role: u8) -> Result<(), &'stati
         .lines()
         .filter(|line| !line.trim().is_empty())
     {
-        let fields: Vec<_> = line.trim_end_matches('\r').split(',').collect();
+        // Java String.split 默认丢弃全部尾空列；仅移除行尾逗号，保留字段内空白。
+        let fields: Vec<_> = line
+            .trim_end_matches('\r')
+            .trim_end_matches(',')
+            .split(',')
+            .collect();
         if fields.len() != 8
             || !valid_username(fields[0])
             || !matches!(fields[1], "1" | "2" | "3")
@@ -931,6 +967,137 @@ mod tests {
                 .await
                 .is_ok());
             assert!(validate_account(row.as_bytes(), "admin", 2).is_err());
+        }
+    }
+
+    // 固定资料只接受本文件名及精确的/log路径，数据请求必须使用已验证的返回名。
+    #[tokio::test]
+    async fn fixed_reads_use_the_validated_basename_or_log_path() {
+        for (requested, resolved) in [
+            ("account.txt", "account.txt"),
+            ("account.txt", "/log/account.txt"),
+            ("version.txt", "version.txt"),
+            ("version.txt", "/log/version.txt"),
+        ] {
+            for status in [0i32, 1] {
+                let mut bytes = transfer(resolved, b"fixture\n");
+                bytes[4..8].copy_from_slice(&status.to_be_bytes());
+                let mut stream = Fixture::new(bytes);
+                assert!(
+                    read_fixed_file(&mut stream, requested)
+                        .await
+                        .unwrap()
+                        .as_slice()
+                        == b"fixture\n"
+                );
+                let mut expected = pair(4, requested.len() as i32);
+                expected.extend_from_slice(requested.as_bytes());
+                expected.extend(pair(5, resolved.len() as i32));
+                expected.extend_from_slice(resolved.as_bytes());
+                expected.extend(pair(6, 0));
+                assert!(stream.output == expected);
+            }
+        }
+    }
+
+    // 不对返回路径做通用规范化，跨文件、任意目录、列表及NUL均不能进入命令5。
+    #[tokio::test]
+    async fn metadata_paths_reject_cross_file_or_unverified_aliases() {
+        for (requested, other) in [
+            ("account.txt", "version.txt"),
+            ("version.txt", "account.txt"),
+        ] {
+            for resolved in [
+                other.to_string(),
+                format!("/log/{other}"),
+                format!("/tmp/{requested}"),
+                format!("/log/../{requested}"),
+                format!("/log//{requested}"),
+                format!("//log/{requested}"),
+                format!("/log/./{requested}"),
+                format!("/log/{requested}/"),
+                format!("/log/{requested}\0"),
+                format!("/log/{requested},{requested}"),
+                format!("/log/{requested} "),
+                format!("\\log\\{requested}"),
+                format!("/LOG/{requested}"),
+            ] {
+                for status in [0i32, 1] {
+                    let mut bytes = transfer(&resolved, b"fixture\n");
+                    bytes[4..8].copy_from_slice(&status.to_be_bytes());
+                    let mut stream = Fixture::new(bytes);
+                    assert!(read_fixed_file(&mut stream, requested).await.is_err());
+                    let mut expected = pair(4, requested.len() as i32);
+                    expected.extend_from_slice(requested.as_bytes());
+                    assert!(stream.output == expected);
+                }
+            }
+        }
+    }
+
+    // 原Java默认split丢弃全部尾空列，UTF-8和GBK的CRLF账号行均采用该边界。
+    #[test]
+    fn account_rows_follow_java_trailing_empty_column_semantics() {
+        for suffix in ["", ",", ",,,"] {
+            let row = format!("admin,1,fixture,0,合成描述,0,首次登录,0{suffix}\r\n");
+            assert!(validate_account(row.as_bytes(), "admin", 1).is_ok());
+            let (encoded, _, errors) = encoding_rs::GBK.encode(&row);
+            assert!(!errors);
+            assert!(validate_account(&encoded, "admin", 1).is_ok());
+        }
+        for row in [
+            "admin,1,fixture,0,x,0,首次登录,1,extra\r\n",
+            "admin,1,fixture,0,x,0,首次登录,1, \r\n",
+            "admin,1,fixture,0,x,0,首次登录,,,\r\n",
+            "admin,1,fixture,0,x,0,,,\r\n",
+            " admin,1,fixture,0,x,0,首次登录,1,\r\n",
+            "admin, 1,fixture,0,x,0,首次登录,1,\r\n",
+        ] {
+            assert!(validate_account(row.as_bytes(), "admin", 1).is_err());
+        }
+        let duplicate =
+            "admin,1,fixture,0,x,0,首次登录,1,\r\nadmin,1,fixture,0,x,0,首次登录,1,,,\r\n";
+        assert!(validate_account(duplicate.as_bytes(), "admin", 1).is_err());
+    }
+
+    // 完整初始化兼容两个/log固定路径及合成三行账号表的行末逗号，仍按角色隔离。
+    #[tokio::test]
+    async fn initializes_log_paths_with_java_style_account_rows() {
+        let accounts = "fixtureAdmin,1,fixture,0,合成管理员,0,首次登录,0,\r\nfixtureSecure,2,fixture,0,合成操作员,0,首次登录,0,,,\r\nfixtureAudit,3,fixture,0,合成审计员,0,首次登录,0,\r\n";
+        let (gbk, _, errors) = encoding_rs::GBK.encode(accounts);
+        assert!(!errors);
+        for body in [accounts.as_bytes(), gbk.as_ref()] {
+            for (username, role) in [
+                ("fixtureAdmin", 1),
+                ("fixtureSecure", 2),
+                ("fixtureAudit", 3),
+            ] {
+                let mut bytes = transfer("/log/account.txt", body);
+                bytes.extend(transfer("/log/version.txt", b"NSS3000 fixture\r\n"));
+                let mut stream = Fixture::new(bytes);
+                assert_eq!(
+                    initialize(&mut stream, username, role)
+                        .await
+                        .unwrap()
+                        .version,
+                    "NSS3000 fixture"
+                );
+                let mut expected = Vec::new();
+                for (requested, resolved) in [
+                    ("account.txt", "/log/account.txt"),
+                    ("version.txt", "/log/version.txt"),
+                ] {
+                    expected.extend(pair(4, requested.len() as i32));
+                    expected.extend_from_slice(requested.as_bytes());
+                    expected.extend(pair(5, resolved.len() as i32));
+                    expected.extend_from_slice(resolved.as_bytes());
+                    expected.extend(pair(6, 0));
+                }
+                assert!(stream.output == expected);
+                assert!(
+                    validate_account(body, username, if role == 3 { 1 } else { role + 1 }).is_err()
+                );
+            }
         }
     }
 
