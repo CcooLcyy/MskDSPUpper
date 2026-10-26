@@ -1,4 +1,4 @@
-//! 独立纵密 TLS 登录。成功码尚无设备证据，任何未知应答均关闭连接，不建立身份。
+//! 独立纵密登录、默认密码修改与只读初始化；未知应答不建立身份。
 use crate::state::AppState;
 use native_tls::{Certificate, Identity};
 use parking_lot::Mutex;
@@ -12,13 +12,21 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncWriteExt},
     sync::watch,
 };
 use zeroize::{Zeroize, Zeroizing};
 
 #[path = "security_login_builtin.rs"]
 mod builtin;
+
+#[path = "security_login_sessions.rs"]
+mod sessions;
+
+#[path = "security_login_protocol.rs"]
+mod protocol;
+use protocol::{read_login_reply, Reply};
+use sessions::{ConnectionContext, ConnectionKind, StoredConnection};
 
 const TARGET_IP: &str = "11.22.33.44";
 const TARGET_PORT: u16 = 8888;
@@ -200,6 +208,7 @@ struct LoginInner {
     profile: Option<Arc<LoadedProfile>>,
     builtin_cache: HashMap<BuiltinMode, Arc<LoadedProfile>>,
     pending: HashMap<String, watch::Sender<bool>>,
+    connections: HashMap<String, StoredConnection>,
     // 保留取消及完成记录，防止 IPC 迟到造成先取消后启动，或重复使用请求标识。
     retired: HashMap<String, Instant>,
     config_generation: u64,
@@ -220,16 +229,40 @@ impl Drop for RequestGuard<'_> {
     }
 }
 impl SecurityLoginManager {
+    fn advance_configuration(inner: &mut LoginInner) -> u64 {
+        tracing::info!("证书配置开始变化，立即取消纵密请求并关闭已有身份和改密连接");
+        inner.config_generation = inner.config_generation.wrapping_add(1);
+        for sender in inner.pending.values() {
+            let _ = sender.send(true);
+        }
+        for (_, entry) in inner.connections.drain() {
+            entry.close();
+        }
+        inner.config_generation
+    }
     pub fn cancel_all(&self) {
-        tracing::info!("清理纵密待处理登录，保留当前进程证书配置");
-        for cancellation in self.inner.lock().pending.values() {
+        tracing::info!("清理纵密登录请求、临时改密连接与已登录身份，保留进程证书配置");
+        let mut inner = self.inner.lock();
+        for cancellation in inner.pending.values() {
             let _ = cancellation.send(true);
+        }
+        for (_, entry) in inner.connections.drain() {
+            entry.close();
         }
     }
     fn prune(inner: &mut LoginInner) {
         inner
             .retired
             .retain(|_, at| at.elapsed() < Duration::from_secs(300));
+        let generation = inner.config_generation;
+        inner.connections.retain(|_, entry| {
+            let active =
+                entry.context.expires_at > Instant::now() && entry.context.generation == generation;
+            if !active {
+                entry.close();
+            }
+            active
+        });
     }
     fn begin(&self, id: &str) -> Result<(watch::Receiver<bool>, RequestGuard<'_>), &'static str> {
         validate_request_id(id)?;
@@ -258,6 +291,15 @@ impl SecurityLoginManager {
         Self::prune(&mut inner);
         if let Some(sender) = inner.pending.get(id) {
             let _ = sender.send(true);
+        }
+        inner.connections.retain(|connection_id, entry| {
+            let keep = connection_id != id && entry.context.request_id != id;
+            if !keep {
+                entry.close();
+            }
+            keep
+        });
+        if inner.pending.contains_key(id) {
             return Ok(());
         }
         if inner.retired.contains_key(id) {
@@ -500,7 +542,7 @@ async fn initialize_builtin_profile(
                 return Ok(profile.clone());
             }
         } else {
-            inner.config_generation = inner.config_generation.wrapping_add(1);
+            SecurityLoginManager::advance_configuration(&mut inner);
         }
         (
             inner.config_generation,
@@ -538,6 +580,9 @@ fn activate_builtin_profile(
     if force {
         for sender in inner.pending.values() {
             let _ = sender.send(true);
+        }
+        for (_, entry) in inner.connections.drain() {
+            entry.close();
         }
     }
     if let Some(mode) = loaded.metadata.builtin_mode {
@@ -636,67 +681,6 @@ where
     Err(TlsAttemptError::CertificateValidationFailed(None))
 }
 
-enum Reply {
-    CredentialsRejected,
-    Locked(Option<u32>),
-    UkeyUnavailable,
-    PinRejected,
-    UkeyLimit,
-    LicenseRequired,
-    PasswordExpired,
-    Unverified,
-}
-async fn read_login_reply<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Reply, &'static str> {
-    if reader.read_i32().await.map_err(|_| "登录应答不完整")? != 12 {
-        return Err("登录应答命令不匹配");
-    }
-    let ret = reader.read_i32().await.map_err(|_| "登录应答不完整")?;
-    match ret {
-        0 => {
-            let length = reader.read_u8().await.map_err(|_| "失败应答不完整")?;
-            if length == 0 {
-                return Ok(Reply::CredentialsRejected);
-            }
-            if length > 127 {
-                return Err("锁定应答长度无效");
-            }
-            let mut seconds = vec![0; length as usize];
-            reader
-                .read_exact(&mut seconds)
-                .await
-                .map_err(|_| "锁定应答不完整")?;
-            let value = std::str::from_utf8(&seconds)
-                .ok()
-                .filter(|text| text.bytes().all(|b| b.is_ascii_digit()))
-                .and_then(|text| text.parse().ok());
-            Ok(Reply::Locked(value))
-        }
-        -2 => Ok(Reply::UkeyUnavailable),
-        -1 => Ok(Reply::PinRejected),
-        -4 => Ok(Reply::UkeyLimit),
-        // 原程序在此应答后进入许可流程；本轮不调用许可命令。
-        1 => Ok(Reply::LicenseRequired),
-        _ => {
-            let _count = reader.read_u8().await.map_err(|_| "登录资料不完整")?;
-            let update = reader.read_u8().await.map_err(|_| "登录资料不完整")?;
-            let length = reader.read_u8().await.map_err(|_| "登录资料不完整")?;
-            if length > 127 {
-                return Err("登录资料长度无效");
-            }
-            let mut last_login = vec![0; length as usize];
-            reader
-                .read_exact(&mut last_login)
-                .await
-                .map_err(|_| "登录资料不完整")?;
-            // 正常成功码集合尚待设备验证；附带登录资料不能作为认证成功的依据。
-            if update == 2 {
-                Ok(Reply::PasswordExpired)
-            } else {
-                Ok(Reply::Unverified)
-            }
-        }
-    }
-}
 fn apply_reply(result: LoginResult, reply: Reply) -> LoginResult {
     let (code, message) = match reply {
         Reply::CredentialsRejected => (
@@ -721,14 +705,12 @@ fn apply_reply(result: LoginResult, reply: Reply) -> LoginResult {
             "纵密 UKey 连接尝试次数超过限制，请停止重试并检查装置",
         ),
         Reply::LicenseRequired => ("license_required", "设备要求处理许可，许可流程尚未接入"),
-        Reply::PasswordExpired => {
-            let mut result = result.failure(
+        Reply::Accepted(_) => {
+            return result.failure(
                 2,
-                "password_expired",
-                "设备报告密码过期；修改流程待验证，请使用原纵密上位机处理后重新登录",
+                "incomplete_login_flow",
+                "登录资料尚未完成验证，不能直接创建纵密身份",
             );
-            result.state = "password_change_required";
-            return result;
         }
         Reply::Unverified => {
             let mut result = result.failure(
@@ -743,10 +725,116 @@ fn apply_reply(result: LoginResult, reply: Reply) -> LoginResult {
     result.failure(2, code, message)
 }
 
+struct AuthenticationContext {
+    username: String,
+    role: u8,
+    old_digest: Zeroizing<String>,
+    default_password: bool,
+    generation: u64,
+}
+
+async fn complete_login<S>(
+    manager: &Arc<SecurityLoginManager>,
+    mut result: LoginResult,
+    credentials: AuthenticationContext,
+    mut stream: S,
+    reply: Reply,
+) -> LoginResult
+where
+    S: AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let Reply::Accepted(info) = reply else {
+        return apply_reply(result, reply);
+    };
+    tracing::info!(phase = "authenticate", "实测格式的纵密登录应答已通过校验");
+    result.success_step(2, "装置已接受本次登录，登录资料结构校验通过");
+    result.last_login_at = Some(info.last_login);
+    let must_change = credentials.default_password || info.password_expired;
+    if must_change {
+        let context = ConnectionContext {
+            request_id: result.request_id.clone(),
+            username: credentials.username.clone(),
+            role: credentials.role,
+            generation: credentials.generation,
+            kind: ConnectionKind::Challenge,
+            expires_at: Instant::now() + Duration::from_secs(300),
+        };
+        match manager.retain_connection(context, stream, Some(credentials.old_digest)) {
+            Ok(id) => {
+                result.state = "password_change_required";
+                result.code = if credentials.default_password {
+                    "default_password"
+                } else {
+                    "password_expired"
+                };
+                result.message = if credentials.default_password {
+                    "当前使用默认密码，请设置新密码后重新登录"
+                } else {
+                    "装置报告密码已过有效期，请设置新密码后重新登录"
+                }
+                .into();
+                result.challenge_id = Some(id);
+                result.username = Some(credentials.username);
+                result.role = Some(credentials.role);
+                result.steps[3].message = "修改密码并重新登录后读取装置资料".into();
+                tracing::info!(
+                    reason = result.code,
+                    "已建立短时单次改密连接，尚未开放纵密业务"
+                );
+                result
+            }
+            Err(message) => result.failure(2, "challenge_unavailable", message),
+        }
+    } else {
+        drop(credentials.old_digest);
+        let info = match tokio::time::timeout(
+            Duration::from_secs(12),
+            protocol::initialize(&mut stream, &credentials.username, credentials.role),
+        )
+        .await
+        {
+            Ok(Ok(info)) => info,
+            Ok(Err(message)) => return result.failure(3, "initialization_failed", message),
+            Err(_) => {
+                return result.failure(
+                    3,
+                    "initialization_timeout",
+                    "读取装置登录资料超时，连接已关闭，请重新登录",
+                )
+            }
+        };
+        let context = ConnectionContext {
+            request_id: result.request_id.clone(),
+            username: credentials.username.clone(),
+            role: credentials.role,
+            generation: credentials.generation,
+            kind: ConnectionKind::Authenticated,
+            expires_at: Instant::now() + Duration::from_secs(900),
+        };
+        match manager.retain_connection(context, stream, None) {
+            Ok(id) => {
+                result.success_step(3, "已读取固定账号与版本资料，并确认当前账号角色");
+                result.state = "authenticated";
+                result.code = "authenticated";
+                result.message = "已登录纵密装置，只读初始化完成".into();
+                result.username = Some(credentials.username);
+                result.role = Some(credentials.role);
+                result.session_id = Some(id);
+                result.device_version = Some(info.version);
+                tracing::info!("纵密只读初始化完成，保留已认证连接");
+                result
+            }
+            Err(message) => result.failure(3, "session_unavailable", message),
+        }
+    }
+}
+
 async fn connect_and_authenticate(
+    manager: &Arc<SecurityLoginManager>,
     mut result: LoginResult,
     profile: Arc<LoadedProfile>,
     packet: Zeroizing<Vec<u8>>,
+    credentials: AuthenticationContext,
 ) -> LoginResult {
     let Ok(now) = current_unix_time() else {
         return result.failure(
@@ -830,9 +918,9 @@ async fn connect_and_authenticate(
     );
     let exchange = exchange_credentials_once(&mut stream, &packet);
     let reply = tokio::time::timeout(Duration::from_secs(8), exchange).await;
-    // 每个分支均释放 TLS 和 TCP 流，关闭未经验证的连接。
+    // 只有合法应答可转交临时改密或已认证连接，其余分支关闭流。
     match reply {
-        Ok(Ok(reply)) => apply_reply(result, reply),
+        Ok(Ok(reply)) => complete_login(manager, result, credentials, stream, reply).await,
         Ok(Err(message)) => {
             let mut result = result.failure(2, "invalid_response", message);
             result.state = "unverified_response";
@@ -863,8 +951,8 @@ pub fn get_vertical_security_login_capabilities() -> LoginCapabilities {
     LoginCapabilities {
         direct_available: cfg!(windows),
         remote_available: false,
-        password_change_available: false,
-        reason: "当前仅支持证书配置及直连 TLS 登录尝试；正常成功码尚待真机验证，当前不会创建认证会话；改密和远程通道待接入",
+        password_change_available: cfg!(windows),
+        reason: "支持直连登录、默认或过期密码修改及只读初始化；修改后请使用新密码重新登录，远程通道与其他业务待接入",
     }
 }
 #[tauri::command]
@@ -900,8 +988,7 @@ pub async fn configure_vertical_security_certificate_profile(
     let manager = &state.security_login;
     let generation = {
         let mut inner = manager.inner.lock();
-        inner.config_generation = inner.config_generation.wrapping_add(1);
-        inner.config_generation
+        SecurityLoginManager::advance_configuration(&mut inner)
     };
     let loaded = tokio::task::spawn_blocking(move || load_profile(request))
         .await
@@ -912,6 +999,9 @@ pub async fn configure_vertical_security_certificate_profile(
     }
     for sender in inner.pending.values() {
         let _ = sender.send(true);
+    }
+    for (_, entry) in inner.connections.drain() {
+        entry.close();
     }
     let metadata = loaded.metadata.clone();
     inner.profile = Some(Arc::new(loaded));
@@ -929,6 +1019,8 @@ pub async fn login_vertical_security(
         Ok(packet) => packet,
         Err(message) => return Ok(result.failure(2, "invalid_credentials", message)),
     };
+    let default_password = protocol::default_password(&request.username, &request.password);
+    let old_digest = protocol::password_digest(&request.username, &request.password);
     request.password.zeroize();
     let manager = &state.security_login;
     let (mut cancellation, _guard) = match manager.begin(&request.request_id) {
@@ -962,11 +1054,29 @@ pub async fn login_vertical_security(
             ))
         }
     };
+    let generation = {
+        let inner = manager.inner.lock();
+        if !inner
+            .profile
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, &profile))
+        {
+            return Ok(result.failure(1, "certificate_changed", "证书配置已改变，请重新登录"));
+        }
+        inner.config_generation
+    };
+    let credentials = AuthenticationContext {
+        username: request.username.clone(),
+        role: request.role,
+        old_digest,
+        default_password,
+        generation,
+    };
     let cancelled =
         LoginResult::new(&request).failure(0, "cancelled", "纵密登录已取消，连接已关闭");
     tokio::select! { biased;
         _ = async { if !*cancellation.borrow() { let _ = cancellation.changed().await; } } => Ok(cancelled),
-        response = connect_and_authenticate(result, profile, packet) => {
+        response = connect_and_authenticate(manager, result, profile, packet, credentials) => {
             tracing::info!(code = response.code, state = response.state, "纵密登录尝试结束");
             if *cancellation.borrow() { Ok(cancelled) } else { Ok(response) }
         }
@@ -980,9 +1090,18 @@ pub fn cancel_vertical_security_login(
     state.security_login.cancel(&request_id)
 }
 #[tauri::command]
-pub fn logout_vertical_security(session_id: String) -> Result<(), String> {
-    let _ = session_id;
-    Err("未知纵密会话；尚未创建已验证的纵密身份".into())
+pub fn logout_vertical_security(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    state.security_login.close_session(&session_id)
+}
+#[tauri::command]
+pub fn is_vertical_security_login_active(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> bool {
+    state.security_login.connection_active(&connection_id)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1001,17 +1120,26 @@ pub struct PasswordChangeResult {
     message: &'static str,
 }
 #[tauri::command]
-pub fn change_vertical_security_password(
+pub async fn change_vertical_security_password(
+    state: tauri::State<'_, AppState>,
     mut request: PasswordChangeRequest,
 ) -> Result<PasswordChangeResult, String> {
-    request.new_password.zeroize();
-    let _ = &request.challenge_id;
-    Err("纵密密码修改尚未验证，当前未发送任何修改命令，请使用原纵密上位机处理".into())
+    validate_request_id(&request.challenge_id).map_err(str::to_string)?;
+    let password = Zeroizing::new(std::mem::take(&mut request.new_password));
+    Ok(state
+        .security_login
+        .change_password(&request.challenge_id, password)
+        .await)
 }
+
+#[cfg(test)]
+#[path = "security_login_flow_tests.rs"]
+mod flow_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
 
     // 默认自动模式应先尝试明确批准的旧版 pin，禁止把旧版兼容扩大到新版。
     #[cfg(windows)]
@@ -1525,7 +1653,7 @@ try {
         let mut bytes = Vec::from(12_i32.to_be_bytes());
         bytes.extend_from_slice(&ret.to_be_bytes());
         bytes.extend_from_slice(tail);
-        let (mut writer, mut reader) = tokio::io::duplex(1);
+        let (mut writer, mut reader) = tokio::io::duplex(256);
         let sender = tokio::spawn(async move {
             for byte in bytes {
                 writer.write_all(&[byte]).await.unwrap();
@@ -1589,15 +1717,18 @@ try {
 
     // 使用本地字节流或进程内状态验证，不连接真实纵密装置。
     #[tokio::test]
-    async fn security_login_expiration_is_not_authenticated_or_change_challenge() {
+    async fn security_login_unknown_expiration_never_opens_change_challenge() {
         let result = apply_reply(
             LoginResult::new(&fixture_request()),
             fragmented_reply(7, &[1, 2, 0]).await,
         );
-        assert_eq!(result.state, "password_change_required");
+        assert_eq!(result.state, "unverified_response");
         assert!(result.challenge_id.is_none());
         assert!(result.session_id.is_none());
-        assert!(!get_vertical_security_login_capabilities().password_change_available);
+        assert_eq!(
+            get_vertical_security_login_capabilities().password_change_available,
+            cfg!(windows)
+        );
     }
 
     // 使用本地字节流或进程内状态验证，不连接真实纵密装置。
@@ -1608,7 +1739,7 @@ try {
             vec![0, 0, 0, 12],
             vec![0, 0, 0, 13, 0, 0, 0, 0],
             vec![0, 0, 0, 12, 0, 0, 0, 0, 128],
-            vec![0, 0, 0, 12, 0, 0, 0, 7, 1, 0, 128],
+            vec![0, 0, 0, 12, 0, 0, 0, 17, 1, 0, 128],
         ] {
             let mut cursor = &bytes[..];
             assert!(read_login_reply(&mut cursor).await.is_err());
@@ -1691,14 +1822,16 @@ try {
     }
 
     // 纯 fixture 验证该分支，不连接真实纵密装置。
-    #[test]
-    fn security_login_unimplemented_change_and_unknown_logout_are_errors() {
-        assert!(logout_vertical_security("unknown".into()).is_err());
-        assert!(change_vertical_security_password(PasswordChangeRequest {
-            challenge_id: "unknown".into(),
-            new_password: "fixture-secret".into()
-        })
-        .is_err());
+    #[tokio::test]
+    async fn security_login_unknown_change_and_logout_are_errors() {
+        let manager = SecurityLoginManager::default();
+        assert!(manager.close_session("unknown").is_err());
+        assert!(
+            !manager
+                .change_password("unknown", Zeroizing::new("Fixture@2468X".into()))
+                .await
+                .changed
+        );
         assert!(!get_vertical_security_login_capabilities().remote_available);
     }
 }

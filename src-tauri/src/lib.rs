@@ -237,6 +237,7 @@ pub fn run() {
                 commands::security_login::login_vertical_security,
                 commands::security_login::cancel_vertical_security_login,
                 commands::security_login::logout_vertical_security,
+                commands::security_login::is_vertical_security_login_active,
                 commands::security_login::change_vertical_security_password,
                 commands::export_config::load_full_config_export,
                 commands::lower_update::check_lower_update,

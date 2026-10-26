@@ -275,6 +275,8 @@ export const api = {
     invoke<void>('cancel_vertical_security_login', { requestId }),
   logoutVerticalSecurity: (sessionId: string) =>
     invoke<void>('logout_vertical_security', { sessionId }),
+  isVerticalSecurityLoginActive: (connectionId: string) =>
+    invoke<boolean>('is_vertical_security_login_active', { connectionId }),
   changeVerticalSecurityPassword: (request: VerticalSecurityPasswordChangeRequest) =>
     invoke<VerticalSecurityPasswordChangeResult>('change_vertical_security_password', { request }),
   deployVerticalSecurityScript: (request: VerticalSecurityDeployRequest) =>

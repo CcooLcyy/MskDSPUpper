@@ -10,12 +10,14 @@ import type {
   VerticalSecurityLoginResult,
   VerticalSecurityRole,
 } from '../../adapters';
-import { canAttemptLogin, getBuiltinCertificateMode, getCertificateMatchPresentation, isAuthenticatedLogin, LOGIN_STAGES, loginContextMatches, type LoginIdentity } from './login-state';
+import { canAttemptLogin, getBuiltinCertificateMode, getCertificateMatchPresentation, isAuthenticatedLogin, isPasswordChangeRequired, LOGIN_STAGES, loginContextMatches, validateNewPassword, type LoginIdentity } from './login-state';
 
 const ROLE_OPTIONS = [{ value: 1, label: '系统管理员' }, { value: 2, label: '安全操作员' }, { value: 3, label: '日志审计员' }];
 const ROLE_HINTS = { 1: '管理装置账号与系统设置。', 2: '配置网络、隧道与策略。', 3: '查看运行日志与审计信息。' };
 const BUILTIN_MODE_OPTIONS = [{ value: 'auto', label: '自动匹配旧版／新版' }, { value: 'old', label: '仅旧版配套证书' }, { value: 'new', label: '仅新版配套证书' }];
 type ActiveRequest = { identity: LoginIdentity; generation: number; cancelled: boolean };
+type PasswordChallenge = { id: string; identity: LoginIdentity };
+type ActivePasswordChange = { challenge: PasswordChallenge; generation: number };
 
 export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy, onLockChange }: {
   mode: VerticalSecurityAccessMode;
@@ -42,6 +44,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const [changeBusy, setChangeBusy] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [challenge, setChallenge] = useState<PasswordChallenge | null>(null);
   const [result, setResult] = useState<VerticalSecurityLoginResult | null>(null);
   const [session, setSession] = useState<VerticalSecurityLoginResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,10 +53,10 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const generationRef = useRef(0);
   const activeRef = useRef<ActiveRequest | null>(null);
   const sessionRef = useRef<string | null>(null);
-  const challengeRef = useRef<string | null>(null);
+  const challengeRef = useRef<PasswordChallenge | null>(null);
+  const passwordChangeRef = useRef<ActivePasswordChange | null>(null);
   const secretInputs = useRef<Array<HTMLInputElement | null>>([]);
-  const challenge = result?.state === 'password_change_required' ? result.challenge_id : null;
-  const mustChangePassword = result?.state === 'password_change_required';
+  const mustChangePassword = Boolean(challenge);
   const locked = busy || certificateBusy || logoutBusy || changeBusy || Boolean(session) || mustChangePassword;
   const allowed = !initializing && canAttemptLogin(mode, deviceId, capabilities, profile);
   const certificateMatch = getCertificateMatchPresentation(result);
@@ -82,17 +85,53 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
       const active = activeRef.current;
       if (active) { active.cancelled = true; void api.cancelVerticalSecurityLogin(active.identity.request_id).catch(() => {}); }
       if (sessionRef.current) void api.logoutVerticalSecurity(sessionRef.current).catch(() => {});
-      if (challengeRef.current && !active) void api.cancelVerticalSecurityLogin(challengeRef.current).catch(() => {});
+      if (challengeRef.current) void api.cancelVerticalSecurityLogin(challengeRef.current.id).catch(() => {});
       for (const input of inputs) if (input) input.value = '';
       onLockChange(false);
     };
   }, [onLockChange]);
 
+  useEffect(() => {
+    const sessionId = session?.session_id;
+    const pending = challenge;
+    const connectionId = sessionId || pending?.id;
+    if (!connectionId || changeBusy) return;
+    const generation = generationRef.current;
+    let current = true;
+    let checking = false;
+    const check = async () => {
+      if (checking || passwordChangeRef.current) return;
+      checking = true;
+      let connected = false;
+      try { connected = await api.isVerticalSecurityLoginActive(connectionId); } catch { /* 状态无法确认时退出当前身份。 */ }
+      checking = false;
+      if (!current || !mountedRef.current || generationRef.current !== generation || passwordChangeRef.current
+        || (sessionId ? sessionRef.current !== sessionId : challengeRef.current !== pending) || connected) return;
+      generationRef.current += 1;
+      if (sessionId) {
+        sessionRef.current = null;
+        void api.logoutVerticalSecurity(sessionId).catch(() => {});
+      } else if (pending) {
+        challengeRef.current = null;
+        void api.cancelVerticalSecurityLogin(pending.id).catch(() => {});
+      }
+      setSession(null); setChallenge(null); setResult(null);
+      setPassword(''); setCertificatePassword(''); setNewPassword(''); setConfirmPassword('');
+      setError('纵密连接已失效或状态无法确认，请重新登录。'); setNotice(null);
+    };
+    const timer = window.setInterval(() => { void check(); }, 3000);
+    return () => { current = false; window.clearInterval(timer); };
+  }, [session, challenge, changeBusy]);
+
   const clearSecrets = () => { setPassword(''); setCertificatePassword(''); setNewPassword(''); setConfirmPassword(''); };
   const cleanupReturnedSession = async (value: VerticalSecurityLoginResult) => {
     if (!value.session_id) return;
-    try { await api.logoutVerticalSecurity(value.session_id); }
-    catch { if (mountedRef.current) setError('返回的异常或过期会话清理失败，请检查装置连接后退出此页重试。'); }
+    try { await api.logoutVerticalSecurity(value.session_id); } catch { /* 清理结果不能覆盖新请求的界面状态。 */ }
+  };
+  const cleanupReturnedConnection = async (value: VerticalSecurityLoginResult, requestId: string) => {
+    await cleanupReturnedSession(value);
+    const id = value.challenge_id?.trim() ? value.challenge_id : value.state === 'password_change_required' ? requestId : null;
+    if (id) { try { await api.cancelVerticalSecurityLogin(id); } catch { /* 后端到期清理仍会关闭该临时连接。 */ } }
   };
 
   const login = async () => {
@@ -109,30 +148,35 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
     try {
       const value = await api.loginVerticalSecurity({ ...identity, password: secret });
       if (!mountedRef.current || active.cancelled || generationRef.current !== active.generation) {
-        await cleanupReturnedSession(value); return;
+        await cleanupReturnedConnection(value, identity.request_id); return;
       }
       if (!loginContextMatches(identity, value)) {
-        await cleanupReturnedSession(value);
-        if (mountedRef.current) setError('登录结果与当前请求或目标设备不匹配，已拒绝建立纵密身份。');
+        await cleanupReturnedConnection(value, identity.request_id);
+        if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) setError('登录结果与当前请求或目标设备不匹配，已拒绝建立纵密身份。');
         return;
       }
       if (value.state === 'authenticated') {
         if (!isAuthenticatedLogin(identity, value)) {
-          await cleanupReturnedSession(value);
-          if (mountedRef.current) setError('登录身份或初始化结果不完整，已拒绝建立纵密身份。');
+          await cleanupReturnedConnection(value, identity.request_id);
+          if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) setError('登录身份或初始化结果不完整，已拒绝建立纵密身份。');
           return;
         }
         sessionRef.current = value.session_id;
         setSession(value); setResult(value);
       } else {
-        await cleanupReturnedSession(value);
-        if (!mountedRef.current || active.cancelled || generationRef.current !== active.generation) return;
-        if (value.state === 'password_change_required' && value.challenge_id && capabilities?.password_change_available
-          && (value.username !== identity.username || value.role !== identity.role)) {
-          setError('密码变更结果与当前账号或角色不匹配，已拒绝使用此结果。'); return;
+        if (value.state === 'password_change_required') {
+          if (!isPasswordChangeRequired(identity, value)) {
+            await cleanupReturnedConnection(value, identity.request_id);
+            if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) setError('密码变更身份或挑战不完整，已拒绝使用此结果，请重新登录。');
+            return;
+          }
+          const pending = { id: value.challenge_id!, identity };
+          challengeRef.current = pending; setChallenge(pending);
+        } else {
+          await cleanupReturnedConnection(value, identity.request_id);
+          if (!mountedRef.current || active.cancelled || generationRef.current !== active.generation) return;
         }
         setResult({ ...value, session_id: null });
-        if (value.state === 'password_change_required') challengeRef.current = identity.request_id;
       }
     } catch {
       if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) setError('纵密登录失败，请检查连接与装置状态后手动重试。');
@@ -202,38 +246,58 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const logout = async () => {
     const id = sessionRef.current;
     if (!id || logoutBusy) return;
+    const generation = generationRef.current;
     clearSecrets(); setLogoutBusy(true); setError(null);
     try {
       await api.logoutVerticalSecurity(id);
+      if (!mountedRef.current || generationRef.current !== generation || sessionRef.current !== id) return;
       sessionRef.current = null;
-      if (mountedRef.current) { setSession(null); setResult(null); setNotice('已退出纵密登录。'); }
-    } catch { if (mountedRef.current) setError('退出纵密登录失败，会话记录仍保留，请重试。'); }
-    finally { if (mountedRef.current) setLogoutBusy(false); }
+      setSession(null); setResult(null); setNotice('已退出纵密登录。');
+    } catch { if (mountedRef.current && generationRef.current === generation && sessionRef.current === id) setError('退出纵密登录失败，会话记录仍保留，请重试。'); }
+    finally { if (mountedRef.current && (generationRef.current === generation || sessionRef.current === null)) setLogoutBusy(false); }
   };
 
   const dismissChallenge = async () => {
-    if (!challengeRef.current || changeBusy) return;
-    clearSecrets(); setChangeBusy(true);
+    const pending = challengeRef.current;
+    if (!pending || passwordChangeRef.current || changeBusy) return;
+    const active = { challenge: pending, generation: ++generationRef.current };
+    passwordChangeRef.current = active;
+    clearSecrets(); setChangeBusy(true); setError(null); setNotice(null);
     try {
-      await api.cancelVerticalSecurityLogin(challengeRef.current);
-      challengeRef.current = null;
-      if (mountedRef.current) { setResult(null); setNotice('已结束密码变更流程，请重新登录。'); }
-    } catch { if (mountedRef.current) setError('结束密码变更流程失败，请重试。'); }
-    finally { if (mountedRef.current) setChangeBusy(false); }
+      await api.cancelVerticalSecurityLogin(pending.id);
+      if (mountedRef.current && generationRef.current === active.generation) setNotice('已结束密码变更流程，请重新登录。');
+    } catch {
+      if (mountedRef.current && generationRef.current === active.generation) setError('结束密码变更流程未获确认，请重新登录。');
+    } finally {
+      if (passwordChangeRef.current === active) passwordChangeRef.current = null;
+      if (mountedRef.current && generationRef.current === active.generation && challengeRef.current === pending) {
+        challengeRef.current = null; setChallenge(null); setResult(null); setChangeBusy(false);
+      }
+    }
   };
 
   const changePassword = async () => {
-    if (!capabilities?.password_change_available || !challenge || changeBusy) return;
-    if (!newPassword || newPassword.length > 32 || newPassword !== confirmPassword) { setError('请填写不超过 32 个字符的新密码，并确认两次输入一致。'); return; }
+    const pending = challengeRef.current;
+    if (!capabilities?.password_change_available || !pending || passwordChangeRef.current || changeBusy) return;
+    const validation = validateNewPassword(pending.identity.username, newPassword, confirmPassword);
+    if (validation) { setError(validation); return; }
     const secret = newPassword;
-    clearSecrets(); setChangeBusy(true); setError(null);
+    const active = { challenge: pending, generation: ++generationRef.current };
+    passwordChangeRef.current = active;
+    clearSecrets(); setChangeBusy(true); setError(null); setNotice(null);
     try {
-      const value = await api.changeVerticalSecurityPassword({ challenge_id: challenge, new_password: secret });
-      if (!mountedRef.current) return;
-      if (value.changed) { challengeRef.current = null; setResult(null); setNotice('密码已修改，请重新登录纵密装置。'); }
-      else setError('密码修改未完成，请检查装置状态；当前账号仍未登录。');
-    } catch { if (mountedRef.current) setError('密码修改失败，当前账号仍未登录。'); }
-    finally { if (mountedRef.current) setChangeBusy(false); }
+      const value = await api.changeVerticalSecurityPassword({ challenge_id: pending.id, new_password: secret });
+      if (!mountedRef.current || generationRef.current !== active.generation || challengeRef.current !== pending) return;
+      if (value.changed) setNotice('密码已修改，请使用新密码重新登录纵密装置。');
+      else setError(value.message?.trim() || '密码修改未完成，当前账号仍未登录，请重新登录。');
+    } catch {
+      if (mountedRef.current && generationRef.current === active.generation && challengeRef.current === pending) setError('密码修改结果未确认，请先手动核实装置状态后重新登录。');
+    } finally {
+      if (passwordChangeRef.current === active) passwordChangeRef.current = null;
+      if (mountedRef.current && generationRef.current === active.generation && challengeRef.current === pending) {
+        challengeRef.current = null; setChallenge(null); setResult(null); setChangeBusy(false);
+      }
+    }
   };
 
   return <section className="security-login-workbench" aria-label="纵密登录工作台">
@@ -242,12 +306,12 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
     <div className="security-access-columns">
       <Card title="装置身份认证" extra={<Tag color={session ? 'success' : busy ? 'processing' : 'default'}>{session ? '已登录' : busy ? '认证中' : '未登录'}</Tag>}>
         {session ? <>
-          <Alert type="success" showIcon title="已登录纵密装置" description="当前会话仅用于身份认证；纵密业务入口尚未接入。" />
+          <Alert type="success" showIcon title="已登录纵密装置" description="已完成身份认证与账号、版本资料只读初始化；纵密业务入口尚未接入。" />
           <dl className="security-login-session"><dt>当前账号</dt><dd>{session.username}</dd><dt>当前角色</dt><dd>{ROLE_OPTIONS.find(item => item.value === session.role)?.label}</dd><dt>装置地址</dt><dd>{session.target_ip}</dd><dt>装置版本</dt><dd>{session.device_version || '未提供'}</dd><dt>上次登录</dt><dd>{session.last_login_at || '未提供'}</dd></dl>
           <Button icon={<LogoutOutlined />} loading={logoutBusy} onClick={() => void logout()}>退出纵密登录</Button>
         </> : mustChangePassword ? <>
-          <Alert type="warning" showIcon title="需要修改纵密密码" description={result?.message} />
-          {!capabilities?.password_change_available || !challenge ? <Alert className="security-access-notice" type="info" title="密码修改流程尚未验证，当前不可修改" description="此状态不代表已经登录纵密装置。" /> : <div className="security-login-fields"><label>新密码<Input.Password aria-label="纵密新密码" value={newPassword} maxLength={32} autoComplete="off" disabled={changeBusy} onChange={event => setNewPassword(event.target.value)} /></label><label>确认新密码<Input.Password aria-label="确认纵密新密码" value={confirmPassword} maxLength={32} autoComplete="off" disabled={changeBusy} onChange={event => setConfirmPassword(event.target.value)} /></label><Button type="primary" loading={changeBusy} onClick={() => void changePassword()}>修改并重新登录</Button></div>}
+          <Alert type="warning" showIcon title="设置新密码" description={<><p>{result?.code === 'default_password' ? '当前密码为默认密码，必须修改后重新登录。' : '密码已过期，必须修改后重新登录。'}</p><p>{result?.message}</p><p>当前账号尚未登录。新密码须为 8 至 16 位，至少包含大写字母、小写字母、数字、特殊字符中的三类，不能包含用户名或空格。允许的特殊字符：!@#$_.-+=*?。</p></>} />
+          {!capabilities?.password_change_available ? <Alert className="security-access-notice" type="info" title="密码修改流程尚未验证，当前不可修改" description="此状态不代表已经登录纵密装置。" /> : <div className="security-login-fields"><label>新密码<Input.Password aria-label="纵密新密码" value={newPassword} maxLength={16} autoComplete="new-password" disabled={changeBusy} onChange={event => setNewPassword(event.target.value)} ref={node => { secretInputs.current[2] = node?.input ?? null; }} /></label><label>确认新密码<Input.Password aria-label="确认纵密新密码" value={confirmPassword} maxLength={16} autoComplete="new-password" disabled={changeBusy} onChange={event => setConfirmPassword(event.target.value)} ref={node => { secretInputs.current[3] = node?.input ?? null; }} /></label><Button type="primary" loading={changeBusy} onClick={() => void changePassword()}>修改密码并返回登录</Button></div>}
           <Button className="security-access-notice" disabled={changeBusy} onClick={() => void dismissChallenge()}>取消并返回登录</Button>
         </> : <>
           <div className="security-login-fields">

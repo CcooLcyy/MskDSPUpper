@@ -2141,6 +2141,7 @@ export const browserApi: typeof tauriApi = {
     steps: [],
   }),
   cancelVerticalSecurityLogin: async (requestId: string): Promise<void> => { void requestId; },
+  isVerticalSecurityLoginActive: async (connectionId: string): Promise<boolean> => { void connectionId; return false; },
   logoutVerticalSecurity: async (sessionId: string): Promise<void> => {
     void sessionId;
     throw new Error('浏览器模式没有可退出的纵密会话。');

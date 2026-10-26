@@ -35,6 +35,33 @@ export function isAuthenticatedLogin(request: LoginIdentity, result: VerticalSec
     && result.steps.every(step => step.state === 'success');
 }
 
+export function isPasswordChangeRequired(request: LoginIdentity, result: VerticalSecurityLoginResult): boolean {
+  return loginContextMatches(request, result)
+    && result.state === 'password_change_required'
+    && (result.code === 'default_password' || result.code === 'password_expired')
+    && result.username === request.username
+    && result.role === request.role
+    && typeof result.challenge_id === 'string'
+    && Boolean(result.challenge_id.trim())
+    && result.session_id === null
+    && (result.certificate_group !== 'old' || result.legacy_compatibility === true)
+    && (result.legacy_compatibility !== true || result.certificate_group === 'old')
+    && result.steps.length === LOGIN_STAGES.length
+    && LOGIN_STAGES.every(stage => result.steps.some(step => step.id === stage.id
+      && step.state === (stage.id === 'initialize' ? 'pending' : 'success')));
+}
+
+export function validateNewPassword(username: string, password: string, confirmation: string): string | null {
+  if (password !== confirmation) return '两次新密码输入不一致，请重新输入。';
+  if (password.length < 8 || password.length > 16) return '新密码长度须为 8 至 16 个 ASCII 字符。';
+  // 与原程序 XOPUtil.checkPassword 的实际字符集合一致。
+  if (!/^[A-Za-z0-9!@#$_.+=*?-]+$/.test(password)) return '新密码仅允许英文字母、数字及 !@#$_.-+=*? 中的特殊字符，不能包含空格。';
+  if (username && password.includes(username)) return '新密码不能包含用户名。';
+  const categories = [/[A-Z]/, /[a-z]/, /[0-9]/, /[!@#$_.+=*?-]/];
+  if (categories.filter(pattern => pattern.test(password)).length < 3) return '新密码至少包含大写字母、小写字母、数字和特殊字符中的三类。';
+  return null;
+}
+
 export function canAttemptLogin(
   mode: VerticalSecurityAccessMode,
   deviceId: string | undefined,
