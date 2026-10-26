@@ -58,6 +58,8 @@ class AccessPathInstallTest(unittest.TestCase):
         self.system = self.dir / 'system'
         for relative in ['usr/local/lib', 'etc/systemd/system', 'run']:
             (self.system / relative).mkdir(parents=True, exist_ok=True)
+        self.nsswitch=self.system/'etc/nsswitch.conf'
+        self.nsswitch.write_text('passwd: files systemd\ngroup: files systemd\n')
         for name, body in [('systemctl', SYSTEMCTL), ('mv', WRITER), ('chown', WRITER), ('rm', WRITER)]:
             tool = self.dir / name; tool.write_text(body); tool.chmod(0o755)
 
@@ -80,6 +82,150 @@ class AccessPathInstallTest(unittest.TestCase):
 
     def unit(self):
         return self.system / 'etc/systemd/system/mskdsp-vertical-security-access.service'
+
+    def make_system_ancestors_775(self):
+        for relative in ['usr','usr/local','usr/local/lib','etc','etc/systemd','etc/systemd/system']:
+            (self.system/relative).chmod(0o775)
+
+    def test_site_root_root_775_ancestors_allow_install_with_trusted_root_group(self):
+        self.make_system_ancestors_775()
+        result=self.run_install()
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('MSKDSP_PATH|persistence|success',result.stdout)
+
+    def test_normal_755_ancestors_do_not_require_nss(self):
+        self.state.write_text(json.dumps({**self.initial,'getent_fail':'all'}))
+        self.nsswitch.unlink()
+        result=self.run_install()
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertFalse(any(call[0]=='getent' for call in self.read()['calls']))
+
+    def test_initgroups_may_return_name_only_or_only_supplementary_groups(self):
+        self.make_system_ancestors_775()
+        passwd='root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\noperator:x:1000:1000:operator:/home/operator:/bin/bash'
+        self.state.write_text(json.dumps({**self.initial,'passwd':passwd,'initgroups':{'daemon':'daemon    ','operator':'operator 27'}}))
+        result=self.run_install()
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+    def test_initgroups_missing_name_wrong_name_or_zero_group_is_rejected(self):
+        self.make_system_ancestors_775()
+        for output in ['', '   ', 'another-user 1', 'daemon 0']:
+            with self.subTest(output=output):
+                self.state.write_text(json.dumps({**self.initial,'initgroups':{'daemon':output}}))
+                result=self.run_install()
+                self.assertNotEqual(result.returncode,0)
+                self.assertIn('MSKDSP_PATH|detail|root_group_untrusted',result.stdout)
+                self.assertEqual(self.read()['mutations'],[])
+
+    def test_remote_nss_source_with_unenumerated_gid_zero_user_is_rejected(self):
+        self.make_system_ancestors_775()
+        self.nsswitch.write_text('passwd: files sss\ngroup: files sss\n')
+        self.state.write_text(json.dumps({**self.initial,'initgroups':{'hidden_remote':'hidden_remote 0'}}))
+        result=self.run_install()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('MSKDSP_PATH|detail|root_group_untrusted',result.stdout)
+        self.assertFalse(any(call[0]=='getent' for call in self.read()['calls']))
+        self.assertEqual(self.read()['mutations'],[])
+
+    def test_unknown_incomplete_complex_or_untrusted_nsswitch_is_rejected(self):
+        self.make_system_ancestors_775()
+        for config in ['passwd: files\n','group: files\n','passwd: files\ngroup: files\ninitgroups: ldap\n',
+            'passwd: files [SUCCESS=return] systemd\ngroup: files\n',
+            'passwd: files\npasswd: files\ngroup: files\n','passwd: systemd files\ngroup: files\n']:
+            with self.subTest(config=config):
+                self.nsswitch.write_text(config)
+                self.state.write_text(json.dumps(self.initial))
+                result=self.run_install()
+                self.assertNotEqual(result.returncode,0)
+                self.assertEqual(self.read()['mutations'],[])
+        self.nsswitch.write_text('passwd: files\ngroup: files\ninitgroups: files systemd\n')
+        for override,mode in [({'path_uid':{str(self.nsswitch):1000}},0o644),({},0o664)]:
+            with self.subTest(override=override,mode=mode):
+                self.nsswitch.chmod(mode); self.state.write_text(json.dumps({**self.initial,**override}))
+                self.assertNotEqual(self.run_install().returncode,0)
+                self.assertEqual(self.read()['mutations'],[])
+
+    def test_files_only_and_optional_local_initgroups_sources_are_supported(self):
+        self.make_system_ancestors_775()
+        for config in ['passwd: files\ngroup: files\n',
+            '# local NSS\n passwd : files systemd # supported\ngroup: files\ninitgroups: files systemd\n']:
+            with self.subTest(config=config):
+                self.nsswitch.write_text(config)
+                result=self.run_install()
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+    def test_missing_or_symbolic_nsswitch_cannot_enable_group_write_exception(self):
+        self.make_system_ancestors_775()
+        self.nsswitch.unlink()
+        missing=self.run_install()
+        self.assertNotEqual(missing.returncode,0)
+        self.assertIn('MSKDSP_PATH|detail|root_group_untrusted',missing.stdout)
+        foreign=self.dir/'foreign-nsswitch'; foreign.write_text('passwd: files\ngroup: files\n')
+        self.nsswitch.symlink_to(foreign)
+        linked=self.run_install()
+        self.assertNotEqual(linked.returncode,0)
+        self.assertIn('MSKDSP_PATH|detail|root_group_untrusted',linked.stdout)
+        self.assertEqual(self.read()['mutations'],[])
+
+    def test_root_group_exception_rejects_untrusted_primary_supplementary_or_nss_failure(self):
+        self.make_system_ancestors_775()
+        for detail,override in [
+            ('primary',{'passwd':'root:x:0:0:root:/root:/bin/bash\nordinary:x:1000:0:ordinary:/home/ordinary:/bin/sh'}),
+            ('supplementary',{'groups':'root:x:0:daemon\ndaemon:x:1:'}),
+            ('dynamic-supplementary',{'initgroups':{'daemon':'daemon 1 0'}}),
+            ('group-alias',{'groups':'root:x:0:\nalias:x:0:daemon\ndaemon:x:1:'}),
+            ('missing-member',{'groups':'root:x:0:missing\ndaemon:x:1:'}),
+            ('group-query',{'getent_fail':'group'}),
+            ('passwd-query',{'getent_fail':'passwd'}),
+            ('initgroups-query',{'getent_fail':'initgroups'}),
+        ]:
+            with self.subTest(detail=detail):
+                self.state.write_text(json.dumps({**self.initial,**override}))
+                result=self.run_install()
+                self.assertNotEqual(result.returncode,0)
+                self.assertIn('MSKDSP_PATH|detail|root_group_untrusted',result.stdout)
+                self.assertEqual(self.read()['mutations'],[])
+
+    def test_ancestor_exception_rejects_nonroot_owner_group_other_write_acl_and_read_errors(self):
+        path=self.system/'usr'
+        for detail,mode,override in [
+            ('owner',0o775,{'path_uid':{str(path):1000}}),
+            ('group',0o775,{'path_gid':{str(path):50}}),
+            ('other-write',0o777,{}),
+            ('acl',0o775,{'acl_paths':[str(path)]}),
+            ('acl-755',0o755,{'acl_paths':[str(path)]}),
+            ('stat-read',0o775,{'stat_fail_paths':[str(path)]}),
+            ('ls-read',0o775,{'ls_fail_paths':[str(path)]}),
+        ]:
+            with self.subTest(detail=detail):
+                path.chmod(mode)
+                self.state.write_text(json.dumps({**self.initial,**override}))
+                result=self.run_install()
+                self.assertNotEqual(result.returncode,0)
+                self.assertIn('MSKDSP_PATH|detail|directory_usr',result.stdout)
+                self.assertEqual(self.read()['mutations'],[])
+
+    def test_managed_directory_remains_strict_even_with_trusted_root_group(self):
+        self.assertEqual(self.run_install().returncode,0)
+        (self.system/'usr/local/lib/mskdsp-vertical-security-access').chmod(0o775)
+        n=len(self.read()['mutations'])
+        result=self.run_install()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('MSKDSP_PATH|detail|directory_managed',result.stdout)
+        self.assertEqual(len(self.read()['mutations']),n)
+
+    def test_run_directory_and_lock_remain_strict(self):
+        run=self.system/'run'; run.chmod(0o775)
+        result=self.run_install()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('MSKDSP_PATH|detail|directory_run',result.stdout)
+        self.assertEqual(self.read()['mutations'],[])
+        run.chmod(0o755)
+        lock=run/'mskdsp-vertical-security-access.lock'; lock.write_text(''); lock.chmod(0o666)
+        result=self.run_install()
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('MSKDSP_PATH|detail|directory_run',result.stdout)
+        self.assertEqual(self.read()['mutations'],[])
 
     def test_install_repeat_and_simulated_boot_restore(self):
         first = self.run_install()
@@ -167,6 +313,7 @@ class AccessPathInstallTest(unittest.TestCase):
         directory.symlink_to(foreign, target_is_directory=True)
         result = self.run_install()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('MSKDSP_PATH|detail|directory_usr_local_lib', result.stdout)
         self.assertEqual(self.read()['mutations'], [])
         self.assertEqual(list(foreign.iterdir()), [])
 

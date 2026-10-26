@@ -85,7 +85,7 @@ const dialog = () => page.getByRole('dialog', { name: /配置纵密访问通路/
 async function openPath() { await page.getByRole('button', { name: /配置纵密访问通路/ }).click(); await dialog().waitFor(); }
 async function fillPath() { await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).fill('fixture@fixture-host:10022'); await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).fill('fixture-ssh-secret'); }
 async function resolvePath(applied = true) {
-  await page.evaluate(value => window.__securityPathMock.pathResolve({ target_ip: '11.22.33.44', applied: value, exit_code: value ? 0 : 1, message: value ? 'fixture 配置完成；目标连通性尚未检查' : 'fixture 预检查拒绝，未完成配置', steps: ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'].map(id => ({ id, name: id === 'persistence' ? '开机恢复' : id, state: value ? 'success' : id === 'preflight' ? 'failed' : 'unsupported', message: value ? 'fixture 检查通过' : id === 'preflight' ? 'fixture 固定地址冲突' : 'fixture 阶段未执行' })) }), applied);
+  await page.evaluate(value => window.__securityPathMock.pathResolve({ target_ip: '11.22.33.44', applied: value, exit_code: value ? 0 : 1, message: value ? 'fixture 配置完成；目标连通性尚未检查' : 'fixture 预检查拒绝，未完成配置', steps: ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'].map(id => ({ id, name: id === 'persistence' ? '开机恢复' : id, state: value ? 'success' : id === 'preflight' ? 'failed' : 'pending', message: value ? 'fixture 检查通过' : id === 'preflight' ? 'fixture 固定地址冲突' : 'fixture 阶段未执行' })) }), applied);
 }
 async function check(name, run) { await run(); results.push(name); }
 
@@ -141,7 +141,35 @@ try {
     await dialog().getByText('访问通路配置未完成', { exact: true }).waitFor();
     assert.equal(await dialog().getByText('访问通路已应用', { exact: true }).count(), 0);
     await dialog().getByText('fixture 固定地址冲突', { exact: true }).waitFor();
+    assert.equal(await dialog().getByText('未执行', { exact: true }).count(), 5);
+    assert.equal(await dialog().getByText('不支持', { exact: true }).count(), 0);
     assert.equal(await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).isDisabled(), false);
+  });
+  await check('目录预检失败显示白名单原因，后续阶段明确未执行', async () => {
+    await openFixture(); await openPath(); await fillPath();
+    await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click();
+    await page.waitForFunction(() => Boolean(window.__securityPathMock.pathResolve));
+    await page.evaluate(() => window.__securityPathMock.pathResolve({ target_ip: '11.22.33.44', applied: false, exit_code: 1, message: 'fixture 目录预检查失败', steps: ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'].map(id => ({ id, name: id, state: id === 'preflight' ? 'failed' : 'pending', message: id === 'preflight' ? '目录 /usr 的所有者、权限或访问控制不满足可信目录要求' : '前置阶段失败，本阶段未执行。' })) }));
+    await dialog().getByText('目录 /usr 的所有者、权限或访问控制不满足可信目录要求', { exact: true }).waitFor();
+    assert.equal(await dialog().getByText('失败', { exact: true }).count(), 1);
+    assert.equal(await dialog().getByText('未执行', { exact: true }).count(), 5);
+    assert.equal(await dialog().getByText('未确认', { exact: true }).count(), 0);
+    assert.equal(await dialog().getByText('不支持', { exact: true }).count(), 0);
+    assert.equal(await dialog().getByText('访问通路已应用', { exact: true }).count(), 0);
+    assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '');
+  });
+  await check('超时与结果缺失标为未确认，不冒充未执行或环境不支持', async () => {
+    await openFixture(); await openPath(); await fillPath();
+    await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click();
+    await page.waitForFunction(() => Boolean(window.__securityPathMock.pathResolve));
+    await page.evaluate(() => window.__securityPathMock.pathResolve({ target_ip: '11.22.33.44', applied: false, exit_code: null, message: 'fixture SSH 操作超时，实际配置状态未确认', steps: ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'].map(id => ({ id, name: id, state: 'unknown', message: '未取得该阶段的确认结果。' })) }));
+    await dialog().getByText('fixture SSH 操作超时，实际配置状态未确认', { exact: false }).waitFor();
+    assert.equal(await dialog().getByText('未确认', { exact: true }).count(), 6);
+    assert.equal(await dialog().getByText('未执行', { exact: true }).count(), 0);
+    assert.equal(await dialog().getByText('不支持', { exact: true }).count(), 0);
+    assert.equal(await dialog().getByText('访问通路已应用', { exact: true }).count(), 0);
+    assert.equal((await calls('check_vertical_security_access')).length, 0);
+    assert.equal((await calls('login_vertical_security')).length, 0);
   });
   await check('完成标记与退出码或步骤冲突时拒绝宣称已应用', async () => {
     await openFixture(); await openPath(); await fillPath();

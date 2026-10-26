@@ -321,12 +321,19 @@ export interface VerticalSecurityAccessPathRequest {
   sudo_password: string;
 }
 
+export interface VerticalSecurityAccessPathStep {
+  id: string;
+  name: string;
+  state: 'success' | 'failed' | 'pending' | 'unknown' | 'unsupported';
+  message: string;
+}
+
 export interface VerticalSecurityAccessPathResult {
   target_ip: string;
   applied: boolean;
   exit_code: number | null;
   message: string;
-  steps: VerticalSecurityAccessStep[];
+  steps: VerticalSecurityAccessPathStep[];
 }
 
 export interface VerticalSecurityLoginRequest {

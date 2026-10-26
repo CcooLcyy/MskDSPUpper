@@ -115,14 +115,14 @@ finish_install() {
 trap finish_install EXIT
 trap 'exit 130' INT TERM HUP
 
-for tool in bash cat stat id flock ip iptables sysctl awk grep sha256sum systemctl mktemp cp chmod chown mv rm rmdir readlink head tail mkdir; do
+for tool in bash cat stat ls id flock ip iptables sysctl awk grep sha256sum systemctl mktemp cp chmod chown mv rm rmdir readlink head tail mkdir; do
     command -v "$tool" >/dev/null
 done
 [[ "$(id -u)" == 0 ]]
 acquire_path_lock
-for directory in /usr /usr/local /usr/local/lib /etc /etc/systemd /etc/systemd/system; do secure_directory "$directory"; done
-if [[ -e "$root" || -L "$root" ]]; then secure_directory "$root"; fi
-if [[ -e "$wants_dir" || -L "$wants_dir" ]]; then secure_directory "$wants_dir"; fi
+for directory in /usr /usr/local /usr/local/lib /etc /etc/systemd /etc/systemd/system; do system_ancestor_directory "$directory"; done
+if [[ -e "$root" || -L "$root" ]]; then strict_directory "$root" directory_managed; fi
+if [[ -e "$wants_dir" || -L "$wants_dir" ]]; then system_ancestor_directory "$wants_dir"; fi
 [[ ! -e "$unit_path.d" && ! -L "$unit_path.d" ]]
 [[ -n "$(systemctl show --property=Version --value)" ]]
 load_state=$(systemctl show "$service" --property=LoadState --value) || :
@@ -143,7 +143,7 @@ if [[ "$load_state" == loaded ]]; then [[ "$fragment" == "$unit_path" ]]
 else [[ "$load_state" == not-found && -z "$fragment" ]]; fi
 
 if [[ -e "$root" || -e "$unit_path" || -L "$unit_path" ]]; then
-    secure_directory "$root"
+    strict_directory "$root" directory_managed
     secure_file "$runtime_path"; secure_file "$unit_path"; secure_file "$ownership_path"
     # marker 不能单独证明归属；固定格式 ownership 中的两项散列也必须匹配。
     mapfile -t ownership <"$ownership_path"

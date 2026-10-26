@@ -8,6 +8,7 @@ changed=0
 addr101=0 addr108=0 route101=0 route108=0 fwout=0 fwin=0 snat=0 forward=0 proxy=0
 old_forward=0 old_proxy=0
 shared_forward_retained=0
+root_group_check=unchecked
 out_rule=(-i eth0.101 -o eth0.108 -s 11.22.33.0/24 -d 11.22.33.44/32 -j ACCEPT)
 in_rule=(-i eth0.108 -o eth0.101 -s 11.22.33.44/32 -d 11.22.33.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT)
 nat_rule=(-o eth0.108 -s 11.22.33.0/24 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2)
@@ -43,19 +44,126 @@ finish() {
 }
 secure_directory() {
     local path="$1" uid mode
-    [[ -d "$path" && ! -L "$path" ]]
-    uid=$(stat -c %u -- "$path"); mode=$(stat -c %a -- "$path")
-    [[ "$uid" == 0 && "$mode" =~ ^[0-7]{3,4}$ ]]
+    [[ -d "$path" && ! -L "$path" ]] || return 1
+    uid=$(stat -c %u -- "$path") || return 1
+    mode=$(stat -c %a -- "$path") || return 1
+    [[ "$uid" == 0 && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
     (( (8#$mode & 022) == 0 ))
+}
+strict_directory() {
+    if ! secure_directory "$1"; then emit detail "$2"; return 1; fi
+}
+local_nss_sources_only() {
+    local path=/etc/nsswitch.conf uid mode
+    # 远程 NSS 可能不支持完整枚举；本轮例外只支持固定的本机身份来源。
+    [[ -f "$path" && ! -L "$path" && -r "$path" ]] || return 1
+    uid=$(stat -c %u -- "$path") || return 1
+    mode=$(stat -c %a -- "$path") || return 1
+    [[ "$uid" == 0 && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 022) == 0 )) || return 1
+    LC_ALL=C awk '
+        {
+            sub(/#.*/, "");
+            colon=index($0, ":");
+            if (!colon) next;
+            database=substr($0, 1, colon-1);
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", database);
+            if (database!="passwd" && database!="group" && database!="initgroups") next;
+            source=substr($0, colon+1);
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", source);
+            gsub(/[[:space:]]+/, " ", source);
+            if (source!="files" && source!="files systemd") bad=1;
+            seen[database]++;
+        }
+        END { exit (bad || seen["passwd"]!=1 || seen["group"]!=1 || seen["initgroups"]>1) ? 1 : 0 }
+    ' "$path" 2>/dev/null || return 1
+}
+trusted_root_group() {
+    local group_data passwd_data name password gid members extra member record member_name member_uid
+    local uid gecos home shell membership token found_group=0 found_root_user=0
+    local -a member_names group_ids
+    if [[ "$root_group_check" == trusted ]]; then return 0; fi
+    if [[ "$root_group_check" == untrusted ]]; then return 1; fi
+    root_group_check=untrusted
+    local_nss_sources_only || return 1
+    command -v getent >/dev/null || return 1
+    group_data=$(getent group 2>/dev/null) || return 1
+    passwd_data=$(getent passwd 2>/dev/null) || return 1
+    [[ -n "$group_data" && -n "$passwd_data" ]] || return 1
+    # 扫描全部 gid=0 的组（包括别名），不能只相信名为 root 的一个条目。
+    while IFS=: read -r name password gid members extra; do
+        [[ -n "$name" && "$gid" =~ ^[0-9]+$ && -z "$extra" ]] || return 1
+        if [[ "$gid" =~ ^0+$ ]]; then
+            found_group=1
+            member_names=()
+            IFS=, read -r -a member_names <<<"$members"
+            for member in "${member_names[@]}"; do
+                [[ -n "$member" ]] || return 1
+                record=$(getent passwd "$member" 2>/dev/null) || return 1
+                [[ "$record" != *$'\n'* ]] || return 1
+                IFS=: read -r member_name password member_uid gid gecos home shell extra <<<"$record"
+                [[ "$member_name" == "$member" && "$member_uid" =~ ^0+$ && -z "$extra" ]] || return 1
+            done
+        fi
+    done <<<"$group_data"
+    # 主组成员不一定出现在 group 的成员列表；NSS initgroups 还可能提供动态附组。
+    while IFS=: read -r name password uid gid gecos home shell extra; do
+        [[ -n "$name" && "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ && -z "$extra" ]] || return 1
+        if [[ "$uid" =~ ^0+$ ]]; then found_root_user=1; continue; fi
+        [[ ! "$gid" =~ ^0+$ ]] || return 1
+        membership=$(getent initgroups "$name" 2>/dev/null) || return 1
+        [[ "$membership" != *$'\n'* ]] || return 1
+        read -r -a group_ids <<<"$membership"
+        # 部分 getent 只返回附加组；无附加组时 rc=0 且只返回用户名是正常结果。
+        # 主组 gid 已由上面的 passwd 检查覆盖，不能在这里再要求重复出现。
+        [[ "${#group_ids[@]}" -ge 1 && "${group_ids[0]}" == "$name" ]] || return 1
+        for token in "${group_ids[@]:1}"; do
+            [[ "$token" =~ ^[0-9]+$ && ! "$token" =~ ^0+$ ]] || return 1
+        done
+    done <<<"$passwd_data"
+    [[ "$found_group" == 1 && "$found_root_user" == 1 ]] || return 1
+    root_group_check=trusted
+}
+system_ancestor_directory() {
+    local path="$1" code uid gid mode listing permissions
+    # 仅这些固定系统目录可以使用受限的 root 组写权限例外。
+    case "$path" in
+        /usr) code=directory_usr ;;
+        /usr/local) code=directory_usr_local ;;
+        /usr/local/lib) code=directory_usr_local_lib ;;
+        /etc) code=directory_etc ;;
+        /etc/systemd) code=directory_etc_systemd ;;
+        /etc/systemd/system) code=directory_unit ;;
+        /etc/systemd/system/multi-user.target.wants) code=directory_wants ;;
+        *) return 1 ;;
+    esac
+    if [[ ! -d "$path" || -L "$path" ]]; then emit detail "$code"; return 1; fi
+    if ! uid=$(stat -c %u -- "$path") || ! gid=$(stat -c %g -- "$path") || ! mode=$(stat -c %a -- "$path"); then
+        emit detail "$code"; return 1
+    fi
+    if [[ "$uid" != 0 || ! "$mode" =~ ^[0-7]{3,4}$ ]] || (( (8#$mode & 002) != 0 )); then
+        emit detail "$code"; return 1
+    fi
+    if ! listing=$(LC_ALL=C ls -ld -- "$path" 2>/dev/null); then emit detail "$code"; return 1; fi
+    permissions="${listing%%[[:space:]]*}"
+    # '+' 是扩展 ACL；'.' 只表示安全上下文，不扩大文件访问权限。
+    if [[ ! "$permissions" =~ ^d[rwxstST-]{9}\.?$ ]]; then emit detail "$code"; return 1; fi
+    if (( (8#$mode & 020) != 0 )); then
+        if [[ "$gid" != 0 ]]; then emit detail "$code"; return 1; fi
+        if ! trusted_root_group; then emit detail root_group_untrusted; return 1; fi
+    fi
 }
 acquire_path_lock() {
     local path=/run/mskdsp-vertical-security-access.lock uid mode links
-    secure_directory /run
+    strict_directory /run directory_run
     if [[ -e "$path" || -L "$path" ]]; then
-        [[ -f "$path" && ! -L "$path" ]]
-        uid=$(stat -c %u -- "$path"); mode=$(stat -c %a -- "$path"); links=$(stat -c %h -- "$path")
-        [[ "$uid" == 0 && "$links" == 1 && "$mode" =~ ^[0-7]{3,4}$ ]]
-        (( (8#$mode & 022) == 0 ))
+        if [[ ! -f "$path" || -L "$path" ]]; then emit detail directory_run; return 1; fi
+        if ! uid=$(stat -c %u -- "$path") || ! mode=$(stat -c %a -- "$path") || ! links=$(stat -c %h -- "$path"); then
+            emit detail directory_run; return 1
+        fi
+        if [[ "$uid" != 0 || "$links" != 1 || ! "$mode" =~ ^[0-7]{3,4}$ ]] || (( (8#$mode & 022) != 0 )); then
+            emit detail directory_run; return 1
+        fi
     fi
     # 同一把锁覆盖手动配置、持久化事务及开机恢复。
     exec 9>"$path"

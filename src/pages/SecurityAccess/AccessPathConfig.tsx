@@ -5,6 +5,16 @@ import { api } from '../../adapters';
 import type { LowerUpdateSshAuth, VerticalSecurityAccessPathResult } from '../../adapters';
 
 const REQUIRED_PHASES = ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'] as const;
+const STEP_PRESENTATION: Record<VerticalSecurityAccessPathResult['steps'][number]['state'], {
+  label: string;
+  status: 'success' | 'error' | 'warning' | 'default';
+}> = {
+  success: { label: '通过', status: 'success' },
+  failed: { label: '失败', status: 'error' },
+  pending: { label: '未执行', status: 'default' },
+  unknown: { label: '未确认', status: 'warning' },
+  unsupported: { label: '不支持', status: 'warning' },
+};
 
 function isVerifiedApplied(result: VerticalSecurityAccessPathResult | null): boolean {
   return result?.target_ip === '11.22.33.44' && result.applied === true && result.exit_code === 0
@@ -96,7 +106,10 @@ export default function AccessPathConfig({ disabled, onBusyChange, onApplied }: 
       </Form>
       {busy && <Alert type="info" showIcon title="正在应用访问通路，请等待设备返回结果" description="页面不会自动登录或运行网络检查。" />}
       {error && <Alert className="security-access-notice" type="error" showIcon title={error} />}
-      {result && <section className="security-path-result" aria-label="访问通路配置结果"><Alert type={verifiedApplied ? 'success' : 'error'} showIcon title={verifiedApplied ? '访问通路已应用' : '访问通路配置未完成'} description={<>{result.message}<p>退出码：{result.exit_code ?? '未返回'}</p></>} /><div aria-live="polite">{result.steps.map((step, index) => <div className="security-access-step" key={`${step.id}-${index}`}><Badge status={step.state === 'success' ? 'success' : step.state === 'failed' ? 'error' : 'warning'} /><div><strong>{step.name}</strong><p>{step.message}</p></div><span>{step.state === 'success' ? '通过' : step.state === 'failed' ? '失败' : '不支持'}</span></div>)}</div>{verifiedApplied && <p>可关闭窗口后手动检查直连或登录；页面没有自动发起检查与登录。</p>}</section>}
+      {result && <section className="security-path-result" aria-label="访问通路配置结果"><Alert type={verifiedApplied ? 'success' : 'error'} showIcon title={verifiedApplied ? '访问通路已应用' : '访问通路配置未完成'} description={<>{result.message}<p>退出码：{result.exit_code ?? '未返回'}</p></>} /><div aria-live="polite">{result.steps.map((step, index) => {
+        const presentation = STEP_PRESENTATION[step.state] ?? STEP_PRESENTATION.unknown;
+        return <div className="security-access-step" key={`${step.id}-${index}`}><Badge status={presentation.status} /><div><strong>{step.name}</strong><p>{step.message}</p></div><span>{presentation.label}</span></div>;
+      })}</div>{verifiedApplied && <p>可关闭窗口后手动检查直连或登录；页面没有自动发起检查与登录。</p>}</section>}
     </Modal>
   </>;
 }

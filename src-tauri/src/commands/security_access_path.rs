@@ -98,7 +98,7 @@ fn unavailable(message: &str) -> AccessPathResult {
             .map(|(id, name, _)| AccessPathStep {
                 id,
                 name,
-                state: "unsupported",
+                state: "unknown",
                 message: "未取得该阶段的确认结果".into(),
             })
             .collect(),
@@ -157,13 +157,33 @@ fn command() -> Result<String, String> {
     ))
 }
 
+// 仅接收固定诊断代码，禁止将任意远程文本或路径带入页面和本机日志。
+fn directory_diagnostic(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "directory_run" => "目录 /run 的所有者、权限或访问控制不满足可信目录要求",
+        "directory_usr" => "目录 /usr 的所有者、权限或访问控制不满足可信目录要求",
+        "directory_usr_local" => "目录 /usr/local 的所有者、权限或访问控制不满足可信目录要求",
+        "directory_usr_local_lib" => {
+            "目录 /usr/local/lib 的所有者、权限或访问控制不满足可信目录要求"
+        }
+        "directory_etc" => "目录 /etc 的所有者、权限或访问控制不满足可信目录要求",
+        "directory_etc_systemd" => "目录 /etc/systemd 的所有者、权限或访问控制不满足可信目录要求",
+        "directory_unit" => "目录 /etc/systemd/system 的所有者、权限或访问控制不满足可信目录要求",
+        "directory_managed" => "专属维护脚本目录的所有者、权限或访问控制不满足要求",
+        "directory_wants" => "开机服务启用目录的所有者、权限或访问控制不满足可信目录要求",
+        "root_group_untrusted" => "无法确认 root 组仅包含特权账号，已拒绝组可写目录",
+        _ => return None,
+    })
+}
+
 fn parse_result(exit_code: Option<u32>, output: &str) -> AccessPathResult {
-    let mut states = ["unsupported"; PHASES.len()];
+    let mut states = ["unknown"; PHASES.len()];
     let mut success_counts = [0; PHASES.len()];
     let mut result_count = 0;
     let mut has_failure = false;
     let mut success = false;
     let mut rollback = "unknown";
+    let mut diagnostic = None;
     // 仅解析固定阶段白名单，不返回原始输出、SSH/sudo 诊断或凭据。
     for line in output.lines() {
         let parts: Vec<_> = line.trim_end_matches('\r').split('|').collect();
@@ -181,6 +201,11 @@ fn parse_result(exit_code: Option<u32>, output: &str) -> AccessPathResult {
                 } else if states[index] != "failed" {
                     states[index] = "success";
                 }
+            }
+        } else if parts[1] == "detail" {
+            if let Some(reason) = directory_diagnostic(parts[2]) {
+                has_failure = true;
+                diagnostic.get_or_insert(reason);
             }
         } else if parts[1] == "result" {
             result_count += 1;
@@ -202,6 +227,17 @@ fn parse_result(exit_code: Option<u32>, output: &str) -> AccessPathResult {
                 "retained" => "retained",
                 _ => "unchanged",
             };
+        }
+    }
+    // 只有明确失败退出且收到唯一结束记录，才确认失败阶段之后没有继续执行。
+    // SSH 断链、超时和缺少结束记录时保留 unknown，不能声称远端未执行。
+    if exit_code.is_some_and(|code| code != 0) && result_count == 1 && !success {
+        if let Some(failed_index) = states.iter().rposition(|state| *state == "failed") {
+            for state in states.iter_mut().skip(failed_index + 1) {
+                if *state == "unknown" {
+                    *state = "pending";
+                }
+            }
         }
     }
     let applied = exit_code == Some(0)
@@ -226,7 +262,9 @@ fn parse_result(exit_code: Option<u32>, output: &str) -> AccessPathResult {
         target_ip: TARGET_IP,
         applied,
         exit_code: exit_code.and_then(|code| i32::try_from(code).ok()),
-        message: message.into(),
+        message: diagnostic
+            .map(|reason| format!("{reason}。{message}"))
+            .unwrap_or_else(|| message.into()),
         steps: PHASES
             .iter()
             .enumerate()
@@ -239,7 +277,10 @@ fn parse_result(exit_code: Option<u32>, output: &str) -> AccessPathResult {
                     "success" => {
                         "该阶段曾执行完成；后续失败，已尝试回退本次变更，请以当前网络为准".into()
                     }
-                    "failed" => "该阶段失败；请结合总体结果核对当前网络".into(),
+                    "failed" => diagnostic
+                        .unwrap_or("该阶段失败；请结合总体结果核对当前网络")
+                        .into(),
+                    "pending" => "前序阶段失败，该阶段未执行".into(),
                     _ => "未取得该阶段的确认结果".into(),
                 },
             })
@@ -278,6 +319,7 @@ pub async fn configure_vertical_security_access_path(
         phase = "finish",
         applied = result.applied,
         exit_code = ?result.exit_code,
+        reason = %result.message,
         "纵密维护通路配置请求结束"
     );
     Ok(result)
@@ -419,5 +461,45 @@ mod tests {
         ] {
             assert_eq!(encode_base64(input.as_bytes()), expected);
         }
+    }
+    // 预检已明确结束后只将后续步骤标记为未执行，保留具体白名单诊断。
+    #[test]
+    fn preflight_failure_reports_allowlisted_reason_and_pending_steps() {
+        let result = parse_result(Some(1), "MSKDSP_PATH|detail|directory_usr\nMSKDSP_PATH|preflight|failed\nMSKDSP_PATH|rollback|unchanged\nMSKDSP_PATH|result|failed\n");
+        assert!(!result.applied);
+        assert!(result
+            .message
+            .contains("目录 /usr 的所有者、权限或访问控制不满足可信目录要求"));
+        assert!(result.steps[0].message.contains("目录 /usr"));
+        assert_eq!(result.steps[0].state, "failed");
+        assert!(result.steps[1..]
+            .iter()
+            .all(|step| step.state == "pending" && step.message.contains("未执行")));
+    }
+
+    // 未知诊断及任意远程输出不能进入页面或掩盖执行状态不确定性。
+    #[test]
+    fn interrupted_or_missing_output_stays_unknown_without_leaking_details() {
+        let result = parse_result(None, "MSKDSP_PATH|detail|fixture-secret\nMSKDSP_PATH|preflight|failed\nMSKDSP_PATH|result|failed\n");
+        assert!(result.steps[1..].iter().all(|step| step.state == "unknown"));
+        assert!(!serde_json::to_string(&result)
+            .unwrap()
+            .contains("fixture-secret"));
+        assert!(unavailable("等待结果超时")
+            .steps
+            .iter()
+            .all(|step| step.state == "unknown"));
+        let missing = parse_result(Some(1), "");
+        assert!(missing.steps.iter().all(|step| step.state == "unknown"));
+    }
+
+    // 即使尾部伪装完整成功，前置目录诊断也不能被覆盖。
+    #[test]
+    fn directory_diagnostic_cannot_be_overridden_by_success_markers() {
+        let complete = PHASES
+            .iter()
+            .map(|(id, _, _)| format!("MSKDSP_PATH|{id}|success\n"))
+            .collect::<String>();
+        assert!(!parse_result(Some(0), &format!("MSKDSP_PATH|detail|root_group_untrusted\n{complete}MSKDSP_PATH|result|success\n")).applied);
     }
 }

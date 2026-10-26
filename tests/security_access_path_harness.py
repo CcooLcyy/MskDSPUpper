@@ -24,10 +24,38 @@ elif name == 'flock': pass
 elif name == 'stat':
     try:
         metadata = os.lstat(a[-1])
-        values = {'%u': str(s.get('file_uid', 0)), '%a': format(stat.S_IMODE(metadata.st_mode), 'o'), '%h': str(metadata.st_nlink)}
+        if a[-1] in s.get('stat_fail_paths',[]): raise OSError('fixture')
+        values = {'%u': str(s.get('path_uid',{}).get(a[-1],s.get('file_uid',0))), '%g':str(s.get('path_gid',{}).get(a[-1],s.get('file_gid',0))), '%a': format(stat.S_IMODE(metadata.st_mode), 'o'), '%h': str(metadata.st_nlink)}
         out = a[1]
         for token, value in values.items(): out = out.replace(token, value)
     except OSError: rc = 1
+elif name == 'ls':
+    try:
+        if a[-1] in s.get('ls_fail_paths',[]): raise OSError('fixture')
+        metadata = os.lstat(a[-1])
+        suffix = '+' if a[-1] in s.get('acl_paths',[]) else ''
+        out = stat.filemode(metadata.st_mode)+suffix+' 1 root root 4096 Jan 1 00:00 '+a[-1]
+    except OSError: rc=1
+elif name == 'getent':
+    passwd=s.get('passwd','root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin')
+    groups=s.get('groups','root:x:0:\ndaemon:x:1:')
+    if s.get('getent_fail') in [a[0],'all']: rc=2
+    elif a[0]=='group': out=groups
+    elif a[0]=='passwd':
+        if len(a)==1: out=passwd
+        else:
+            entries=[line for line in passwd.splitlines() if line.split(':')[0]==a[1]]
+            if entries: out='\n'.join(entries)
+            else: rc=2
+    elif a[0]=='initgroups':
+        if a[1] in s.get('initgroups',{}): out=s['initgroups'][a[1]]
+        else:
+            entries=[line.split(':') for line in passwd.splitlines() if line.split(':')[0]==a[1]]
+            if entries:
+                gids=[entries[0][3]]+[line.split(':')[2] for line in groups.splitlines() if a[1] in line.split(':')[3].split(',')]
+                out=a[1]+' '+' '.join(gids)
+            else: rc=2
+    else: rc=2
 elif name == 'sysctl':
     if a[0] == '-n': out = s['sysctls'][a[1]]
     else:
@@ -82,7 +110,7 @@ class AccessPathShellTest(unittest.TestCase):
         self.initial = dict(addresses=[], routes=[], rules=[], calls=[], mutations=[], sysctls={
             'net.ipv4.ip_forward': '0', 'net.ipv4.conf.eth0/101.proxy_arp': '0'})
         self.state.write_text(json.dumps(self.initial))
-        for name in ('ip', 'iptables', 'sysctl', 'flock', 'id', 'stat'):
+        for name in ('ip', 'iptables', 'sysctl', 'flock', 'id', 'stat', 'ls', 'getent'):
             tool = self.dir / name
             tool.write_text(FAKE)
             tool.chmod(0o755)
