@@ -19,7 +19,7 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   const rustLibText = fs.readFileSync(path.join(repoRoot, 'src-tauri/src/lib.rs'), 'utf8');
 
   assert.match(layoutText, /key: '\/security-config'/);
-  assert.match(layoutText, /label: '纵密网络配置'/);
+  assert.match(layoutText, /label: '网络配置'/);
   assert.match(routeComponentsText, /SecurityConfigPage = lazy\(\(\) => import\('\.\/pages\/SecurityConfig'\)\)/);
   assert.match(routeText, /path: 'security-config'/);
   assert.match(routeText, /<SecurityConfigPage \/>/);
@@ -118,7 +118,7 @@ test('纵密访问使用独立工作台且不伪造远程通道', () => {
   const read = file => fs.readFileSync(path.join(repoRoot, file), 'utf8');
   const page = read('src/pages/SecurityAccess/index.tsx');
   assert.match(read('src/layouts/MainLayout.tsx'), /key: '\/security-access'/);
-  assert.match(read('src/layouts/MainLayout.tsx'), /label: '纵密访问'/);
+  assert.match(read('src/layouts/MainLayout.tsx'), /label: '访问通路'/);
   assert.match(read('src/router.tsx'), /path: 'security-access'/);
   assert.match(read('src/route-components.tsx'), /SecurityAccessPage = lazy/);
   assert.match(page, /api\.getVerticalSecurityAccessCapabilities/);
@@ -130,4 +130,20 @@ test('纵密访问使用独立工作台且不伪造远程通道', () => {
   assert.match(page, /ICMP/);
   assert.doesNotMatch(page, /remote_select_device|HTTPS|443|管理服务|DSP 侧网络配置|返回纵密访问/);
   assert.doesNotMatch(read('src/pages/SecurityConfig/index.tsx'), /返回纵密访问/);
+});
+
+// 纵密父项仅用于展开菜单，三个子项分别进入独立路由。
+test('纵密菜单分组包含登录、访问通路和网络配置', () => {
+  const read = file => fs.readFileSync(path.join(repoRoot, file), 'utf8');
+  const layout = read('src/layouts/MainLayout.tsx');
+  const router = read('src/router.tsx');
+  const components = read('src/route-components.tsx');
+  assert.match(layout, /key: '\/security',[\s\S]*?label: '纵密',[\s\S]*?children:/);
+  for (const [key, label] of [['security-login', '登录'], ['security-access', '访问通路'], ['security-config', '网络配置']]) {
+    assert.match(layout, new RegExp(`key: '/${key}', label: '${label}'`));
+    assert.match(router, new RegExp(`path: '${key}'`));
+  }
+  assert.match(components, /SecurityLoginPage = lazy\(\(\) => import\('\.\/pages\/SecurityLogin'\)\)/);
+  assert.match(router, /<SecurityLoginPage \/>/);
+  assert.doesNotMatch(layout, /label: '纵密访问'|label: '纵密网络配置'/);
 });

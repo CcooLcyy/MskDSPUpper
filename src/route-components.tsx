@@ -16,6 +16,7 @@ export const AVCPage = lazy(() => import('./pages/AVC'));
 export const SettingsPage = lazy(() => import('./pages/Settings'));
 export const SoftwareUpdatePage = lazy(() => import('./pages/SoftwareUpdate'));
 export const SecurityAccessPage = lazy(() => import('./pages/SecurityAccess'));
+export const SecurityLoginPage = lazy(() => import('./pages/SecurityLogin'));
 export const SecurityConfigPage = lazy(() => import('./pages/SecurityConfig'));
 
 function RouteLoading() {

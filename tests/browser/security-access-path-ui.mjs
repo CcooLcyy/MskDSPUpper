@@ -19,15 +19,16 @@ import { App, ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { darkTheme } from ${JSON.stringify('/@fs/' + root + '/src/theme/dark.ts')};
 import SecurityAccess from ${JSON.stringify('/@fs/' + root + '/src/pages/SecurityAccess/index.tsx')};
+import SecurityLoginPage from ${JSON.stringify('/@fs/' + root + '/src/pages/SecurityLogin/index.tsx')};
 function Fixture() {
-  const [visible, setVisible] = useState(true);
-  return <><nav><button onClick={() => setVisible(true)}>测试：访问页</button><button onClick={() => setVisible(false)}>测试：离开页面</button></nav>{visible && <SecurityAccess />}</>;
+  const [view, setView] = useState(new URLSearchParams(location.search).get('view') === 'login' ? 'login' : 'access');
+  return <><nav><button onClick={() => setView('access')}>测试：访问页</button><button onClick={() => setView('login')}>测试：登录页</button><button onClick={() => setView('hidden')}>测试：离开页面</button></nav>{view === 'access' ? <SecurityAccess /> : view === 'login' ? <SecurityLoginPage /> : null}</>;
 }
 createRoot(document.getElementById('root')!).render(<React.StrictMode><ConfigProvider theme={darkTheme} locale={zhCN}><App><Fixture /></App></ConfigProvider></React.StrictMode>);
 `);
 const aliases = {};
 for (const name of ['react-dom', 'react', 'antd', '@tauri-apps/api', '@tauri-apps/plugin-dialog', '@ant-design/icons']) aliases[name] = root + '/node_modules/' + name;
-const server = await createServer({ configFile: false, root, plugins: [react(), {
+const server = await createServer({ configFile: false, root, cacheDir: path.join(output, '.vite'), plugins: [react(), {
   name: 'security-access-path-fixture', configureServer(vite) {
     vite.middlewares.use('/__security-path', (_req, res) => {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -75,9 +76,16 @@ async function openFixture(options = {}) {
       },
     };
   }, options);
-  await page.goto(url);
-  await page.getByRole('heading', { name: '登录纵密装置', exact: true }).waitFor();
-  await page.waitForFunction(() => window.__securityPathMock.calls.some(call => call.command === 'get_vertical_security_certificate_profile'));
+  await page.goto(url + (options.view === 'login' ? '?view=login' : ''));
+  await page.getByRole('heading', { name: options.view === 'login' ? '纵密登录' : '纵密访问通路', level: 1, exact: true }).waitFor();
+  await page.waitForFunction(command => window.__securityPathMock.calls.some(call => call.command === command), options.view === 'login' ? 'get_vertical_security_certificate_profile' : 'get_vertical_security_access_capabilities');
+  if (options.view !== 'login') {
+    assert.equal(await page.getByLabel('纵密用户名', { exact: true }).count(), 0);
+    assert.equal((await page.evaluate(() => window.__securityPathMock.calls)).some(call => /^(get_vertical_security_login_capabilities|get_vertical_security_certificate_profile)$/.test(call.command)), false, '通路配置页不加载纵密认证资料');
+  } else {
+    assert.equal(await page.getByRole('button', { name: /配置纵密访问通路|检查直连/ }).count(), 0);
+    assert.equal((await page.evaluate(() => window.__securityPathMock.calls)).some(call => call.command === 'get_vertical_security_access_capabilities'), false);
+  }
 }
 const calls = command => page.evaluate(name => window.__securityPathMock.calls.filter(call => call.command === name), command);
 const sensitiveCalls = () => page.evaluate(() => window.__securityPathMock.calls.filter(call => /^(configure_vertical_security_access_path|check_vertical_security_access|login_vertical_security)$/.test(call.command)));
@@ -92,7 +100,7 @@ async function check(name, run) { await run(); results.push(name); }
 try {
   browser = await chromium.launch({ headless: true, args: ['--no-proxy-server'], ...(process.env.MSKDSP_BROWSER_EXECUTABLE ? { executablePath: process.env.MSKDSP_BROWSER_EXECUTABLE } : {}) });
   await check('内置证书自动加载，不手选证书即可尝试登录；加载页面不自动配置/检查/登录', async () => {
-    await openFixture();
+    await openFixture({ view: 'login' });
     await page.getByText('内置配套证书 · 自动匹配', { exact: true }).waitFor();
     assert.equal((await sensitiveCalls()).length, 0);
     await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-user');
@@ -123,9 +131,9 @@ try {
     const [call] = await calls('configure_vertical_security_access_path');
     assert.deepEqual(call.args.request, { upload_account: 'fixture@fixture-host:10022', auth: { method: 'password', password: 'fixture-ssh-secret' }, sudo_password: 'fixture-ssh-secret' });
     assert.equal(await page.getByRole('radio', { name: /平台远程/ }).isDisabled(), true);
-    assert.equal(await page.getByLabel('纵密登录角色', { exact: true }).isDisabled(), true);
+    assert.equal(await page.getByLabel('纵密登录角色', { exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: /检查直连/ }).isDisabled(), true);
-    assert.equal(await page.getByRole('button', { name: /登录纵密/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /登录纵密/ }).count(), 0);
     assert.equal(await dialog().getByRole('button', { name: /关\s*闭/ }).count(), 0);
     assert.equal(await dialog().getByRole('button', { name: /取消/ }).count(), 0);
     await page.keyboard.press('Escape'); assert.equal(await dialog().isVisible(), true);
@@ -212,7 +220,7 @@ try {
     assert.equal((await calls('configure_vertical_security_access_path')).length, 0);
   });
   await check('高级自定义证书可显式恢复内置，恢复时清口令', async () => {
-    await openFixture({ source: 'custom' });
+    await openFixture({ view: 'login', source: 'custom' });
     await page.locator('.security-login-certificate > summary').click();
     await page.getByLabel('纵密证书口令', { exact: true }).fill('fixture-certificate-secret');
     await page.getByRole('button', { name: '使用内置配套证书', exact: true }).click();
@@ -223,14 +231,14 @@ try {
     assert.equal((await calls('configure_vertical_security_certificate_profile')).length, 0);
   });
   await check('证书读取失败不能伪造内置ready', async () => {
-    await openFixture({ profileFailure: true });
+    await openFixture({ view: 'login', profileFailure: true });
     await page.getByText('读取纵密登录能力或证书配置失败，请离开此页后重试。', { exact: true }).waitFor();
     await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-user'); await page.getByLabel('纵密密码', { exact: true }).fill('fixture-secret');
     assert.equal(await page.getByRole('button', { name: /登录纵密/ }).isDisabled(), true);
     assert.equal(await page.getByText('内置配套证书 · 自动匹配', { exact: true }).count(), 0);
   });
   await check('内置模式只显式应用，运行时锁定并清密码，不提前显示已匹配', async () => {
-    await openFixture();
+    await openFixture({ view: 'login' });
     await page.getByText('内置配套证书 · 自动匹配', { exact: true }).waitFor();
     await page.getByLabel('纵密密码', { exact: true }).fill('fixture-mode-secret');
     await page.locator('.security-login-certificate > summary').click();
@@ -245,7 +253,7 @@ try {
     await page.waitForFunction(() => Boolean(window.__securityPathMock.builtinResolve));
     assert.equal(await page.getByLabel('纵密密码', { exact: true }).inputValue(), '');
     assert.equal(await page.getByRole('radio', { name: /平台远程/ }).isDisabled(), true);
-    assert.equal(await page.getByRole('button', { name: /检查直连/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /检查直连/ }).count(), 0);
     assert.equal(await page.getByLabel('内置证书模式', { exact: true }).isDisabled(), true);
     assert.equal(await page.getByText(/已匹配旧版证书/).count(), 0);
     await page.evaluate(() => window.__securityPathMock.builtinResolve());
@@ -256,7 +264,7 @@ try {
     assert.equal(await page.getByRole('radio', { name: /平台远程/ }).isDisabled(), false);
   });
   await check('模式应用失败保留原模式，不假切换、不自动重试', async () => {
-    await openFixture({ builtinMode: 'new' });
+    await openFixture({ view: 'login', builtinMode: 'new' });
     await page.getByText('内置配套证书 · 仅新版', { exact: true }).waitFor();
     await page.locator('.security-login-certificate > summary').click();
     await page.locator('.security-login-builtin-mode > summary').click();
@@ -272,7 +280,7 @@ try {
   });
   await check('实际TLS匹配后显示旧版受限兼容或新版严格校验，账号只发一次', async () => {
     for (const group of ['old', 'new']) {
-      await openFixture({ certificateGroup: group, legacyCompatibility: group === 'old' });
+      await openFixture({ view: 'login', certificateGroup: group, legacyCompatibility: group === 'old' });
       assert.equal(await page.getByText(/已匹配[旧新]版证书/).count(), 0);
       await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-match-user');
       await page.getByLabel('纵密密码', { exact: true }).fill('fixture-match-secret');
@@ -285,7 +293,7 @@ try {
   });
   await check('TLS失败或旧版兼容元数据缺失时不显示已匹配', async () => {
     for (const option of [{ certificateGroup: 'old', legacyCompatibility: true, tlsFailed: true }, { certificateGroup: 'old', legacyCompatibility: false }]) {
-      await openFixture(option);
+      await openFixture({ ...option, view: 'login' });
       await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-match-user');
       await page.getByLabel('纵密密码', { exact: true }).fill('fixture-match-secret');
       await page.getByRole('button', { name: /登录纵密/ }).click();
@@ -296,7 +304,7 @@ try {
   });
   await check('模式应用、自定义替换及恢复自动成功后清除上轮匹配结果', async () => {
     for (const action of ['mode', 'custom', 'restore']) {
-      await openFixture({ certificateGroup: 'old', legacyCompatibility: true });
+      await openFixture({ view: 'login', certificateGroup: 'old', legacyCompatibility: true });
       await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-match-user');
       await page.getByLabel('纵密密码', { exact: true }).fill('fixture-match-secret');
       await page.getByRole('button', { name: /登录纵密/ }).click();

@@ -91,14 +91,14 @@ const menuItems: MenuItemConfig[] = [
     requires: 'orchestrator',
   },
   {
-    key: '/security-access',
+    key: '/security',
     icon: <SafetyCertificateOutlined />,
-    label: '纵密访问',
-  },
-  {
-    key: '/security-config',
-    icon: <SafetyCertificateOutlined />,
-    label: '纵密网络配置',
+    label: '纵密',
+    children: [
+      { key: '/security-login', label: '登录' },
+      { key: '/security-access', label: '访问通路' },
+      { key: '/security-config', label: '网络配置' },
+    ],
   },
   {
     key: '/software-update',
@@ -118,8 +118,8 @@ const MainLayout: React.FC = () => {
   const { hasAvailableUpdate } = useAppUpdate();
   const { can } = useAppMode();
   const [collapsed, setCollapsed] = useState(false);
-  // Protocol remains a navigation group; page-level view switchers live in the header.
-  const parentMenuKeys = new Set(['/protocol', '/alerts-logs']);
+  // 分组只负责展开，页面级视图切换继续放在顶部。
+  const parentMenuKeys = new Set(['/protocol', '/alerts-logs', '/security']);
   const renderedMenuItems = useMemo(
     () =>
       menuItems
@@ -153,6 +153,11 @@ const MainLayout: React.FC = () => {
   const openKeys = renderedMenuItems
     .filter((item) => item.children?.some((child) => selectedKey.startsWith(child.key)))
     .map((item) => item.key);
+  const [expandedMenu, setExpandedMenu] = useState({ locationKey: location.key, keys: openKeys });
+  // 路由切换时同步外部导航状态；保留同一路由上用户主动收起分组的选择。
+  if (expandedMenu.locationKey !== location.key) {
+    setExpandedMenu({ locationKey: location.key, keys: [...new Set([...expandedMenu.keys, ...openKeys])] });
+  }
 
   // 当前页面在该模式下不可用时（例如离线模式下的系统总览），跳到第一个可用页面。
   useEffect(() => {
@@ -174,6 +179,7 @@ const MainLayout: React.FC = () => {
       .flatMap((item) => ('children' in item ? item.children || [] : []))
       .find((child) => child.key === selectedKey)?.label ||
     'MskDSP';
+  const isSecurityPage = renderedMenuItems.some(item => item.key === '/security' && item.children?.some(child => child.key === selectedKey));
   const isProtocolPage = location.pathname.startsWith('/protocol/');
   const isIec61850Page = location.pathname === '/protocol/iec61850';
   const isIec104Page = location.pathname === '/protocol/iec104';
@@ -188,7 +194,10 @@ const MainLayout: React.FC = () => {
       <Sider
         collapsible
         collapsed={collapsed}
-        onCollapse={setCollapsed}
+        onCollapse={value => {
+          setCollapsed(value);
+          if (!value) setExpandedMenu(previous => ({ locationKey: location.key, keys: [...new Set([...previous.keys, ...openKeys])] }));
+        }}
         width={200}
         className="main-layout-sider"
         style={{ borderRight: '1px solid #3e3e42' }}
@@ -215,11 +224,13 @@ const MainLayout: React.FC = () => {
             theme="dark"
             mode="inline"
             selectedKeys={[selectedKey]}
-            defaultOpenKeys={openKeys}
+            openKeys={expandedMenu.keys}
+            onOpenChange={keys => setExpandedMenu({ locationKey: location.key, keys })}
             items={renderedMenuItems}
             className="main-layout-sider-menu"
             onClick={({ key }) => {
               if (!parentMenuKeys.has(key)) {
+                if (key.startsWith('/security-')) console.info('[纵密导航] 打开独立页面', { path: key });
                 navigate(key);
               }
             }}
@@ -240,7 +251,7 @@ const MainLayout: React.FC = () => {
           <div className={`protocol-header-main${suppressHeaderTitle ? ' is-protocol' : ''}`}>
             {!suppressHeaderTitle ? (
               <Text strong className="protocol-header-title-text">
-                {currentLabel}
+                {isSecurityPage ? `纵密 · ${currentLabel}` : currentLabel}
               </Text>
             ) : null}
             {isProtocolPage && !isIec61850Page ? <ProtocolHeaderViewSwitcher includeSoe={isIec104Page && can('soe')} /> : null}

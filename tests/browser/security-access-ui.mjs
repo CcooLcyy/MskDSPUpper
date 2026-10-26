@@ -29,14 +29,14 @@ createRoot(document.getElementById('root')!).render(<React.StrictMode><ConfigPro
 `);
 const aliases = {};
 for (const name of ['react-dom', 'react', 'antd', '@tauri-apps/api', '@ant-design/icons']) aliases[name] = root + '/node_modules/' + name;
-const server = await createServer({ configFile: false, root, plugins: [react(), {
+const server = await createServer({ configFile: false, root, cacheDir: path.join(output, '.vite'), plugins: [react(), {
   name: 'security-workbench-fixture', configureServer(vite) {
     vite.middlewares.use('/__security-workbench', (_req, res) => {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.end(`<!doctype html><html><head><meta charset="utf-8"><script type="module">import RefreshRuntime from '/@react-refresh';RefreshRuntime.injectIntoGlobalHook(window);window.$RefreshReg$=()=>{};window.$RefreshSig$=()=>type=>type;window.__vite_plugin_react_preamble_installed__=true;</script><style>body{margin:0;background:#1e1e1e;color:white;font-family:Microsoft YaHei,sans-serif}</style></head><body><div id="root"></div><script type="module" src=${JSON.stringify('/@fs/' + entry.replaceAll('\\', '/'))}></script></body></html>`);
     });
   },
-}], resolve: { alias: aliases }, server: { host: '127.0.0.1', port: 0, fs: { allow: [root, output] }, watch: { ignored: ['**/src-tauri/target/**', '**/dist/**'] } }, logLevel: 'error' });
+}], resolve: { alias: aliases }, server: { host: '127.0.0.1', port: 0, fs: { allow: [root, output] }, watch: null, hmr: false }, logLevel: 'error' });
 await server.listen();
 let browser;
 const failures = [];
@@ -68,6 +68,11 @@ try {
   const address = server.httpServer.address();
   await page.goto(`http://127.0.0.1:${address.port}/__security-workbench`, { waitUntil: 'commit', timeout: 15000 });
   await page.getByRole('button', { name: /检查直连/ }).waitFor({ timeout: 45000 });
+  assert.equal(await page.getByLabel('纵密用户名', { exact: true }).count(), 0, '访问通路页不得挂载纵密登录表单');
+  assert.equal(await page.locator('.security-login-workbench').count(), 0);
+  assert.equal((await page.evaluate(() => window.__securityMock.calls)).some(call => /^(get_vertical_security_login_capabilities|get_vertical_security_certificate_profile|login_vertical_security)$/.test(call.command)), false, '访问通路页不得加载登录能力或证书');
+  await page.getByRole('heading', { name: '纵密访问通路', level: 1, exact: true }).waitFor();
+  results.push('访问通路页独立显示标题和网络检查，不挂载认证界面或加载登录能力及证书');
   const ready = { mode: 'direct', target_ip: '11.22.33.44', device_id: null, state: 'ready', session_id: null, steps: [
     { id: 'computer_network', name: '电脑网络', state: 'success', message: '虚构网卡维护地址符合要求' },
     { id: 'target_route', name: '纵密访问路径', state: 'success', message: '虚构路由出口符合要求' },

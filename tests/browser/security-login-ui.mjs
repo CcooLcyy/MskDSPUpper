@@ -20,16 +20,16 @@ import { createRoot } from 'react-dom/client';
 import { App, ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { darkTheme } from ${JSON.stringify('/@fs/' + root + '/src/theme/dark.ts')};
-import SecurityAccess from ${JSON.stringify('/@fs/' + root + '/src/pages/SecurityAccess/index.tsx')};
+import SecurityLoginPage from ${JSON.stringify('/@fs/' + root + '/src/pages/SecurityLogin/index.tsx')};
 function Fixture() {
   const [visible, setVisible] = useState(true);
-  return <><nav><button onClick={() => setVisible(true)}>测试：访问页</button><button onClick={() => setVisible(false)}>测试：离开页面</button></nav>{visible && <SecurityAccess />}</>;
+  return <><nav><button onClick={() => setVisible(true)}>测试：登录页</button><button onClick={() => setVisible(false)}>测试：离开页面</button></nav>{visible && <SecurityLoginPage />}</>;
 }
 createRoot(document.getElementById('root')!).render(<React.StrictMode><ConfigProvider theme={darkTheme} locale={zhCN}><App><Fixture /></App></ConfigProvider></React.StrictMode>);
 `);
 const aliases = {};
 for (const name of ['react-dom', 'react', 'antd', '@tauri-apps/api', '@tauri-apps/plugin-dialog', '@ant-design/icons']) aliases[name] = root + '/node_modules/' + name;
-const server = await createServer({ configFile: false, root, plugins: [react(), {
+const server = await createServer({ configFile: false, root, cacheDir: path.join(output, '.vite'), plugins: [react(), {
   name: 'security-login-fixture', configureServer(vite) {
     vite.middlewares.use('/__security-login', (_req, res) => {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -91,6 +91,11 @@ async function openFixture(options = {}) {
   await page.goto(url, { waitUntil: 'commit', timeout: 15000 });
   await page.getByRole('button', { name: /登录纵密/ }).waitFor({ timeout: 45000 });
   await page.waitForFunction(() => window.__securityLoginMock.calls.some(call => call.command === 'get_vertical_security_certificate_profile'));
+  assert.equal((await page.evaluate(() => window.__securityLoginMock.calls)).some(call => /^(get_vertical_security_access_capabilities|check_vertical_security_access|configure_vertical_security_access_path)$/.test(call.command)), false, '登录页不加载网络检查能力、不检查或配置访问通路');
+  assert.equal(await page.getByRole('button', { name: /检查直连|建立访问连接|配置纵密访问通路/ }).count(), 0, '登录页不显示网络检查或访问通路配置');
+  assert.equal(await page.getByRole('heading', { name: '网络连接检查', exact: true }).count(), 0);
+  await page.getByRole('heading', { name: '纵密登录', level: 1, exact: true }).waitFor();
+  assert.equal(await page.getByRole('heading', { level: 1 }).count(), 1, '独立登录页只有一个主标题');
 }
 
 const loginButton = () => page.getByRole('button', { name: /登录纵密/ });
@@ -168,10 +173,8 @@ try {
   results.push('原生证书选择、保存契约与口令清除');
 
   await openFixture();
-  await page.getByRole('button', { name: /检查直连/ }).click();
-  await page.waitForFunction(() => window.__securityLoginMock.checks.length > 0);
-  await page.evaluate(() => window.__securityLoginMock.checks.shift().resolve({ mode: 'direct', target_ip: '11.22.33.44', device_id: null, state: 'failed', session_id: null, steps: [{ id: 'round-trip', name: '往返响应', state: 'failed', message: 'fixture ICMP 无响应' }] }));
-  await page.getByText('fixture ICMP 无响应', { exact: true }).waitFor();
+  assert.equal((await calls()).some(call => call.command === 'check_vertical_security_access'), false, '登录无需先执行 ICMP 检查');
+  await page.screenshot({ path: path.join(output, 'login-page.png'), fullPage: true });
   const request = await submitLogin();
   assert.equal(request.mode, 'direct');
   assert.equal(request.device_id, undefined);
@@ -186,7 +189,7 @@ try {
   assert.equal((await calls()).some(call => call.command === 'remote_select_device'), false);
   await assertNoPersistedSecret();
   await page.screenshot({ path: path.join(output, 'authenticated.png'), fullPage: true });
-  results.push('ICMP 无响应仍允许认证，认证继承当前路径与身份且不切换全局设备');
+  results.push('独立登录不执行或依赖 ICMP 检查，认证继承当前路径与身份且不切换全局设备');
 
   for (const [name, patch] of [
     ['missing-session', { session_id: null }],
@@ -242,7 +245,7 @@ try {
   await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
   await resolveLogin({ session_id: 'fixture-late-unmount-session' });
   await page.waitForFunction(() => window.__securityLoginMock.calls.some(call => call.command === 'logout_vertical_security' && call.args.sessionId === 'fixture-late-unmount-session'));
-  await page.getByRole('button', { name: '测试：访问页', exact: true }).click();
+  await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
   await loginButton().waitFor();
   assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
   results.push('页面卸载后关闭迟到会话，新页面不继承旧认证结果');
@@ -365,7 +368,7 @@ try {
   await requirePasswordChange();
   await submitPasswordChange();
   await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
-  await page.getByRole('button', { name: '测试：访问页', exact: true }).click();
+  await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
   await submitLogin();
   await resolveLogin();
   await page.getByText('fixture-version', { exact: true }).waitFor();

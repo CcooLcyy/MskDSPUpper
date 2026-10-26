@@ -301,7 +301,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   };
 
   return <section className="security-login-workbench" aria-label="纵密登录工作台">
-    <header className="security-workbench-heading"><h2>登录纵密装置</h2><p>纵密账号和会话独立管理，不复用平台、上位机或 SSH 身份。</p></header>
+    <header className="security-workbench-heading"><h1>纵密登录</h1><p>纵密账号和会话独立管理，不复用平台、上位机或 SSH 身份。</p></header>
     <div className="security-login-context"><span>纵密目标 <strong>11.22.33.44</strong></span><span>当前路径：{mode === 'direct' ? '101 口直连 · 经 DSP 108 口' : `平台远程 · ${deviceLabel || deviceId || '尚未选择 DSP'}`}</span></div>
     <div className="security-access-columns">
       <Card title="装置身份认证" extra={<Tag color={session ? 'success' : busy ? 'processing' : 'default'}>{session ? '已登录' : busy ? '认证中' : '未登录'}</Tag>}>

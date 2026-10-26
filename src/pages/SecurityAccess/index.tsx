@@ -5,7 +5,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { api } from '../../adapters';
 import type { VerticalSecurityAccessCapabilities, VerticalSecurityAccessMode, VerticalSecurityAccessResult } from '../../adapters';
 import './index.css';
-import SecurityLogin from './SecurityLogin';
 import AccessPathConfig from './AccessPathConfig';
 
 interface PlatformDevice { device_id: string; display_name: string; online: boolean }
@@ -24,7 +23,6 @@ export default function SecurityAccess() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadingDevices, setLoadingDevices] = useState(false);
-  const [loginLocked, setLoginLocked] = useState(false);
   const [pathBusy, setPathBusy] = useState(false);
   const generationRef = useRef(0);
   const deviceGenerationRef = useRef(0);
@@ -33,7 +31,7 @@ export default function SecurityAccess() {
   const desktop = '__TAURI_INTERNALS__' in window;
   const selectedDevice = devices.find(device => device.device_id === deviceId);
   const connected = result?.state === 'ready' && Boolean(result.session_id);
-  const locked = busy || connected || loginLocked || pathBusy;
+  const locked = busy || connected || pathBusy;
 
   const loadDevices = useCallback(async () => {
     if (!desktop) return;
@@ -103,15 +101,14 @@ export default function SecurityAccess() {
 
   return <div className="security-access-page">
     {contextHolder}
-    <header className="security-workbench-heading"><h1>纵密访问</h1><p>连接纵密装置，进行身份认证与运行管理。</p></header>
+    <header className="security-workbench-heading"><h1>纵密访问通路</h1><p>配置纵密访问通路，检查电脑、DSP 与纵密装置之间的网络连接。</p></header>
     <div className="security-access-connection-bar">
       <Segmented value={mode} disabled={locked} onChange={value => { clearResult(); setMode(value as VerticalSecurityAccessMode); }} options={[{ value: 'direct', label: '101 口直连', icon: <UsbOutlined /> }, { value: 'remote', label: '平台远程', icon: <CloudOutlined /> }]} />
-      <AccessPathConfig disabled={busy || connected || loginLocked || mode === 'remote'} onBusyChange={setPathBusy} onApplied={clearResult} />
+      <AccessPathConfig disabled={busy || connected || mode === 'remote'} onBusyChange={setPathBusy} onApplied={clearResult} />
       {mode === 'remote' && <Typography.Text type="secondary">访问通路配置当前仅支持 SSH 直连。</Typography.Text>}
       {mode === 'remote' && <Space.Compact className="security-access-device-picker"><Select id="security-access-device" aria-label="目标 DSP" value={deviceId} disabled={locked || !desktop} loading={loadingDevices} placeholder="选择平台设备" onChange={value => { clearResult(); setDeviceId(value); }} options={devices.map(device => ({ value: device.device_id, label: `${device.display_name || device.device_id} · ${device.online ? '在线' : '离线'}` }))} /><Button aria-label="刷新平台设备" icon={<ReloadOutlined />} disabled={locked || !desktop} loading={loadingDevices} onClick={() => void loadDevices()} /></Space.Compact>}
-      {mode === 'direct' && <Typography.Text type="secondary">首次使用先配置访问通路，再手动检查直连或登录。</Typography.Text>}
+      {mode === 'direct' && <Typography.Text type="secondary">首次使用先配置访问通路，再手动检查直连。</Typography.Text>}
     </div>
-    <SecurityLogin key={`${mode}:${deviceId ?? ''}`} mode={mode} deviceId={deviceId} deviceLabel={selectedDevice?.display_name} accessBusy={busy || pathBusy} onLockChange={setLoginLocked} />
     <h2 className="security-access-network-heading">网络连接检查</h2>
     <div className="security-access-columns">
       <Card className="security-access-connect" title="连接纵密" extra={<Badge status={busy ? 'processing' : result?.state === 'ready' ? 'success' : 'default'} text={status} />}>
@@ -128,7 +125,7 @@ export default function SecurityAccess() {
         </div>}
         <div className="security-access-target"><div><span>纵密目标 IP</span><strong>{TARGET_IP}</strong></div><Tag>DSP · 108 口</Tag></div>
         <p className="security-access-scope">按目标 IP 访问 · 不限定端口</p>
-        <Space wrap><Button type="primary" icon={<ScanOutlined />} loading={busy} disabled={connected || loginLocked || pathBusy || (mode === 'remote' && (!capabilities?.remote_ip_available || !selectedDevice?.online))} onClick={() => void check()}>{mode === 'direct' ? '检查直连' : '建立访问连接'}</Button>{busy && !connected && <Button onClick={() => { clearResult(); setBusy(false); }}>取消检查</Button>}</Space>
+        <Space wrap><Button type="primary" icon={<ScanOutlined />} loading={busy} disabled={connected || pathBusy || (mode === 'remote' && (!capabilities?.remote_ip_available || !selectedDevice?.online))} onClick={() => void check()}>{mode === 'direct' ? '检查直连' : '建立访问连接'}</Button>{busy && !connected && <Button onClick={() => { clearResult(); setBusy(false); }}>取消检查</Button>}</Space>
         {error && <Alert className="security-access-notice" type="error" showIcon title={error} />}
         <details className="security-access-details" open><summary>连接详情</summary>
           <div aria-live="polite">{result?.steps.map(step => <div className="security-access-step" key={step.id}><Badge status={step.state === 'success' ? 'success' : step.state === 'failed' ? 'error' : 'warning'} /><div><strong>{step.name}</strong><p>{step.message}</p></div><span>{step.state === 'success' ? '通过' : step.state === 'failed' ? '未通过' : '不支持'}</span></div>) ?? (mode === 'direct' ? DIRECT_STEPS : ['平台设备', '远程网络通道', '纵密访问路径']).map(name => <div className="security-access-step" key={name}><Badge status="default" /><strong>{name}</strong><span>{busy ? '检查中' : '待检查'}</span></div>)}</div>
