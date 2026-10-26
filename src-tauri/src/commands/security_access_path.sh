@@ -1,4 +1,5 @@
 #!/bin/bash
+# MskDSP managed vertical-security-access runtime v1
 # 仅配置固定维护通路，不涉及业务配置或持久化。
 set -euo pipefail
 umask 077
@@ -6,6 +7,7 @@ phase=preflight
 changed=0
 addr101=0 addr108=0 route101=0 route108=0 fwout=0 fwin=0 snat=0 forward=0 proxy=0
 old_forward=0 old_proxy=0
+shared_forward_retained=0
 out_rule=(-i eth0.101 -o eth0.108 -s 11.22.33.0/24 -d 11.22.33.44/32 -j ACCEPT)
 in_rule=(-i eth0.108 -o eth0.101 -s 11.22.33.44/32 -d 11.22.33.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT)
 nat_rule=(-o eth0.108 -s 11.22.33.0/24 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2)
@@ -16,31 +18,52 @@ rollback() {
     if (( snat )); then iptables -w 5 -t nat -D POSTROUTING "${nat_rule[@]}" >/dev/null 2>&1 || failed=1; fi
     if (( fwin )); then iptables -w 5 -t filter -D FORWARD "${in_rule[@]}" >/dev/null 2>&1 || failed=1; fi
     if (( fwout )); then iptables -w 5 -t filter -D FORWARD "${out_rule[@]}" >/dev/null 2>&1 || failed=1; fi
-    if (( forward )); then sysctl -w "net.ipv4.ip_forward=$old_forward" >/dev/null 2>&1 || failed=1; fi
+    # IPv4 转发是业务与维护共享依赖，即使本次开启也不自动关闭。
+    if (( forward )); then shared_forward_retained=1; fi
     if (( proxy || forward )); then sysctl -w "net.ipv4.conf.eth0/101.proxy_arp=$old_proxy" >/dev/null 2>&1 || failed=1; fi
     if (( route108 )); then ip route del 11.22.33.44/32 dev eth0.108 src 11.22.33.2 scope link >/dev/null 2>&1 || failed=1; fi
     if (( route101 )); then ip route del 11.22.33.0/24 dev eth0.101 src 11.22.33.1 scope link >/dev/null 2>&1 || failed=1; fi
     if (( addr108 )); then ip address del 11.22.33.2/32 dev eth0.108 >/dev/null 2>&1 || failed=1; fi
     if (( addr101 )); then ip address del 11.22.33.1/32 dev eth0.101 >/dev/null 2>&1 || failed=1; fi
-    if (( failed )); then emit rollback failed; else emit rollback success; fi
+    return "$failed"
 }
 finish() {
     local rc=$?
     trap - EXIT INT TERM HUP
     if (( rc != 0 )); then
         emit "$phase" failed
-        if (( changed )); then rollback; else emit rollback unchanged; fi
+        if (( changed )); then
+            if rollback; then
+                if (( shared_forward_retained )); then emit rollback partial; else emit rollback success; fi
+            else emit rollback failed; fi
+        else emit rollback unchanged; fi
         emit result failed
     fi
     exit "$rc"
 }
-trap finish EXIT
-trap 'exit 130' INT TERM HUP
-for tool in ip iptables sysctl flock awk grep id; do command -v "$tool" >/dev/null; done
+secure_directory() {
+    local path="$1" uid mode
+    [[ -d "$path" && ! -L "$path" ]]
+    uid=$(stat -c %u -- "$path"); mode=$(stat -c %a -- "$path")
+    [[ "$uid" == 0 && "$mode" =~ ^[0-7]{3,4}$ ]]
+    (( (8#$mode & 022) == 0 ))
+}
+acquire_path_lock() {
+    local path=/run/mskdsp-vertical-security-access.lock uid mode links
+    secure_directory /run
+    if [[ -e "$path" || -L "$path" ]]; then
+        [[ -f "$path" && ! -L "$path" ]]
+        uid=$(stat -c %u -- "$path"); mode=$(stat -c %a -- "$path"); links=$(stat -c %h -- "$path")
+        [[ "$uid" == 0 && "$links" == 1 && "$mode" =~ ^[0-7]{3,4}$ ]]
+        (( (8#$mode & 022) == 0 ))
+    fi
+    # 同一把锁覆盖手动配置、持久化事务及开机恢复。
+    exec 9>"$path"
+    flock -n 9
+}
+runtime_preflight() {
+for tool in ip iptables sysctl flock awk grep id stat; do command -v "$tool" >/dev/null; done
 [[ "$(id -u)" == 0 ]]
-# /run 由 root 管理，避免使用普通用户可写目录里的锁。
-exec 9>/run/mskdsp-vertical-security-access.lock
-flock -n 9
 for interface in eth0.101 eth0.108; do
     ip -o link show dev "$interface" | grep -Eq '<([^>]*,)?UP(,|>)'
 done
@@ -85,7 +108,8 @@ if iptables -w 5 -t filter -C FORWARD "${out_rule[@]}" >/dev/null 2>&1; then :; 
 if iptables -w 5 -t filter -C FORWARD "${in_rule[@]}" >/dev/null 2>&1; then :; else rc=$?; [[ $rc == 1 ]]; needin=1; fi
 if iptables -w 5 -t nat -C POSTROUTING "${nat_rule[@]}" >/dev/null 2>&1; then :; else rc=$?; [[ $rc == 1 ]]; neednat=1; fi
 emit preflight success
-
+}
+apply_runtime() {
 phase=addresses
 if (( !has101 )); then ip address add 11.22.33.1/32 dev eth0.101 >/dev/null 2>&1; addr101=1; changed=1; fi
 if (( !has108 )); then ip address add 11.22.33.2/32 dev eth0.108 >/dev/null 2>&1; addr108=1; changed=1; fi
@@ -108,4 +132,16 @@ for route in "$(ip -4 route get 11.22.33.44)" "$(ip -4 route get 11.22.33.44 fro
     printf '%s\n' "$route" | awk '{for (i=1;i<=NF;i++) {if ($i=="dev" && $(i+1)=="eth0.108") ok=1; if ($i=="via") bad=1}} END {exit (!ok || bad)}'
 done
 emit verification success
-emit result success
+}
+
+# 安装事务 source 同一份函数，保持新增项账本到持久化结束；启动服务直接执行。
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
+    trap finish EXIT
+    trap 'exit 130' INT TERM HUP
+    for tool in stat id flock; do command -v "$tool" >/dev/null; done
+    [[ "$(id -u)" == 0 ]]
+    acquire_path_lock
+    runtime_preflight
+    apply_runtime
+    emit result success
+fi

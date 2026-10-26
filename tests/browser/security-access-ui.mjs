@@ -60,7 +60,7 @@ try {
         if (command === 'remote_list_devices') return [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true }];
         if (command === 'check_vertical_security_access') return new Promise((resolve, reject) => { mock.resolve = resolve; mock.reject = reject; });
         if (command === 'deploy_vertical_security_script') return { remote_path: '/home/fixture/vertical-security.sh', service_name: 'fixture-security', exit_code: 0, stdout: '', stderr: '', success: true };
-        if (command === 'get_vertical_security_status') return { service_name: 'fixture-security', active_state: 'active', sub_state: 'exited', result: 'success', exit_code: 0, restart_count: 0, steps: ['precheck', 'fixed_network', 'local_security', 'local_rtu', 'ppp0_wait', 'remote_security_route', 'dnat', 'conntrack', 'save_config'].map(id => ({ step_id: id, name: id, state: 'success', message: '虚构执行结果', updated_at: 1 })) };
+        if (command === 'get_vertical_security_status') return { service_name: 'fixture-security', active_state: 'active', sub_state: 'exited', result: 'success', exit_code: 0, restart_count: 0, steps: ['precheck', 'forwarding', 'local_security', 'local_rtu', 'ppp0_wait', 'remote_security_route', 'dnat', 'conntrack', 'save_config'].map(id => ({ step_id: id, name: id, state: 'success', message: '虚构执行结果', updated_at: 1 })) };
         return null;
       },
     };
@@ -113,6 +113,8 @@ try {
   results.push('页面卸载和重新进入不会保留迟到检查结果');
   await page.getByRole('button', { name: '测试：配置页', exact: true }).click();
   await page.getByRole('heading', { name: '纵密网络配置', exact: true }).waitFor();
+  assert.equal(await page.locator('.security-config-maintenance').count(), 0, '业务页移除维护参数详情');
+  assert.equal(/11\.22\.33\.44|101\s*\/\s*108\s*维护|代理\s*ARP|SNAT/.test(await page.locator('.security-config-page').innerText()), false, '业务页不展示维护配置');
   assert.equal(await page.getByRole('button', { name: '返回纵密访问', exact: true }).count(), 0);
   const passwords = await page.locator('input[type="password"]').evaluateAll(inputs => inputs.map(input => input.value));
   assert.equal(passwords.every(value => value === ''), true, '配置页不能自动填入内置密码');
@@ -128,6 +130,9 @@ try {
   await page.getByLabel('SSH 密码', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: /预览网络变更/ }).click();
   await page.getByRole('dialog', { name: '网络变更预览', exact: true }).waitFor();
+  const businessPreview = await page.getByRole('dialog', { name: '网络变更预览', exact: true }).innerText();
+  assert.equal(/11\.22\.33\.44|101|代理\s*ARP|SNAT/.test(businessPreview), false, '业务预览不包含维护参数或步骤');
+  assert.equal(/PPP/.test(businessPreview) && /DNAT/.test(businessPreview) && /连接跟踪/.test(businessPreview), true, '业务预览保留业务网络影响');
   assert.equal((await page.evaluate(() => window.__securityMock.calls)).some(call => call.command === 'deploy_vertical_security_script'), false, '预览不能下发配置');
   await page.getByRole('button', { name: '返回修改', exact: true }).click();
   await page.getByRole('button', { name: /预览网络变更/ }).click();

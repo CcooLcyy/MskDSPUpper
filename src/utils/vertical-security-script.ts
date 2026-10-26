@@ -70,9 +70,8 @@ export function buildVerticalSecurityScript(values: VerticalSecurityScriptValues
   return `#!/usr/bin/env bash
 set -Eeuo pipefail
 
-# MskDSP 纵密网络配置脚本
-# 前置条件：电脑必须使用 11.22.33.0/24 网段内的地址访问纵密装置。
-# 固定网络段：11.22.33.0/24 为电脑网段，11.22.33.44 为纵密装置地址。
+# MskDSP 纵密业务网络配置脚本
+# 维护访问通路由纵密访问页面独立配置及恢复，本脚本不管理维护地址或规则。
 
 readonly TARGET_DEVICE=${shellQuote(device)}
 readonly LOCAL_RTU_ADDRESS=${shellQuote(localRtuAddress)}
@@ -128,7 +127,6 @@ CURRENT_STEP_ID='precheck'
 CURRENT_STEP_NAME='系统预检查'
 trap handle_step_error ERR
 begin_step 'precheck' '系统预检查' '检查必要命令和网络接口'
-ip link show dev eth0.101 >/dev/null 2>&1
 ip link show dev eth0.108 >/dev/null 2>&1
 ip link show dev eth0.107 >/dev/null 2>&1
 complete_step '必要命令和网络接口检查完成'
@@ -140,27 +138,10 @@ if [[ -r "\${CONFIG_FILE}" ]]; then
   PREVIOUS_LOCAL_SECURITY_ADDRESS="$(awk -F= '$1 == "LOCAL_SECURITY_ADDRESS" { print $2; exit }' "\${CONFIG_FILE}")"
 fi
 
-# 固定的 101 口纵密直连配置。
-begin_step 'fixed_network' '101 固定网络' '配置转发、代理 ARP、固定地址和 SNAT'
+# 业务链路同样需要共享的 IPv4 转发；不修改独立维护通路的接口参数。
+begin_step 'forwarding' '业务 IPv4 转发' '启用业务链路所需的共享 IPv4 转发'
 sysctl -w net.ipv4.ip_forward=1
-sysctl -w 'net.ipv4.conf.eth0/101.proxy_arp=1'
-sysctl -w 'net.ipv4.conf.eth0/108.proxy_arp=0'
-
-ip addr replace 11.22.33.1/32 dev eth0.101
-# 配置整个电脑网段。
-ip route replace 11.22.33.0/24 dev eth0.101 scope link
-
-ip addr replace 11.22.33.2/32 dev eth0.108
-ip route replace 11.22.33.44/32 dev eth0.108 scope link
-
-# 检查后再追加，避免脚本重复执行产生重复 NAT 规则。
-while iptables -t nat -C POSTROUTING -o eth0.108 -s 11.22.33.41/32 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2 2>/dev/null; do
-  iptables -t nat -D POSTROUTING -o eth0.108 -s 11.22.33.41/32 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2
-done
-if ! iptables -t nat -C POSTROUTING -o eth0.108 -s 11.22.33.0/24 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2 2>/dev/null; then
-  iptables -t nat -A POSTROUTING -o eth0.108 -s 11.22.33.0/24 -d 11.22.33.44/32 -j SNAT --to-source 11.22.33.2
-fi
-complete_step '101 固定网络和 SNAT 配置完成'
+complete_step '业务 IPv4 转发已启用'
 
 # 107 口：使用本地网关地址访问本地纵密。
 begin_step 'local_security' '107 本地纵密链路' '配置本地网关地址和本地纵密路由'
@@ -241,7 +222,7 @@ chmod 0600 "\${CONFIG_FILE}.tmp"
 mv -f "\${CONFIG_FILE}.tmp" "\${CONFIG_FILE}"
 complete_step '纵密配置文件保存完成'
 
-echo "纵密网络固定配置已完成，目标设备：\${TARGET_DEVICE}"
+echo "纵密业务网络配置已完成，目标设备：\${TARGET_DEVICE}"
 `;
 }
 

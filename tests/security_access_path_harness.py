@@ -13,7 +13,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'src-tauri/src/commands/security_access_path.sh'
 FAKE = r'''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, stat, sys
 p = pathlib.Path(os.environ['FAKE_STATE'])
 s = json.loads(p.read_text())
 name = pathlib.Path(sys.argv[0]).name
@@ -21,6 +21,13 @@ a = sys.argv[1:]
 rc, out, mutation = 0, '', False
 if name == 'id': out = '0'
 elif name == 'flock': pass
+elif name == 'stat':
+    try:
+        metadata = os.lstat(a[-1])
+        values = {'%u': str(s.get('file_uid', 0)), '%a': format(stat.S_IMODE(metadata.st_mode), 'o'), '%h': str(metadata.st_nlink)}
+        out = a[1]
+        for token, value in values.items(): out = out.replace(token, value)
+    except OSError: rc = 1
 elif name == 'sysctl':
     if a[0] == '-n': out = s['sysctls'][a[1]]
     else:
@@ -75,7 +82,7 @@ class AccessPathShellTest(unittest.TestCase):
         self.initial = dict(addresses=[], routes=[], rules=[], calls=[], mutations=[], sysctls={
             'net.ipv4.ip_forward': '0', 'net.ipv4.conf.eth0/101.proxy_arp': '0'})
         self.state.write_text(json.dumps(self.initial))
-        for name in ('ip', 'iptables', 'sysctl', 'flock', 'id'):
+        for name in ('ip', 'iptables', 'sysctl', 'flock', 'id', 'stat'):
             tool = self.dir / name
             tool.write_text(FAKE)
             tool.chmod(0o755)
@@ -123,9 +130,18 @@ class AccessPathShellTest(unittest.TestCase):
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
         after = self.read()
-        for key in ('addresses', 'routes', 'rules', 'sysctls'):
+        for key in ('addresses', 'routes', 'rules'):
             self.assertEqual(after[key], s[key], key)
-        self.assertIn('MSKDSP_PATH|rollback|success', result.stdout)
+        self.assertEqual(after['sysctls']['net.ipv4.ip_forward'], '1')
+        self.assertIn('MSKDSP_PATH|rollback|partial', result.stdout)
+
+    def test_rollback_does_not_disable_shared_ipv4_forwarding(self):
+        self.state.write_text(json.dumps({**self.initial, 'fail_once': True}))
+        result = self.run_script()
+        self.assertNotEqual(result.returncode, 0)
+        after = self.read()
+        self.assertEqual(after['sysctls']['net.ipv4.ip_forward'], '1')
+        self.assertFalse(any(call == ['sysctl', '-w', 'net.ipv4.ip_forward=0'] for call in after['calls']))
 
     def test_policy_route_wrong_output_does_not_report_success(self):
         self.state.write_text(json.dumps({**self.initial, 'actual_dev': 'eth0.101'}))

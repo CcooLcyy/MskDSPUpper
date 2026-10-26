@@ -85,7 +85,7 @@ const dialog = () => page.getByRole('dialog', { name: /配置纵密访问通路/
 async function openPath() { await page.getByRole('button', { name: /配置纵密访问通路/ }).click(); await dialog().waitFor(); }
 async function fillPath() { await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).fill('fixture@fixture-host:10022'); await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).fill('fixture-ssh-secret'); }
 async function resolvePath(applied = true) {
-  await page.evaluate(value => window.__securityPathMock.pathResolve({ target_ip: '11.22.33.44', applied: value, exit_code: value ? 0 : 1, message: value ? 'fixture 配置完成；目标连通性尚未检查' : 'fixture 预检查拒绝，未完成配置', steps: [{ id: 'preflight', name: '系统预检查', state: value ? 'success' : 'failed', message: value ? 'fixture 检查通过' : 'fixture 固定地址冲突' }] }), applied);
+  await page.evaluate(value => window.__securityPathMock.pathResolve({ target_ip: '11.22.33.44', applied: value, exit_code: value ? 0 : 1, message: value ? 'fixture 配置完成；目标连通性尚未检查' : 'fixture 预检查拒绝，未完成配置', steps: ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'].map(id => ({ id, name: id === 'persistence' ? '开机恢复' : id, state: value ? 'success' : id === 'preflight' ? 'failed' : 'unsupported', message: value ? 'fixture 检查通过' : id === 'preflight' ? 'fixture 固定地址冲突' : 'fixture 阶段未执行' })) }), applied);
 }
 async function check(name, run) { await run(); results.push(name); }
 
@@ -109,7 +109,9 @@ try {
     assert.equal(await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).inputValue(), '');
     assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '');
     assert.equal(await dialog().getByRole('textbox', { name: /目录|本端|对端|RTU/ }).count(), 0);
-    await dialog().getByText('仅当前运行态有效，设备重启后需要重新配置', { exact: true }).waitFor();
+    await dialog().getByText('应用后独立开机恢复维护通路', { exact: true }).waitFor();
+    assert.equal(/运行态有效|重启后需要重新配置|不配置.*开机服务/.test(await dialog().innerText()), false);
+    await dialog().getByText(/独立的 systemd 服务/).waitFor();
     await fillPath(); await dialog().getByRole('button', { name: /关\s*闭/ }).click();
     await openPath(); assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '');
   });
@@ -149,6 +151,20 @@ try {
     assert.equal(await dialog().getByText('访问通路已应用', { exact: true }).count(), 0);
     assert.equal((await calls('check_vertical_security_access')).length, 0);
     assert.equal((await calls('login_vertical_security')).length, 0);
+  });
+  await check('缺少持久化确认、重复或未知阶段不能误认完整成功', async () => {
+    const expected = ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'];
+    for (const phases of [expected.slice(0, -1), [...expected, 'unknown'], [...expected.slice(0, -1), 'verification'], []]) {
+      await openFixture(); await openPath(); await fillPath();
+      await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click();
+      await page.waitForFunction(() => Boolean(window.__securityPathMock.pathResolve));
+      await page.evaluate(ids => window.__securityPathMock.pathResolve({ target_ip: '11.22.33.44', applied: true, exit_code: 0, message: 'fixture incomplete confirmation', steps: ids.map(id => ({ id, name: id, state: 'success', message: 'fixture success' })) }), phases);
+      await dialog().getByText('访问通路配置未完成', { exact: true }).waitFor();
+      assert.equal(await dialog().getByText('访问通路已应用', { exact: true }).count(), 0);
+      await dialog().getByText('配置结果的完成标记与执行状态不一致，不能确认已应用，请检查设备实际网络状态。', { exact: true }).waitFor();
+      assert.equal((await calls('check_vertical_security_access')).length, 0);
+      assert.equal((await calls('login_vertical_security')).length, 0);
+    }
   });
   await check('证书SSH认证只携带独立sudo密码；与纵密TLS证书分离', async () => {
     await openFixture(); await openPath();

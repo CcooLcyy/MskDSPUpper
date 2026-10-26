@@ -4,6 +4,14 @@ import { NodeIndexOutlined } from '@ant-design/icons';
 import { api } from '../../adapters';
 import type { LowerUpdateSshAuth, VerticalSecurityAccessPathResult } from '../../adapters';
 
+const REQUIRED_PHASES = ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'] as const;
+
+function isVerifiedApplied(result: VerticalSecurityAccessPathResult | null): boolean {
+  return result?.target_ip === '11.22.33.44' && result.applied === true && result.exit_code === 0
+    && result.steps.length === REQUIRED_PHASES.length
+    && REQUIRED_PHASES.every(id => result.steps.filter(step => step.id === id && step.state === 'success').length === 1);
+}
+
 export default function AccessPathConfig({ disabled, onBusyChange, onApplied }: {
   disabled: boolean;
   onBusyChange: (busy: boolean) => void;
@@ -21,8 +29,7 @@ export default function AccessPathConfig({ disabled, onBusyChange, onApplied }: 
   const mountedRef = useRef(false);
   const runningRef = useRef(false);
   const secretInputs = useRef<Array<HTMLInputElement | null>>([]);
-  const verifiedApplied = result?.applied === true && result.exit_code === 0
-    && result.steps.length > 0 && result.steps.every(step => step.state === 'success');
+  const verifiedApplied = isVerifiedApplied(result);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -60,7 +67,7 @@ export default function AccessPathConfig({ disabled, onBusyChange, onApplied }: 
       if (!mountedRef.current) return;
       if (value.target_ip !== '11.22.33.44') { setError('返回结果的目标地址不匹配，请检查设备实际网络状态。'); return; }
       setResult(value);
-      if (value.applied && value.exit_code === 0 && value.steps.length > 0 && value.steps.every(step => step.state === 'success')) onApplied();
+      if (isVerifiedApplied(value)) onApplied();
       else if (value.applied) setError('配置结果的完成标记与执行状态不一致，不能确认已应用，请检查设备实际网络状态。');
     } catch {
       if (mountedRef.current) setError('无法确认访问通路配置结果。设备可能已经应用部分变更，请检查实际网络状态后再决定是否重试。');
@@ -77,8 +84,8 @@ export default function AccessPathConfig({ disabled, onBusyChange, onApplied }: 
       footer={<Space>{!busy && <Button onClick={close}>关闭</Button>}<Button type="primary" loading={busy} disabled={busy || disabled} onClick={() => void apply()}>应用访问通路</Button></Space>}
     >
       <Alert type="info" showIcon title="仅配置 101 → 108 的纵密维护访问" description="本操作独立于纵密业务网络配置，不需要填写本端／对端 RTU、网关或纵密业务地址。" />
-      <div className="security-path-preview"><strong>固定访问路径</strong><p>电脑（11.22.33.0/24） → DSP 101 口（11.22.33.1/32） → DSP 108 口（11.22.33.2/32） → 纵密 11.22.33.44</p><p>配置维护地址、代理 ARP、目标及回程路由，启用全局 IPv4 转发，并添加限定此路径的转发和 SNAT。回包经 DSP 返回电脑，不限定纵密访问端口。</p><p>不配置 107、PPP、DNAT、默认路由或开机服务。配置完成不代表目标已可达，需要另行检查。</p></div>
-      <Alert type="warning" showIcon title="仅当前运行态有效，设备重启后需要重新配置" description="应用会修改目标 DSP 网络。启用全局 IPv4 转发可能同步改变内核的主机／路由器默认参数；失败回退不保证恢复全部状态。执行中不能取消或关闭本窗口；如果操作中断，不能视为配置已撤销。" />
+      <div className="security-path-preview"><strong>固定访问路径</strong><p>电脑（11.22.33.0/24） → DSP 101 口（11.22.33.1/32） → DSP 108 口（11.22.33.2/32） → 纵密 11.22.33.44</p><p>配置维护地址、代理 ARP、目标及回程路由，启用全局 IPv4 转发，并添加限定此路径的转发和 SNAT。回包经 DSP 返回电脑，不限定纵密访问端口。</p><p>安装独立的 systemd 服务，设备开机后自动恢复此维护通路；不依赖 PPP 或纵密业务服务，不配置 107、业务 DNAT 或默认路由。配置完成不代表目标已可达，需要另行检查。</p></div>
+      <Alert type="warning" showIcon title="应用后独立开机恢复维护通路" description="应用会修改目标 DSP 网络，并安装和启用维护通路开机恢复服务。首次应用及开机恢复启用均确认成功，才显示已应用。启用全局 IPv4 转发可能改变内核默认参数；失败会尽力恢复本次变更，但不能保证恢复全部状态。执行中不能关闭窗口；操作中断不代表配置已撤销。" />
       <Form layout="vertical" className="security-path-form" disabled={busy} autoComplete="off">
         <Form.Item label="DSP SSH 上传账号"><Input aria-label="访问通路 SSH 上传账号" value={uploadAccount} placeholder="user@设备地址:SSH端口" onChange={event => setUploadAccount(event.target.value)} /></Form.Item>
         <Form.Item label="SSH 认证方式"><Segmented aria-label="访问通路 SSH 认证方式" block value={authMethod} options={[{ label: '密码', value: 'password' }, { label: '证书', value: 'certificate' }]} onChange={value => { clearSecrets(); setAuthMethod(value as LowerUpdateSshAuth['method']); }} /></Form.Item>
@@ -89,7 +96,7 @@ export default function AccessPathConfig({ disabled, onBusyChange, onApplied }: 
       </Form>
       {busy && <Alert type="info" showIcon title="正在应用访问通路，请等待设备返回结果" description="页面不会自动登录或运行网络检查。" />}
       {error && <Alert className="security-access-notice" type="error" showIcon title={error} />}
-      {result && <section className="security-path-result" aria-label="访问通路配置结果"><Alert type={verifiedApplied ? 'success' : 'error'} showIcon title={verifiedApplied ? '访问通路已应用' : '访问通路配置未完成'} description={<>{result.message}<p>退出码：{result.exit_code ?? '未返回'}</p></>} /><div aria-live="polite">{result.steps.map(step => <div className="security-access-step" key={step.id}><Badge status={step.state === 'success' ? 'success' : step.state === 'failed' ? 'error' : 'warning'} /><div><strong>{step.name}</strong><p>{step.message}</p></div><span>{step.state === 'success' ? '通过' : step.state === 'failed' ? '失败' : '不支持'}</span></div>)}</div>{verifiedApplied && <p>可关闭窗口后手动检查直连或登录；页面没有自动发起检查与登录。</p>}</section>}
+      {result && <section className="security-path-result" aria-label="访问通路配置结果"><Alert type={verifiedApplied ? 'success' : 'error'} showIcon title={verifiedApplied ? '访问通路已应用' : '访问通路配置未完成'} description={<>{result.message}<p>退出码：{result.exit_code ?? '未返回'}</p></>} /><div aria-live="polite">{result.steps.map((step, index) => <div className="security-access-step" key={`${step.id}-${index}`}><Badge status={step.state === 'success' ? 'success' : step.state === 'failed' ? 'error' : 'warning'} /><div><strong>{step.name}</strong><p>{step.message}</p></div><span>{step.state === 'success' ? '通过' : step.state === 'failed' ? '失败' : '不支持'}</span></div>)}</div>{verifiedApplied && <p>可关闭窗口后手动检查直连或登录；页面没有自动发起检查与登录。</p>}</section>}
     </Modal>
   </>;
 }

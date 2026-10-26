@@ -88,7 +88,7 @@ const SCRIPT_PREVIEW_FIELDS: Array<keyof SecurityConfigValues> = [
 const STATUS_POLL_INTERVAL_MS = 2000;
 const EXECUTION_STEPS = [
   { id: 'precheck', name: '系统预检查' },
-  { id: 'fixed_network', name: '101 固定网络' },
+  { id: 'forwarding', name: '业务 IPv4 转发' },
   { id: 'local_security', name: '107 本地纵密链路' },
   { id: 'local_rtu', name: '108 本地 RTU 链路' },
   { id: 'ppp0_wait', name: 'PPP 链路' },
@@ -535,7 +535,6 @@ const SecurityConfig: React.FC = () => {
             </div>
           </section>
           </div>
-          <details className="security-config-maintenance"><summary>101 / 108 维护访问参数</summary><dl><dt>101 口</dt><dd>11.22.33.1/32</dd><dt>108 口</dt><dd>11.22.33.2/32</dd><dt>纵密管理地址</dt><dd>11.22.33.44，端口不限</dd></dl></details>
           <div className="security-config-actions">
             <span>应用后修改设备网络，并设置开机自动应用。</span>
             <Space wrap>
@@ -566,7 +565,7 @@ const SecurityConfig: React.FC = () => {
       <Modal title="网络变更预览" open={reviewValues !== null} onCancel={() => setReviewValues(null)} width={860} destroyOnHidden
         footer={<Space><Button onClick={() => setReviewValues(null)}>返回修改</Button><Button type="primary" loading={isGenerating} onClick={() => { if (reviewValues) void handleApply(reviewValues); }}>应用网络配置</Button></Space>}
       >
-        <Alert type="warning" showIcon title="应用后会修改设备网络并启动开机自启服务" description="将配置 101 / 108 维护地址、代理 ARP、SNAT、本端与对端业务路由，以及现有 PPP、DNAT 和连接跟踪规则。执行失败可能保留部分配置；当前脚本没有自动回滚。" />
+        <Alert type="warning" showIcon title="应用后会修改设备网络并启动开机自启服务" description="将启用业务 IPv4 转发，配置本端与对端业务地址、路由，以及现有 PPP、DNAT 和连接跟踪规则。执行失败可能保留部分配置；当前脚本没有自动回滚。" />
         <p>目标设备：{reviewValues?.device} · SSH：{reviewValues?.uploadAccount}</p>
         <pre className="security-config-script-preview">{reviewValues ? buildVerticalSecurityScript({ ...reviewValues, device: reviewValues.device ?? '' }) : ''}</pre>
       </Modal>
