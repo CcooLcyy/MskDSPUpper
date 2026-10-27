@@ -302,13 +302,12 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   };
 
   return <section className="security-login-workbench" aria-label="纵密登录工作台">
-    <div className="security-login-context">
+    <div className="security-login-context" aria-label={`当前连接：${mode === 'direct' ? '101 口直连' : `平台远程 · ${deviceLabel || deviceId || '尚未选择 DSP'}`}`}>
       {modeControls && <div className="security-login-mode-controls">{modeControls}</div>}
-      <span>纵密目标 <strong>11.22.33.44</strong></span>
-      <span>{mode === 'direct' ? '出口：DSP 108 口' : `远程 DSP：${deviceLabel || deviceId || '尚未选择 DSP'}`}</span>
+      <div className="security-login-target-summary"><span>纵密目标 <strong>11.22.33.44</strong></span><span>出口：DSP 108 口</span></div>
     </div>
     <div className="security-access-columns security-login-columns">
-      <Card title="装置身份认证" extra={<Tag color={session ? 'success' : busy ? 'processing' : 'default'}>{session ? '已登录' : busy ? '认证中' : '未登录'}</Tag>}>
+      <Card className="security-login-auth" title="装置身份认证" extra={<Tag color={session ? 'success' : busy ? 'processing' : 'default'}>{session ? '已登录' : busy ? '认证中' : '未登录'}</Tag>}>
         {session ? <>
           <Alert type="success" showIcon title="已登录纵密装置" description="已完成身份认证与账号、版本资料只读初始化；纵密业务入口尚未接入。" />
           <dl className="security-login-session"><dt>当前账号</dt><dd>{session.username}</dd><dt>当前角色</dt><dd>{ROLE_OPTIONS.find(item => item.value === session.role)?.label}</dd><dt>装置地址</dt><dd>{session.target_ip}</dd><dt>装置版本</dt><dd>{session.device_version || '未提供'}</dd><dt>上次登录</dt><dd>{session.last_login_at || '未提供'}</dd></dl>
@@ -323,7 +322,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
             <label htmlFor="vertical-security-username">用户名<Input id="vertical-security-username" aria-label="纵密用户名" value={username} maxLength={32} autoComplete="off" disabled={locked || accessBusy} placeholder="输入纵密账号" onChange={event => setUsername(event.target.value)} /></label>
             <label htmlFor="vertical-security-password">密码<Input.Password id="vertical-security-password" aria-label="纵密密码" value={password} maxLength={32} autoComplete="off" disabled={locked || accessBusy} placeholder="输入纵密密码" onChange={event => setPassword(event.target.value)} onPressEnter={() => void login()} ref={node => { secretInputs.current[0] = node?.input ?? null; }} /></label>
           </div>
-          <Space wrap className="security-login-actions"><Button type="primary" icon={<LoginOutlined />} loading={busy} disabled={!allowed || locked || accessBusy || !username.trim() || !password} onClick={() => void login()}>登录纵密</Button>{busy && <Button loading={cancelling} onClick={() => void cancelLogin()}>取消登录</Button>}</Space>
+          <div className="security-login-actions"><Button type="primary" block icon={<LoginOutlined />} loading={busy} disabled={!allowed || locked || accessBusy || !username.trim() || !password} onClick={() => void login()}>登录纵密</Button>{busy && <Button block loading={cancelling} onClick={() => void cancelLogin()}>取消登录</Button>}</div>
           <details className="security-login-certificate"><summary>连接证书 <span>{profile?.configured ? profile.source === 'builtin' ? builtinSummary : '已配置 · 当前进程有效' : initializing ? '读取中' : '尚未配置'}</span></summary>
             {profile?.source === 'builtin' && profile.configured && <p>{profile.label || '内置配套证书'}已由上位机加载，无需手动选择证书。实际组别须等待本次 TLS 匹配完成。</p>}
             <details className="security-login-builtin-mode"><summary>内置证书模式（高级）</summary><p>自动模式仅在 TLS 握手期间匹配候选证书；发送账号后不切换证书、不自动重试认证。旧版兼容仅适用于固定目标与精确匹配的配套证书，自定义和新版证书保持严格校验。</p><p>已生效模式：{profile?.source === 'builtin' && profile.configured ? BUILTIN_MODE_OPTIONS.find(item => item.value === appliedBuiltinMode)?.label : '当前使用自定义证书或尚未配置'}。下方选择须点击应用才会生效。</p><Space wrap><Select aria-label="内置证书模式" value={builtinMode} options={BUILTIN_MODE_OPTIONS} disabled={locked || accessBusy || initializing} onChange={setBuiltinMode} style={{ minWidth: 210 }} /><Button disabled={locked || accessBusy || initializing} loading={certificateBusy} onClick={() => void applyBuiltinCertificate(builtinMode)}>应用内置证书模式</Button></Space></details>
@@ -347,10 +346,10 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
         {notice && <Alert className="security-access-notice" type="info" showIcon title={notice} />}
         {result && !session && !mustChangePassword && <Alert className="security-access-notice" type={result.state === 'failed' ? 'error' : 'warning'} showIcon title={result.state === 'unverified_response' ? '装置应答尚未验证，未建立登录会话' : '纵密尚未登录'} description={<>{result.message}{result.lock_seconds !== null && <p>装置返回锁定时间：{result.lock_seconds} 秒</p>}</>} />}
       </Card>
-      <Card title="登录进度" className="security-login-progress"><div aria-live="polite">{LOGIN_STAGES.map(stage => {
+      <aside className="security-login-progress" aria-labelledby="security-login-progress-title"><h2 id="security-login-progress-title">登录进度</h2><div aria-live="polite">{LOGIN_STAGES.map(stage => {
         const step = result?.steps.find(item => item.id === stage.id);
         return <div className="security-access-step" key={stage.id}><Badge status={step?.state === 'success' ? 'success' : step?.state === 'failed' ? 'error' : step?.state === 'unsupported' ? 'warning' : 'default'} /><div><strong>{stage.name}</strong><p>{step?.message || (busy ? '等待装置返回本次检查结果' : '尚未执行')}</p></div><span>{step?.state === 'success' ? '通过' : step?.state === 'failed' ? '失败' : step?.state === 'unsupported' ? '不支持' : '待确认'}</span></div>;
-      })}</div>{certificateMatch ? <Alert className="security-access-notice" type={certificateMatch.legacy ? 'warning' : 'info'} showIcon title={certificateMatch.label} description={<>{certificateMatch.compatibility}{certificateMatch.legacy && <p>仅此固定纵密目标、精确配套旧证书允许受限日期与名称兼容；不代表账号已经通过认证。</p>}</>} /> : profile?.source === 'builtin' && <p className="security-login-hint">证书组别待 TLS 匹配确认。</p>}<p className="security-access-boundary">使用纵密装置账号与连接证书。网络检查与身份认证分别显示；ICMP 无响应不阻止尝试登录。</p></Card>
+      })}</div>{certificateMatch ? <Alert className="security-access-notice" type={certificateMatch.legacy ? 'warning' : 'info'} showIcon title={certificateMatch.label} description={<>{certificateMatch.compatibility}{certificateMatch.legacy && <p>仅此固定纵密目标、精确配套旧证书允许受限日期与名称兼容；不代表账号已经通过认证。</p>}</>} /> : profile?.source === 'builtin' && <p className="security-login-hint">证书组别待 TLS 匹配确认。</p>}<p className="security-access-boundary">使用纵密装置账号与连接证书。网络检查与身份认证分别显示；ICMP 无响应不阻止尝试登录。</p></aside>
     </div>
   </section>;
 }

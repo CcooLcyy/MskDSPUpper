@@ -326,9 +326,10 @@ const SecurityConfig: React.FC = () => {
   return (
     <div className="security-config-page">
       {contextHolder}
+      <div className="security-config-workspace">
       <header className="security-config-heading"><h1>纵密网络配置</h1><p>配置 DSP 上的纵密业务地址、路由与转发规则。</p></header>
-      <Card className="security-config-card">
         {deployResult ? (
+          <Card className="security-config-execution-card">
           <Alert
             className="security-config-deploy-result"
             type={executionOutcome.failed ? 'error' : executionOutcome.completed ? 'success' : 'info'}
@@ -342,8 +343,6 @@ const SecurityConfig: React.FC = () => {
               ? `${executionOutcome.failedStep.name}：${executionOutcome.failedStep.message}`
               : `远端脚本：${deployResult.remote_path}`}
           />
-        ) : null}
-        {deployResult ? (
           <section
             className="security-config-execution"
             aria-labelledby="security-config-execution-title"
@@ -408,8 +407,10 @@ const SecurityConfig: React.FC = () => {
               })}
             </div>
           </section>
+          </Card>
         ) : null}
         <Form
+          className="security-config-form"
           form={form}
           layout="vertical"
           autoComplete="off"
@@ -423,6 +424,7 @@ const SecurityConfig: React.FC = () => {
           onFinish={handleApply}
           onFinishFailed={() => setConnectionOptionsOpen(true)}
         >
+          <Card className="security-config-target-card">
           <section className="security-config-target">
           <h2 className="security-config-section-title">配置目标</h2>
           <div className="security-config-target-row">
@@ -501,6 +503,8 @@ const SecurityConfig: React.FC = () => {
             </div>
           </details>
           </section>
+          </Card>
+          <Card className="security-config-card">
           <section className="security-config-business">
           <div className="security-config-business-heading"><h2 className="security-config-section-title">纵密业务地址</h2><span>本端 / 对端表示业务两端</span></div>
           <div className="security-config-address-columns">
@@ -558,8 +562,9 @@ const SecurityConfig: React.FC = () => {
             </Space>
           </div>
           </section>
+          </Card>
         </Form>
-      </Card>
+      </div>
       <Modal
         title="纵密配置脚本预览"
         open={scriptPreview !== null}

@@ -225,10 +225,9 @@ try {
   await assertPage(pages[0]);
   results.push('侧栏收起再展开后恢复当前纵密分组，并能继续进入其他子页');
 
-  // 在真实侧栏占用宽度下检查内容布局，覆盖宽屏留白、顶部顺序和窄屏堆叠。
+  // 在真实侧栏占用宽度下检查居中、控件宽度、主辅区域及窄屏堆叠。
   for (const width of [2560, 1440, 1024, 736]) {
     await page.setViewportSize({ width, height: width === 2560 ? 1349 : 1100 });
-    let headingTop;
     for (const expected of pages) {
       await menuItem(expected.label).click();
       await assertPage(expected);
@@ -236,27 +235,83 @@ try {
       const heading = await page.getByRole('heading', { level: 1, name: expected.title }).boundingBox();
       const workbench = page.locator('.security-access-columns, .security-config-card');
       const workbenchBox = await workbench.boundingBox();
+      const frame = page.locator('.security-login-frame, .security-access-frame, .security-config-workspace');
+      const frameBox = await frame.boundingBox();
+      const contentBox = await content.boundingBox();
+      const contentWidth = await content.evaluate(element => element.clientWidth);
       assert.equal(await content.evaluate(element => element.scrollWidth <= element.clientWidth + 2), true, `${width}px ${expected.label}内容区无横向溢出`);
+      assert.ok(Math.abs(frameBox.x + frameBox.width / 2 - contentBox.x - contentWidth / 2) <= 2, `${width}px ${expected.label}工作区在侧栏之外的主内容区居中`);
       assert.ok(heading.y + heading.height < workbenchBox.y, '页面标题始终在操作工作区上方');
-      headingTop ??= heading.y;
-      assert.ok(Math.abs(heading.y - headingTop) <= 1, '三个页面标题顶部保持对齐');
+      assert.ok(Math.abs(heading.x - frameBox.x) <= 1, '标题与居中工作区左侧对齐');
       if (expected.path === '/security-login') {
         const controls = await page.locator('.security-login-mode-controls').boundingBox();
         const submit = await page.getByRole('button', { name: /登录纵密/ }).boundingBox();
         const certificate = await page.locator('.security-login-certificate > summary').boundingBox();
+        const auth = await page.locator('.security-login-auth').boundingBox();
+        const progress = await page.locator('.security-login-progress').boundingBox();
+        const username = await page.getByLabel('纵密用户名', { exact: true }).boundingBox();
         assert.ok(heading.y + heading.height < controls.y, '连接方式放在页面标题下方');
         assert.ok(submit.y + submit.height <= certificate.y, '登录按钮紧跟表单，位于高级证书设置之前');
+        assert.ok(username.width <= 500, '宽屏不拉长登录输入框');
+        assert.equal(await page.locator('.security-login-progress').evaluate(element => element.tagName), 'ASIDE', '进度作为轻量辅助区');
+        if (width >= 1440) {
+          assert.ok(progress.x >= auth.x + auth.width, '宽屏进度在认证区旁边');
+          assert.ok(Math.abs(frameBox.y + frameBox.height / 2 - contentBox.y - contentBox.height / 2) <= 2, '宽屏登录整体在主内容区垂直居中');
+        } else {
+          assert.ok(progress.y >= auth.y + auth.height, '可用宽度不足时进度堆叠到认证区下方');
+        }
       } else if (expected.path === '/security-access') {
         const actions = page.locator('.security-access-actions');
+        const route = await page.locator('.security-access-path').boundingBox();
+        const check = await page.locator('.security-access-connect').boundingBox();
+        const nodes = await page.locator('.security-access-path li').evaluateAll(elements => elements.map(element => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y }; }));
         assert.equal(await actions.getByRole('button', { name: /检查直连|配置纵密访问通路/ }).count(), 2, '配置通路与检查在同一操作区');
+        assert.ok(route.y + route.height <= check.y, '路径概览放在检查工作区上方');
+        if (width >= 1024) assert.ok(nodes.every(node => Math.abs(node.y - nodes[0].y) <= 1), '宽屏路径节点横向展示');
+        else assert.ok(nodes[1].y > nodes[0].y, '窄屏路径节点竖向堆叠');
       } else {
         const actions = await page.locator('.security-config-actions').boundingBox();
+        const target = await page.locator('.security-config-target-card').boundingBox();
+        const local = await page.locator('#security-config-local-title').boundingBox();
+        const remote = await page.locator('#security-config-remote-title').boundingBox();
+        assert.ok(target.y + target.height < workbenchBox.y, '目标认证与业务地址分成两块卡片');
+        if (width >= 1024) assert.ok(Math.abs(local.y - remote.y) <= 1, '宽屏本端和对端并排');
+        else assert.ok(remote.y > local.y, '窄屏本端和对端上下堆叠');
         assert.ok(workbenchBox.y + workbenchBox.height - actions.y - actions.height < 48, '网络配置卡片底部不再保留撑满高度造成的大片空白');
       }
       await capture(`layout-${expected.path.slice(1)}-${width}`);
     }
   }
-  results.push('真实侧栏下三页在2560/1440/1024/736px无横向溢出，标题对齐、主操作顺序和配置卡片收缩正常');
+  results.push('真实侧栏下三页在2560/1440/1024/736px工作区居中；登录限宽且主辅分明，通路横向概览，网络配置分区，窄屏实际堆叠');
+
+  // 展开较长表单后仍使用主内容区滚动，不以居中布局裁切底部操作。
+  await page.setViewportSize({ width: 820, height: 560 });
+  for (const expected of [pages[0], pages[2]]) {
+    await goDirect(expected);
+    const summary = page.locator(expected.path === '/security-login' ? '.security-login-certificate > summary' : '.security-config-auth > summary');
+    await summary.click();
+    const action = page.getByRole('button', { name: expected.path === '/security-login' ? '应用连接证书' : /应用网络配置/ });
+    await action.scrollIntoViewIfNeeded();
+    const content = page.locator('.ant-layout-content');
+    const contentBox = await content.boundingBox();
+    const actionBox = await action.boundingBox();
+    assert.equal(await content.evaluate(element => element.scrollHeight > element.clientHeight && element.scrollTop > 0), true, '长表单通过主内容区滚动');
+    assert.ok(actionBox.y >= contentBox.y && actionBox.y + actionBox.height <= contentBox.y + contentBox.height + 1, '展开后的底部操作可以完整滚入视口');
+    assert.equal(await content.evaluate(element => element.scrollWidth <= element.clientWidth + 2), true, '高级表单展开后无横向溢出');
+    await capture(`expanded-${expected.path.slice(1)}-820`);
+  }
+  results.push('820×560窗口展开证书或SSH认证后，表单自然增高，底部操作可滚入视口且无横向溢出');
+
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  for (const expected of [pages[0], pages[1]]) {
+    await goDirect(expected);
+    await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
+    await page.getByRole('combobox', { name: '目标 DSP', exact: true }).waitFor();
+    const content = page.locator('.ant-layout-content');
+    assert.equal(await content.evaluate(element => element.scrollWidth <= element.clientWidth + 2), true, '远程设备选择和不可用提示不撑破居中布局');
+    await capture(`remote-${expected.path.slice(1)}-1440`);
+  }
+  results.push('登录和访问通路远程模式的设备选择与不可用提示保持正常布局');
 
   assert.deepEqual(await page.evaluate(() => window.__securityNavigationMock.unexpected), []);
   assert.equal((await calls()).some(call => /^(login_vertical_security|check_vertical_security_access|configure_vertical_security_access_path|deploy_vertical_security_script)$/.test(call.command)), false);

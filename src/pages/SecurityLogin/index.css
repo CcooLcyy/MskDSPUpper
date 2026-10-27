@@ -1,0 +1,161 @@
+.security-login-page {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100%;
+  padding: clamp(32px, 5vh, 64px) 32px;
+  container-name: security-login;
+}
+
+.security-login-page .security-login-frame {
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+.security-login-page .security-workbench-heading {
+  margin-bottom: 28px;
+}
+
+.security-login-page .security-workbench-heading p {
+  line-height: 1.7;
+}
+
+.security-login-page .security-login-workbench {
+  max-width: none;
+}
+
+.security-login-page .security-login-context {
+  gap: 16px 24px;
+  padding: 0 0 24px;
+  margin-bottom: 28px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 0;
+}
+
+.security-login-page .security-login-mode-controls {
+  gap: 12px;
+}
+
+.security-login-page .security-access-device-picker {
+  min-width: 220px;
+  max-width: 300px;
+}
+
+.security-login-page .security-login-target-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, .7);
+}
+
+.security-login-page .security-login-context strong {
+  margin-left: 8px;
+  color: rgba(255, 255, 255, .9);
+}
+
+.security-login-page .security-login-columns {
+  grid-template-columns: minmax(0, 540px) minmax(0, 300px);
+  gap: 40px;
+  max-width: none;
+}
+
+.security-login-page .security-login-auth > .ant-card-head {
+  min-height: 56px;
+  padding-inline: 24px;
+}
+
+.security-login-page .security-login-auth > .ant-card-body {
+  padding: 24px;
+}
+
+.security-login-page .security-login-fields {
+  gap: 18px;
+}
+
+.security-login-page .security-login-fields label {
+  gap: 8px;
+}
+
+.security-login-page .security-login-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.security-login-page .security-login-actions > .ant-btn {
+  min-height: 36px;
+}
+
+.security-login-page .security-login-progress {
+  min-width: 0;
+  padding-top: 17px;
+}
+
+.security-login-page .security-login-progress h2 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.security-login-page .security-login-progress .security-access-step {
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 7px 0;
+}
+
+.security-login-page .security-login-progress .security-access-step p {
+  margin-top: 2px;
+  line-height: 1.5;
+}
+
+.security-login-page .security-login-progress .security-access-boundary {
+  margin-top: 20px;
+  line-height: 1.7;
+}
+
+.security-login-page .security-login-frame > .security-login-hint {
+  max-width: 540px;
+  margin: 20px 0 0;
+  line-height: 1.7;
+}
+
+@container security-login (max-width: 780px) {
+  .security-login-page .security-login-frame {
+    max-width: 540px;
+  }
+
+  .security-login-page .security-login-columns {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+  }
+
+  .security-login-page .security-login-progress {
+    padding-top: 0;
+  }
+}
+
+@container security-login (max-width: 440px) {
+  .security-login-page .security-login-auth > .ant-card-head {
+    padding-inline: 18px;
+  }
+
+  .security-login-page .security-login-auth > .ant-card-body {
+    padding: 18px;
+  }
+
+  .security-login-page .security-login-mode-controls,
+  .security-login-page .security-access-device-picker {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .security-login-page .security-access-device-picker {
+    max-width: none;
+    flex-basis: 100%;
+  }
+}

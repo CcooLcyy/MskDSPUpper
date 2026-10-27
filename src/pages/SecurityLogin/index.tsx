@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { VerticalSecurityAccessMode } from '../../adapters';
 import SecurityLogin from '../SecurityAccess/SecurityLogin';
 import '../SecurityAccess/index.css';
+import './index.css';
 
 interface PlatformDevice { device_id: string; display_name: string; online: boolean }
 
@@ -42,6 +43,7 @@ export default function SecurityLoginPage() {
   }, [loadDevices]);
 
   return <div className="security-access-page security-login-page">
+    <div className="security-login-frame">
     <header className="security-workbench-heading"><h1>纵密登录</h1><p>纵密账号和会话独立管理，不复用平台、上位机或 SSH 身份。</p></header>
     <SecurityLogin key={`${mode}:${deviceId ?? ''}`} mode={mode} deviceId={deviceId} deviceLabel={selectedDevice?.display_name} accessBusy={false} onLockChange={setLocked} modeControls={<>
       <Segmented aria-label="纵密登录连接方式" value={mode} disabled={locked} onChange={value => setMode(value as VerticalSecurityAccessMode)} options={[{ value: 'direct', label: '101 口直连', icon: <UsbOutlined /> }, { value: 'remote', label: '平台远程', icon: <CloudOutlined /> }]} />
@@ -50,5 +52,6 @@ export default function SecurityLoginPage() {
       {mode === 'remote' && deviceError && <Alert type="warning" showIcon title={deviceError} />}
     </>} />
     {mode === 'direct' && <p className="security-login-hint">首次使用可在访问通路页配置维护通路，随后手动登录纵密装置。</p>}
+    </div>
   </div>;
 }

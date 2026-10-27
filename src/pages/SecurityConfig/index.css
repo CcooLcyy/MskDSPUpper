@@ -3,27 +3,40 @@
   width: 100%;
   min-width: 0;
   padding: 24px;
+}
+
+.security-config-workspace {
+  width: 100%;
+  max-width: 1040px;
+  min-width: 0;
+  margin: 0 auto;
   container: security-config / inline-size;
 }
 
-.security-config-card {
+.security-config-form {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.security-config-card,
+.security-config-target-card,
+.security-config-execution-card {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  max-width: 1040px;
 }
+.security-config-execution-card { margin-bottom: 20px; }
 
 .security-config-heading { margin-bottom: 24px; }
 .security-config-heading h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.4; }
 .security-config-heading p { margin: 0; color: rgba(255,255,255,.65); }
-.security-config-target { padding-bottom: 20px; }
 .security-config-target-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 32px; margin-bottom: 16px; }
 .security-config-target-summary { display: grid; gap: 6px; font-size: 13px; color: rgba(255,255,255,.65); }
 .security-config-target > .security-config-section-title,
 .security-config-business-heading > .security-config-section-title { font-size: 16px; }
 .security-config-auth summary, .security-config-maintenance summary { cursor: pointer; color: rgba(255,255,255,.65); }
 .security-config-auth[open] summary { margin-bottom: 20px; }
-.security-config-business { border-top: 1px solid rgba(255,255,255,.12); padding-top: 20px; }
 .security-config-business-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .security-config-business-heading > span { font-size: 12px; color: rgba(255,255,255,.6); }
 .security-config-address-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
@@ -38,9 +51,9 @@
   flex: 0 1 300px;
   min-width: 0;
 }
-.security-config-card .ant-form-item { margin-bottom: 20px; }
-.security-config-card .security-config-device .ant-form-item { margin-bottom: 0; }
-.security-config-card .ant-space { max-width: 100%; }
+.security-config-form .ant-form-item { margin-bottom: 20px; }
+.security-config-form .security-config-device .ant-form-item { margin-bottom: 0; }
+.security-config-form .ant-space { max-width: 100%; }
 
 .security-config-network-alert {
   margin-bottom: 20px;
@@ -48,13 +61,12 @@
 
 .security-config-deploy-result {
   margin-bottom: 20px;
+  overflow-wrap: anywhere;
 }
 
 .security-config-execution {
-  margin-bottom: 20px;
-  padding: 16px 0;
+  padding-top: 16px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .security-config-execution-heading {
@@ -69,6 +81,7 @@
   color: rgba(255, 255, 255, 0.55);
   font-size: 12px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .security-config-status-error {
@@ -232,5 +245,6 @@
 
 @media (max-width: 520px) {
   .security-config-page { padding: 16px; }
-  .security-config-card > .ant-card-body { padding: 16px; }
+  .security-config-workspace > .ant-card > .ant-card-body,
+  .security-config-form > .ant-card > .ant-card-body { padding: 16px; }
 }

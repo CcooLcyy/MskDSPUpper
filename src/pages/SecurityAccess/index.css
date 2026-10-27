@@ -1,5 +1,6 @@
 .security-access-page { padding: 24px; min-width: 0; width: 100%; flex: none; box-sizing: border-box; container: security-workbench / inline-size; }
-.security-access-connection-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; max-width: 1040px; }
+.security-access-frame { width: 100%; max-width: 1280px; margin-inline: auto; }
+.security-access-connection-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
 .security-access-device-picker { min-width: 260px; flex: 1; max-width: 460px; }
 .security-access-device-picker .ant-select { flex: 1; min-width: 0; }
 .security-login-workbench { max-width: 1040px; }
@@ -41,6 +42,12 @@
 .security-access-columns > .ant-card { min-width: 0; }
 .security-access-columns > .ant-card > .ant-card-head { min-height: 52px; padding: 0 20px; }
 .security-access-columns > .ant-card > .ant-card-body { padding: 20px; }
+.security-access-frame .security-access-columns { display: flex; flex-direction: column; align-items: stretch; max-width: none; }
+.security-access-check-layout { display: grid; grid-template-columns: minmax(320px, .9fr) minmax(0, 1.2fr); gap: 32px; }
+.security-access-check-controls { min-width: 0; padding-right: 32px; border-right: 1px solid rgba(255,255,255,.12); }
+.security-access-diagnostics { min-width: 0; }
+.security-access-diagnostics .security-access-details { margin: 0; padding: 0; border: 0; }
+.security-access-diagnostics > .security-access-notice:first-child { margin-top: 0; }
 .security-access-notice { margin-top: 16px; }
 .security-access-target span { display: block; color: rgba(255,255,255,.65); font-size: 12px; margin-bottom: 6px; }
 .security-access-remote { display: grid; gap: 12px; margin-top: 20px; }
@@ -60,16 +67,29 @@
 .security-access-step p { margin: 4px 0 0; font-size: 12px; color: rgba(255,255,255,.6); overflow-wrap: anywhere; }
 .security-access-step > span:last-child { font-size: 12px; color: rgba(255,255,255,.6); }
 .security-access-boundary { font-size: 12px; color: rgba(255,255,255,.5); margin: 14px 0 0; }
-.security-access-path ol { margin: 0; padding: 0 0 0 20px; list-style: none; }
-.security-access-path li { position: relative; padding: 0 0 20px 8px; border-left: 1px solid rgba(255,255,255,.18); }
-.security-access-path li:last-child { padding-bottom: 0; border-left-color: transparent; }
-.security-access-path li::before { content: ''; position: absolute; left: -5px; top: 5px; width: 7px; height: 7px; border: 2px solid #69b1ff; border-radius: 50%; background: #292a2d; }
+.security-access-path ol { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 24px; margin: 0; padding: 0; list-style: none; }
+.security-access-path li { position: relative; min-width: 0; padding: 0 24px; }
+.security-access-path li::before { content: ''; position: absolute; left: 0; top: 5px; width: 7px; height: 7px; border: 2px solid #69b1ff; border-radius: 50%; background: #292a2d; }
+.security-access-path li:not(:last-child)::after { content: '→'; position: absolute; right: 0; top: 0; color: rgba(255,255,255,.4); }
 .security-access-path li strong { display: block; font-weight: 500; }
 .security-access-path li span { display: block; color: rgba(255,255,255,.65); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
-.security-access-path dl { display: grid; grid-template-columns: auto 1fr; gap: 12px 16px; border-top: 1px solid rgba(255,255,255,.12); padding-top: 20px; margin: 22px 0 0; font-size: 12px; }
+.security-access-path dl { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px 24px; border-top: 1px solid rgba(255,255,255,.12); padding-top: 16px; margin: 20px 0 0; font-size: 12px; }
+.security-access-path dl > div { display: flex; flex-wrap: wrap; gap: 6px 12px; min-width: 0; }
 .security-access-path dt { color: rgba(255,255,255,.6); }
 .security-access-path dd { margin: 0; overflow-wrap: anywhere; }
 .security-access-result { border-top: 1px solid rgba(255,255,255,.12); margin-top: 20px; padding-top: 20px; }
 .security-access-result p { color: rgba(255,255,255,.65); }
 @container security-workbench (max-width: 700px) { .security-access-columns { grid-template-columns: minmax(0,1fr); } }
+@container security-workbench (max-width: 860px) {
+  .security-access-check-layout { grid-template-columns: minmax(0,1fr); gap: 24px; }
+  .security-access-check-controls { padding: 0 0 24px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.12); }
+}
+@container security-workbench (max-width: 700px) {
+  .security-access-path ol { grid-template-columns: minmax(0,1fr); gap: 0; }
+  .security-access-path li { border-left: 1px solid rgba(255,255,255,.18); padding: 0 0 20px 24px; margin-left: 5px; }
+  .security-access-path li:last-child { padding-bottom: 0; border-color: transparent; }
+  .security-access-path li::before { left: -6px; }
+  .security-access-path li::after { display: none; }
+  .security-access-path dl { grid-template-columns: minmax(0,1fr); gap: 12px; }
+}
 @media (max-width: 520px) { .security-access-page { padding: 16px; } .security-access-device-picker { min-width: 0; width: 100%; flex-basis: 100%; } .security-login-mode-controls { width: 100%; } .security-access-step { grid-template-columns: 16px minmax(0,1fr); } .security-access-step > span:last-child { grid-column: 2; } }
