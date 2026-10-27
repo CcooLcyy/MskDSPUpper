@@ -415,10 +415,6 @@ const ModbusTCP: React.FC = () => {
     if (linkMutation !== null) {
       return;
     }
-    if (links.find((link) => link.config?.conn_name === connName)?.state === 2) {
-      messageApi.warning('请先停止轮询，再删除运行中的连接');
-      return;
-    }
     setLinkMutation('delete');
     try {
       await api.modbusTcpDeleteLink(connName);
@@ -433,7 +429,7 @@ const ModbusTCP: React.FC = () => {
     } finally {
       setLinkMutation(null);
     }
-  }, [linkMutation, links, messageApi, refreshLinks, selectedConn]);
+  }, [linkMutation, messageApi, refreshLinks, selectedConn]);
 
   const handleCopyLink = useCallback(async (sourceConnName: string) => {
     if (linkMutation !== null) {
@@ -1176,7 +1172,9 @@ const ModbusTCP: React.FC = () => {
                 const tcp = item.config?.tcp;
                 return `${LINK_STATE_LABELS[item.state] ?? '状态未知'} · ${tcp ? `${tcp.host}:${tcp.port}` : '目标未配置'} · Unit ${tcp?.unit_id ?? '-'}`;
               }}
-              getDeleteTitle={(connName) => `确认删除 ${connName}？`}
+              getDeleteTitle={(connName) => links.find((link) => link.config?.conn_name === connName)?.state === 2
+                ? `连接正在运行，确认停止并删除连接 ${connName}？`
+                : `确认删除 ${connName}？`}
             />
             <div className="modbus-connection-shell">
               <ConnectionConfig

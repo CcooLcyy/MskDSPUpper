@@ -426,12 +426,6 @@ const DLT645: React.FC = () => {
     if (linkMutation !== null) {
       return;
     }
-    const link = links.find((item) => item.config?.conn_name === connName);
-    if (link?.state === 2) {
-      messageApi.warning('请先停止运行中的连接，再删除该连接');
-      return;
-    }
-
     setLinkMutation('delete');
     try {
       await api.dlt645DeleteLink(connName);
@@ -446,7 +440,7 @@ const DLT645: React.FC = () => {
     } finally {
       setLinkMutation(null);
     }
-  }, [linkMutation, links, messageApi, refreshLinks, selectedConn]);
+  }, [linkMutation, messageApi, refreshLinks, selectedConn]);
 
   const handleCopyLink = useCallback(async (sourceConnName: string) => {
     if (linkMutation !== null) {
@@ -1436,7 +1430,9 @@ const DLT645: React.FC = () => {
                 )?.label ?? '通信方式未指定';
                 return `${LINK_STATE_LABELS[item.state] ?? '状态未知'} · ${protocolVariant} · ${commMode} · 表计 ${config.meter_addr || '-'}`;
               }}
-              getDeleteTitle={(connName) => `\u786e\u8ba4\u5220\u9664 ${connName}\uff1f`}
+              getDeleteTitle={(connName) => links.find((link) => link.config?.conn_name === connName)?.state === 2
+                ? `连接正在运行，确认停止并删除连接 ${connName}？`
+                : `确认删除 ${connName}？`}
             />
 
             <div className="dlt645-connection-shell">

@@ -523,10 +523,6 @@ const ModbusRTU: React.FC = () => {
     if (linkMutation !== null) {
       return;
     }
-    if (links.find((link) => link.config?.conn_name === connName)?.state === 2) {
-      messageApi.warning('请先停止轮询，再删除运行中的连接');
-      return;
-    }
     setLinkMutation('delete');
     try {
       await api.modbusRtuDeleteLink(connName);
@@ -541,7 +537,7 @@ const ModbusRTU: React.FC = () => {
     } finally {
       setLinkMutation(null);
     }
-  }, [linkMutation, links, messageApi, refreshLinks, selectedConn]);
+  }, [linkMutation, messageApi, refreshLinks, selectedConn]);
 
   const handleCopyLink = useCallback(async (sourceConnName: string) => {
     if (linkMutation !== null) {
@@ -1386,7 +1382,9 @@ const ModbusRTU: React.FC = () => {
                 const transport = config.transport_type === 2 ? 'MQTT 透传' : '本地串口';
                 return `${LINK_STATE_LABELS[item.state] ?? '状态未知'} · ${transport} · 从站 ${config.device_id}`;
               }}
-              getDeleteTitle={(connName) => `\u786e\u8ba4\u5220\u9664 ${connName}\uff1f`}
+              getDeleteTitle={(connName) => links.find((link) => link.config?.conn_name === connName)?.state === 2
+                ? `连接正在运行，确认停止并删除连接 ${connName}？`
+                : `确认删除 ${connName}？`}
             />
 
             <div className="modbus-connection-shell">
