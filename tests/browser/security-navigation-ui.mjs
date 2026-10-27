@@ -225,6 +225,39 @@ try {
   await assertPage(pages[0]);
   results.push('侧栏收起再展开后恢复当前纵密分组，并能继续进入其他子页');
 
+  // 在真实侧栏占用宽度下检查内容布局，覆盖宽屏留白、顶部顺序和窄屏堆叠。
+  for (const width of [2560, 1440, 1024, 736]) {
+    await page.setViewportSize({ width, height: width === 2560 ? 1349 : 1100 });
+    let headingTop;
+    for (const expected of pages) {
+      await menuItem(expected.label).click();
+      await assertPage(expected);
+      const content = page.locator('.ant-layout-content');
+      const heading = await page.getByRole('heading', { level: 1, name: expected.title }).boundingBox();
+      const workbench = page.locator('.security-access-columns, .security-config-card');
+      const workbenchBox = await workbench.boundingBox();
+      assert.equal(await content.evaluate(element => element.scrollWidth <= element.clientWidth + 2), true, `${width}px ${expected.label}内容区无横向溢出`);
+      assert.ok(heading.y + heading.height < workbenchBox.y, '页面标题始终在操作工作区上方');
+      headingTop ??= heading.y;
+      assert.ok(Math.abs(heading.y - headingTop) <= 1, '三个页面标题顶部保持对齐');
+      if (expected.path === '/security-login') {
+        const controls = await page.locator('.security-login-mode-controls').boundingBox();
+        const submit = await page.getByRole('button', { name: /登录纵密/ }).boundingBox();
+        const certificate = await page.locator('.security-login-certificate > summary').boundingBox();
+        assert.ok(heading.y + heading.height < controls.y, '连接方式放在页面标题下方');
+        assert.ok(submit.y + submit.height <= certificate.y, '登录按钮紧跟表单，位于高级证书设置之前');
+      } else if (expected.path === '/security-access') {
+        const actions = page.locator('.security-access-actions');
+        assert.equal(await actions.getByRole('button', { name: /检查直连|配置纵密访问通路/ }).count(), 2, '配置通路与检查在同一操作区');
+      } else {
+        const actions = await page.locator('.security-config-actions').boundingBox();
+        assert.ok(workbenchBox.y + workbenchBox.height - actions.y - actions.height < 48, '网络配置卡片底部不再保留撑满高度造成的大片空白');
+      }
+      await capture(`layout-${expected.path.slice(1)}-${width}`);
+    }
+  }
+  results.push('真实侧栏下三页在2560/1440/1024/736px无横向溢出，标题对齐、主操作顺序和配置卡片收缩正常');
+
   assert.deepEqual(await page.evaluate(() => window.__securityNavigationMock.unexpected), []);
   assert.equal((await calls()).some(call => /^(login_vertical_security|check_vertical_security_access|configure_vertical_security_access_path|deploy_vertical_security_script)$/.test(call.command)), false);
   assert.deepEqual(failures, []);

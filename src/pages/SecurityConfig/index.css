@@ -1,30 +1,33 @@
 .security-config-page {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
-  min-height: 100%;
-  overflow: auto;
   padding: 24px;
+  container: security-config / inline-size;
 }
 
 .security-config-card {
-  flex: 1 1 auto;
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
-  max-width: 1200px;
+  max-width: 1040px;
 }
 
 .security-config-heading { margin-bottom: 24px; }
-.security-config-heading h1 { margin: 0 0 6px; font-size: 24px; }
+.security-config-heading h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.4; }
 .security-config-heading p { margin: 0; color: rgba(255,255,255,.65); }
-.security-config-target { padding-bottom: 24px; }
-.security-config-target-summary { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.security-config-target { padding-bottom: 20px; }
+.security-config-target-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 32px; margin-bottom: 16px; }
+.security-config-target-summary { display: grid; gap: 6px; font-size: 13px; color: rgba(255,255,255,.65); }
+.security-config-target > .security-config-section-title,
+.security-config-business-heading > .security-config-section-title { font-size: 16px; }
 .security-config-auth summary, .security-config-maintenance summary { cursor: pointer; color: rgba(255,255,255,.65); }
 .security-config-auth[open] summary { margin-bottom: 20px; }
-.security-config-business { border-top: 1px solid rgba(255,255,255,.12); padding-top: 24px; }
+.security-config-business { border-top: 1px solid rgba(255,255,255,.12); padding-top: 20px; }
 .security-config-business-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .security-config-business-heading > span { font-size: 12px; color: rgba(255,255,255,.6); }
-.security-config-address-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.security-config-address-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.security-config-address-columns > .security-config-section { min-width: 0; }
 .security-config-address-columns .security-config-grid { grid-template-columns: 1fr; }
 .security-config-address-columns .security-config-section + .security-config-section { margin: 0; padding: 0; border: 0; }
 .security-config-maintenance { margin: 8px 0 20px; }
@@ -32,8 +35,12 @@
 .security-config-maintenance dd { margin: 0; font-family: Consolas, monospace; }
 
 .security-config-device {
-  width: min(100%, 360px);
+  flex: 0 1 300px;
+  min-width: 0;
 }
+.security-config-card .ant-form-item { margin-bottom: 20px; }
+.security-config-card .security-config-device .ant-form-item { margin-bottom: 0; }
+.security-config-card .ant-space { max-width: 100%; }
 
 .security-config-network-alert {
   margin-bottom: 20px;
@@ -172,7 +179,9 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  margin-top: 8px;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255,255,255,.12);
 }
 .security-config-actions > span { color: rgba(255,255,255,.6); font-size: 12px; }
 
@@ -188,15 +197,24 @@
   white-space: pre;
 }
 
-@media (max-width: 720px) {
+@container security-config (max-width: 760px) {
   .security-config-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 520px) {
-  .security-config-page { padding: 16px; }
+@container security-config (max-width: 680px) {
   .security-config-address-columns { grid-template-columns: 1fr; }
+  .security-config-address-columns .security-config-section + .security-config-section {
+    padding-top: 16px;
+    border-top: 1px solid rgba(255,255,255,.08);
+  }
+  .security-config-actions { align-items: flex-start; flex-direction: column; }
+  .security-config-target-row { gap: 12px; }
+  .security-config-target-summary { width: 100%; }
+}
+
+@container security-config (max-width: 440px) {
   .security-config-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -210,4 +228,9 @@
     justify-content: start;
     text-align: left;
   }
+}
+
+@media (max-width: 520px) {
+  .security-config-page { padding: 16px; }
+  .security-config-card > .ant-card-body { padding: 16px; }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, Badge, Button, Card, Form, Input, Select, Space, Tag, Typography } from 'antd';
 import { FileOutlined, LoginOutlined, LogoutOutlined } from '@ant-design/icons';
 import { api } from '../../adapters';
@@ -19,12 +19,13 @@ type ActiveRequest = { identity: LoginIdentity; generation: number; cancelled: b
 type PasswordChallenge = { id: string; identity: LoginIdentity };
 type ActivePasswordChange = { challenge: PasswordChallenge; generation: number };
 
-export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy, onLockChange }: {
+export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy, onLockChange, modeControls }: {
   mode: VerticalSecurityAccessMode;
   deviceId?: string;
   deviceLabel?: string;
   accessBusy: boolean;
   onLockChange: (locked: boolean) => void;
+  modeControls?: ReactNode;
 }) {
   const [capabilities, setCapabilities] = useState<VerticalSecurityLoginCapabilities | null>(null);
   const [profile, setProfile] = useState<VerticalSecurityCertificateProfile | null>(null);
@@ -301,9 +302,12 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   };
 
   return <section className="security-login-workbench" aria-label="纵密登录工作台">
-    <header className="security-workbench-heading"><h1>纵密登录</h1><p>纵密账号和会话独立管理，不复用平台、上位机或 SSH 身份。</p></header>
-    <div className="security-login-context"><span>纵密目标 <strong>11.22.33.44</strong></span><span>当前路径：{mode === 'direct' ? '101 口直连 · 经 DSP 108 口' : `平台远程 · ${deviceLabel || deviceId || '尚未选择 DSP'}`}</span></div>
-    <div className="security-access-columns">
+    <div className="security-login-context">
+      {modeControls && <div className="security-login-mode-controls">{modeControls}</div>}
+      <span>纵密目标 <strong>11.22.33.44</strong></span>
+      <span>{mode === 'direct' ? '出口：DSP 108 口' : `远程 DSP：${deviceLabel || deviceId || '尚未选择 DSP'}`}</span>
+    </div>
+    <div className="security-access-columns security-login-columns">
       <Card title="装置身份认证" extra={<Tag color={session ? 'success' : busy ? 'processing' : 'default'}>{session ? '已登录' : busy ? '认证中' : '未登录'}</Tag>}>
         {session ? <>
           <Alert type="success" showIcon title="已登录纵密装置" description="已完成身份认证与账号、版本资料只读初始化；纵密业务入口尚未接入。" />
@@ -315,11 +319,11 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
           <Button className="security-access-notice" disabled={changeBusy} onClick={() => void dismissChallenge()}>取消并返回登录</Button>
         </> : <>
           <div className="security-login-fields">
-            <label htmlFor="vertical-security-role">登录角色<Select id="vertical-security-role" aria-label="纵密登录角色" value={role} disabled={locked || accessBusy} options={ROLE_OPTIONS} onChange={value => { clearSecrets(); setRole(value); setUsername(''); setResult(null); setError(null); setNotice(null); }} /></label>
-            <Typography.Text type="secondary">{ROLE_HINTS[role]}</Typography.Text>
+            <label htmlFor="vertical-security-role">登录角色<Select id="vertical-security-role" aria-label="纵密登录角色" value={role} disabled={locked || accessBusy} options={ROLE_OPTIONS} onChange={value => { clearSecrets(); setRole(value); setUsername(''); setResult(null); setError(null); setNotice(null); }} /><Typography.Text className="security-login-role-hint" type="secondary">{ROLE_HINTS[role]}</Typography.Text></label>
             <label htmlFor="vertical-security-username">用户名<Input id="vertical-security-username" aria-label="纵密用户名" value={username} maxLength={32} autoComplete="off" disabled={locked || accessBusy} placeholder="输入纵密账号" onChange={event => setUsername(event.target.value)} /></label>
             <label htmlFor="vertical-security-password">密码<Input.Password id="vertical-security-password" aria-label="纵密密码" value={password} maxLength={32} autoComplete="off" disabled={locked || accessBusy} placeholder="输入纵密密码" onChange={event => setPassword(event.target.value)} onPressEnter={() => void login()} ref={node => { secretInputs.current[0] = node?.input ?? null; }} /></label>
           </div>
+          <Space wrap className="security-login-actions"><Button type="primary" icon={<LoginOutlined />} loading={busy} disabled={!allowed || locked || accessBusy || !username.trim() || !password} onClick={() => void login()}>登录纵密</Button>{busy && <Button loading={cancelling} onClick={() => void cancelLogin()}>取消登录</Button>}</Space>
           <details className="security-login-certificate"><summary>连接证书 <span>{profile?.configured ? profile.source === 'builtin' ? builtinSummary : '已配置 · 当前进程有效' : initializing ? '读取中' : '尚未配置'}</span></summary>
             {profile?.source === 'builtin' && profile.configured && <p>{profile.label || '内置配套证书'}已由上位机加载，无需手动选择证书。实际组别须等待本次 TLS 匹配完成。</p>}
             <details className="security-login-builtin-mode"><summary>内置证书模式（高级）</summary><p>自动模式仅在 TLS 握手期间匹配候选证书；发送账号后不切换证书、不自动重试认证。旧版兼容仅适用于固定目标与精确匹配的配套证书，自定义和新版证书保持严格校验。</p><p>已生效模式：{profile?.source === 'builtin' && profile.configured ? BUILTIN_MODE_OPTIONS.find(item => item.value === appliedBuiltinMode)?.label : '当前使用自定义证书或尚未配置'}。下方选择须点击应用才会生效。</p><Space wrap><Select aria-label="内置证书模式" value={builtinMode} options={BUILTIN_MODE_OPTIONS} disabled={locked || accessBusy || initializing} onChange={setBuiltinMode} style={{ minWidth: 210 }} /><Button disabled={locked || accessBusy || initializing} loading={certificateBusy} onClick={() => void applyBuiltinCertificate(builtinMode)}>应用内置证书模式</Button></Space></details>
@@ -335,10 +339,9 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
             </details>
           </details>
           {initializing && <p role="status">正在读取登录能力与证书配置…</p>}
-          {!initializing && capabilities?.reason && <Alert className="security-access-notice" type="info" title="当前登录能力" description={capabilities.reason} />}
+          {!initializing && capabilities?.reason && (mode === 'direct' ? capabilities.direct_available : capabilities.remote_available) && <p className="security-login-capability"><Typography.Text type="secondary">当前登录能力：{capabilities.reason}</Typography.Text></p>}
           {!initializing && (!capabilities || !(mode === 'direct' ? capabilities.direct_available : capabilities.remote_available)) && <Alert className="security-access-notice" type="info" title={mode === 'remote' ? '远程纵密登录待网络通道接入' : '当前环境暂不支持纵密登录'} description={capabilities?.reason} />}
           {!initializing && profile && !profile.configured && <p className="security-login-hint">请展开连接证书，配置后再登录。</p>}
-          <Space wrap className="security-access-notice"><Button type="primary" icon={<LoginOutlined />} loading={busy} disabled={!allowed || locked || accessBusy || !username.trim() || !password} onClick={() => void login()}>登录纵密</Button>{busy && <Button loading={cancelling} onClick={() => void cancelLogin()}>取消登录</Button>}</Space>
         </>}
         {error && <Alert className="security-access-notice" type="error" showIcon title={error} />}
         {notice && <Alert className="security-access-notice" type="info" showIcon title={notice} />}

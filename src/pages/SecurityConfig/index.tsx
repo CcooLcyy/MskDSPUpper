@@ -327,7 +327,7 @@ const SecurityConfig: React.FC = () => {
     <div className="security-config-page">
       {contextHolder}
       <header className="security-config-heading"><h1>纵密网络配置</h1><p>配置 DSP 上的纵密业务地址、路由与转发规则。</p></header>
-      <Card size="small" className="security-config-card">
+      <Card className="security-config-card">
         {deployResult ? (
           <Alert
             className="security-config-deploy-result"
@@ -412,7 +412,6 @@ const SecurityConfig: React.FC = () => {
         <Form
           form={form}
           layout="vertical"
-          size="small"
           autoComplete="off"
           initialValues={{
             authMethod: 'password',
@@ -426,7 +425,7 @@ const SecurityConfig: React.FC = () => {
         >
           <section className="security-config-target">
           <h2 className="security-config-section-title">配置目标</h2>
-          <div className="security-config-target-summary"><span>连接方式：SSH 直连 DSP</span><span>执行权限：设备 SSH 账号 + sudo</span></div>
+          <div className="security-config-target-row">
           <div className="security-config-device">
             <Form.Item
               name="device"
@@ -440,6 +439,8 @@ const SecurityConfig: React.FC = () => {
                 onChange={handleDeviceChange}
               />
             </Form.Item>
+          </div>
+          <div className="security-config-target-summary"><span>连接方式：SSH 直连 DSP</span><span>执行权限：设备 SSH 账号 + sudo</span></div>
           </div>
           <details className="security-config-auth" open={connectionOptionsOpen} onToggle={event => setConnectionOptionsOpen(event.currentTarget.open)}>
             <summary>连接认证与部署选项</summary>
