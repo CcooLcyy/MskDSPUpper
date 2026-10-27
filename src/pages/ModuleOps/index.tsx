@@ -299,17 +299,16 @@ const ModuleOps: React.FC = () => {
         setPlatformConfigReady(true);
         setPlatformConnectionKey(value => value + 1);
         await refresh();
-      }} />
-
-      <Card size="small" bordered className="module-ops-toolbar-card">
-        <Space align="start">
-          <Text style={{ lineHeight: '32px' }}>ModuleManager 地址:</Text>
-          <div style={{ minWidth: 240 }}>
+      }} actions={
+        <Button icon={<ReloadOutlined />} onClick={() => void refresh()} loading={loading}>刷新模块</Button>
+      } directControls={<>
+          <Text className="module-ops-address-label">ModuleManager</Text>
+          <div className="module-ops-address-input">
             <Input
+              aria-label="ModuleManager 地址"
               value={managerAddr}
               disabled={remoteMode}
               onChange={(event) => setManagerAddr(event.target.value)}
-              style={{ width: 240 }}
               status={managerAddrError ? 'error' : undefined}
               placeholder="host:port"
             />
@@ -322,11 +321,7 @@ const ModuleOps: React.FC = () => {
           <Button type="primary" onClick={() => void handleConnect()} disabled={remoteMode || Boolean(managerAddrError)}>
             连接
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => void refresh()} loading={loading}>
-            刷新
-          </Button>
-        </Space>
-      </Card>
+      </>} />
 
       {!remoteMode && <DevicePlatformAccessCard connectionKey={platformConnectionKey} ready={platformConfigReady} />}
 

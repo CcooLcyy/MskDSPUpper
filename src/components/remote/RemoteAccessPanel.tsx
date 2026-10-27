@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Badge, Button, Card, Input, Modal, Select, Space, Tag, Typography, message } from 'antd';
+import type { ReactNode } from 'react';
+import { Alert, Badge, Button, Card, Input, Modal, Segmented, Select, Space, Tag, Typography, message } from 'antd';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -15,9 +16,11 @@ interface ConnectionStatus { remote: boolean; device_id: string | null; active: 
 type SshEvent = { type: 'host_key'; fingerprint: string; device_id: string }
   | { type: 'connected' } | { type: 'data'; bytes: number[] } | { type: 'closed'; message: string };
 
-export default function RemoteAccessPanel({ directAddress, onModeChange, onConnected }: {
+export default function RemoteAccessPanel({ directAddress, onModeChange, onConnected, directControls, actions }: {
   directAddress: string; onModeChange: (remote: boolean) => void; onConnected: () => Promise<void>;
+  directControls?: ReactNode; actions?: ReactNode;
 }) {
+  const [connectionView, setConnectionView] = useState<'direct' | 'remote' | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [selected, setSelected] = useState<string>();
   const [status, setStatus] = useState<ConnectionStatus>({ remote: false, device_id: null, active: false });
@@ -50,6 +53,7 @@ export default function RemoteAccessPanel({ directAddress, onModeChange, onConne
   const deviceOnline = status.active && connectedDevice?.online === true;
   const sshTargetReady = status.remote && status.device_id === selected && deviceOnline
     && device?.allow_ssh === true && device.services.includes('ssh');
+  const showRemote = (connectionView ?? (status.remote ? 'remote' : 'direct')) === 'remote';
 
   const closeSsh = useCallback(() => {
     sessionEpoch.current += 1;
@@ -211,11 +215,21 @@ export default function RemoteAccessPanel({ directAddress, onModeChange, onConne
     : hostKey ? sshSessionId ? '等待核对 SSH 主机指纹' : '正在准备身份确认，请稍候'
       : sshConnected ? 'SSH 已连接' : sshStarting ? '正在连接并认证 SSH' : sshNotice;
 
-  return <Card size="small" title="平台远程设备" style={{ marginBottom: 12 }}>
+  return <Card size="small" className="module-ops-connection-card">
     {contextHolder}
-    {!desktop ? <Alert type="info" title="平台远程设备与 SSH 终端需要桌面版上位机" /> : <>
-      <Space wrap>
-        <Select style={{ minWidth: 300 }} placeholder="选择授权设备" value={selected} disabled={busy}
+    <div className="module-ops-connection-bar">
+      <Segmented aria-label="连接方式" value={showRemote ? 'remote' : 'direct'} disabled={busy}
+        options={[{ label: '现场直连', value: 'direct' }, { label: '平台远程', value: 'remote' }]}
+        onChange={value => {
+          console.info('[模块运维] 切换连接方式面板', { mode: value });
+          setConnectionView(value as 'direct' | 'remote');
+        }} />
+      <div className="module-ops-connection-controls">
+      {!showRemote ? <>
+        {status.remote && <Button loading={busy} onClick={() => void returnToDirect()}>切换至现场直连</Button>}
+        {directControls}
+      </> : !desktop ? <Typography.Text type="secondary">平台远程设备与 SSH 终端需要桌面版上位机</Typography.Text> : <>
+        <Select className="module-ops-device-select" aria-label="平台远程设备" placeholder="选择授权设备" value={selected} disabled={busy}
           onChange={value => { closeSsh(); setSelected(value); }}
           options={devices.map(d => ({
             value: d.device_id,
@@ -225,13 +239,18 @@ export default function RemoteAccessPanel({ directAddress, onModeChange, onConne
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.display_name || d.device_id}</span>
             </span>,
           }))} />
-        <Button onClick={() => void load().catch(error => messages.error(String(error)))}>刷新设备</Button>
+        <Button disabled={busy} onClick={() => void load().catch(error => messages.error(String(error)))}>刷新设备</Button>
         <Button type="primary" loading={busy} disabled={!device?.online} onClick={() => void connectDevice()}>连接所选设备</Button>
-        <Button disabled={!status.remote || busy} onClick={() => void returnToDirect()}>返回现场直连</Button>
-        <Button disabled={!device?.allow_ssh || !device.services.includes('ssh') || !deviceOnline || status.device_id !== selected}
+        {status.remote && <Button disabled={busy || !sshTargetReady}
           onClick={() => { setSshError(null); setSshNotice('终端已就绪，请登录'); setTerminalOpen(true); }}>SSH 终端</Button>
-        <Tag color={status.remote ? (deviceOnline ? 'blue' : 'red') : 'default'}>{status.remote ? `平台设备：${status.device_id}${deviceOnline ? '' : '（离线或连接失效）'}` : '现场直连'}</Tag>
-      </Space>
+        }
+      </>}
+      </div>
+      <div className="module-ops-connection-actions">
+        <Tag color={status.remote ? (deviceOnline ? 'blue' : 'red') : 'default'}>{status.remote ? `当前：${status.device_id}${deviceOnline ? '' : '（离线或连接失效）'}` : '当前：现场直连'}</Tag>
+        {actions}
+      </div>
+    </div>
       {status.remote && <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>管理与模块操作通过平台隧道发送到所选设备。断线后需重新连接。</Typography.Paragraph>}
       <Modal title={`SSH 终端 · ${status.device_id ?? ''}`} open={terminalOpen} width={1000} destroyOnHidden
         onCancel={() => { closeSsh(); setTerminalOpen(false); }} footer={null}>
@@ -252,6 +271,5 @@ export default function RemoteAccessPanel({ directAddress, onModeChange, onConne
         </>} style={{ marginBottom: 12 }} />}
         <div ref={setTerminalElement} style={{ height: 460, background: '#000', padding: 8 }} />
       </Modal>
-    </>}
   </Card>;
 }

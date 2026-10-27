@@ -2,14 +2,68 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 0;
+  gap: 12px;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
-.module-ops-toolbar-card {
+.module-ops-connection-card {
   flex-shrink: 0;
+}
+
+.module-ops-connection-bar,
+.module-ops-connection-controls,
+.module-ops-connection-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.module-ops-connection-bar {
+  gap: 12px;
+}
+
+.module-ops-connection-controls {
+  flex: 1 1 auto;
+}
+
+.module-ops-connection-actions {
+  margin-left: auto;
+}
+
+.module-ops-connection-actions .ant-tag {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  margin-inline-end: 0;
+}
+
+.module-ops-address-input {
+  width: 260px;
+  max-width: 100%;
+}
+
+.module-ops-device-select {
+  width: 300px;
+  max-width: 100%;
+}
+
+@media (max-width: 760px) {
+  .module-ops-connection-controls {
+    flex-basis: 100%;
+  }
+
+  .module-ops-address-label {
+    display: none;
+  }
+
+  .module-ops-address-input,
+  .module-ops-device-select {
+    flex: 1 1 180px;
+    width: auto;
+  }
 }
 
 .module-ops-list-card {
