@@ -129,22 +129,27 @@ try {
   for (const [label, value] of [['本端 RTU 地址', '10.10.1.10'], ['本端纵密地址', '10.10.1.20'], ['本端网关地址', '10.10.1.1'], ['对端 RTU 地址', '10.20.1.10'], ['对端纵密地址', '10.20.1.20'], ['对端网关地址', '10.20.1.1']]) {
     await page.getByLabel(label, { exact: true }).fill(value);
   }
-  await page.getByRole('button', { name: /预览网络变更/ }).click();
-  await page.waitForFunction(() => document.querySelector('.security-config-auth')?.open === true);
-  await page.getByLabel('SSH 上传账号', { exact: true }).fill('fixture-user@192.0.2.1:10022');
-  await page.getByLabel('SSH 密码', { exact: true }).fill('fixture-password');
-  await page.getByRole('button', { name: /预览网络变更/ }).click();
-  await page.getByRole('dialog', { name: '网络变更预览', exact: true }).waitFor();
-  const businessPreview = await page.getByRole('dialog', { name: '网络变更预览', exact: true }).innerText();
+  await page.getByRole('button', { name: /配置预览/ }).click();
+  const previewDialog = page.getByRole('dialog', { name: '纵密配置脚本预览', exact: true });
+  await previewDialog.waitFor();
+  const businessPreview = await previewDialog.innerText();
   assert.equal(/11\.22\.33\.44|101|代理\s*ARP|SNAT/.test(businessPreview), false, '业务预览不包含维护参数或步骤');
   assert.equal(/PPP/.test(businessPreview) && /DNAT/.test(businessPreview) && /连接跟踪/.test(businessPreview), true, '业务预览保留业务网络影响');
   assert.equal((await page.evaluate(() => window.__securityMock.calls)).some(call => call.command === 'deploy_vertical_security_script'), false, '预览不能下发配置');
-  await page.getByRole('button', { name: '返回修改', exact: true }).click();
-  await page.getByRole('button', { name: /预览网络变更/ }).click();
-  await page.getByRole('button', { name: '应用网络配置', exact: true }).click();
+  await page.screenshot({ path: path.join(output, 'network-config-preview.png'), fullPage: true });
+  await previewDialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await previewDialog.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: /应用网络配置/ }).click();
+  await page.waitForFunction(() => document.querySelector('.security-config-auth')?.open === true);
+  assert.equal((await page.evaluate(() => window.__securityMock.calls)).some(call => call.command === 'deploy_vertical_security_script'), false, '认证缺失时应用不能下发');
+  await page.getByLabel('SSH 上传账号', { exact: true }).fill('fixture-user@192.0.2.1:10022');
+  await page.getByLabel('SSH 密码', { exact: true }).fill('fixture-password');
+  await page.getByRole('button', { name: /应用网络配置/ }).click();
   await page.waitForFunction(() => window.__securityMock.calls.some(call => call.command === 'get_vertical_security_status'));
+  assert.equal(await page.getByRole('dialog').count(), 0, '应用直接下发，不打开预览或确认弹窗');
   assert.equal((await page.evaluate(() => window.__securityMock.calls)).filter(call => call.command === 'deploy_vertical_security_script').length, 1);
-  results.push('认证错误展开隐藏字段，预览不下发，显式应用才调用部署和状态查询（全程虚构IPC）');
+  await page.screenshot({ path: path.join(output, 'network-config-applied.png'), fullPage: true });
+  results.push('独立预览无需认证且不下发；应用校验认证后直接部署并查询状态，不弹配置预览（全程虚构IPC）');
   await page.getByRole('button', { name: '测试：访问页', exact: true }).click();
   for (const width of [736, 375, 320]) {
     await page.setViewportSize({ width, height: 1300 });

@@ -40,9 +40,9 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(pageText, /label="对端 RTU 地址"/);
   assert.match(pageText, /label="对端纵密地址"/);
   assert.match(pageText, /label="对端网关地址"/);
-  assert.match(pageText, />\s*预览网络变更\s*<\/Button>/);
+  assert.match(pageText, />\s*应用网络配置\s*<\/Button>/);
   assert.match(pageText, /buildVerticalSecurityScript/);
-  assert.match(pageText, />\s*查看脚本\s*<\/Button>/);
+  assert.match(pageText, />\s*配置预览\s*<\/Button>/);
   assert.match(pageText, /title="纵密配置脚本预览"/);
   assert.match(pageText, /启动请求已提交/);
   assert.match(pageText, /deployVerticalSecurityScript/);

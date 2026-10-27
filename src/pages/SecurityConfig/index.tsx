@@ -174,7 +174,6 @@ const SecurityConfig: React.FC = () => {
   const [executionStatus, setExecutionStatus] = useState<VerticalSecurityStatusResult | null>(null);
   const [statusQueryError, setStatusQueryError] = useState<string | null>(null);
   const [isPollingStatus, setIsPollingStatus] = useState(false);
-  const [reviewValues, setReviewValues] = useState<SecurityConfigValues | null>(null);
   const [connectionOptionsOpen, setConnectionOptionsOpen] = useState(false);
   const [scriptPreview, setScriptPreview] = useState<string | null>(null);
   const statusPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -274,7 +273,6 @@ const SecurityConfig: React.FC = () => {
   };
 
   const handleApply = async (values: SecurityConfigValues) => {
-    setReviewValues(null);
     setIsGenerating(true);
     stopStatusPolling();
     setDeployResult(null);
@@ -321,7 +319,6 @@ const SecurityConfig: React.FC = () => {
     setExecutionStatus(null);
     setStatusQueryError(null);
     setScriptPreview(null);
-    setReviewValues(null);
     setConnectionOptionsOpen(false);
     messageApi.info('已重置地址输入');
   };
@@ -424,7 +421,7 @@ const SecurityConfig: React.FC = () => {
             device: 'MskDSP',
           }}
           disabled={isGenerating}
-          onFinish={values => setReviewValues(values)}
+          onFinish={handleApply}
           onFinishFailed={() => setConnectionOptionsOpen(true)}
         >
           <section className="security-config-target">
@@ -546,29 +543,22 @@ const SecurityConfig: React.FC = () => {
                 icon={<FileTextOutlined />}
                 onClick={handlePreview}
               >
-                查看脚本
+                配置预览
               </Button>
-                <Button
-                  type="primary"
-                  htmlType="submit"
-                  icon={<PlayCircleOutlined />}
-                  loading={isGenerating}
-                  disabled={!selectedDevice}
-                >
-                预览网络变更
+              <Button
+                type="primary"
+                htmlType="submit"
+                icon={<PlayCircleOutlined />}
+                loading={isGenerating}
+                disabled={!selectedDevice}
+              >
+                应用网络配置
               </Button>
             </Space>
           </div>
           </section>
         </Form>
       </Card>
-      <Modal title="网络变更预览" open={reviewValues !== null} onCancel={() => setReviewValues(null)} width={860} destroyOnHidden
-        footer={<Space><Button onClick={() => setReviewValues(null)}>返回修改</Button><Button type="primary" loading={isGenerating} onClick={() => { if (reviewValues) void handleApply(reviewValues); }}>应用网络配置</Button></Space>}
-      >
-        <Alert type="warning" showIcon title="应用后会修改设备网络并启动开机自启服务" description="将启用业务 IPv4 转发，配置本端与对端业务地址、路由，以及现有 PPP、DNAT 和连接跟踪规则。执行失败可能保留部分配置；当前脚本没有自动回滚。" />
-        <p>目标设备：{reviewValues?.device} · SSH：{reviewValues?.uploadAccount}</p>
-        <pre className="security-config-script-preview">{reviewValues ? buildVerticalSecurityScript({ ...reviewValues, device: reviewValues.device ?? '' }) : ''}</pre>
-      </Modal>
       <Modal
         title="纵密配置脚本预览"
         open={scriptPreview !== null}
