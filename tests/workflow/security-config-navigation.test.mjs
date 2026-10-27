@@ -29,7 +29,8 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(pageText, /label="目标设备"/);
   assert.match(pageText, /value: 'MskDSP', label: 'MskDSP'/);
   assert.match(pageText, /uploadAccount: 'megsky@192\.168\.1\.219:10022'/);
-  assert.doesNotMatch(pageText, /sshPassword: '/);
+  // 允许清空密码，仍禁止内置非空密码。
+  assert.doesNotMatch(pageText, /sshPassword:\s*'[^']+'/);
   assert.match(pageText, /onChange=\{handleDeviceChange\}/);
   assert.match(pageText, /disabled=\{!selectedDevice\}/);
   assert.match(pageText, /label="本端 RTU 地址"/);

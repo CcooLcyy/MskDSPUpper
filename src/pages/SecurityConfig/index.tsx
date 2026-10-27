@@ -36,6 +36,7 @@ import {
   deployVerticalSecurityScript,
   isValidIpv4Address,
 } from '../../utils/vertical-security-script';
+import { lowerUpdateCredentialCoordinator } from '../../utils/lower-update-connection';
 
 type SecurityAuthMethod = 'password' | 'certificate';
 
@@ -167,6 +168,7 @@ const SecurityConfig: React.FC = () => {
   const [form] = Form.useForm<SecurityConfigValues>();
   const [messageApi, contextHolder] = message.useMessage();
   const selectedDevice = Form.useWatch('device', form);
+  const uploadAccount = Form.useWatch('uploadAccount', form) ?? '';
   const authMethod = Form.useWatch('authMethod', form) ?? 'password';
   const reuseSshPasswordForSudo = Form.useWatch('reuseSshPasswordForSudo', form) ?? true;
   const [isGenerating, setIsGenerating] = useState(false);
@@ -178,6 +180,61 @@ const SecurityConfig: React.FC = () => {
   const [scriptPreview, setScriptPreview] = useState<string | null>(null);
   const statusPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusPollGenerationRef = useRef(0);
+  const [credentialReadRevision, setCredentialReadRevision] = useState(0);
+  const credentialStateRef = useRef({ revision: 0, sshEdited: false, sudoEdited: false });
+
+  useEffect(() => {
+    const account = uploadAccount.trim();
+    const match = /^([A-Za-z_][A-Za-z0-9_-]*)@([^@:\s]+):(\d+)$/.exec(account);
+    if (!selectedDevice || !match || Number(match[3]) < 1 || Number(match[3]) > 65535) return;
+    const needsSsh = authMethod === 'password';
+    const needsSudo = !needsSsh || !reuseSshPasswordForSudo;
+
+    let cancelled = false;
+    const state = credentialStateRef.current;
+    const revision = state.revision;
+    const savedRevision = lowerUpdateCredentialCoordinator.revision(account);
+    const isCurrent = () => !cancelled && state.revision === revision
+      && lowerUpdateCredentialCoordinator.revision(account) === savedRevision;
+
+    // 读取现有系统凭据；迟到结果不得覆盖手工输入或带到其他目标。
+    void api.getLowerUpdateCredentials(account).then(credentials => {
+      if (!isCurrent()) return;
+      const fields: Partial<SecurityConfigValues> = {};
+      if (needsSsh && !state.sshEdited && !form.getFieldValue('sshPassword') && credentials?.ssh_password) {
+        fields.sshPassword = credentials.ssh_password;
+      }
+      if (needsSudo && !state.sudoEdited && !form.getFieldValue('sudoPassword') && credentials?.sudo_password) {
+        fields.sudoPassword = credentials.sudo_password;
+      }
+      form.setFieldsValue(fields);
+    }).catch(() => {
+      if (isCurrent()) messageApi.warning('读取已保存密码失败，请手动输入');
+    });
+    return () => { cancelled = true; };
+  }, [selectedDevice, uploadAccount, authMethod, reuseSshPasswordForSudo, credentialReadRevision, form, messageApi]);
+
+  const clearConnectionCredentials = () => {
+    const state = credentialStateRef.current;
+    state.revision += 1;
+    state.sshEdited = false;
+    state.sudoEdited = false;
+    form.setFieldsValue({ sshPassword: '', sudoPassword: '' });
+  };
+
+  const handleValuesChange = (changed: Partial<SecurityConfigValues>) => {
+    const state = credentialStateRef.current;
+    if ('uploadAccount' in changed || 'authMethod' in changed) {
+      clearConnectionCredentials();
+    } else if ('reuseSshPasswordForSudo' in changed) {
+      state.revision += 1;
+      state.sudoEdited = false;
+      form.setFieldsValue({ sudoPassword: '' });
+    }
+    // 清空也算手工编辑，后续读取不能重新填回被用户删除的内容。
+    if ('sshPassword' in changed) state.sshEdited = true;
+    if ('sudoPassword' in changed) state.sudoEdited = true;
+  };
 
   const executionOutcome = useMemo(
     () => getExecutionOutcome(executionStatus),
@@ -266,10 +323,12 @@ const SecurityConfig: React.FC = () => {
   };
 
   const handleDeviceChange = (device?: string) => {
+    clearConnectionCredentials();
     const defaults = device ? DEVICE_CONNECTION_DEFAULTS[device] : undefined;
     if (defaults) {
       form.setFieldsValue(defaults);
     }
+    setCredentialReadRevision(revision => revision + 1);
   };
 
   const handleApply = async (values: SecurityConfigValues) => {
@@ -314,7 +373,9 @@ const SecurityConfig: React.FC = () => {
 
   const handleReset = () => {
     stopStatusPolling();
+    clearConnectionCredentials();
     form.resetFields();
+    setCredentialReadRevision(revision => revision + 1);
     setDeployResult(null);
     setExecutionStatus(null);
     setStatusQueryError(null);
@@ -415,6 +476,7 @@ const SecurityConfig: React.FC = () => {
           layout="vertical"
           autoComplete="off"
           initialValues={{
+            ...DEVICE_CONNECTION_DEFAULTS.MskDSP,
             authMethod: 'password',
             reuseSshPasswordForSudo: true,
             installDir: '/home/megsky',
@@ -422,6 +484,7 @@ const SecurityConfig: React.FC = () => {
           }}
           disabled={isGenerating}
           onFinish={handleApply}
+          onValuesChange={handleValuesChange}
           onFinishFailed={() => setConnectionOptionsOpen(true)}
         >
           <Card className="security-config-target-card">
