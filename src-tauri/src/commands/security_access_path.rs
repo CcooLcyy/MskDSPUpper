@@ -23,7 +23,7 @@ const PHASES: [(&str, &str, &str); 6] = [
     (
         "forwarding",
         "转发与回程",
-        "目标限定的转发、SNAT 与连接跟踪回程规则已配置",
+        "仅代理维护目标 11.22.33.44，目标限定的转发、SNAT 与回程规则已配置",
     ),
     (
         "verification",
@@ -172,6 +172,10 @@ fn directory_diagnostic(code: &str) -> Option<&'static str> {
         "directory_managed" => "专属维护脚本目录的所有者、权限或访问控制不满足要求",
         "directory_wants" => "开机服务启用目录的所有者、权限或访问控制不满足可信目录要求",
         "root_group_untrusted" => "无法确认 root 组仅包含特权账号，已拒绝组可写目录",
+        "proxy_arp_conflict" => {
+            "代理 ARP 范围冲突：全局自动代理或 PVLAN 代理已开启，无法保证仅代理固定维护目标"
+        }
+        "proxy_arp_query" => "无法读取固定维护目标的代理 ARP 状态，已停止配置",
         _ => return None,
     })
 }
@@ -501,5 +505,26 @@ mod tests {
             .map(|(id, _, _)| format!("MSKDSP_PATH|{id}|success\n"))
             .collect::<String>();
         assert!(!parse_result(Some(0), &format!("MSKDSP_PATH|detail|root_group_untrusted\n{complete}MSKDSP_PATH|result|success\n")).applied);
+    }
+
+    // 代理范围冲突和查询失败必须显示固定中文原因，且不能被成功标记覆盖。
+    #[test]
+    fn proxy_arp_diagnostics_are_visible_and_block_success() {
+        let stages = PHASES
+            .iter()
+            .map(|(id, _, _)| format!("MSKDSP_PATH|{id}|success\n"))
+            .collect::<String>();
+        for (code, reason) in [
+            ("proxy_arp_conflict", "代理 ARP 范围冲突"),
+            ("proxy_arp_query", "无法读取固定维护目标的代理 ARP 状态"),
+        ] {
+            let failed = parse_result(Some(1), &format!("MSKDSP_PATH|detail|{code}\nMSKDSP_PATH|preflight|failed\nMSKDSP_PATH|result|failed\n"));
+            assert!(failed.steps[0].message.contains(reason));
+            let spoofed = parse_result(
+                Some(0),
+                &format!("MSKDSP_PATH|detail|{code}\n{stages}MSKDSP_PATH|result|success\n"),
+            );
+            assert!(!spoofed.applied);
+        }
     }
 }

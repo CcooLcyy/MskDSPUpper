@@ -94,7 +94,7 @@ export default function AccessPathConfig({ disabled, onBusyChange, onApplied }: 
       footer={<Space>{!busy && <Button onClick={close}>关闭</Button>}<Button type="primary" loading={busy} disabled={busy || disabled} onClick={() => void apply()}>应用访问通路</Button></Space>}
     >
       <Alert type="info" showIcon title="仅配置 101 → 108 的纵密维护访问" description="本操作独立于纵密业务网络配置，不需要填写本端／对端 RTU、网关或纵密业务地址。" />
-      <div className="security-path-preview"><strong>固定访问路径</strong><p>电脑（11.22.33.0/24） → DSP 101 口（11.22.33.1/32） → DSP 108 口（11.22.33.2/32） → 纵密 11.22.33.44</p><p>配置维护地址、代理 ARP、目标及回程路由，启用全局 IPv4 转发，并添加限定此路径的转发和 SNAT。回包经 DSP 返回电脑，不限定纵密访问端口。</p><p>安装独立的 systemd 服务，设备开机后自动恢复此维护通路；不依赖 PPP 或纵密业务服务，不配置 107、业务 DNAT 或默认路由。配置完成不代表目标已可达，需要另行检查。</p></div>
+      <div className="security-path-preview"><strong>固定访问路径</strong><p>电脑（11.22.33.0/24） → DSP 101 口（11.22.33.1/32） → DSP 108 口（11.22.33.2/32） → 纵密 11.22.33.44</p><p>配置维护地址、目标及回程路由，仅为 11.22.33.44 代理 ARP，关闭 101 口原有的自动代理。启用全局 IPv4 转发，并添加限定此路径的转发和 SNAT。回包经 DSP 返回电脑，不限定纵密访问端口。</p><p>安装独立的 systemd 服务，设备开机后自动恢复此维护通路；不依赖 PPP 或纵密业务服务，不配置 107、业务 DNAT 或默认路由。配置完成不代表目标已可达，需要另行检查。</p></div>
       <Alert type="warning" showIcon title="应用后独立开机恢复维护通路" description="应用会修改目标 DSP 网络，并安装和启用维护通路开机恢复服务。首次应用及开机恢复启用均确认成功，才显示已应用。启用全局 IPv4 转发可能改变内核默认参数；失败会尽力恢复本次变更，但不能保证恢复全部状态。执行中不能关闭窗口；操作中断不代表配置已撤销。" />
       <Form layout="vertical" className="security-path-form" disabled={busy} autoComplete="off">
         <Form.Item label="DSP SSH 上传账号"><Input aria-label="访问通路 SSH 上传账号" value={uploadAccount} placeholder="user@设备地址:SSH端口" onChange={event => setUploadAccount(event.target.value)} /></Form.Item>

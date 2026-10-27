@@ -6,6 +6,7 @@ umask 077
 phase=preflight
 changed=0
 addr101=0 addr108=0 route101=0 route108=0 fwout=0 fwin=0 snat=0 forward=0 proxy=0
+proxy_neighbor=0
 old_forward=0 old_proxy=0
 shared_forward_retained=0
 root_group_check=unchecked
@@ -22,6 +23,7 @@ rollback() {
     # IPv4 转发是业务与维护共享依赖，即使本次开启也不自动关闭。
     if (( forward )); then shared_forward_retained=1; fi
     if (( proxy || forward )); then sysctl -w "net.ipv4.conf.eth0/101.proxy_arp=$old_proxy" >/dev/null 2>&1 || failed=1; fi
+    if (( proxy_neighbor )); then ip neigh del proxy 11.22.33.44 dev eth0.101 >/dev/null 2>&1 || failed=1; fi
     if (( route108 )); then ip route del 11.22.33.44/32 dev eth0.108 src 11.22.33.2 scope link >/dev/null 2>&1 || failed=1; fi
     if (( route101 )); then ip route del 11.22.33.0/24 dev eth0.101 src 11.22.33.1 scope link >/dev/null 2>&1 || failed=1; fi
     if (( addr108 )); then ip address del 11.22.33.2/32 dev eth0.108 >/dev/null 2>&1 || failed=1; fi
@@ -169,6 +171,23 @@ acquire_path_lock() {
     exec 9>"$path"
     flock -n 9
 }
+check_shared_proxy_scope() {
+    local key value
+    # 全局或 PVLAN 代理会绕过目标限定，不改动这些共享配置。
+    for key in net.ipv4.conf.all.proxy_arp net.ipv4.conf.all.proxy_arp_pvlan net.ipv4.conf.eth0/101.proxy_arp_pvlan; do
+        value=$(sysctl -n "$key") || { emit detail proxy_arp_query; return 1; }
+        if [[ "$value" != 0 ]]; then emit detail proxy_arp_conflict; return 1; fi
+    done
+}
+read_proxy_neighbors() {
+    if ! proxy_neighbors=$(ip -4 neigh show proxy dev eth0.101); then
+        emit detail proxy_arp_query
+        return 1
+    fi
+}
+has_target_proxy() {
+    printf '%s\n' "$proxy_neighbors" | awk '$1=="11.22.33.44" {found=1} END {exit !found}'
+}
 runtime_preflight() {
 for tool in ip iptables sysctl flock awk grep id stat; do command -v "$tool" >/dev/null; done
 [[ "$(id -u)" == 0 ]]
@@ -210,6 +229,10 @@ if printf '%s\n' "$routes" | grep -Eq '^11\.22\.33\.44(/32)? '; then hasroute108
 old_forward=$(sysctl -n net.ipv4.ip_forward)
 old_proxy=$(sysctl -n net.ipv4.conf.eth0/101.proxy_arp)
 [[ "$old_forward" =~ ^[01]$ && "$old_proxy" =~ ^[01]$ ]]
+check_shared_proxy_scope
+read_proxy_neighbors
+hasproxy=0
+if has_target_proxy; then hasproxy=1; fi
 needout=0 needin=0 neednat=0
 # 退出码 1 代表规则不存在；权限、模块缺失等其他错误在修改前退出。
 if iptables -w 5 -t filter -C FORWARD "${out_rule[@]}" >/dev/null 2>&1; then :; else rc=$?; [[ $rc == 1 ]]; needout=1; fi
@@ -228,12 +251,19 @@ if (( !hasroute108 )); then ip route add 11.22.33.44/32 dev eth0.108 src 11.22.3
 emit routes success
 phase=forwarding
 if [[ "$old_forward" != 1 ]]; then sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1; forward=1; changed=1; fi
-if [[ "$old_proxy" != 1 || "$forward" == 1 ]]; then sysctl -w net.ipv4.conf.eth0/101.proxy_arp=1 >/dev/null 2>&1; proxy=1; changed=1; fi
+# 显式代理只覆盖固定维护目标，先建立目标项再关闭旧接口自动代理。
+if (( !hasproxy )); then ip neigh add proxy 11.22.33.44 dev eth0.101 >/dev/null 2>&1; proxy_neighbor=1; changed=1; fi
+# 切换全局转发可能复位接口参数，切换后同样明确关闭自动代理。
+if [[ "$old_proxy" != 0 || "$forward" == 1 ]]; then sysctl -w net.ipv4.conf.eth0/101.proxy_arp=0 >/dev/null 2>&1; proxy=1; changed=1; fi
 if (( needout )); then iptables -w 5 -t filter -I FORWARD 1 "${out_rule[@]}" >/dev/null 2>&1; fwout=1; changed=1; fi
 if (( needin )); then iptables -w 5 -t filter -I FORWARD 1 "${in_rule[@]}" >/dev/null 2>&1; fwin=1; changed=1; fi
 if (( neednat )); then iptables -w 5 -t nat -I POSTROUTING 1 "${nat_rule[@]}" >/dev/null 2>&1; snat=1; changed=1; fi
 emit forwarding success
 phase=verification
+check_shared_proxy_scope
+[[ "$(sysctl -n net.ipv4.conf.eth0/101.proxy_arp)" == 0 ]] || { emit detail proxy_arp_conflict; return 1; }
+read_proxy_neighbors
+has_target_proxy
 # 策略路由可能覆盖主路由表，因此分别检查 DSP 本机及 101 口转发的出口。
 # 此处仅读取路由，不向目标发送探测报文。
 for route in "$(ip -4 route get 11.22.33.44)" "$(ip -4 route get 11.22.33.44 from 11.22.33.3 iif eth0.101)"; do

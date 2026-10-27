@@ -1,5 +1,6 @@
 """独立维护安装事务的本地命令桩；不调用真实 systemd 或网络命令。"""
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -241,7 +242,7 @@ class AccessPathInstallTest(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stdout+second.stderr)
         self.assertEqual(len(self.read()['mutations']), n)
         current = self.read()
-        for key in ['addresses', 'routes', 'rules']: current[key] = []
+        for key in ['addresses', 'routes', 'rules', 'proxy_neighbors']: current[key] = []
         current['sysctls'] = self.initial['sysctls']; current['link_down'] = True
         self.state.write_text(json.dumps(current))
         env = {**os.environ, 'PATH':str(self.dir)+':'+os.environ['PATH'], 'FAKE_STATE':str(self.state)}
@@ -251,6 +252,71 @@ class AccessPathInstallTest(unittest.TestCase):
         ready = subprocess.run(['/bin/bash', str(self.installed_runtime())], env=env, capture_output=True, text=True)
         self.assertEqual(ready.returncode, 0, ready.stdout+ready.stderr)
         self.assertEqual(len(self.read()['addresses']), 2)
+        self.assertEqual(self.read()['proxy_neighbors'], ['11.22.33.44'])
+        self.assertEqual(self.read()['sysctls']['net.ipv4.conf.eth0/101.proxy_arp'], '0')
+
+    def install_owned_old_runtime(self):
+        first = self.run_install()
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        old_runtime = b'#!/bin/bash\n# MskDSP managed vertical-security-access runtime v1\nset -e\nsysctl -w net.ipv4.conf.eth0/101.proxy_arp=1\n'
+        self.installed_runtime().write_bytes(old_runtime)
+        ownership = self.installed_runtime().parent / 'ownership'
+        ownership.write_text('# MskDSP managed vertical-security-access ownership v1\n'
+            + 'runtime_sha=' + hashlib.sha256(old_runtime).hexdigest() + '\n'
+            + 'unit_sha=' + hashlib.sha256(self.unit().read_bytes()).hexdigest() + '\n')
+        current = self.read()
+        current['sysctls']['net.ipv4.conf.eth0/101.proxy_arp'] = '1'
+        current['proxy_neighbors'] = ['192.168.10.55']
+        self.state.write_text(json.dumps(current))
+        return old_runtime
+
+    def test_owned_legacy_install_migrates_proxy_and_updates_hashes_for_boot_restore(self):
+        old_runtime = self.install_owned_old_runtime()
+        result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotEqual(self.installed_runtime().read_bytes(), old_runtime)
+        self.assertEqual(self.read()['sysctls']['net.ipv4.conf.eth0/101.proxy_arp'], '0')
+        self.assertEqual(self.read()['proxy_neighbors'], ['192.168.10.55', '11.22.33.44'])
+        ownership = dict(line.split('=', 1) for line in
+            (self.installed_runtime().parent / 'ownership').read_text().splitlines() if '=' in line)
+        self.assertEqual(ownership['runtime_sha'], hashlib.sha256(self.installed_runtime().read_bytes()).hexdigest())
+        self.assertEqual(ownership['unit_sha'], hashlib.sha256(self.unit().read_bytes()).hexdigest())
+        current = self.read()
+        current['sysctls']['net.ipv4.conf.eth0/101.proxy_arp'] = '1'
+        current['proxy_neighbors'] = ['192.168.10.55']
+        self.state.write_text(json.dumps(current))
+        result = subprocess.run(['/bin/bash', str(self.installed_runtime())],
+            env={**os.environ, 'PATH': str(self.dir) + ':' + os.environ['PATH'], 'FAKE_STATE': str(self.state)},
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.read()['sysctls']['net.ipv4.conf.eth0/101.proxy_arp'], '0')
+        self.assertEqual(self.read()['proxy_neighbors'], ['192.168.10.55', '11.22.33.44'])
+
+    def test_failed_legacy_migration_restores_runtime_hashes_and_old_proxy(self):
+        old_runtime = self.install_owned_old_runtime()
+        ownership = self.installed_runtime().parent / 'ownership'
+        old_ownership = ownership.read_bytes()
+        current = self.read(); current['fail_enable'] = True
+        self.state.write_text(json.dumps(current))
+        result = self.run_install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('MSKDSP_PATH|result|success', result.stdout)
+        self.assertEqual(self.installed_runtime().read_bytes(), old_runtime)
+        self.assertEqual(ownership.read_bytes(), old_ownership)
+        self.assertEqual(self.read()['sysctls']['net.ipv4.conf.eth0/101.proxy_arp'], '1')
+        self.assertEqual(self.read()['proxy_neighbors'], ['192.168.10.55'])
+
+    def test_proxy_preflight_conflict_preserves_install_and_network(self):
+        self.assertEqual(self.run_install().returncode, 0)
+        original_runtime = self.installed_runtime().read_bytes()
+        current = self.read(); n = len(current['mutations'])
+        current['sysctls']['net.ipv4.conf.all.proxy_arp'] = '1'
+        self.state.write_text(json.dumps(current))
+        result = self.run_install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('MSKDSP_PATH|detail|proxy_arp_conflict', result.stdout)
+        self.assertEqual(len(self.read()['mutations']), n)
+        self.assertEqual(self.installed_runtime().read_bytes(), original_runtime)
 
     def test_service_failure_restores_previous_install_and_enabled_state(self):
         self.assertEqual(self.run_install().returncode, 0)
@@ -274,6 +340,7 @@ class AccessPathInstallTest(unittest.TestCase):
                 self.assertFalse(self.unit().exists())
                 self.assertFalse(self.installed_runtime().exists())
                 self.assertEqual(self.read()['addresses'], [])
+                self.assertEqual(self.read()['proxy_neighbors'], [])
 
     def test_foreign_file_symlink_or_dropin_is_rejected_before_network_change(self):
         foreign = self.dir / 'foreign'; foreign.write_text('foreign-data')
