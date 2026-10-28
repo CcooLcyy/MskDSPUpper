@@ -26,6 +26,7 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(pageText, /纵密网络配置/);
   assert.doesNotMatch(pageText, /101 \/ 108 维护访问参数|fixed_network/);
   assert.match(pageText, /id: 'forwarding'/);
+  assert.match(pageText, /id: 'snat'/);
   assert.match(pageText, /label="目标设备"/);
   assert.match(pageText, /value: 'MskDSP', label: 'MskDSP'/);
   assert.match(pageText, /uploadAccount: 'megsky@192\.168\.1\.219:10022'/);
@@ -86,7 +87,7 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(rustCommandText, /rm -f -- \/run\/mskdsp-vertical-security\/steps\.log/);
   assert.match(rustCommandText, /systemctl show --property=ActiveState --value/);
   assert.match(scriptText, /sysctl -w net\.ipv4\.ip_forward=1/);
-  assert.doesNotMatch(scriptText, /11\.22\.33\.|eth0\.101|proxy_arp|fixed_network|SNAT/);
+  assert.doesNotMatch(scriptText, /11\.22\.33\.|eth0\.101|proxy_arp|fixed_network/);
   assert.match(scriptText, /ip addr replace "\\\$\{LOCAL_GATEWAY_ADDRESS\}\/32" dev eth0\.107/);
   assert.match(scriptText, /ip route replace "\\\$\{LOCAL_SECURITY_ADDRESS\}\/32" dev eth0\.107 scope link src "\\\$\{LOCAL_GATEWAY_ADDRESS\}"/);
   assert.match(scriptText, /ip addr replace "\\\$\{LOCAL_RTU_ADDRESS\}\/32" dev eth0\.108/);

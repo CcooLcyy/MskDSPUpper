@@ -60,7 +60,7 @@ try {
         if (command === 'remote_list_devices') return [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true }];
         if (command === 'check_vertical_security_access') return new Promise((resolve, reject) => { mock.resolve = resolve; mock.reject = reject; });
         if (command === 'deploy_vertical_security_script') return { remote_path: '/home/fixture/vertical-security.sh', service_name: 'fixture-security', exit_code: 0, stdout: '', stderr: '', success: true };
-        if (command === 'get_vertical_security_status') return { service_name: 'fixture-security', active_state: 'active', sub_state: 'exited', result: 'success', exit_code: 0, restart_count: 0, steps: ['precheck', 'forwarding', 'local_security', 'local_rtu', 'ppp0_wait', 'remote_security_route', 'dnat', 'conntrack', 'save_config'].map(id => ({ step_id: id, name: id, state: 'success', message: '虚构执行结果', updated_at: 1 })) };
+        if (command === 'get_vertical_security_status') return { service_name: 'fixture-security', active_state: 'active', sub_state: 'running', result: 'success', exit_code: 0, restart_count: 0, steps: ['precheck', 'forwarding', 'local_security', 'local_rtu', 'ppp0_wait', 'remote_security_route', 'dnat', 'snat', 'conntrack', 'save_config'].map(id => ({ step_id: id, name: id, state: 'success', message: '虚构执行结果', updated_at: 1 })) };
         return null;
       },
     };
@@ -133,7 +133,8 @@ try {
   const previewDialog = page.getByRole('dialog', { name: '纵密配置脚本预览', exact: true });
   await previewDialog.waitFor();
   const businessPreview = await previewDialog.innerText();
-  assert.equal(/11\.22\.33\.44|101|代理\s*ARP|SNAT/.test(businessPreview), false, '业务预览不包含维护参数或步骤');
+  assert.equal(/11\.22\.33\.44|101|代理\s*ARP/.test(businessPreview), false, '业务预览不包含维护参数或步骤');
+  assert.match(businessPreview, /-A POSTROUTING -o ppp0[\s\S]*?-j SNAT/, '业务预览包含限定 ppp0 的业务 SNAT');
   assert.equal(/PPP/.test(businessPreview) && /DNAT/.test(businessPreview) && /连接跟踪/.test(businessPreview), true, '业务预览保留业务网络影响');
   assert.equal((await page.evaluate(() => window.__securityMock.calls)).some(call => call.command === 'deploy_vertical_security_script'), false, '预览不能下发配置');
   await page.screenshot({ path: path.join(output, 'network-config-preview.png'), fullPage: true });

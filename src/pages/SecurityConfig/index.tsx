@@ -95,6 +95,7 @@ const EXECUTION_STEPS = [
   { id: 'ppp0_wait', name: 'PPP 链路' },
   { id: 'remote_security_route', name: '远程纵密路由' },
   { id: 'dnat', name: 'DNAT 规则' },
+  { id: 'snat', name: 'SNAT 规则' },
   { id: 'conntrack', name: '连接跟踪超时' },
   { id: 'save_config', name: '配置保存' },
 ] as const;
@@ -601,7 +602,7 @@ const SecurityConfig: React.FC = () => {
           </section>
           </div>
           <div className="security-config-actions">
-            <span>应用后修改设备网络，并设置开机自动应用。</span>
+            <span>应用后修改设备网络，并设置开机自动应用；PPP 重拨后自动更新业务路由和双向地址转换。</span>
             <Space wrap>
               <Button htmlType="button" onClick={handleReset}>
                 重置

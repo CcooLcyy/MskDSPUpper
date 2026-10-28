@@ -26,7 +26,7 @@ const values = {
 // 业务脚本不再拥有维护网段，不删除旧配置，保留业务与共享转发依赖。
 test('业务生成器移除维护通路且保留业务链路', () => {
   const script = generator.buildVerticalSecurityScript(values);
-  assert.doesNotMatch(script, /11\.22\.33\.|eth0\.101|proxy_arp|fixed_network|POSTROUTING|SNAT/);
+  assert.doesNotMatch(script, /11\.22\.33\.|eth0\.101|proxy_arp|fixed_network/);
   assert.match(script, /sysctl -w net\.ipv4\.ip_forward=1/);
   assert.match(script, /ip addr replace "\$\{LOCAL_GATEWAY_ADDRESS\}\/32" dev eth0\.107/);
   assert.match(script, /ip route replace "\$\{LOCAL_SECURITY_ADDRESS\}\/32" dev eth0\.107/);
@@ -34,6 +34,7 @@ test('业务生成器移除维护通路且保留业务链路', () => {
   assert.match(script, /ip route replace "\$\{REMOTE_RTU_ADDRESS\}\/32" via 192\.168\.8\.220 dev eth0\.108/);
   assert.match(script, /ip route replace "\$\{REMOTE_SECURITY_ADDRESS\}\/32" dev ppp0/);
   assert.match(script, /iptables -t nat -I PREROUTING 1 -i ppp0/);
+  assert.match(script, /iptables -t nat -A POSTROUTING -o ppp0 -s "\$\{LOCAL_SECURITY_ADDRESS\}\/32" -d "\$\{REMOTE_SECURITY_ADDRESS\}\/32" -j SNAT --to-source "\$\{PPP0_ADDRESS\}"/);
   assert.match(script, /nf_conntrack_generic_timeout=3/);
   assert.match(script, /nf_conntrack_generic_timeout=600/);
   assert.match(script, /REMOTE_GATEWAY_ADDRESS=\$\{REMOTE_GATEWAY_ADDRESS\}/);

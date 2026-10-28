@@ -2175,6 +2175,7 @@ export const browserApi: typeof tauriApi = {
       ['ppp0_wait', 'PPP 链路', '已获取 ppp0 IPv4 地址'],
       ['remote_security_route', '远程纵密路由', '远程纵密路由配置完成'],
       ['dnat', 'DNAT 规则', 'DNAT 规则配置完成'],
+      ['snat', 'SNAT 规则', 'SNAT 规则配置完成，不限制协议和端口'],
       ['conntrack', '连接跟踪超时', '连接跟踪超时已恢复为 600 秒'],
       ['save_config', '配置保存', '纵密配置文件保存完成'],
     ].map(([step_id, name, message]) => ({

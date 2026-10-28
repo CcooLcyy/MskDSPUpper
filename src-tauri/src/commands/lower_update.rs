@@ -1872,7 +1872,9 @@ fn build_vertical_security_install_command(remote_path: &str) -> String {
 if ! command -v systemctl >/dev/null 2>&1; then \
   printf '%s\\n' '设备未检测到 systemctl，无法安装纵密开机自启服务' >&2; exit 127; \
 fi; \
+service_exists=0; \
 if systemctl cat {service_name} >/dev/null 2>&1; then \
+  service_exists=1; \
   printf '%s\\n' '检测到已有纵密开机自启服务，将更新配置'; \
 else \
   printf '%s\\n' '未检测到纵密开机自启服务，将创建服务'; \
@@ -1885,8 +1887,12 @@ cleanup() {{ rm -f -- \"$script_tmp\" \"$service_tmp\"; }}; \
 trap cleanup EXIT HUP INT TERM; \
 bash -n {script_path}; \
 install -m 0755 {script_path} \"$script_tmp\"; \
+if [ \"$service_exists\" = 1 ]; then \
+  printf '%s\\n' '停止旧纵密业务服务，等待 PPP 监控进程退出'; \
+  systemctl stop {service_name}; \
+fi; \
 mv -f -- \"$script_tmp\" {script_install_path}; \
-cat > \"$service_tmp\" <<'EOF'\n[Unit]\nDescription=MskDSP 纵密配置\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=exec\nExecStart=/usr/local/libexec/mskdsp-vertical-security\nRemainAfterExit=yes\nTimeoutStartSec=30s\nRestart=on-failure\nRestartSec=10s\n\n[Install]\nWantedBy=multi-user.target\nEOF\ninstall -m 0644 \"$service_tmp\" {service_path}; \
+cat > \"$service_tmp\" <<'EOF'\n[Unit]\nDescription=MskDSP 纵密配置\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=exec\nExecStart=/usr/local/libexec/mskdsp-vertical-security --watch-ppp\nRemainAfterExit=yes\nTimeoutStartSec=30s\nRestart=on-failure\nRestartSec=10s\n\n[Install]\nWantedBy=multi-user.target\nEOF\ninstall -m 0644 \"$service_tmp\" {service_path}; \
 rm -f -- \"$service_tmp\"; \
 trap - EXIT HUP INT TERM; \
 systemctl daemon-reload; \
@@ -5271,6 +5277,9 @@ mod tests {
         assert!(command.contains("StartLimitIntervalSec=0"));
         assert!(command.contains("Type=exec"));
         assert!(!command.contains("Type=oneshot"));
+        assert!(
+            command.contains("ExecStart=/usr/local/libexec/mskdsp-vertical-security --watch-ppp")
+        );
         assert!(command.contains("TimeoutStartSec=30s"));
         assert!(command.contains("Restart=on-failure"));
         assert!(command.contains("RestartSec=10s"));
@@ -5282,6 +5291,29 @@ mod tests {
         assert!(command.contains("systemctl show --property=ActiveState --value"));
         assert!(command.contains("rm -f -- /run/mskdsp-vertical-security/steps.log"));
         assert!(!command.contains("sudo-secret"));
+    }
+
+    // 更新业务脚本前先校验并停止旧监控进程，不能影响独立维护服务。
+    #[test]
+    fn stops_existing_vertical_security_watcher_before_replacing_script() {
+        let command =
+            build_vertical_security_install_command("/tmp/mskdsp/mskdsp-vertical-security.sh");
+        let validation = command.find("bash -n").expect("必须先校验上传脚本");
+        let stop = command
+            .find("systemctl stop 'mskdsp-vertical-security.service'")
+            .expect("必须同步停止旧业务服务");
+        let replacement = command
+            .find(r#"mv -f -- "$script_tmp""#)
+            .expect("必须原子替换业务脚本");
+        let restart = command
+            .find("systemctl restart --no-block")
+            .expect("必须重新启动业务服务");
+
+        assert!(validation < stop && stop < replacement && replacement < restart);
+        assert!(command.contains("service_exists=0"));
+        assert!(command.contains("service_exists=1"));
+        assert!(command.contains(r#"if [ "$service_exists" = 1 ]; then"#));
+        assert!(!command.contains("mskdsp-vertical-security-access.service"));
     }
 
     #[test]
