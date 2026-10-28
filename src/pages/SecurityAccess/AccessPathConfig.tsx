@@ -4,6 +4,8 @@ import { NodeIndexOutlined } from '@ant-design/icons';
 import { api } from '../../adapters';
 import type { LowerUpdateSshAuth, VerticalSecurityAccessPathResult } from '../../adapters';
 
+const DEFAULT_UPLOAD_ACCOUNT = 'megsky@192.168.1.219:10022';
+const DEFAULT_SSH_PASSWORD = 'Meg@Admin123';
 const REQUIRED_PHASES = ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'] as const;
 const STEP_PRESENTATION: Record<VerticalSecurityAccessPathResult['steps'][number]['state'], {
   label: string;
@@ -28,9 +30,9 @@ export default function AccessPathConfig({ disabled, onBusyChange, onApplied }: 
   onApplied: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [uploadAccount, setUploadAccount] = useState('');
+  const [uploadAccount, setUploadAccount] = useState(DEFAULT_UPLOAD_ACCOUNT);
   const [authMethod, setAuthMethod] = useState<LowerUpdateSshAuth['method']>('password');
-  const [sshPassword, setSshPassword] = useState('');
+  const [sshPassword, setSshPassword] = useState(DEFAULT_SSH_PASSWORD);
   const [reuseSshPasswordForSudo, setReuseSshPasswordForSudo] = useState(true);
   const [sudoPassword, setSudoPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -89,7 +91,7 @@ export default function AccessPathConfig({ disabled, onBusyChange, onApplied }: 
   };
 
   return <>
-    <Button icon={<NodeIndexOutlined />} disabled={disabled || busy} onClick={() => { clearSecrets(); setResult(null); setError(null); setOpen(true); }}>配置纵密访问通路</Button>
+    <Button icon={<NodeIndexOutlined />} disabled={disabled || busy} onClick={() => { clearSecrets(); if (uploadAccount.trim() === DEFAULT_UPLOAD_ACCOUNT && authMethod === 'password') setSshPassword(DEFAULT_SSH_PASSWORD); setResult(null); setError(null); setOpen(true); }}>配置纵密访问通路</Button>
     <Modal title="配置纵密访问通路" open={open} width={680} centered onCancel={close} closable={!busy} mask={{ closable: !busy }} keyboard={!busy} destroyOnHidden styles={{ body: { maxHeight: 'calc(100vh - 180px)', overflowY: 'auto', paddingRight: 4 } }}
       footer={<Space>{!busy && <Button onClick={close}>关闭</Button>}<Button type="primary" loading={busy} disabled={busy || disabled} onClick={() => void apply()}>应用访问通路</Button></Space>}
     >
