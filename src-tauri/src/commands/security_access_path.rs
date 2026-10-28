@@ -105,6 +105,23 @@ fn unavailable(message: &str) -> AccessPathResult {
     }
 }
 
+fn ssh_failure_result(error: &str) -> AccessPathResult {
+    // 仅识别本机 SSH 辅助函数在认证拒绝时生成的完整固定文本。
+    // 其他错误仍无法确认远端执行状态，禁止透传原始异常或任意远程内容。
+    if error == "SSH命令未完成（阶段：SSH密码认证）：SSH 用户名或密码错误，或下位机未启用密码认证"
+    {
+        let mut result = unavailable(
+            "SSH 认证失败：用户名或密码错误，或设备未启用密码认证。本次尚未开始配置访问通路，请核对 SSH 凭据后重试。",
+        );
+        for step in &mut result.steps {
+            step.state = "pending";
+            step.message = "SSH 认证未通过，该阶段未执行".into();
+        }
+        return result;
+    }
+    unavailable("SSH 或 sudo 执行未成功返回，未确认远端操作是否开始或停止，DSP 可能保留部分配置；请核对连接凭据与当前网络")
+}
+
 fn installer_script() -> String {
     INSTALLER.replace("\r\n", "\n").replace(
         "__MSKDSP_RUNTIME_PAYLOAD__",
@@ -315,7 +332,7 @@ pub async fn configure_vertical_security_access_path(
     .await;
     let result = match result {
         Ok(Ok(output)) => parse_result(output.exit_code, &output.stdout),
-        Ok(Err(_)) => unavailable("SSH 或 sudo 执行未成功返回，未确认远端操作是否开始或停止，DSP 可能保留部分配置；请核对连接凭据与当前网络"),
+        Ok(Err(error)) => ssh_failure_result(&error),
         Err(_) => unavailable("等待配置结果超时；这不代表远端操作已停止或撤销，DSP 可能已应用部分配置。请核对当前网络后再重试"),
     };
     tracing::info!(
@@ -336,6 +353,45 @@ mod tests {
 
     fn valid_request() -> serde_json::Value {
         json!({"upload_account":"fixture@192.0.2.5:22", "auth":{"method":"password","password":"fixture"}, "sudo_password":"fixture"})
+    }
+
+    // 明确的密码认证拒绝发生在命令发送前，全部配置阶段都应标为未执行。
+    #[test]
+    fn rejected_password_reports_authentication_failure_without_starting_configuration() {
+        let observer = super::super::lower_update::UpdateSshObserver::new(
+            "",
+            "SSH命令",
+            "fixture@fixture-host:10022",
+            &[],
+        );
+        observer.stage("SSH密码认证");
+        let error = observer.failure("SSH 用户名或密码错误，或下位机未启用密码认证");
+        let result = ssh_failure_result(&error);
+        assert!(!result.applied);
+        assert_eq!(result.exit_code, None);
+        assert!(result.message.contains("SSH 认证失败"));
+        assert!(result.message.contains("尚未开始配置"));
+        assert!(result.steps.iter().all(|step| step.state == "pending"));
+    }
+
+    // 未知错误及带任意前后缀的认证文本不能冒充已确认拒绝，也不能泄露原始内容。
+    #[test]
+    fn unrecognized_ssh_failures_remain_unknown_without_leaking_error_text() {
+        let rejected =
+            "SSH命令未完成（阶段：SSH密码认证）：SSH 用户名或密码错误，或下位机未启用密码认证";
+        for error in [
+            "fixture-secret".to_string(),
+            format!("fixture-secret{rejected}"),
+            format!("{rejected}fixture-secret"),
+            "SSH命令未完成（阶段：SSH响应接收）：连接断开".to_string(),
+        ] {
+            let result = ssh_failure_result(&error);
+            assert!(result.message.contains("未确认远端操作是否开始或停止"));
+            assert!(result.steps.iter().all(|step| step.state == "unknown"));
+            assert!(!serde_json::to_string(&result)
+                .unwrap()
+                .contains("fixture-secret"));
+        }
     }
 
     #[test]

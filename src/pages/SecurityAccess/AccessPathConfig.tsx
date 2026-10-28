@@ -5,7 +5,7 @@ import { api } from '../../adapters';
 import type { LowerUpdateSshAuth, VerticalSecurityAccessPathResult } from '../../adapters';
 
 const DEFAULT_UPLOAD_ACCOUNT = 'megsky@192.168.1.219:10022';
-const DEFAULT_SSH_PASSWORD = 'Meg@Admin123';
+const DEFAULT_SSH_PASSWORD = 'Meg@admin123';
 const REQUIRED_PHASES = ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'] as const;
 const STEP_PRESENTATION: Record<VerticalSecurityAccessPathResult['steps'][number]['state'], {
   label: string;

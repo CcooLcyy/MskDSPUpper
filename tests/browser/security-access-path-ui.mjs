@@ -4,7 +4,7 @@ import os from 'node:os';
 import assert from 'node:assert/strict';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
-// 真实 React / AntD + 内存 IPC fixture；只使用虚构账号、口令和证书路径，不连接设备。
+// 真实 React / AntD + 内存 IPC fixture；全部调用由内存模拟截获，不连接设备。
 const root = fileURLToPath(new URL('../../', import.meta.url)).replaceAll('\\', '/').replace(/\/$/, '');
 const output = process.env.SECURITY_ACCESS_PATH_UI_OUTPUT || await fs.mkdtemp(path.join(os.tmpdir(), 'mskdsp-security-path-'));
 await fs.mkdir(output, { recursive: true });
@@ -111,15 +111,27 @@ try {
     assert.equal((await calls('configure_vertical_security_certificate_profile')).length, 0);
     assert.equal(await page.getByLabel('纵密密码', { exact: true }).inputValue(), '');
   });
-  await check('配置按钮独立，打开窗口不应用；无目录或六业务地址，关闭清秘密', async () => {
+  await check('默认连接信息大小写正确，打开窗口不应用；关闭清除手填密码并恢复默认值', async () => {
     await openFixture(); await openPath();
     assert.equal((await sensitiveCalls()).length, 0);
-    assert.equal(await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).inputValue(), '');
-    assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '');
+    assert.equal(await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).inputValue(), 'megsky@192.168.1.219:10022');
+    assert.ok(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue() === 'Meg@admin123', '默认密码必须与已确认设备配置的大小写一致');
     assert.equal(await dialog().getByRole('textbox', { name: /目录|本端|对端|RTU/ }).count(), 0);
     await dialog().getByText('应用后独立开机恢复维护通路', { exact: true }).waitFor();
     assert.equal(/运行态有效|重启后需要重新配置|不配置.*开机服务/.test(await dialog().innerText()), false);
     await dialog().getByText(/独立的 systemd 服务/).waitFor();
+    await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).fill('fixture-override-secret');
+    await dialog().getByRole('button', { name: /关\s*闭/ }).click();
+    await openPath();
+    assert.ok(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue() === 'Meg@admin123', '重新打开默认账号时恢复正确默认密码，不保留手填值');
+    await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click();
+    const [defaultCall] = await calls('configure_vertical_security_access_path');
+    assert.equal(defaultCall.args.request.upload_account, 'megsky@192.168.1.219:10022');
+    assert.ok(defaultCall.args.request.auth.method === 'password' && defaultCall.args.request.auth.password === 'Meg@admin123', '首次提交应使用正确的默认 SSH 密码');
+    assert.ok(defaultCall.args.request.sudo_password === 'Meg@admin123', 'sudo 默认复用正确的 SSH 密码');
+    assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '');
+    await resolvePath();
+    await dialog().getByText('访问通路已应用', { exact: true }).waitFor();
     await fillPath(); await dialog().getByRole('button', { name: /关\s*闭/ }).click();
     await openPath(); assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '');
   });
