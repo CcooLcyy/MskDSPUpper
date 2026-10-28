@@ -145,6 +145,9 @@ async function assertNoPersistedSecret() {
 try {
   browser = await chromium.launch({ headless: true, args: ['--no-proxy-server'], ...(process.env.MSKDSP_BROWSER_EXECUTABLE ? { executablePath: process.env.MSKDSP_BROWSER_EXECUTABLE } : {}) });
   await openFixture({ configured: false });
+  // 默认选择系统管理员，仍需手动输入账号与密码才能提交认证。
+  assert.equal(await page.locator('.ant-select').filter({ has: page.getByRole('combobox', { name: '纵密登录角色', exact: true }) }).innerText(), '系统管理员');
+  assert.equal((await calls()).some(call => call.command === 'login_vertical_security'), false, '默认角色不触发自动登录');
   assert.equal(await username().inputValue(), '');
   assert.equal(await password().inputValue(), '');
   await fillLogin();
@@ -180,7 +183,7 @@ try {
   assert.equal(request.device_id, undefined);
   assert.equal(request.username, 'fixture-user');
   assert.equal(request.password, 'fixture-secret');
-  assert.equal([1, 2, 3].includes(request.role), true);
+  assert.equal(request.role, 1, '未切换角色时使用系统管理员进行认证');
   assert.equal(typeof request.request_id, 'string');
   assert.equal(request.request_id.length > 0, true);
   assert.equal(await password().inputValue(), '', '提交后清空密码');

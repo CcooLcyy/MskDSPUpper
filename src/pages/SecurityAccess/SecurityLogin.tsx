@@ -30,7 +30,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const [capabilities, setCapabilities] = useState<VerticalSecurityLoginCapabilities | null>(null);
   const [profile, setProfile] = useState<VerticalSecurityCertificateProfile | null>(null);
   const [initializing, setInitializing] = useState(true);
-  const [role, setRole] = useState<VerticalSecurityRole>(2);
+  const [role, setRole] = useState<VerticalSecurityRole>(1);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [clientPath, setClientPath] = useState('');
