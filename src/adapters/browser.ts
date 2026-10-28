@@ -2076,6 +2076,7 @@ export const browserApi: typeof tauriApi = {
     device_id: request.mode === 'remote' ? request.device_id ?? null : null,
     state: 'unsupported',
     session_id: null,
+    checked_at_ms: Date.now(),
     steps: [{
       id: request.mode === 'remote' ? 'remote_network' : 'computer_network',
       name: request.mode === 'remote' ? '网络访问连接' : '电脑网络',

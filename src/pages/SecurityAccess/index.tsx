@@ -6,10 +6,11 @@ import { api } from '../../adapters';
 import type { VerticalSecurityAccessCapabilities, VerticalSecurityAccessMode, VerticalSecurityAccessResult } from '../../adapters';
 import './index.css';
 import AccessPathConfig from './AccessPathConfig';
+import { getAccessCheckRevision, subscribeAccessCheckInvalidation } from './access-state';
 
 interface PlatformDevice { device_id: string; display_name: string; online: boolean }
 const TARGET_IP = '11.22.33.44';
-const DIRECT_STEPS = ['电脑网络', '纵密访问路径', '往返响应'];
+const DIRECT_STEPS = ['电脑网络', '纵密访问路径', 'ICMP 往返响应', 'TCP 管理端口', 'TLS 安全连接'];
 
 export default function SecurityAccess() {
   const [messages, contextHolder] = message.useMessage();
@@ -67,14 +68,22 @@ export default function SecurityAccess() {
     };
   }, [loadDevices]);
 
+  useEffect(() => subscribeAccessCheckInvalidation(() => {
+    generationRef.current += 1;
+    setResult(null);
+    setBusy(false);
+    setError('纵密登录连接未通过，之前的检查结果已失效，请重新检查。');
+  }), []);
+
   const clearResult = () => { generationRef.current += 1; setResult(null); setError(null); };
   const check = async () => {
     if (locked || (mode === 'remote' && (!capabilities?.remote_ip_available || !selectedDevice?.online))) return;
     const generation = ++generationRef.current;
+    const revision = getAccessCheckRevision();
     setBusy(true); setError(null); setResult(null);
     try {
       const value = await api.checkVerticalSecurityAccess({ mode, ...(mode === 'remote' ? { device_id: deviceId } : {}) });
-      if (!mountedRef.current || generation !== generationRef.current) {
+      if (!mountedRef.current || generation !== generationRef.current || revision !== getAccessCheckRevision()) {
         if (value.session_id) void api.closeVerticalSecurityAccess(value.session_id).catch(() => {});
         return;
       }
@@ -109,7 +118,7 @@ export default function SecurityAccess() {
     </div>
     <div className="security-access-columns">
       <Card title="访问路径" className="security-access-path"><ol>{path.map(([name, detail]) => <li key={name}><strong>{name}</strong><span>{detail}</span></li>)}</ol><dl><div><dt>访问范围</dt><dd>仅目标 IP，端口不限</dd></div><div><dt>回程</dt><dd>{mode === 'direct' ? '经 DSP 返回 101 口电脑' : '通道接入后沿当前远程连接返回'}</dd></div><div><dt>接入网络</dt><dd>{mode === 'direct' ? '101 口网线直连' : '由 DSP 当前网络路由决定'}</dd></div></dl></Card>
-      <Card className="security-access-connect" title={<h2 className="security-workbench-card-title">网络连接检查</h2>} extra={<Badge status={busy ? 'processing' : result?.state === 'ready' ? 'success' : 'default'} text={status} />}>
+      <Card className="security-access-connect" title={<h2 className="security-workbench-card-title">管理连接检查</h2>} extra={<Badge status={busy ? 'processing' : result?.state === 'ready' ? 'success' : result?.state === 'failed' ? 'error' : 'default'} text={status} />}>
         <div className="security-access-check-layout">
         <div className="security-access-check-controls">
         <div className="security-access-target"><div><span>纵密目标 IP</span><strong>{TARGET_IP}</strong></div><Tag>DSP · 108 口</Tag></div>
@@ -130,11 +139,12 @@ export default function SecurityAccess() {
         </div>
         <div className="security-access-diagnostics">
         {error && <Alert className="security-access-notice" type="error" showIcon title={error} />}
+        {result && <p className="security-access-check-time">检查时间：<time dateTime={new Date(result.checked_at_ms).toISOString()}>{new Date(result.checked_at_ms).toLocaleString()}</time></p>}
         <details className="security-access-details" open><summary>连接详情</summary>
-          <div aria-live="polite">{result?.steps.map(step => <div className="security-access-step" key={step.id}><Badge status={step.state === 'success' ? 'success' : step.state === 'failed' ? 'error' : 'warning'} /><div><strong>{step.name}</strong><p>{step.message}</p></div><span>{step.state === 'success' ? '通过' : step.state === 'failed' ? '未通过' : '不支持'}</span></div>) ?? (mode === 'direct' ? DIRECT_STEPS : ['平台设备', '远程网络通道', '纵密访问路径']).map(name => <div className="security-access-step" key={name}><Badge status="default" /><strong>{name}</strong><span>{busy ? '检查中' : '待检查'}</span></div>)}</div>
+          <div aria-live="polite">{result?.steps.map(step => <div className="security-access-step" key={step.id}><Badge status={step.state === 'success' ? 'success' : step.state === 'failed' ? 'error' : 'warning'} /><div><strong>{step.name}</strong><p>{step.message}</p></div><span>{step.state === 'success' ? '通过' : step.state === 'failed' ? '未通过' : mode === 'direct' ? '未执行' : '不支持'}</span></div>) ?? (mode === 'direct' ? DIRECT_STEPS : ['平台设备', '远程网络通道', '纵密访问路径']).map(name => <div className="security-access-step" key={name}><Badge status="default" /><strong>{name}</strong><span>{busy ? '检查中' : '待检查'}</span></div>)}</div>
         </details>
-        <details className="security-access-explanation"><summary>检查结果说明</summary><p className="security-access-boundary">ICMP 响应仅代表本次往返检查结果，不代表所有协议、端口或配置工具均已联调；无响应也不能独立证明业务通信不可用。</p></details>
-        {result?.state === 'ready' && <div className="security-access-result"><strong>{mode === 'direct' ? '101 口直连检查通过' : '纵密网络访问已建立'}</strong><p>在原有纵密配置工具中使用目标 IP：{TARGET_IP}</p><Space wrap><Button icon={<CopyOutlined />} onClick={() => void navigator.clipboard.writeText(TARGET_IP).then(() => messages.success('已复制目标 IP')).catch(() => messages.error('复制失败，请手动复制目标 IP'))}>复制目标 IP</Button><Button icon={<DisconnectOutlined />} disabled={busy} onClick={() => void disconnect()}>{connected ? '断开网络访问' : '清除检查结果'}</Button></Space></div>}
+        <details className="security-access-explanation"><summary>检查结果说明</summary><p className="security-access-boundary">管理连接可用表示本次 TCP 8888 连接及 TLS 证书握手通过；ICMP 仅辅助诊断。检查不发送账号，登录认证需单独完成；检查完成即释放连接，后续状态变化需重新检查。</p></details>
+        {result?.state === 'ready' && <div className="security-access-result"><strong>{mode === 'direct' ? '管理连接可用' : '纵密网络访问已建立'}</strong><p>在原有纵密配置工具中使用目标 IP：{TARGET_IP}</p><Space wrap><Button icon={<CopyOutlined />} onClick={() => void navigator.clipboard.writeText(TARGET_IP).then(() => messages.success('已复制目标 IP')).catch(() => messages.error('复制失败，请手动复制目标 IP'))}>复制目标 IP</Button><Button icon={<DisconnectOutlined />} disabled={busy} onClick={() => void disconnect()}>{connected ? '断开网络访问' : '清除检查结果'}</Button></Space></div>}
         </div>
         </div>
       </Card>

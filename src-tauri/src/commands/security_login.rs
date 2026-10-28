@@ -216,6 +216,7 @@ struct LoginInner {
 #[derive(Default)]
 pub struct SecurityLoginManager {
     inner: Mutex<LoginInner>,
+    management_probe: tokio::sync::Mutex<()>,
 }
 struct RequestGuard<'a> {
     manager: &'a SecurityLoginManager,
@@ -628,6 +629,9 @@ impl TlsAttemptError {
     fn message(self) -> &'static str {
         match self {
             Self::ConnectionTimeout(_) => "连接纵密管理服务超时，请检查 101 至 108 口的访问路径",
+            Self::ConnectionFailed(Some(10061 | 111 | 61)) => {
+                "纵密管理端口 8888 拒绝连接，请检查装置管理服务或访问策略"
+            }
             Self::ConnectionFailed(_) => "无法连接纵密管理服务，请检查地址路径与服务状态",
             Self::TlsTimeout => "等待纵密证书握手超时，尚未发送账号",
             Self::CertificateMismatch(_) => {
@@ -829,19 +833,38 @@ where
     }
 }
 
-async fn connect_and_authenticate(
-    manager: &Arc<SecurityLoginManager>,
-    mut result: LoginResult,
+// 登录与连通检查共用此建连入口，证书候选选择结束前不发送账号。
+struct ManagementConnection {
+    stream: tokio_native_tls::TlsStream<tokio::net::TcpStream>,
+    group: Option<&'static str>,
+    legacy_compatibility: bool,
+}
+
+pub(super) struct ManagementError {
+    pub tcp_connected: bool,
+    pub(super) step_index: usize,
+    pub(super) code: &'static str,
+    pub message: String,
+}
+impl ManagementError {
+    fn profile(code: &'static str, message: &str) -> Self {
+        Self {
+            tcp_connected: false,
+            step_index: 1,
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+async fn connect_management(
     profile: Arc<LoadedProfile>,
-    packet: Zeroizing<Vec<u8>>,
-    credentials: AuthenticationContext,
-) -> LoginResult {
+) -> Result<ManagementConnection, ManagementError> {
     let Ok(now) = current_unix_time() else {
-        return result.failure(
-            1,
+        return Err(ManagementError::profile(
             "certificate_time_invalid",
             "系统时间无效，无法检查证书有效期",
-        );
+        ));
     };
     let active: Vec<_> = profile
         .candidates
@@ -855,14 +878,13 @@ async fn connect_and_authenticate(
         })
         .collect();
     if active.is_empty() {
-        return result.failure(
-            1,
+        return Err(ManagementError::profile(
             "certificate_expired",
             "内置配套证书均未生效或已过期，请替换有效证书",
-        );
+        ));
     }
     // 在此阶段尚未发送任何账号材料；候选切换只处理 TLS 证书阶段失败。
-    let (index, mut stream) = match select_tls_candidate(active.len(), |index| {
+    let (index, stream) = match select_tls_candidate(active.len(), |index| {
         let connector = active[index].connector.clone();
         let server_name = active[index].server_name.clone();
         let group = active[index].group.unwrap_or("custom");
@@ -895,13 +917,93 @@ async fn connect_and_authenticate(
     {
         Ok(selection) => selection,
         Err(error) => {
-            if error.is_tls() { result.success_step(0, "已连接固定纵密管理服务"); }
-            return result.failure(if error.is_tls() { 1 } else { 0 }, error.code(), error.message());
+            return Err(ManagementError { tcp_connected: error.is_tls(), step_index: if error.is_tls() { 1 } else { 0 }, code: error.code(), message: error.message().into() });
         }
     };
+    Ok(ManagementConnection {
+        stream,
+        group: active[index].group,
+        legacy_compatibility: active[index].legacy_compatibility,
+    })
+}
+
+// 探测只验证管理连接，不交换账号、不注册会话；返回前关闭并释放流。
+pub(super) async fn probe_management_connection(
+    manager: &SecurityLoginManager,
+) -> Result<(), ManagementError> {
+    run_management_probe(manager, || async {
+        let profile = initialize_builtin_profile(manager, false, BuiltinMode::Auto)
+            .await
+            .map_err(|message| {
+                ManagementError::profile("certificate_configuration_failed", &message)
+            })?;
+        let connection = connect_management(profile.clone()).await?;
+        if !manager
+            .inner
+            .lock()
+            .profile
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &profile))
+        {
+            return Err(ManagementError {
+                tcp_connected: true,
+                step_index: 1,
+                code: "certificate_configuration_changed",
+                message: "证书配置已改变，请重新检查管理连接".into(),
+            });
+        }
+        Ok(connection.stream)
+    })
+    .await
+}
+
+// 并发保护覆盖证书准备、建连和释放，取消页面不会叠加新的探测连接。
+async fn run_management_probe<S, F, Fut>(
+    manager: &SecurityLoginManager,
+    connect: F,
+) -> Result<(), ManagementError>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<S, ManagementError>>,
+{
+    let _permit = manager.management_probe.try_lock().map_err(|_| {
+        ManagementError::profile(
+            "management_probe_busy",
+            "上次管理连接检查尚未结束，请稍后重试",
+        )
+    })?;
+    let stream = connect().await?;
+    close_probe_stream(stream).await;
+    tracing::info!("纵密管理连接检查完成，探测连接已释放，未发送账号");
+    Ok(())
+}
+
+async fn close_probe_stream<S: tokio::io::AsyncWrite + Unpin>(mut stream: S) {
+    // 关闭通知也受超时限制；超时后直接释放底层连接。
+    let _ = tokio::time::timeout(Duration::from_secs(1), stream.shutdown()).await;
+}
+
+async fn connect_and_authenticate(
+    manager: &Arc<SecurityLoginManager>,
+    mut result: LoginResult,
+    profile: Arc<LoadedProfile>,
+    packet: Zeroizing<Vec<u8>>,
+    credentials: AuthenticationContext,
+) -> LoginResult {
+    let connection = match connect_management(profile).await {
+        Ok(connection) => connection,
+        Err(error) => {
+            if error.tcp_connected {
+                result.success_step(0, "已连接固定纵密管理服务");
+            }
+            return result.failure(error.step_index, error.code, &error.message);
+        }
+    };
+    let mut stream = connection.stream;
     result.success_step(0, "已连接固定纵密管理服务");
-    result.certificate_group = active[index].group;
-    result.legacy_compatibility = active[index].legacy_compatibility;
+    result.certificate_group = connection.group;
+    result.legacy_compatibility = connection.legacy_compatibility;
     result.success_step(
         1,
         if result.legacy_compatibility {
@@ -1833,5 +1935,76 @@ try {
                 .changed
         );
         assert!(!get_vertical_security_login_capabilities().remote_available);
+    }
+}
+
+#[cfg(test)]
+mod management_probe_tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    // 探测关闭时不写入账号或业务字节，远端应读到 EOF。
+    #[tokio::test]
+    async fn security_management_probe_closes_without_credentials() {
+        let (stream, mut peer) = tokio::io::duplex(256);
+        let manager = SecurityLoginManager::default();
+        assert!(run_management_probe(&manager, || async { Ok(stream) })
+            .await
+            .is_ok());
+        assert!(manager.management_probe.try_lock().is_ok());
+        let mut received = Vec::new();
+        peer.read_to_end(&mut received).await.unwrap();
+        assert!(received.is_empty());
+    }
+
+    // 探测进行中不执行第二次建连，取消未来后连接与并发许可均应释放。
+    #[tokio::test]
+    async fn security_management_probe_rejects_overlap_and_releases_on_cancel() {
+        let manager = Arc::new(SecurityLoginManager::default());
+        let (stream, mut peer) = tokio::io::duplex(256);
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let owner = manager.clone();
+        let task = tokio::spawn(async move {
+            run_management_probe(&owner, || async move {
+                let _stream = stream;
+                let _ = started.send(());
+                std::future::pending::<Result<tokio::io::DuplexStream, ManagementError>>().await
+            })
+            .await
+        });
+        ready.await.unwrap();
+        let called = std::sync::atomic::AtomicBool::new(false);
+        let result = run_management_probe(&manager, || async {
+            called.store(true, std::sync::atomic::Ordering::SeqCst);
+            let (stream, _) = tokio::io::duplex(32);
+            Ok(stream)
+        })
+        .await;
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(result.err().unwrap().code, "management_probe_busy");
+        task.abort();
+        let _ = task.await;
+        assert!(manager.management_probe.try_lock().is_ok());
+        let mut received = Vec::new();
+        peer.read_to_end(&mut received).await.unwrap();
+        assert!(received.is_empty());
+        let (stream, _) = tokio::io::duplex(32);
+        assert!(run_management_probe(&manager, || async { Ok(stream) })
+            .await
+            .is_ok());
+    }
+
+    // 拒绝连接与超时的提示必须可区分，并且都属于 TCP 阶段。
+    #[test]
+    fn security_management_refusal_is_distinct_from_timeout() {
+        for code in [10061, 111, 61] {
+            let refusal = TlsAttemptError::ConnectionFailed(Some(code));
+            assert!(refusal.message().contains("拒绝连接"));
+            assert!(!refusal.is_tls());
+        }
+        assert!(TlsAttemptError::ConnectionTimeout(None)
+            .message()
+            .contains("超时"));
+        assert!(!TlsAttemptError::ConnectionTimeout(None).is_tls());
     }
 }

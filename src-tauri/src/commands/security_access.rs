@@ -1,4 +1,6 @@
 //! 纵密访问检查只读本机网络并探测固定目标，不创建网络通道。
+use super::security_login::{probe_management_connection, ManagementError, SecurityLoginManager};
+use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 
 const TARGET_IP: &str = "11.22.33.44";
@@ -41,6 +43,7 @@ pub struct AccessResult {
     state: &'static str,
     session_id: Option<String>,
     steps: Vec<AccessStep>,
+    checked_at_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,8 +94,9 @@ fn evaluate_snapshot(snapshot: NetworkSnapshot) -> AccessResult {
         mode: AccessMode::Direct,
         target_ip: TARGET_IP,
         device_id: None,
-        state: if response_ok { "ready" } else { "failed" },
+        state: "failed",
         session_id: None,
+        checked_at_ms: checked_at_ms(),
         steps: vec![
             step(
                 "computer-network",
@@ -124,7 +128,7 @@ fn evaluate_snapshot(snapshot: NetworkSnapshot) -> AccessResult {
             ),
             step(
                 "round-trip",
-                "往返连接",
+                "ICMP 往返响应",
                 if !network_ok || !route_ok {
                     "unsupported"
                 } else if response_ok {
@@ -140,8 +144,83 @@ fn evaluate_snapshot(snapshot: NetworkSnapshot) -> AccessResult {
                     "固定目标未响应本次 ICMP 检查；不能据此认定业务不可用，目标可能禁用 ICMP"
                 },
             ),
+            step(
+                "management-tcp",
+                "管理端口 TCP 8888",
+                "unsupported",
+                "尚未检查管理端口",
+            ),
+            step(
+                "management-tls",
+                "管理连接 TLS",
+                "unsupported",
+                "尚未检查证书握手",
+            ),
         ],
     }
+}
+
+fn checked_at_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn apply_management_result(
+    mut result: AccessResult,
+    outcome: Result<(), ManagementError>,
+) -> AccessResult {
+    match outcome {
+        Ok(()) => {
+            result.state = "ready";
+            result.steps[3] = step(
+                "management-tcp",
+                "管理端口 TCP 8888",
+                "success",
+                "纵密管理端口接受连接",
+            );
+            result.steps[4] = step(
+                "management-tls",
+                "管理连接 TLS",
+                "success",
+                "已按当前登录证书配置完成 TLS 握手，未发送账号，探测连接已释放",
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                code = error.code,
+                tcp_connected = error.tcp_connected,
+                "纵密管理连接检查失败，未发送账号"
+            );
+            if error.tcp_connected {
+                result.steps[3] = step(
+                    "management-tcp",
+                    "管理端口 TCP 8888",
+                    "success",
+                    "纵密管理端口接受连接",
+                );
+            }
+            let index = if error.step_index == 0 { 3 } else { 4 };
+            let name = if index == 3 {
+                "管理端口 TCP 8888"
+            } else {
+                "管理连接 TLS"
+            };
+            result.steps[index] = step(
+                if index == 3 {
+                    "management-tcp"
+                } else {
+                    "management-tls"
+                },
+                name,
+                "failed",
+                &error.message,
+            );
+        }
+    }
+    result.checked_at_ms = checked_at_ms();
+    result
 }
 
 fn unavailable_result(
@@ -156,10 +235,13 @@ fn unavailable_result(
         device_id,
         state,
         session_id: None,
+        checked_at_ms: checked_at_ms(),
         steps: vec![
             step("computer-network", "电脑网络", state, reason),
             step("target-route", "纵密访问路径", "unsupported", reason),
-            step("round-trip", "往返连接", "unsupported", reason),
+            step("round-trip", "ICMP 往返响应", "unsupported", reason),
+            step("management-tcp", "管理端口 TCP 8888", "unsupported", reason),
+            step("management-tls", "管理连接 TLS", "unsupported", reason),
         ],
     }
 }
@@ -174,6 +256,14 @@ pub fn get_vertical_security_access_capabilities() -> AccessCapabilities {
 
 #[tauri::command]
 pub async fn check_vertical_security_access(
+    state: tauri::State<'_, AppState>,
+    request: AccessRequest,
+) -> Result<AccessResult, String> {
+    check_access(&state.security_login, request).await
+}
+
+async fn check_access(
+    _manager: &SecurityLoginManager,
     request: AccessRequest,
 ) -> Result<AccessResult, String> {
     if matches!(request.mode, AccessMode::Remote) {
@@ -190,7 +280,14 @@ pub async fn check_vertical_security_access(
     {
         match read_windows_snapshot().await {
             Ok(snapshot) => {
-                let result = evaluate_snapshot(snapshot);
+                let mut result = evaluate_snapshot(snapshot);
+                if result.steps[..2].iter().all(|step| step.state == "success") {
+                    result = apply_management_result(
+                        result,
+                        probe_management_connection(_manager).await,
+                    );
+                }
+                result.checked_at_ms = checked_at_ms();
                 tracing::info!(state = result.state, "纵密直连检查完成");
                 Ok(result)
             }
@@ -255,6 +352,84 @@ pub async fn close_vertical_security_access(session_id: String) -> Result<(), St
 mod tests {
     use super::*;
 
+    // ping 成功只代表网络诊断通过，不能独立判定管理连接可用。
+    #[test]
+    fn security_access_ping_alone_never_reports_ready() {
+        let result = evaluate_snapshot(snapshot("11.22.33.41", 24, true, 7, true));
+        assert_ne!(result.state, "ready");
+    }
+
+    // 管理端口拒绝与超时均不得因为 ping 成功误报可用。
+    #[test]
+    fn security_access_tcp_failure_blocks_success_and_skips_tls() {
+        for message in ["纵密管理端口 8888 拒绝连接", "连接纵密管理服务超时"] {
+            let result = apply_management_result(
+                evaluate_snapshot(snapshot("11.22.33.41", 24, true, 7, true)),
+                Err(ManagementError {
+                    tcp_connected: false,
+                    step_index: 0,
+                    code: "connection_failed",
+                    message: message.into(),
+                }),
+            );
+            assert_eq!(result.state, "failed");
+            assert_eq!(result.steps[3].state, "failed");
+            assert_eq!(result.steps[3].message, message);
+            assert_eq!(result.steps[4].state, "unsupported");
+            assert!(result.checked_at_ms > 0);
+            assert!(result.session_id.is_none());
+        }
+    }
+
+    // TLS 错误保留已验证的 TCP 成功，整体仍失败。
+    #[test]
+    fn security_access_tls_failure_keeps_tcp_diagnostic() {
+        let result = apply_management_result(
+            evaluate_snapshot(snapshot("11.22.33.41", 24, true, 7, true)),
+            Err(ManagementError {
+                tcp_connected: true,
+                step_index: 1,
+                code: "tls_timeout",
+                message: "等待纵密证书握手超时".into(),
+            }),
+        );
+        assert_eq!(result.state, "failed");
+        assert_eq!(result.steps[3].state, "success");
+        assert_eq!(result.steps[4].state, "failed");
+        assert!(result.steps[4].message.contains("超时"));
+    }
+
+    // ICMP 可被装置禁用，TCP 与 TLS 成功才是管理连接的通过依据。
+    #[test]
+    fn security_access_tls_success_can_override_icmp_failure() {
+        let result = apply_management_result(
+            evaluate_snapshot(snapshot("11.22.33.41", 24, true, 7, false)),
+            Ok(()),
+        );
+        assert_eq!(result.state, "ready");
+        assert_eq!(result.steps[2].state, "failed");
+        assert_eq!(result.steps[3].state, "success");
+        assert_eq!(result.steps[4].state, "success");
+        assert!(result.session_id.is_none());
+    }
+
+    // 证书配置前置失败时不能声称已经探测过 TCP。
+    #[test]
+    fn security_access_profile_failure_does_not_claim_tcp_success() {
+        let result = apply_management_result(
+            evaluate_snapshot(snapshot("11.22.33.41", 24, true, 7, true)),
+            Err(ManagementError {
+                tcp_connected: false,
+                step_index: 1,
+                code: "certificate_expired",
+                message: "证书已过期".into(),
+            }),
+        );
+        assert_eq!(result.state, "failed");
+        assert_eq!(result.steps[3].state, "unsupported");
+        assert_eq!(result.steps[4].state, "failed");
+    }
+
     fn snapshot(
         address: &str,
         prefix: u8,
@@ -273,7 +448,7 @@ mod tests {
     #[test]
     fn security_access_valid_direct_response_is_qualified() {
         let result = evaluate_snapshot(snapshot("11.22.33.41", 24, true, 7, true));
-        assert_eq!(result.state, "ready");
+        assert_eq!(result.state, "failed");
         assert!(result.session_id.is_none());
         assert!(result.steps[2].message.contains("不代表所有协议"));
     }
@@ -339,10 +514,13 @@ mod tests {
 
     #[tokio::test]
     async fn security_access_remote_has_no_session_or_success() {
-        let result = check_vertical_security_access(AccessRequest {
-            mode: AccessMode::Remote,
-            device_id: Some("device-1".into()),
-        })
+        let result = check_access(
+            &SecurityLoginManager::default(),
+            AccessRequest {
+                mode: AccessMode::Remote,
+                device_id: Some("device-1".into()),
+            },
+        )
         .await
         .unwrap();
         assert_eq!(result.state, "unsupported");

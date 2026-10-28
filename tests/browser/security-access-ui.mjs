@@ -21,9 +21,10 @@ import zhCN from 'antd/locale/zh_CN';
 import { darkTheme } from ${JSON.stringify('/@fs/' + root + '/src/theme/dark.ts')};
 import SecurityAccess from ${JSON.stringify('/@fs/' + root + '/src/pages/SecurityAccess/index.tsx')};
 import SecurityConfig from ${JSON.stringify('/@fs/' + root + '/src/pages/SecurityConfig/index.tsx')};
+import { reportLoginConnectionFailure } from ${JSON.stringify('/@fs/' + root + '/src/pages/SecurityAccess/access-state.ts')};
 function Fixture() {
   const [page, setPage] = useState('access');
-  return <><nav><button onClick={() => setPage('access')}>测试：访问页</button><button onClick={() => setPage('config')}>测试：配置页</button></nav>{page === 'access' ? <SecurityAccess /> : <SecurityConfig />}</>;
+  return <><nav><button onClick={() => setPage('access')}>测试：访问页</button><button onClick={() => setPage('config')}>测试：配置页</button><button onClick={() => reportLoginConnectionFailure({ mode: 'direct', target_ip: '11.22.33.44', steps: [{ id: 'connect', state: 'failed' }] })}>测试：登录连接失败</button><button onClick={() => reportLoginConnectionFailure({ mode: 'direct', target_ip: '11.22.33.44', steps: [{ id: 'connect', state: 'success' }, { id: 'tls', state: 'success' }, { id: 'authenticate', state: 'failed' }] })}>测试：账号认证失败</button></nav>{page === 'access' ? <SecurityAccess /> : <SecurityConfig />}</>;
 }
 createRoot(document.getElementById('root')!).render(<React.StrictMode><ConfigProvider theme={darkTheme} locale={zhCN}><App><Fixture /></App></ConfigProvider></React.StrictMode>);
 `);
@@ -73,10 +74,12 @@ try {
   assert.equal((await page.evaluate(() => window.__securityMock.calls)).some(call => /^(get_vertical_security_login_capabilities|get_vertical_security_certificate_profile|login_vertical_security)$/.test(call.command)), false, '访问通路页不得加载登录能力或证书');
   await page.getByRole('heading', { name: '纵密访问通路', level: 1, exact: true }).waitFor();
   results.push('访问通路页独立显示标题和网络检查，不挂载认证界面或加载登录能力及证书');
-  const ready = { mode: 'direct', target_ip: '11.22.33.44', device_id: null, state: 'ready', session_id: null, steps: [
-    { id: 'computer_network', name: '电脑网络', state: 'success', message: '虚构网卡维护地址符合要求' },
-    { id: 'target_route', name: '纵密访问路径', state: 'success', message: '虚构路由出口符合要求' },
-    { id: 'round_trip', name: '往返响应', state: 'success', message: '虚构 ICMP 响应，不代表所有业务均已联调' },
+  const ready = { mode: 'direct', target_ip: '11.22.33.44', device_id: null, state: 'ready', session_id: null, checked_at_ms: Date.UTC(2026, 9, 28, 9, 20, 0), steps: [
+    { id: 'computer-network', name: '电脑网络', state: 'success', message: '虚构网卡维护地址符合要求' },
+    { id: 'target-route', name: '纵密访问路径', state: 'success', message: '虚构路由出口符合要求' },
+    { id: 'round-trip', name: '往返响应', state: 'success', message: '虚构 ICMP 响应，不代表所有业务均已联调' },
+    { id: 'management-tcp', name: '管理端口', state: 'success', message: 'TCP 8888 已连接' },
+    { id: 'management-tls', name: 'TLS 握手', state: 'success', message: '配套证书验证成功，探测连接已关闭' },
   ] };
   await page.getByRole('button', { name: /检查直连/ }).click();
   await page.waitForFunction(() => window.__securityMock.resolve !== null);
@@ -89,13 +92,54 @@ try {
   await page.getByRole('button', { name: /检查直连/ }).click();
   await page.waitForFunction(() => window.__securityMock.resolve !== null);
   await page.evaluate(value => { window.__securityMock.resolve(value); window.__securityMock.resolve = null; }, ready);
-  await page.getByText('101 口直连检查通过', { exact: true }).waitFor();
+  await page.getByText('管理连接可用', { exact: true }).waitFor();
+  assert.match(await page.locator('.security-access-page').innerText(), /检查时间/);
+  assert.equal(await page.locator('.security-access-check-time time').getAttribute('datetime'), new Date(ready.checked_at_ms).toISOString());
+  assert.equal(await page.getByText('TLS 握手', { exact: true }).isVisible(), true);
+  await page.getByRole('button', { name: '测试：账号认证失败', exact: true }).click();
+  assert.equal(await page.getByText('管理连接可用', { exact: true }).isVisible(), true, '账号错误不能否定已验证的管理连接');
   assert.equal(await page.getByRole('button', { name: /复制目标 IP/ }).isVisible(), true);
   assert.equal((await page.locator('.security-access-target strong').innerText()), '11.22.33.44');
   assert.equal(/HTTPS|127\.0\.0\.1:|打开管理页面/.test(await page.locator('.security-access-page').innerText()), false);
   assert.equal(await page.getByRole('heading', { name: 'DSP 侧网络配置', exact: true }).count(), 0);
   await page.screenshot({ path: path.join(output, 'direct-result.png'), fullPage: true });
   results.push('真实组件显示后端检测结果，目标为 IP 且无协议端口输入');
+  await page.getByRole('button', { name: '测试：登录连接失败', exact: true }).click();
+  await page.getByText('管理连接可用', { exact: true }).waitFor({ state: 'hidden' });
+  results.push('登录连接失败撤销旧通过结果，账号认证失败保留连接结果');
+  await page.getByRole('button', { name: /检查直连/ }).click();
+  await page.waitForFunction(() => window.__securityMock.resolve !== null);
+  await page.getByRole('button', { name: '测试：登录连接失败', exact: true }).click();
+  await page.evaluate(value => { window.__securityMock.resolve(value); window.__securityMock.resolve = null; }, ready);
+  assert.equal(await page.getByText('管理连接可用', { exact: true }).count(), 0, '登录连接失败后的迟到成功不得回填');
+  results.push('检查期间发生登录连接失败，迟到成功结果不会恢复绿色状态');
+  await page.getByRole('button', { name: /检查直连/ }).click();
+  await page.waitForFunction(() => window.__securityMock.resolve !== null);
+  const refused = { ...ready, state: 'failed', steps: ready.steps.map(step => step.id === 'management-tcp'
+    ? { ...step, state: 'failed', message: '管理端口拒绝连接' }
+    : step.id === 'management-tls' ? { ...step, state: 'unsupported', message: 'TCP 连接失败，未执行 TLS 握手' } : step) };
+  await page.evaluate(value => { window.__securityMock.resolve(value); window.__securityMock.resolve = null; }, refused);
+  await page.getByText('管理端口拒绝连接', { exact: true }).waitFor();
+  assert.equal(await page.getByText('管理连接可用', { exact: true }).count(), 0, 'ICMP 成功但 TCP 拒绝不能显示通过');
+  assert.equal(await page.locator('.security-access-step').filter({ hasText: 'TLS 握手' }).locator('span').last().innerText(), '未执行');
+  await page.screenshot({ path: path.join(output, 'port-refused.png'), fullPage: true });
+  results.push('ICMP 成功但管理端口拒绝时显示失败，并保留 TLS 未执行诊断');
+  await page.getByRole('button', { name: /检查直连/ }).click();
+  await page.waitForFunction(() => window.__securityMock.resolve !== null);
+  const tlsFailed = { ...ready, state: 'failed', steps: ready.steps.map(step => step.id === 'management-tls'
+    ? { ...step, state: 'failed', message: '证书握手失败' } : step) };
+  await page.evaluate(value => { window.__securityMock.resolve(value); window.__securityMock.resolve = null; }, tlsFailed);
+  await page.getByText('证书握手失败', { exact: true }).waitFor();
+  assert.equal(await page.getByText('管理连接可用', { exact: true }).count(), 0, 'TCP 成功但 TLS 失败不能显示通过');
+  results.push('TCP 成功但证书握手失败时整体失败');
+  await page.getByRole('button', { name: /检查直连/ }).click();
+  await page.waitForFunction(() => window.__securityMock.resolve !== null);
+  const noPing = { ...ready, steps: ready.steps.map(step => step.id === 'round-trip'
+    ? { ...step, state: 'failed', message: 'ICMP 无响应，仅供诊断' } : step) };
+  await page.evaluate(value => { window.__securityMock.resolve(value); window.__securityMock.resolve = null; }, noPing);
+  await page.getByText('管理连接可用', { exact: true }).waitFor();
+  assert.equal(await page.getByText('ICMP 无响应，仅供诊断', { exact: true }).isVisible(), true);
+  results.push('ICMP 无响应但管理连接验证通过时，显示可用且保留诊断提示');
   await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
   await page.getByText('远程网络通道待接入', { exact: true }).waitFor();
   const combo = page.getByRole('combobox', { name: '目标 DSP', exact: true });

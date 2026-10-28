@@ -11,6 +11,7 @@ import type {
   VerticalSecurityRole,
 } from '../../adapters';
 import { canAttemptLogin, getBuiltinCertificateMode, getCertificateMatchPresentation, isAuthenticatedLogin, isPasswordChangeRequired, LOGIN_STAGES, loginContextMatches, validateNewPassword, type LoginIdentity } from './login-state';
+import { reportLoginConnectionFailure } from './access-state';
 
 const ROLE_OPTIONS = [{ value: 1, label: '系统管理员' }, { value: 2, label: '安全操作员' }, { value: 3, label: '日志审计员' }];
 const ROLE_HINTS = { 1: '管理装置账号与系统设置。', 2: '配置网络、隧道与策略。', 3: '查看运行日志与审计信息。' };
@@ -156,6 +157,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
         if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) setError('登录结果与当前请求或目标设备不匹配，已拒绝建立纵密身份。');
         return;
       }
+      reportLoginConnectionFailure(value);
       if (value.state === 'authenticated') {
         if (!isAuthenticatedLogin(identity, value)) {
           await cleanupReturnedConnection(value, identity.request_id);

@@ -285,6 +285,7 @@ export interface VerticalSecurityAccessResult {
   device_id: string | null;
   state: 'ready' | 'failed' | 'unsupported';
   session_id: string | null;
+  checked_at_ms: number;
   steps: VerticalSecurityAccessStep[];
 }
 
