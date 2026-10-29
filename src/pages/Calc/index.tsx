@@ -1,946 +1,291 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  Button,
-  Card,
-  Col,
-  Divider,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Popconfirm,
-  Row,
-  Select,
-  Space,
-  Table,
-  Tag,
-  Typography,
-  message,
-} from 'antd';
-import {
-  DeleteOutlined,
-  EditOutlined,
-  PauseCircleOutlined,
-  PlayCircleOutlined,
-  PlusOutlined,
-  ReloadOutlined,
-} from '@ant-design/icons';
+import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { UNSAFE_DataRouterContext } from 'react-router-dom';
+import { Alert, Button, Card, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography, message } from 'antd';
+import { DeleteOutlined, EditOutlined, MoreOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { api } from '../../adapters';
-import type {
-  CalcGroupInfo,
-  CalcItemConfig,
-  CalcOperandSpec,
-  DcRoute,
-} from '../../adapters';
-import ResizableSplit from '../../components/layout/ResizableSplit';
-import { getDecimalTextError, isDecimalTextZero } from '../../utils/decimal-input';
-import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
-import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
+import type { CalcGroupConfig, CalcGroupInfo, CalcItemConfig, DcEndpoint, DcRoute } from '../../adapters';
+import { buildCalcRoutePlan, calcInputTags, CalcSaveError, retryCalcRoutes, saveCalcWithRoutes } from '../../utils/calc-routing';
+import { formatErrorText } from '../../utils/runtime-restart';
+import { defaultItem, defaultOperand, draftFromItem, endpointKey, endpointLabel, formula, isAggregate, isLogic, itemToConfig, operators, validateDraft } from './editor-model';
+import type { ItemDraft, OperandDraft } from './editor-model';
+import CalcNavigationGuard from './CalcNavigationGuard';
 import './index.css';
 
-const { Text, Paragraph } = Typography;
-
-const GROUP_STATE: Record<number, { label: string; color: string }> = {
-  0: { label: '未指定', color: 'default' },
-  1: { label: '已停止', color: 'default' },
-  2: { label: '运行中', color: 'success' },
-  3: { label: '待删除', color: 'warning' },
+const { Text } = Typography;
+const groupStates: Record<number, { label: string; color: string }> = {
+  0: { label: '状态未知', color: 'default' }, 1: { label: '已停止', color: 'default' },
+  2: { label: '运行中', color: 'success' }, 3: { label: '待删除', color: 'warning' },
 };
+type PointOption = { value: string; label: string; point: DcEndpoint };
+type Editor = { index: number | null; draft: ItemDraft; initial: string; config: CalcGroupConfig; routes: DcRoute[] };
+type GroupDraft = { originalName: string | null; name: string; trigger: number; period: number };
 
-const OPERATOR_OPTIONS = [
-  { label: '加法（+）', value: 1, group: '数值' },
-  { label: '减法（-）', value: 2, group: '数值' },
-  { label: '乘法（×）', value: 3, group: '数值' },
-  { label: '除法（÷）', value: 4, group: '数值' },
-  { label: '非（NOT）', value: 5, group: '逻辑' },
-  { label: '与（AND）', value: 6, group: '逻辑' },
-  { label: '或（OR）', value: 7, group: '逻辑' },
-  { label: '异或（XOR）', value: 8, group: '逻辑' },
-  { label: '求和（SUM）', value: 9, group: '聚合' },
-  { label: '求平均（AVERAGE）', value: 10, group: '聚合' },
-];
-
-const NUMERIC_OPERATOR_KINDS = new Set([1, 2, 3, 4, 9, 10]);
-const LOGIC_OPERATOR_KINDS = new Set([5, 6, 7, 8]);
-const AGGREGATE_OPERATOR_KINDS = new Set([9, 10]);
-
-const TRIGGER_MODE_OPTIONS = [
-  { label: '变化触发', value: 1 },
-  { label: '周期定时', value: 2 },
-];
-
-type ConstantType = 'bool' | 'int' | 'decimal';
-type OperandDraft = {
-  sourceKind: number;
-  constantType: ConstantType;
-  constantValue: boolean | number | string;
-};
-
-type ItemDraft = {
-  itemName: string;
-  operatorKind: number;
-  left: OperandDraft;
-  right: OperandDraft;
-  operands: OperandDraft[];
-  decimalPlaces?: number;
-};
-
-type GroupDraftSnapshot = {
-  name: string;
-  triggerMode: number;
-  periodMs: number;
-};
-
-const groupDraftKey = (draft: GroupDraftSnapshot): string => JSON.stringify(draft);
-
-const decimalTextError = (value: string): string | undefined => {
-  return getDecimalTextError(value, '精确十进制常量');
-};
-
-const defaultConstantValue = (type: ConstantType): boolean | number | string => {
-  if (type === 'bool') return false;
-  if (type === 'int') return 0;
-  return '0';
-};
-
-const defaultOperand = (): OperandDraft => ({
-  sourceKind: 1,
-  constantType: 'decimal',
-  constantValue: '0',
-});
-
-const defaultItem = (): ItemDraft => ({
-  itemName: '',
-  operatorKind: 1,
-  left: defaultOperand(),
-  right: defaultOperand(),
-  operands: [defaultOperand(), defaultOperand()],
-});
-
-const operatorLabel = (operatorKind: number): string =>
-  OPERATOR_OPTIONS.find((option) => option.value === operatorKind)?.label ?? `未知运算符 (${operatorKind})`;
-
-const sourceLabel = (operand: CalcOperandSpec | null | undefined): string => {
-  if (!operand || operand.source_kind === 1) return '数据总线点位';
-  if (operand.source_kind !== 2 || !operand.constant) return '常量';
-  const constant = operand.constant;
-  if (constant.decimal_value !== undefined) return `常量：${formatDecimalDisplay(constant.decimal_value)}`;
-  if (constant.bool_value !== undefined) return `常量：${constant.bool_value ? '真' : '假'}`;
-  if (constant.int_value !== undefined) return `常量：${constant.int_value}`;
-  if (constant.double_value !== undefined) return `常量：${formatAutoRealtimeNumber(constant.double_value)}`;
-  return '常量';
-};
-
-const draftFromOperand = (operand: CalcOperandSpec | null | undefined): OperandDraft => {
-  const constant = operand?.constant;
-  if (constant?.decimal_value !== undefined) {
-    return { sourceKind: operand?.source_kind ?? 2, constantType: 'decimal', constantValue: constant.decimal_value };
-  }
-  if (constant?.bool_value !== undefined) {
-    return { sourceKind: operand?.source_kind ?? 2, constantType: 'bool', constantValue: constant.bool_value };
-  }
-  if (constant?.int_value !== undefined) {
-    return { sourceKind: operand?.source_kind ?? 2, constantType: 'int', constantValue: constant.int_value };
-  }
-  return {
-    sourceKind: operand?.source_kind ?? 1,
-    constantType: 'decimal',
-    constantValue: constant?.double_value !== undefined ? String(constant.double_value) : '0',
-  };
-};
-
-const draftFromItem = (item: CalcItemConfig): ItemDraft => ({
-  itemName: item.item_name,
-  operatorKind: item.operator_kind,
-  left: draftFromOperand(item.left_operand),
-  right: draftFromOperand(item.right_operand),
-  operands: (item.operands?.length ? item.operands : [item.left_operand, item.right_operand].filter(Boolean) as CalcOperandSpec[]).map(draftFromOperand),
-  decimalPlaces: item.decimal_places,
-});
-
-const normalizeConstantValue = (draft: OperandDraft): CalcOperandSpec => {
-  if (draft.sourceKind !== 2) return { source_kind: 1, constant: null };
-  if (draft.constantType === 'bool') {
-    return { source_kind: 2, constant: { bool_value: Boolean(draft.constantValue) } };
-  }
-  if (draft.constantType === 'int') {
-    return { source_kind: 2, constant: { int_value: Number(draft.constantValue) || 0 } };
-  }
-  return { source_kind: 2, constant: { decimal_value: String(draft.constantValue) } };
-};
-
-const itemToConfig = (draft: ItemDraft): CalcItemConfig => ({
-  item_name: draft.itemName.trim(),
-  operator_kind: draft.operatorKind,
-  left_operand: AGGREGATE_OPERATOR_KINDS.has(draft.operatorKind) ? null : normalizeConstantValue(draft.left),
-  right_operand: AGGREGATE_OPERATOR_KINDS.has(draft.operatorKind) || draft.operatorKind === 5
-    ? null
-    : normalizeConstantValue(draft.right),
-  operands: AGGREGATE_OPERATOR_KINDS.has(draft.operatorKind)
-    ? draft.operands.map(normalizeConstantValue)
-    : [],
-  decimal_places: draft.operatorKind === 10 ? draft.decimalPlaces : undefined,
-});
-
-const draftKey = (draft: ItemDraft): string => JSON.stringify(draft);
-
-const calcEndpointPath = (groupName: string, itemName: string, tag: string): string => (
-  `Calc/${groupName}/${itemName}/${tag}`
-);
-
-const routeEndpointLabel = (endpoint: DcRoute['src']): string => (
-  `${endpoint.module_name}/${endpoint.conn_name}/${endpoint.tag}`
-);
+/** 点目录部分加载失败时，已有映射仍独立完整回显。 */
+async function loadPointOptions(): Promise<{ options: PointOption[]; warning: string | null }> {
+  const connections = await api.dcListConnections();
+  const results = await Promise.allSettled(connections.map(async (connection) => {
+    const { tags } = await api.dcGetConnTags(connection.conn_id);
+    return tags.map((tag) => {
+      const point = { module_name: connection.module_name, conn_name: connection.conn_name, tag };
+      return { value: endpointKey(point), label: endpointLabel(point), point };
+    });
+  }));
+  const failed = results.filter((result) => result.status === 'rejected').length;
+  return { options: results.flatMap((result) => result.status === 'fulfilled' ? result.value : []).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN')),
+    warning: failed ? `${failed} 个连接的点位目录加载失败，已有绑定仍保留，可刷新重试。` : null };
+}
 
 const CalcPage: React.FC = () => {
-  const [groups, setGroups] = useState<CalcGroupInfo[]>([]);
-  const [routes, setRoutes] = useState<DcRoute[]>([]);
-  const [selectedGroupName, setSelectedGroupName] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [groupModalOpen, setGroupModalOpen] = useState(false);
-  const [groupModalMode, setGroupModalMode] = useState<'create' | 'edit'>('create');
-  const [groupSubmitting, setGroupSubmitting] = useState(false);
-  const [groupNameDraft, setGroupNameDraft] = useState('');
-  const [groupTriggerModeDraft, setGroupTriggerModeDraft] = useState(1);
-  const [groupPeriodMsDraft, setGroupPeriodMsDraft] = useState(1000);
-  const [groupInitialDraft, setGroupInitialDraft] = useState<string | null>(null);
-  const [itemModalOpen, setItemModalOpen] = useState(false);
-  const [itemSubmitting, setItemSubmitting] = useState(false);
-  const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
-  const [itemDraft, setItemDraft] = useState<ItemDraft>(defaultItem);
-  const [itemInitialSnapshot, setItemInitialSnapshot] = useState<string | null>(null);
+  const dataRouter = useContext(UNSAFE_DataRouterContext);
   const [messageApi, contextHolder] = message.useMessage();
-
-  const selectedGroup = useMemo(
-    () => groups.find((group) => group.config?.group_name === selectedGroupName) ?? null,
-    [groups, selectedGroupName],
-  );
-  const selectedConfig = selectedGroup?.config ?? null;
-
-  const getGroupState = useCallback(async (groupName: string): Promise<number | null> => {
-    const group = await api.calcGetGroup(groupName);
-    return group.state;
-  }, []);
-
-  const runSelectedGroupStopped = useCallback(
-    async (
-      operation: () => Promise<void>,
-      options?: {
-        initialState?: number | null;
-        originalGroupName?: string;
-        restartGroupName?: string;
-      },
-    ) => {
-      const originalGroupName = options?.originalGroupName ?? selectedGroupName;
-      if (!originalGroupName) {
-        await operation();
-        return {
-          stoppedBeforeRun: false,
-          restartedAfterRun: false,
-          retriedAfterRunningPrecondition: false,
-          restartError: null,
-        };
-      }
-
-      const restartGroupName = options?.restartGroupName ?? originalGroupName;
-      return runWithRuntimeRestart({
-        initialState: options?.initialState ?? selectedGroup?.state ?? null,
-        loadState: () => getGroupState(originalGroupName),
-        stop: () => api.calcStopGroup(originalGroupName),
-        run: operation,
-        start: () => api.calcStartGroup(restartGroupName),
-        restoreStart: () => api.calcStartGroup(originalGroupName),
-        failOnRestartError: false,
-      });
-    },
-    [getGroupState, selectedGroup?.state, selectedGroupName],
-  );
+  const [groups, setGroups] = useState<CalcGroupInfo[]>([]);
+  const [groupName, setGroupName] = useState<string | null>(null);
+  const [routes, setRoutes] = useState<DcRoute[]>([]);
+  const [points, setPoints] = useState<PointOption[]>([]);
+  const [catalogWarning, setCatalogWarning] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const [editor, setEditor] = useState<Editor | null>(null);
+  const [pending, setPending] = useState<CalcSaveError | null>(null);
+  const [groupDraft, setGroupDraft] = useState<GroupDraft | null>(null);
+  const groupInitial = useRef('');
+  const requestRef = useRef(0);
+  const group = groups.find((item) => item.config?.group_name === groupName) ?? null;
+  const config = group?.config ?? null;
+  const dirty = Boolean(editor && JSON.stringify(editor.draft) !== editor.initial);
+  const groupDirty = Boolean(groupDraft && JSON.stringify(groupDraft) !== groupInitial.current);
+  const locked = busy || Boolean(pending);
 
   const refresh = useCallback(async () => {
+    const request = ++requestRef.current;
     setLoading(true);
     try {
-      const [nextGroups, nextRoutes] = await Promise.all([
-        api.calcListGroups(),
-        api.dcListRoutes(0, '', 0, '').catch(() => []),
-      ]);
+      const nextGroups = await api.calcListGroups();
+      if (request !== requestRef.current) return;
       setGroups(nextGroups);
-      setRoutes(nextRoutes);
-      setSelectedGroupName((current) => {
-        if (current && nextGroups.some((group) => group.config?.group_name === current)) return current;
-        return nextGroups[0]?.config?.group_name ?? null;
-      });
+      setGroupName((current) => nextGroups.some((item) => item.config?.group_name === current) ? current : nextGroups[0]?.config?.group_name ?? null);
+      // 路由接口失败必须保持错误状态，不能伪装成空映射。
+      const [nextRoutes, catalog] = await Promise.all([api.dcListRoutes(0, '', 0, ''), loadPointOptions()]);
+      if (request !== requestRef.current) return;
+      setRoutes(nextRoutes); setPoints(catalog.options); setCatalogWarning(catalog.warning); setLoadError(null);
     } catch (error) {
-      messageApi.error(`刷新数值计算分组失败：${String(error)}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [messageApi]);
-
+      if (request === requestRef.current) setLoadError(`加载计算配置或路由失败：${formatErrorText(error)}`);
+      console.error('加载计算清单失败', error);
+    } finally { if (request === requestRef.current) setLoading(false); }
+  }, []);
+  useEffect(() => { void refresh(); return () => { requestRef.current += 1; }; }, [refresh]);
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (!dirty && !pending && !groupDirty) return;
+    const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', protect);
+    return () => window.removeEventListener('beforeunload', protect);
+  }, [dirty, pending, groupDirty]);
 
-  const openCreateGroup = () => {
-    setGroupModalMode('create');
-    const draft = `计算组${groups.length + 1}`;
-    setGroupNameDraft(draft);
-    setGroupTriggerModeDraft(1);
-    setGroupPeriodMsDraft(1000);
-    setGroupInitialDraft(groupDraftKey({ name: draft, triggerMode: 1, periodMs: 1000 }));
-    setGroupModalOpen(true);
+  const guard = (action: () => void) => {
+    if (busyRef.current) return;
+    if (pending) { messageApi.warning('请先完成待重试的路由同步或恢复运行'); return; }
+    if (dirty) Modal.confirm({ title: '放弃未保存修改？', content: '当前计算与点位关联尚未保存。', okText: '放弃修改', cancelText: '继续编辑', onOk: action });
+    else action();
   };
-
-  const openEditGroup = () => {
-    if (!selectedConfig) return;
-    setGroupModalMode('edit');
-    setGroupNameDraft(selectedConfig.group_name);
-    const triggerMode = selectedConfig.trigger_mode === 2 ? 2 : 1;
-    const periodMs = selectedConfig.period_ms > 0 ? selectedConfig.period_ms : 1000;
-    setGroupTriggerModeDraft(triggerMode);
-    setGroupPeriodMsDraft(periodMs);
-    setGroupInitialDraft(groupDraftKey({ name: selectedConfig.group_name, triggerMode, periodMs }));
-    setGroupModalOpen(true);
+  const begin = () => { if (busyRef.current) return false; busyRef.current = true; setBusy(true); return true; };
+  const end = () => { busyRef.current = false; setBusy(false); };
+  const openEditor = async (index: number | null) => {
+    if (!groupName || !begin()) return;
+    try {
+      const [latest, baselineRoutes, catalog] = await Promise.all([api.calcGetGroup(groupName), api.dcListRoutes(0, '', 0, ''), loadPointOptions()]);
+      if (!latest.config) throw new Error('计算分组配置不存在');
+      const chosenName = index === null ? null : config?.items[index]?.item_name;
+      const actualIndex = index === null ? null : latest.config.items.findIndex((value) => value.item_name === chosenName);
+      const item = actualIndex === null ? null : latest.config.items[actualIndex];
+      if (index !== null && !item) throw new Error('计算项已被其他操作修改，请刷新');
+      const draft = item ? draftFromItem(groupName, item, baselineRoutes) : defaultItem(`计算项${latest.config.items.length + 1}`);
+      setGroups((current) => current.map((value) => value.config?.group_name === groupName ? latest : value));
+      setRoutes(baselineRoutes); setPoints(catalog.options); setCatalogWarning(catalog.warning); setLoadError(null);
+      setEditor({ index: actualIndex, draft, initial: JSON.stringify(draft), config: latest.config, routes: baselineRoutes });
+      console.info('打开计算清单内编辑', { 分组: groupName, 计算项: draft.itemName, 新增: index === null });
+    } catch (error) { setLoadError(`加载计算项及关联失败：${formatErrorText(error)}`); }
+    finally { end(); }
   };
-
-  const groupNameError = useMemo(() => {
-    const name = groupNameDraft.trim();
-    if (!name) return '请输入分组名称';
-    const duplicate = groups.some((group) => {
-      const currentName = group.config?.group_name;
-      return currentName === name && (groupModalMode === 'create' || currentName !== selectedConfig?.group_name);
+  const editDraft = (change: (draft: ItemDraft) => ItemDraft) => setEditor((current) => current ? { ...current, draft: change(current.draft) } : current);
+  const updateInput = (index: number, patch: Partial<OperandDraft>) => editDraft((draft) => ({ ...draft, inputs: draft.inputs.map((input, i) => i === index ? { ...input, ...patch } : input) }));
+  const changeOperator = (kind: number) => editDraft((draft) => {
+    const count = kind === 5 ? 1 : isAggregate(kind) ? Math.max(2, draft.inputs.length) : 2;
+    const inputs = Array.from({ length: count }, (_, index) => draft.inputs[index] ?? defaultOperand()).map((input): OperandDraft => {
+      if (input.sourceKind !== 2 || isLogic(kind) === (input.constantType === 'bool')) return input;
+      return { ...input, constantType: isLogic(kind) ? 'bool' : 'decimal', constantValue: isLogic(kind) ? false : '0' };
     });
-    return duplicate ? '分组名称已存在' : undefined;
-  }, [groupNameDraft, groupModalMode, groups, selectedConfig?.group_name]);
-
-  const groupPeriodError = groupTriggerModeDraft === 2 && (!Number.isInteger(groupPeriodMsDraft) || groupPeriodMsDraft <= 0)
-    ? '周期定时模式下周期必须为大于 0 的整数毫秒'
-    : undefined;
-
-  const closeGroupModal = () => {
-    if (groupSubmitting) {
-      return;
-    }
-
-    const currentDraft = groupDraftKey({
-      name: groupNameDraft,
-      triggerMode: groupTriggerModeDraft,
-      periodMs: groupPeriodMsDraft,
-    });
-    if (groupInitialDraft !== null && currentDraft !== groupInitialDraft) {
-      Modal.confirm({
-        title: '放弃未保存修改？',
-        content: '当前分组配置尚未保存，确定关闭吗？',
-        okText: '放弃修改',
-        cancelText: '继续编辑',
-        onOk: () => {
-          setGroupModalOpen(false);
-          setGroupInitialDraft(null);
-        },
-      });
-      return;
-    }
-    setGroupModalOpen(false);
-    setGroupInitialDraft(null);
+    return { ...draft, operatorKind: kind, inputs };
+  });
+  const handleSaveError = (error: unknown) => {
+    if (error instanceof CalcSaveError && error.configSaved) {
+      setPending(error);
+      messageApi.warning(error.phase === 'restart' ? '计算与关联已保存，恢复分组运行失败' : '计算已保存，路由同步失败，请重试');
+    } else messageApi.error(`保存失败：${formatErrorText(error)}`);
+    console.error('保存计算与关联失败', error);
   };
-
-  const saveGroup = async () => {
-    if (groupSubmitting) {
-      return;
-    }
-
-    setGroupSubmitting(true);
-    try {
-      const name = groupNameDraft.trim();
-      if (groupNameError) {
-        messageApi.warning(groupNameError);
-        return;
-      }
-      if (groupPeriodError) {
-        messageApi.warning(groupPeriodError);
-        return;
-      }
-
-      if (groupModalMode === 'create') {
-        await api.calcUpsertGroup({
-          group_name: name,
-          trigger_mode: groupTriggerModeDraft,
-          period_ms: groupPeriodMsDraft,
-          items: [{
-            item_name: '计算项1',
-            operator_kind: 1,
-            left_operand: { source_kind: 1, constant: null },
-            right_operand: { source_kind: 2, constant: { decimal_value: '0' } },
-            operands: [],
-          }],
-        }, true);
-        messageApi.success('计算分组已创建');
-      } else if (selectedConfig) {
-        const oldName = selectedConfig.group_name;
-        const nextConfig = {
-          ...selectedConfig,
-          group_name: name,
-          trigger_mode: groupTriggerModeDraft,
-          period_ms: groupPeriodMsDraft,
-        };
-        const restartResult = await runSelectedGroupStopped(
-          async () => {
-            await api.calcUpsertGroup({ ...nextConfig, group_name: oldName }, false);
-            if (name !== oldName) {
-              await api.calcRenameGroup(oldName, name);
-            }
-          },
-          { originalGroupName: oldName, restartGroupName: name },
-        );
-        console.info('Calc 计算分组配置保存完成', {
-          groupName: oldName,
-          nextGroupName: name,
-          triggerMode: groupTriggerModeDraft,
-          periodMs: groupPeriodMsDraft,
-          restarted: restartResult.restartedAfterRun,
-        });
-        if (restartResult.restartError) {
-          messageApi.warning(`计算分组配置已保存，但重新启动失败：${formatErrorText(restartResult.restartError)}`);
-        } else if (restartResult.stoppedBeforeRun) {
-          messageApi.success('计算分组配置已保存并重新启动');
-        } else {
-          messageApi.success('计算分组配置已保存');
-        }
-      }
-      setGroupModalOpen(false);
-      setGroupInitialDraft(null);
-      setSelectedGroupName(name);
-      await refresh();
-    } catch (error) {
-      messageApi.error(`保存分组失败：${formatErrorText(error)}`);
-    } finally {
-      setGroupSubmitting(false);
-    }
-  };
-
-  const deleteGroup = async () => {
-    if (!selectedConfig) return;
-    try {
-      await api.calcDeleteGroup(selectedConfig.group_name);
-      messageApi.success('计算分组已删除');
-      await refresh();
-    } catch (error) {
-      messageApi.error(`删除分组失败：${String(error)}`);
-    }
-  };
-
-  const toggleGroup = async () => {
-    if (!selectedConfig || !selectedGroup) return;
-    try {
-      if (selectedGroup.state === 2) {
-        await api.calcStopGroup(selectedConfig.group_name);
-        messageApi.success('计算分组已停止');
-      } else {
-        await api.calcStartGroup(selectedConfig.group_name);
-        messageApi.success('计算分组已启动');
-      }
-      await refresh();
-    } catch (error) {
-      messageApi.error(`切换分组状态失败：${String(error)}`);
-    }
-  };
-
-  const openCreateItem = () => {
-    if (!selectedConfig) return;
-    setEditingItemIndex(null);
-    const draft = { ...defaultItem(), itemName: `计算项${selectedConfig.items.length + 1}` };
-    setItemDraft(draft);
-    setItemInitialSnapshot(draftKey(draft));
-    setItemModalOpen(true);
-  };
-
-  const openEditItem = (index: number) => {
-    const item = selectedConfig?.items[index];
-    if (!item) return;
-    setEditingItemIndex(index);
-    const draft = draftFromItem(item);
-    setItemDraft(draft);
-    setItemInitialSnapshot(draftKey(draft));
-    setItemModalOpen(true);
-  };
-
-  const itemNameError = useMemo(() => {
-    const name = itemDraft.itemName.trim();
-    if (!name) return '请输入计算项名称';
-    const duplicate = selectedConfig?.items.some((item, index) => item.item_name === name && index !== editingItemIndex);
-    return duplicate ? '同一分组内计算项名称不能重复' : undefined;
-  }, [editingItemIndex, itemDraft.itemName, selectedConfig]);
-
-  const isAggregate = AGGREGATE_OPERATOR_KINDS.has(itemDraft.operatorKind);
-  const usesRightOperand = itemDraft.operatorKind !== 5 && !isAggregate;
-  const draftOperands = isAggregate ? itemDraft.operands : [itemDraft.left, ...(usesRightOperand ? [itemDraft.right] : [])];
-  const hasExternalInput = draftOperands.some((operand) => operand.sourceKind === 1);
-  const inputRequirementError = isAggregate || hasExternalInput ? undefined : '至少保留一侧使用数据总线点位';
-  const divisorError = itemDraft.operatorKind === 4
-    && itemDraft.right.sourceKind === 2
-    && ((itemDraft.right.constantType === 'decimal' && isDecimalTextZero(String(itemDraft.right.constantValue)))
-      || (itemDraft.right.constantType === 'int' && itemDraft.right.constantValue === 0))
-    ? '除数不能为 0'
-    : undefined;
-
-  const operandTypeError = (operand: OperandDraft, operatorKind = itemDraft.operatorKind): string | undefined => {
-    if (operand.sourceKind !== 2) return undefined;
-    if (LOGIC_OPERATOR_KINDS.has(operatorKind) && operand.constantType !== 'bool') {
-      return '逻辑运算的常量必须是 bool';
-    }
-    if (NUMERIC_OPERATOR_KINDS.has(operatorKind) && operand.constantType === 'bool') {
-      return '数值运算的常量必须是 int64 或精确十进制';
-    }
-    if (operand.constantType === 'decimal') return decimalTextError(String(operand.constantValue));
-    return undefined;
-  };
-
-  const closeItemModal = () => {
-    if (itemSubmitting) {
-      return;
-    }
-
-    if (itemInitialSnapshot !== null && draftKey(itemDraft) !== itemInitialSnapshot) {
-      Modal.confirm({
-        title: '放弃未保存修改？',
-        content: '当前计算项尚未保存，确定关闭吗？',
-        okText: '放弃修改',
-        cancelText: '继续编辑',
-        onOk: () => {
-          setItemModalOpen(false);
-          setItemInitialSnapshot(null);
-        },
-      });
-      return;
-    }
-    setItemModalOpen(false);
-    setItemInitialSnapshot(null);
-  };
-
   const saveItem = async () => {
-    if (!selectedConfig || itemSubmitting) return;
-
-    setItemSubmitting(true);
+    if (!editor || pending || loadError || !begin()) return;
     try {
-      const item = itemToConfig(itemDraft);
-      if (itemNameError) {
-        messageApi.warning(itemNameError);
-        return;
-      }
-      if (NUMERIC_OPERATOR_KINDS.has(item.operator_kind)) {
-      const operands = isAggregate ? item.operands : [item.left_operand, item.right_operand];
-      const valid = operands.every((operand) => {
-        if (!operand || operand.source_kind !== 2) return true;
-        return Boolean(
-          operand.constant?.int_value !== undefined
-          || operand.constant?.double_value !== undefined
-          || operand.constant?.decimal_value !== undefined,
-        );
-      });
-      if (!valid) {
-        messageApi.warning('数值运算的常量必须是 int64 或精确十进制');
-        return;
-      }
-    }
-      if (LOGIC_OPERATOR_KINDS.has(item.operator_kind)) {
-      const valid = [item.left_operand, item.right_operand].filter(Boolean).every((operand) => {
-        if (!operand || operand.source_kind !== 2) return true;
-        return operand.constant?.bool_value !== undefined;
-      });
-      if (!valid) {
-        messageApi.warning('逻辑运算的常量必须是 bool');
-        return;
-      }
-    }
-      if (isAggregate && item.operands.length < 2) {
-      messageApi.warning('求和/求平均至少需要两个操作数');
-      return;
-    }
-      const decimalError = draftOperands
-        .filter((operand) => operand.sourceKind === 2 && operand.constantType === 'decimal')
-        .map((operand) => decimalTextError(String(operand.constantValue)))
-        .find((error) => error !== undefined);
-      if (decimalError) {
-      messageApi.warning(decimalError);
-      return;
-    }
-      if (item.operator_kind === 10 && item.decimal_places !== undefined && (item.decimal_places < 0 || item.decimal_places > 20)) {
-      messageApi.warning('平均值小数位数必须为 0 到 20');
-      return;
-    }
-      if (inputRequirementError) {
-      messageApi.warning(inputRequirementError);
-      return;
-    }
-      if (divisorError) {
-      messageApi.warning(divisorError);
-      return;
-    }
-      const items = [...selectedConfig.items];
-      if (editingItemIndex === null) items.push(item);
-      else items[editingItemIndex] = item;
-      try {
-        const restartResult = await runSelectedGroupStopped(
-          () => api.calcUpsertGroup({ ...selectedConfig, items }, false).then(() => undefined),
-        );
-        console.info('Calc 计算项保存完成', {
-          groupName: selectedConfig.group_name,
-          itemName: item.item_name,
-          restarted: restartResult.restartedAfterRun,
-        });
-        setItemModalOpen(false);
-        setItemInitialSnapshot(null);
-        if (restartResult.restartError) {
-          messageApi.warning(`计算项已保存，但重新启动失败：${formatErrorText(restartResult.restartError)}`);
-        } else if (restartResult.stoppedBeforeRun) {
-          messageApi.success(editingItemIndex === null ? '计算项已添加并重新启动' : '计算项已更新并重新启动');
-        } else {
-          messageApi.success(editingItemIndex === null ? '计算项已添加' : '计算项已更新');
-        }
-        await refresh();
-      } catch (error) {
-        messageApi.error(`保存计算项失败：${formatErrorText(error)}`);
-      }
-    } finally {
-      setItemSubmitting(false);
-    }
+      const error = validateDraft(editor.draft);
+      if (error) { messageApi.warning(error); return; }
+      if (editor.config.items.some((item, index) => index !== editor.index && item.item_name === editor.draft.itemName.trim())) { messageApi.warning('同一分组内计算项名称不能重复'); return; }
+      const item = itemToConfig(editor.draft), items = [...editor.config.items];
+      if (editor.index === null) items.push(item); else items[editor.index] = item;
+      const plan = buildCalcRoutePlan({ groupName: editor.config.group_name,
+        previousItem: editor.index === null ? null : editor.config.items[editor.index], item,
+        inputSources: editor.draft.inputs.map((input) => input.sourceKind === 1 ? input.sources : []), outputs: editor.draft.outputs, baselineRoutes: editor.routes });
+      await saveCalcWithRoutes({ config: { ...editor.config, items }, expectedConfig: editor.config, plan, api });
+      setEditor(null); setPending(null); await refresh(); messageApi.success('计算与关联已保存');
+      console.info('计算与关联已保存', { 分组: editor.config.group_name, 计算项: item.item_name });
+    } catch (error) { handleSaveError(error); await refresh(); } finally { end(); }
   };
-
-  const deleteItem = async (index: number) => {
-    if (!selectedConfig) return;
-    if (selectedConfig.items.length <= 1) {
-      messageApi.warning('计算分组至少保留一个计算项');
-      return;
-    }
-    const items = selectedConfig.items.filter((_, itemIndex) => itemIndex !== index);
+  const retry = async () => {
+    if (!pending || !begin()) return;
+    try { await retryCalcRoutes(pending, api); setPending(null); setEditor(null); await refresh(); messageApi.success('计算与关联同步完成'); }
+    catch (error) { handleSaveError(error); } finally { end(); }
+  };
+  const reloadPending = () => Modal.confirm({
+    title: '放弃旧重试计划并重新加载？',
+    content: '计算配置可能已保存，部分路由可能已同步。重新加载将放弃当前草稿和旧重试计划，读取当前实际配置供你重新检查；不会修改设备配置或运行状态。',
+    okText: '放弃并重新加载', cancelText: '继续处理',
+    onOk: async () => { setPending(null); setEditor(null); await refresh(); console.info('用户已放弃旧计算关联计划并重新加载'); },
+  });
+  const deleteItem = async (item: CalcItemConfig) => {
+    if (!config || !begin()) return;
+    setEditor(null);
     try {
-      const restartResult = await runSelectedGroupStopped(
-        () => api.calcUpsertGroup({ ...selectedConfig, items }, false).then(() => undefined),
-      );
-      console.info('Calc 计算项删除完成', {
-        groupName: selectedConfig.group_name,
-        deletedItemIndex: index,
-        restarted: restartResult.restartedAfterRun,
-      });
-      if (restartResult.restartError) {
-        messageApi.warning(`计算项已删除，但重新启动失败：${formatErrorText(restartResult.restartError)}`);
-      } else if (restartResult.stoppedBeforeRun) {
-        messageApi.success('计算项已删除并重新启动');
+      const latest = await api.calcGetGroup(config.group_name);
+      if (!latest.config || JSON.stringify(latest.config) !== JSON.stringify(config)) throw new Error('分组已被其他操作修改，请刷新后重试');
+      if (config.items.length <= 1) throw new Error('分组至少保留一个计算项，可删除整个分组');
+      const baselineRoutes = await api.dcListRoutes(0, '', 0, '');
+      const plan = buildCalcRoutePlan({ groupName: config.group_name, previousItem: item, item: null, inputSources: [], outputs: [], baselineRoutes });
+      await saveCalcWithRoutes({ config: { ...config, items: config.items.filter((value) => value.item_name !== item.item_name) }, expectedConfig: config, plan, api });
+      setEditor(null); await refresh(); messageApi.success('计算项及相关路由已删除');
+    } catch (error) { handleSaveError(error); await refresh(); } finally { end(); }
+  };
+  const openGroup = (create: boolean) => guard(() => {
+    setEditor(null);
+    const draft = { originalName: create ? null : config?.group_name ?? null, name: create ? `计算组${groups.length + 1}` : config?.group_name ?? '', trigger: create ? 1 : config?.trigger_mode === 2 ? 2 : 1, period: create ? 1000 : config?.period_ms || 1000 };
+    groupInitial.current = JSON.stringify(draft); setGroupDraft(draft);
+  });
+  const closeGroup = () => {
+    if (busyRef.current) return;
+    if (groupDirty) Modal.confirm({ title: '放弃未保存的分组修改？', okText: '放弃修改', cancelText: '继续编辑', onOk: () => setGroupDraft(null) });
+    else setGroupDraft(null);
+  };
+  const saveGroup = async () => {
+    if (!groupDraft || !begin()) return;
+    try {
+      const name = groupDraft.name.trim();
+      if (!name || name.includes('/')) throw new Error('请填写不包含 / 的分组名称');
+      if (groups.some((value) => value.config?.group_name === name && name !== groupDraft.originalName)) throw new Error('分组名称已存在');
+      if (groupDraft.trigger === 2 && (!Number.isInteger(groupDraft.period) || groupDraft.period <= 0)) throw new Error('计算周期必须为正整数毫秒');
+      if (!groupDraft.originalName) {
+        const seed = defaultItem('计算项1'); seed.inputs[1] = { ...defaultOperand(), sourceKind: 2 };
+        await api.calcUpsertGroup({ group_name: name, trigger_mode: groupDraft.trigger, period_ms: groupDraft.period, items: [itemToConfig(seed)] }, true);
+        if ((await api.calcGetGroup(name)).state === 2) await api.calcStopGroup(name);
       } else {
-        messageApi.success('计算项已删除');
+        const latest = await api.calcGetGroup(groupDraft.originalName);
+        if (!latest.config || JSON.stringify(latest.config) !== JSON.stringify(config)) throw new Error('分组已变化，请刷新后编辑');
+        await saveCalcWithRoutes({ config: { ...latest.config, trigger_mode: groupDraft.trigger, period_ms: groupDraft.period }, expectedConfig: latest.config, plan: { routes: [], removedRoutes: [] }, api });
+        if (name !== groupDraft.originalName) {
+          const running = (await api.calcGetGroup(groupDraft.originalName)).state === 2;
+          if (running) await api.calcStopGroup(groupDraft.originalName);
+          try { await api.calcRenameGroup(groupDraft.originalName, name); }
+          finally { if (running) { const all = await api.calcListGroups(); const actual = all.some((value) => value.config?.group_name === name) ? name : groupDraft.originalName; await api.calcStartGroup(actual); } }
+        }
       }
-      await refresh();
-    } catch (error) {
-      messageApi.error(`删除计算项失败：${formatErrorText(error)}`);
-    }
+      setGroupName(name); setGroupDraft(null); await refresh(); messageApi.success('分组配置已保存');
+      console.info('保存计算分组设置完成', { 分组: name });
+    } catch (error) { if (error instanceof CalcSaveError && error.configSaved) setGroupDraft(null); handleSaveError(error); } finally { end(); }
   };
-
-  const updateOperand = (index: number, patch: Partial<OperandDraft>) => {
-    setItemDraft((current) => {
-      if (AGGREGATE_OPERATOR_KINDS.has(current.operatorKind)) {
-        return {
-          ...current,
-          operands: current.operands.map((operand, operandIndex) => operandIndex === index ? { ...operand, ...patch } : operand),
-        };
-      }
-      const side = index === 0 ? 'left' : 'right';
-      return { ...current, [side]: { ...current[side], ...patch } };
-    });
+  const toggleGroup = async () => {
+    if (!groupName || !begin()) return;
+    try { const latest = await api.calcGetGroup(groupName); if (latest.state === 2) await api.calcStopGroup(groupName); else await api.calcStartGroup(groupName); await refresh(); }
+    catch (error) { messageApi.error(`操作分组功能失败：${formatErrorText(error)}`); } finally { end(); }
   };
-
-  const updateOperator = (operatorKind: number) => {
-    setItemDraft((current) => {
-      const nextIsLogic = LOGIC_OPERATOR_KINDS.has(operatorKind);
-      const normalize = (operand: OperandDraft): OperandDraft => {
-        if (operand.sourceKind !== 2) return operand;
-        if (nextIsLogic) return { ...operand, constantType: 'bool', constantValue: false };
-        if (operand.constantType === 'bool') return { ...operand, constantType: 'decimal', constantValue: '0' };
-        return operand;
-      };
-      const normalizedOperands = current.operands.map(normalize);
-      return {
-        ...current,
-        operatorKind,
-        left: normalize(current.left),
-        right: normalize(current.right),
-        operands: normalizedOperands.length >= 2
-          ? normalizedOperands
-          : [normalize(current.left), normalize(current.right)],
-      };
-    });
+  const deleteGroup = async () => {
+    if (!groupName || !begin()) return;
+    try { await api.calcDeleteGroup(groupName); setEditor(null); await refresh(); messageApi.success('计算分组已删除'); }
+    catch (error) { messageApi.error(`删除分组失败：${formatErrorText(error)}`); } finally { end(); }
   };
-
-  const itemInfoByName = useMemo(
-    () => new Map((selectedGroup?.items ?? []).flatMap((item) => (
-      item.config ? [[item.config.item_name, item] as const] : []
-    ))),
-    [selectedGroup],
-  );
-
-  const findInputRoute = useCallback((groupName: string, tag: string): DcRoute | undefined => (
-    routes.find((route) => (
-      route.dst.module_name === 'Calc'
-      && route.dst.conn_name === groupName
-      && route.dst.tag === tag
-    ))
-  ), [routes]);
-
-  const findOutputRoute = useCallback((groupName: string, tag: string): DcRoute | undefined => (
-    routes.find((route) => (
-      route.src.module_name === 'Calc'
-      && route.src.conn_name === groupName
-      && route.src.tag === tag
-    ))
-  ), [routes]);
-
-  const configuredOperands = (item: CalcItemConfig): CalcOperandSpec[] => {
-    if (AGGREGATE_OPERATOR_KINDS.has(item.operator_kind)) return item.operands ?? [];
-    return [item.left_operand, ...(item.operator_kind === 5 ? [] : [item.right_operand])].filter(Boolean) as CalcOperandSpec[];
+  const pointOptions = (current: DcEndpoint[]) => {
+    const options = new Map(points.filter((option) => option.point.module_name !== 'Calc' || option.point.conn_name !== groupName).map((option) => [option.value, option]));
+    current.forEach((point) => { const key = endpointKey(point); if (!options.has(key)) options.set(key, { value: key, label: `${endpointLabel(point)}（已有绑定）`, point }); });
+    return [...options.values()];
   };
-
-  const renderBoundInput = (item: CalcItemConfig, index: number): React.ReactNode => {
-    const operand = configuredOperands(item)[index];
-    if (!operand) return <Text type="secondary">未配置</Text>;
-    if (operand.source_kind !== 1) return sourceLabel(operand);
-    const info = itemInfoByName.get(item.item_name);
-    const fallbackTag = index === 0 ? info?.left_input_tag : index === 1 ? info?.right_input_tag : undefined;
-    const tag = info?.input_tags?.[index] ?? fallbackTag;
-    const status = info?.operand_status?.find((value) => value.index === index);
-    const route = selectedConfig && tag ? findInputRoute(selectedConfig.group_name, tag) : undefined;
-    if (status && !status.ready) {
-      return <Space size={4} wrap>
-        {!route ? <Tag color="orange">未绑定</Tag> : <Tag color="red">未就绪</Tag>}
-        <Text type="danger">{!route ? '未配置路由；' : ''}{status.reason || '尚未收到输入'}</Text>
-      </Space>;
-    }
-    return route
-      ? <Space size={4} wrap><Tag color="green">已绑定</Tag><Text ellipsis={{ tooltip: routeEndpointLabel(route.src) }}>{routeEndpointLabel(route.src)}</Text></Space>
-      : <Space size={4} wrap><Tag color="orange">未绑定</Tag>{tag ? <Text type="secondary">目标：{tag}</Text> : null}</Space>;
+  const pointsFromKeys = (keys: string[], current: DcEndpoint[]): DcEndpoint[] => {
+    const options = pointOptions(current);
+    return keys.map((key) => options.find((option) => option.value === key)?.point).filter((point): point is DcEndpoint => Boolean(point));
   };
-
-  const renderBoundInputs = (item: CalcItemConfig): React.ReactNode => (
-    <Space direction="vertical" size={2} style={{ width: '100%' }}>
-      {configuredOperands(item).map((_, index) => (
-        <Space key={`${item.item_name}-${index}`} size={4} align="start">
-          <Text type="secondary">输入{index + 1}</Text>
-          {renderBoundInput(item, index)}
-        </Space>
-      ))}
-    </Space>
-  );
-
-  const renderBoundOutput = (item: CalcItemConfig): React.ReactNode => {
-    const info = itemInfoByName.get(item.item_name);
-    const route = selectedConfig && info ? findOutputRoute(selectedConfig.group_name, info.result_tag) : undefined;
-    return route
-      ? <Space size={4}><Tag color="green">已绑定</Tag><Text ellipsis={{ tooltip: routeEndpointLabel(route.dst) }}>{routeEndpointLabel(route.dst)}</Text></Space>
-      : <Tag color="orange">未绑定</Tag>;
+  const renderInput = (input: OperandDraft, index: number) => <div className="calc-operand-editor" key={index}>
+    <Text strong>输入 {index + 1}</Text>
+    <Select aria-label={`输入${index + 1}来源`} value={input.sourceKind} options={[{ value: 1, label: '点位' }, { value: 2, label: '常量' }]} onChange={(sourceKind) => updateInput(index, { sourceKind })} />
+    <div className="calc-operand-value">
+      {input.sourceKind === 1 ? <>
+        <Select aria-label={`输入${index + 1}关联点位`} showSearch optionFilterProp="label" allowClear mode={input.sources.length > 1 ? 'multiple' : undefined} className="calc-point-select" placeholder="搜索连接名或点位名称" options={pointOptions(input.sources)}
+          value={input.sources.length > 1 ? input.sources.map(endpointKey) : input.sources[0] ? endpointKey(input.sources[0]) : undefined}
+          onChange={(value: string | string[] | undefined) => updateInput(index, { sources: pointsFromKeys(value === undefined ? [] : Array.isArray(value) ? value : [value], input.sources) })} />
+        {input.sources.length > 1 ? <Text type="warning">已有 {input.sources.length} 个来源，数值以最后到达者为准；求和请拆成独立输入。</Text> : null}
+      </> : <>
+        <Select aria-label={`输入${index + 1}常量类型`} value={input.constantType} options={isLogic(editor!.draft.operatorKind) ? [{ value: 'bool', label: '布尔值' }] : [{ value: 'decimal', label: '精确十进制' }, { value: 'int', label: '整数' }]} onChange={(constantType: OperandDraft['constantType']) => updateInput(index, { constantType, constantValue: constantType === 'bool' ? false : '0' })} />
+        {input.constantType === 'bool' ? <Select aria-label={`输入${index + 1}常量值`} value={Boolean(input.constantValue)} options={[{ value: true, label: '真' }, { value: false, label: '假' }]} onChange={(constantValue) => updateInput(index, { constantValue })} /> : <InputNumber<string> aria-label={`输入${index + 1}常量值`} stringMode value={String(input.constantValue)} onChange={(constantValue) => updateInput(index, { constantValue: constantValue ?? '' })} />}
+      </>}
+    </div>
+    {editor && isAggregate(editor.draft.operatorKind) && editor.draft.inputs.length > 2 ? <Button type="text" danger icon={<DeleteOutlined />} aria-label={`移除输入${index + 1}`} onClick={() => editDraft((draft) => ({ ...draft, inputs: draft.inputs.filter((_, i) => i !== index) }))} /> : <span />}
+  </div>;
+  const renderEditor = () => editor ? <div className="calc-inline-editor">
+    <div className="calc-editor-head"><Text strong>{editor.index === null ? '新增计算' : '编辑计算'}</Text><Text type="secondary">{dirty ? '有未保存修改' : '配置与关联草稿'}</Text></div>
+    <Form layout="vertical" disabled={locked}>
+      <div className="calc-item-basics"><Form.Item label="计算项名称" required><Input aria-label="计算项名称" value={editor.draft.itemName} onChange={(event) => editDraft((draft) => ({ ...draft, itemName: event.target.value }))} /></Form.Item><Form.Item label="运算方式" required><Select aria-label="运算方式" value={editor.draft.operatorKind} options={operators} onChange={changeOperator} /></Form.Item></div>
+      <div className="calc-input-section"><div className="calc-section-heading"><Text strong>输入数据</Text><Text type="secondary">{editor.draft.inputs.length} 项输入</Text>{isAggregate(editor.draft.operatorKind) ? <Button size="small" type="text" icon={<PlusOutlined />} onClick={() => editDraft((draft) => ({ ...draft, inputs: [...draft.inputs, defaultOperand()] }))}>添加输入</Button> : null}</div>{editor.draft.inputs.map(renderInput)}</div>
+      <div className="calc-formula-preview"><Text type="secondary">计算关系</Text><Text>{editor.draft.itemName || '计算结果'} = {formula(editor.draft)}</Text></div>
+      <div className="calc-output-section"><Form.Item label="结果去向" help="可关联多个目标点；留空则仅生成结果点。"><Select aria-label="结果关联目标" mode="multiple" showSearch optionFilterProp="label" allowClear placeholder="搜索并选择结果对应的目标点" options={pointOptions(editor.draft.outputs)} value={editor.draft.outputs.map(endpointKey)} onChange={(keys: string[]) => editDraft((draft) => ({ ...draft, outputs: pointsFromKeys(keys, draft.outputs) }))} /></Form.Item></div>
+      <details className="calc-advanced"><summary>高级设置与运行诊断</summary>
+        {editor.draft.operatorKind === 10 ? <Form.Item label="平均值小数位数" help="不填写表示不主动舍入，合法范围为 0～20。"><InputNumber aria-label="平均值小数位数" min={0} max={20} precision={0} value={editor.draft.decimalPlaces} onChange={(value) => editDraft((draft) => ({ ...draft, decimalPlaces: value ?? undefined }))} /></Form.Item> : null}
+        <Text type="secondary">结果点：Calc/{editor.config.group_name}/{editor.draft.itemName}/result</Text>
+        {calcInputTags(itemToConfig(editor.draft)).map((tag, index) => <div key={tag}><Text type="secondary">输入{index + 1}：Calc/{editor.config.group_name}/{tag}</Text></div>)}
+        {editor.index !== null ? group?.items.find((item) => item.config?.item_name === editor.config.items[editor.index!]?.item_name)?.operand_status.map((input) => <div key={input.index}><Text type={input.ready ? 'secondary' : 'warning'}>输入{input.index + 1}：{input.ready ? '已就绪' : input.reason || '等待输入'}</Text></div>) : null}
+        {editor.index !== null && group?.items.find((item) => item.config?.item_name === editor.draft.itemName)?.last_error ? <Text type="danger">{group.items.find((item) => item.config?.item_name === editor.draft.itemName)?.last_error}</Text> : null}
+      </details>
+    </Form>
+    <div className="calc-editor-footer"><Text type="secondary">选择点位后，保存时统一同步路由。</Text><Space wrap><Button disabled={locked} onClick={() => guard(() => setEditor(null))}>取消</Button><Button type="primary" disabled={Boolean(pending) || Boolean(loadError)} loading={busy} onClick={() => void saveItem()}>保存计算与关联</Button></Space></div>
+  </div> : null;
+  const itemStatus = (item: CalcItemConfig) => {
+    const info = group?.items.find((value) => value.config?.item_name === item.item_name);
+    if (group?.state !== 2) return <Tag>未运行</Tag>;
+    if (info?.operand_status.some((input) => !input.ready)) return <Tag color="warning">等待输入</Tag>;
+    if (info?.last_error) return <Tag color="error">计算异常</Tag>;
+    return <Tag color="processing">运行中</Tag>;
   };
-
-  const itemColumns: ColumnsType<CalcItemConfig> = [
-    { title: '计算项', dataIndex: 'item_name', key: 'item_name', width: 150, render: (name: string) => <Text strong>{name}</Text> },
-    { title: '运算', dataIndex: 'operator_kind', key: 'operator_kind', width: 130, render: (kind: number) => operatorLabel(kind) },
-    { title: '输入点 / 状态', key: 'inputs', width: 300, render: (_, item) => renderBoundInputs(item) },
-    { title: '诊断', key: 'diagnostic', width: 220, render: (_, item) => {
-      const info = itemInfoByName.get(item.item_name);
-      return info?.last_error ? <Text type="danger" ellipsis={{ tooltip: info.last_error }}>{info.last_error}</Text> : <Text type="secondary">输入已就绪或尚未运行</Text>;
-    } },
-    { title: '结果输出点', key: 'result_output', width: 230, render: (_, item) => renderBoundOutput(item) },
-    {
-      title: '操作', key: 'actions', width: 140, render: (_, item) => {
-        const index = selectedConfig?.items.indexOf(item) ?? -1;
-        return <Space><Button size="small" icon={<EditOutlined />} onClick={() => openEditItem(index)}>编辑</Button><Popconfirm title="确认删除此计算项？" onConfirm={() => void deleteItem(index)}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm></Space>;
-      },
-    },
+  const columns: ColumnsType<CalcItemConfig> = [
+    { title: '计算项', dataIndex: 'item_name', key: 'name', width: '22%', render: (name: string) => <Text strong ellipsis={{ tooltip: name }}>{name}</Text> },
+    { title: '运算摘要', key: 'formula', render: (_, item) => <div className="calc-item-summary"><Text>{operators.find((operator) => operator.value === item.operator_kind)?.label ?? '未知运算'}</Text><Text type="secondary" ellipsis={{ tooltip: formula(draftFromItem(groupName ?? '', item, routes)) }}>{formula(draftFromItem(groupName ?? '', item, routes))}</Text></div> },
+    { title: '结果去向', key: 'output', width: '20%', responsive: ['lg'], render: (_, item) => { const outputs = draftFromItem(groupName ?? '', item, routes).outputs; return <Text type="secondary" ellipsis={{ tooltip: outputs.map(endpointLabel).join('；') }}>{outputs.length ? outputs.length === 1 ? endpointLabel(outputs[0]) : `${outputs.length} 个关联目标` : '仅生成结果点'}</Text>; } },
+    { title: '状态', key: 'state', width: 100, render: (_, item) => itemStatus(item) },
+    { title: '操作', key: 'actions', width: 120, render: (_, item, index) => <Space size={4}><Button size="small" disabled={locked || loading} onClick={() => guard(() => { if (editor?.index === index) setEditor(null); else void openEditor(index); })}>{editor?.index === index ? '收起' : '编辑'}</Button><Button size="small" danger aria-label={`删除${item.item_name}`} disabled={locked || loading} icon={<DeleteOutlined />} onClick={() => guard(() => Modal.confirm({ title: '删除计算项及相关路由？', content: item.item_name, okText: '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteItem(item) }))} /></Space> },
   ];
-
-  const renderOperand = (index: number, label: string) => {
-    const aggregate = AGGREGATE_OPERATOR_KINDS.has(itemDraft.operatorKind);
-    const operand = aggregate ? itemDraft.operands[index] : index === 0 ? itemDraft.left : itemDraft.right;
-    if (!operand) return null;
-    const isLogic = LOGIC_OPERATOR_KINDS.has(itemDraft.operatorKind);
-    const effectiveType: ConstantType = isLogic ? 'bool' : operand.constantType === 'bool' ? 'decimal' : operand.constantType;
-    const constantError = operand.sourceKind === 2 && operand.constantType === 'decimal'
-      ? decimalTextError(String(operand.constantValue))
-      : undefined;
-    const side = index === 0 ? 'left' : 'right';
-    const endpoint = selectedConfig && itemDraft.itemName.trim()
-      ? calcEndpointPath(selectedConfig.group_name, itemDraft.itemName.trim(), aggregate ? `input_${index + 1}` : `${side}_input`)
-      : null;
-    const itemInfo = itemInfoByName.get(itemDraft.itemName.trim());
-    const inputTag = itemInfo?.input_tags?.[index] ?? (side === 'left' ? itemInfo?.left_input_tag : itemInfo?.right_input_tag);
-    const boundRoute = selectedConfig && inputTag ? findInputRoute(selectedConfig.group_name, inputTag) : undefined;
-    const typeError = operandTypeError(operand);
-    const sourceError = inputRequirementError && index === 0 ? inputRequirementError : undefined;
-    const endpointRole = aggregate ? `输入${index + 1}` : side === 'left' ? '左输入点' : '右输入点';
-    return <div className="calc-operand-editor">
-      <Text strong>{label}</Text>
-      <Form.Item
-        validateStatus={sourceError ? 'error' : undefined}
-        help={sourceError}
-        style={{ marginBottom: 0 }}
-      >
-        <Select value={operand.sourceKind} onChange={(value) => updateOperand(index, { sourceKind: value })} options={[{ label: '数据总线点位', value: 1 }, { label: '常量', value: 2 }]} />
-      </Form.Item>
-      {operand.sourceKind === 2 ? <>
-        <Form.Item
-          validateStatus={typeError && !constantError ? 'error' : undefined}
-          help={constantError ? undefined : typeError}
-          style={{ marginBottom: 0 }}
-        >
-          <Select value={effectiveType} onChange={(value: ConstantType) => updateOperand(index, { constantType: value, constantValue: defaultConstantValue(value) })} options={isLogic ? [{ label: 'bool', value: 'bool' }] : [{ label: 'int64', value: 'int' }, { label: '精确十进制', value: 'decimal' }]} />
-        </Form.Item>
-        {effectiveType === 'bool' ? <Select value={Boolean(operand.constantValue)} onChange={(value) => updateOperand(index, { constantValue: value })} options={[{ label: '真', value: true }, { label: '假', value: false }]} /> : effectiveType === 'decimal' ? <InputNumber<string> stringMode style={{ width: '100%' }} value={String(operand.constantValue)} status={constantError || (index === 1 && divisorError) ? 'error' : undefined} onChange={(value) => updateOperand(index, { constantValue: value ?? '' })} /> : <InputNumber style={{ width: '100%' }} value={typeof operand.constantValue === 'number' ? operand.constantValue : 0} precision={0} status={index === 1 && divisorError ? 'error' : undefined} onChange={(value) => updateOperand(index, { constantValue: value ?? 0 })} />}
-        {constantError ? <Text type="danger">{constantError}</Text> : index === 1 && divisorError ? <Text type="danger">{divisorError}</Text> : null}
-      </> : <Space direction="vertical" size={4} className="calc-endpoint-info">
-        <Space size={6} wrap>
-          <Text type="secondary">{endpointRole}</Text>
-          {boundRoute ? <Tag color="green">已绑定：{routeEndpointLabel(boundRoute.src)}</Tag> : <Tag color="orange">未绑定</Tag>}
-        </Space>
-        {endpoint ? <Text type="secondary">数据总线目标槽位：<Text code copyable={{ text: endpoint }}>{endpoint}</Text></Text> : <Text type="secondary">填写计算项名称后生成内部点路径</Text>}
-      </Space>}
-    </div>;
-  };
-
-  const renderAggregateOperand = (index: number): React.ReactNode => {
-    const operand = itemDraft.operands[index];
-    if (!operand) return null;
-    const itemInfo = itemInfoByName.get(itemDraft.itemName.trim());
-    const inputTag = itemInfo?.input_tags?.[index] ?? `${itemDraft.itemName.trim()}/input_${index + 1}`;
-    const boundRoute = selectedConfig && inputTag ? findInputRoute(selectedConfig.group_name, inputTag) : undefined;
-    const status = itemInfo?.operand_status?.find((value) => value.index === index);
-    const typeError = operandTypeError(operand);
-    const effectiveType: ConstantType = operand.constantType === 'bool' ? 'decimal' : operand.constantType;
-    const endpoint = selectedConfig && itemDraft.itemName.trim()
-      ? calcEndpointPath(selectedConfig.group_name, itemDraft.itemName.trim(), `input_${index + 1}`)
-      : null;
-    return <div className="calc-aggregate-row">
-      <span className="calc-aggregate-index">{String(index + 1).padStart(2, '0')}</span>
-      <Select
-        className="calc-aggregate-source"
-        value={operand.sourceKind}
-        onChange={(value) => updateOperand(index, { sourceKind: value })}
-        options={[{ label: '数据总线点位', value: 1 }, { label: '常量', value: 2 }]}
-      />
-      {operand.sourceKind === 2 ? <Space className="calc-aggregate-value" size={8} wrap>
-        <Select
-          className="calc-aggregate-type"
-          value={effectiveType}
-          onChange={(value: ConstantType) => updateOperand(index, { constantType: value, constantValue: defaultConstantValue(value) })}
-          options={[{ label: 'int64', value: 'int' }, { label: '精确十进制', value: 'decimal' }]}
-        />
-        {effectiveType === 'decimal' ? <InputNumber<string>
-          stringMode
-          className="calc-aggregate-number"
-          value={String(operand.constantValue)}
-          status={typeError ? 'error' : undefined}
-          onChange={(value) => updateOperand(index, { constantValue: value ?? '' })}
-        /> : <InputNumber
-          className="calc-aggregate-number"
-          value={typeof operand.constantValue === 'number' ? operand.constantValue : 0}
-          precision={0}
-          onChange={(value) => updateOperand(index, { constantValue: value ?? 0 })}
-        />}
-      </Space> : <div className="calc-aggregate-route">
-        <Text type="secondary" ellipsis={{ tooltip: endpoint ?? undefined }}>{endpoint ?? '填写计算项名称后生成目标槽位'}</Text>
-        {boundRoute ? <Tag color="green">已绑定：{routeEndpointLabel(boundRoute.src)}</Tag> : <Tag color="orange">未绑定</Tag>}
-      </div>}
-      <div className="calc-aggregate-status">
-        {typeError ? <Text type="danger">{typeError}</Text> : status && !status.ready ? <Text type="danger">{status.reason || '尚未收到输入'}</Text> : null}
-      </div>
-      {index >= 2 ? <Button
-        type="text"
-        danger
-        aria-label={`移除输入${index + 1}`}
-        icon={<DeleteOutlined />}
-        onClick={() => setItemDraft((current) => ({ ...current, operands: current.operands.filter((__, operandIndex) => operandIndex !== index) }))}
-      /> : <span className="calc-aggregate-action-placeholder" />}
-    </div>;
-  };
-
+  const state = groupStates[group?.state ?? 0] ?? groupStates[0];
   return <div className="calc-page">
     {contextHolder}
-    <Card className="calc-toolbar" size="small">
-      <Space wrap>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateGroup}>新建分组</Button>
-        <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void refresh()}>刷新</Button>
-        {selectedConfig ? <><Button icon={<EditOutlined />} onClick={openEditGroup}>编辑分组</Button><Popconfirm title="确认删除该计算分组？" onConfirm={() => void deleteGroup()}><Button danger icon={<DeleteOutlined />}>删除分组</Button></Popconfirm><Button type={selectedGroup?.state === 2 ? 'default' : 'primary'} icon={selectedGroup?.state === 2 ? <PauseCircleOutlined /> : <PlayCircleOutlined />} onClick={() => void toggleGroup()}>{selectedGroup?.state === 2 ? '停止分组' : '启动分组'}</Button></> : null}
-      </Space>
-    </Card>
-    <ResizableSplit
-      className="calc-content"
-      defaultSize={400}
-      minSize={280}
-      maxSize={620}
-      storageKey="mskdsp.layout.calc-groups"
-    >
-      <Card
-        title="计算分组"
-        size="small"
-        className="calc-groups-card"
-        style={{ width: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}
-        styles={{ body: { flex: 1, minHeight: 0, padding: 0, overflow: 'auto' } }}
-      >
-        <Table<CalcGroupInfo> rowKey={(record) => record.config?.group_name ?? String(record.conn_id)} size="small" loading={loading} pagination={false} dataSource={groups} rowClassName={(record) => record.config?.group_name === selectedGroupName ? 'calc-selected-row' : ''} onRow={(record) => ({ onClick: () => setSelectedGroupName(record.config?.group_name ?? null) })} columns={[{ title: '名称', key: 'name', render: (_, record) => record.config?.group_name ?? '-' }, { title: '触发方式', key: 'trigger_mode', width: 100, render: (_, record) => record.config?.trigger_mode === 2 ? `周期 ${record.config.period_ms} ms` : '变化触发' }, { title: '状态', key: 'state', width: 90, render: (_, record) => { const state = GROUP_STATE[record.state] ?? GROUP_STATE[0]; return <Tag color={state.color}>{state.label}</Tag>; } }, { title: '项数', key: 'items', width: 60, render: (_, record) => record.config?.items.length ?? 0 }]} />
-      </Card>
-      <Card
-        title={selectedConfig ? `${selectedConfig.group_name} · 计算项` : '请选择计算分组'}
-        size="small"
-        className="calc-items-card"
-        style={{ width: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}
-        styles={{ body: { flex: 1, minHeight: 0, overflow: 'auto' } }}
-        extra={selectedConfig ? <Text type="secondary">conn_id: {selectedGroup?.conn_id}</Text> : null}
-      >
-        {selectedConfig ? <>
-          {selectedGroup?.last_error ? <Paragraph type="danger" className="calc-error">{selectedGroup.last_error}</Paragraph> : null}
-          <Paragraph type="secondary">数据总线绑定状态会显示在输入点和结果输出点旁；点击“刷新”可同步最新路由。</Paragraph>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateItem}>新增计算项</Button>
-          <Divider style={{ margin: '12px 0' }} />
-          <Table<CalcItemConfig> rowKey="item_name" size="small" dataSource={selectedConfig.items} columns={itemColumns} pagination={false} scroll={{ x: 1170 }} locale={{ emptyText: '暂无计算项，请新增一项运算' }} />
-        </> : <div className="calc-empty">暂无计算分组，请先新建。</div>}
-      </Card>
-    </ResizableSplit>
-    <Modal title={groupModalMode === 'create' ? '新建计算分组' : '编辑计算分组'} open={groupModalOpen} onCancel={closeGroupModal} onOk={() => void saveGroup()} okText="保存" cancelText="取消" confirmLoading={groupSubmitting} maskClosable={!groupSubmitting} closable={!groupSubmitting} keyboard={!groupSubmitting}>
-      <Form layout="vertical">
-        <Form.Item label="分组名称" required validateStatus={groupNameError ? 'error' : undefined} help={groupNameError}><Input autoFocus value={groupNameDraft} onChange={(event) => setGroupNameDraft(event.target.value)} onPressEnter={() => void saveGroup()} /></Form.Item>
-        <Form.Item label="运算触发方式" required>
-          <Select value={groupTriggerModeDraft} options={TRIGGER_MODE_OPTIONS} onChange={(value: number) => setGroupTriggerModeDraft(value)} />
-        </Form.Item>
-        <Form.Item label="计算周期（毫秒）" validateStatus={groupPeriodError ? 'error' : undefined} help={groupPeriodError ?? '仅周期定时模式生效'}>
-          <InputNumber min={1} precision={0} disabled={groupTriggerModeDraft !== 2} value={groupPeriodMsDraft} style={{ width: '100%' }} onChange={(value) => setGroupPeriodMsDraft(value ?? 0)} />
-        </Form.Item>
-      </Form>
-    </Modal>
-    <Modal className="calc-item-modal" centered title={editingItemIndex === null ? '新增计算项' : '编辑计算项'} open={itemModalOpen} width="min(920px, calc(100vw - 32px))" styles={{ body: { maxHeight: 'min(680px, calc(100vh - 220px))', overflowY: 'auto', paddingInline: 24 } }} onCancel={closeItemModal} onOk={() => void saveItem()} okText="保存" cancelText="取消" confirmLoading={itemSubmitting} maskClosable={!itemSubmitting} closable={!itemSubmitting} keyboard={!itemSubmitting}>
-      <Form layout="vertical">
-        <Row gutter={16}><Col span={12}><Form.Item label="计算项名称" required validateStatus={itemNameError ? 'error' : undefined} help={itemNameError}><Input placeholder="例如：总功率" value={itemDraft.itemName} onChange={(event) => setItemDraft((current) => ({ ...current, itemName: event.target.value }))} /></Form.Item></Col><Col span={12}><Form.Item label="运算符" required><Select value={itemDraft.operatorKind} onChange={updateOperator} options={OPERATOR_OPTIONS.map(({ label, value }) => ({ label, value }))} /></Form.Item></Col></Row>
-        {isAggregate ? <>
-          <div className="calc-section-heading"><Text strong>输入配置</Text><Text type="secondary">{itemDraft.operands.length} 个操作数</Text></div>
-          {itemDraft.operatorKind === 10 ? <Form.Item className="calc-average-precision" label="平均值小数位数" help="不填写表示不主动舍入，范围 0 到 20"><InputNumber min={0} max={20} precision={0} value={itemDraft.decimalPlaces} placeholder="不舍入" style={{ width: 180 }} onChange={(value) => setItemDraft((current) => ({ ...current, decimalPlaces: value === null ? undefined : value }))} /></Form.Item> : null}
-          <div className="calc-aggregate-list">
-            <div className="calc-aggregate-list-header"><span>序号</span><span>输入来源</span><span>值 / 目标槽位</span><span>状态</span><span /></div>
-            {itemDraft.operands.map((_, index) => <React.Fragment key={`operand-${index}`}>{renderAggregateOperand(index)}</React.Fragment>)}
-          </div>
-          <Button icon={<PlusOutlined />} onClick={() => setItemDraft((current) => ({ ...current, operands: [...current.operands, defaultOperand()] }))}>增加操作数</Button>
-          <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>求和和求平均会等待所有数据总线输入到齐；常量可以与路由输入混合，也可以全部使用常量。</Paragraph>
-        </> : <Row gutter={16}><Col xs={24} sm={12}>{renderOperand(0, '左输入点')}</Col><Col xs={24} sm={12}>{itemDraft.operatorKind === 5 ? <div className="calc-operand-editor"><Text strong>右输入点</Text><Text type="secondary">NOT 为单目运算，右输入点不会参与计算。</Text></div> : renderOperand(1, '右输入点')}</Col></Row>}
-        {selectedConfig && itemDraft.itemName.trim() ? (() => {
-          const itemInfo = itemInfoByName.get(itemDraft.itemName.trim());
-          const resultRoute = itemInfo ? findOutputRoute(selectedConfig.group_name, itemInfo.result_tag) : undefined;
-          const resultEndpoint = calcEndpointPath(selectedConfig.group_name, itemDraft.itemName.trim(), 'result');
-          return <div className="calc-result-settings">
-            <div className="calc-section-heading"><Text strong>输出设置</Text><Text type="secondary">结果点</Text></div>
-            <div className="calc-result-endpoint">
-            <Space size={8} wrap>
-              <Text type="secondary">结果输出点</Text>
-              {resultRoute ? <Tag color="green">已绑定：{routeEndpointLabel(resultRoute.dst)}</Tag> : <Tag color="orange">未绑定</Tag>}
-              <Text type="secondary">数据总线源点：</Text>
-              <Text code copyable={{ text: resultEndpoint }}>{resultEndpoint}</Text>
-            </Space>
-            </div>
-          </div>;
-        })() : null}
-      </Form>
+    {dataRouter ? <CalcNavigationGuard blocked={dirty || groupDirty || locked} locked={locked} /> : null}
+    <div className="calc-page-header"><div><Typography.Title level={4}>数值计算</Typography.Title><Text type="secondary">选择输入点，配置运算，并关联结果去向。</Text></div><Space wrap><Button disabled={locked} loading={loading} icon={<ReloadOutlined />} onClick={() => guard(() => { setEditor(null); void refresh(); })}>刷新</Button><Button disabled={locked} icon={<PlusOutlined />} onClick={() => openGroup(true)}>新建分组</Button></Space></div>
+    {loadError ? <Alert type="error" showIcon title={loadError} action={<Button size="small" disabled={locked} onClick={() => void refresh()}>重新加载</Button>} /> : null}
+    {catalogWarning ? <Alert type="warning" showIcon title={catalogWarning} /> : null}
+    {pending ? <Alert type="warning" showIcon title={pending.phase === 'restart' ? '计算与关联已保存，恢复分组运行失败' : '计算已保存，路由同步失败'} description={formatErrorText(pending)} action={<Space wrap><Button disabled={busy} onClick={reloadPending}>重新加载当前配置</Button><Button loading={busy} onClick={() => void retry()}>{pending.phase === 'restart' ? '重试恢复运行' : '重试路由同步'}</Button></Space>} /> : null}
+    <div className="calc-group-toolbar"><Space wrap><Select aria-label="计算分组" placeholder="请选择计算分组" className="calc-group-select" value={groupName} disabled={locked || loading} options={groups.map((value) => ({ value: value.config?.group_name, label: value.config?.group_name }))} onChange={(name: string) => guard(() => { setEditor(null); setGroupName(name); })} />{config ? <><Tag color={state.color}>{state.label}</Tag><Text type="secondary">{config.trigger_mode === 2 ? `每 ${config.period_ms} ms 计算` : '输入变化时计算'} · {config.items.length} 项</Text></> : null}</Space>
+      {config ? <Space wrap><Button type="primary" disabled={locked || loading} icon={<PlusOutlined />} onClick={() => guard(() => { void openEditor(null); })}>新增计算项</Button><Button disabled={locked} icon={group?.state === 2 ? <PauseCircleOutlined /> : <PlayCircleOutlined />} onClick={() => guard(() => { setEditor(null); void toggleGroup(); })}>{group?.state === 2 ? '停止分组' : '启动分组'}</Button><Dropdown disabled={locked} trigger={['click']} menu={{ items: [{ key: 'edit', label: '编辑分组', icon: <EditOutlined /> }, { key: 'delete', label: '删除分组', danger: true, icon: <DeleteOutlined /> }], onClick: ({ key }) => key === 'edit' ? openGroup(false) : guard(() => Modal.confirm({ title: '删除计算分组？', content: groupName, okText: '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: deleteGroup })) }}><Button disabled={locked} icon={<MoreOutlined />} aria-label="更多分组操作" /></Dropdown></Space> : null}
+    </div>
+    <Card className="calc-list-card" size="small">{config ? <>
+      {group?.last_error ? <details className="calc-group-diagnostic"><summary>分组诊断</summary><Text type="warning">{group.last_error}</Text></details> : null}
+      {editor?.index === null ? <div className="calc-new-editor">{renderEditor()}</div> : null}
+      <Table<CalcItemConfig> className="calc-items-table" rowKey="item_name" size="middle" tableLayout="fixed" columns={columns} dataSource={config.items} loading={loading} pagination={false} expandable={{ expandedRowKeys: editor && editor.index !== null ? [pending?.configSaved ? editor.draft.itemName.trim() : editor.config.items[editor.index].item_name] : [], expandedRowRender: renderEditor, showExpandColumn: false }} />
+    </> : <div className="calc-empty"><Text type="secondary">暂无计算分组，请先新建。</Text><Button icon={<PlusOutlined />} onClick={() => openGroup(true)}>新建分组</Button></div>}</Card>
+    <Modal title={groupDraft?.originalName ? '编辑计算分组' : '新建计算分组'} open={Boolean(groupDraft)} onOk={() => void saveGroup()} confirmLoading={busy} okText="保存分组" cancelText="取消" onCancel={closeGroup} mask={{ closable: false }}>
+      {groupDraft ? <Form layout="vertical" disabled={busy}><Form.Item label="分组名称" required><Input aria-label="分组名称" value={groupDraft.name} onChange={(event) => setGroupDraft({ ...groupDraft, name: event.target.value })} /></Form.Item><Form.Item label="触发方式"><Select value={groupDraft.trigger} options={[{ value: 1, label: '变化触发' }, { value: 2, label: '周期定时' }]} onChange={(trigger) => setGroupDraft({ ...groupDraft, trigger })} /></Form.Item>{groupDraft.trigger === 2 ? <Form.Item label="计算周期（毫秒）"><InputNumber min={1} precision={0} value={groupDraft.period} onChange={(period) => setGroupDraft({ ...groupDraft, period: period ?? 0 })} /></Form.Item> : null}</Form> : null}
     </Modal>
   </div>;
 };
