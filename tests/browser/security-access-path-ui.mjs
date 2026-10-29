@@ -50,7 +50,7 @@ async function openFixture(options = {}) {
   page.setDefaultTimeout(10000);
   page.on('pageerror', error => failures.push(error.message));
   await page.addInitScript(initial => {
-    const mock = window.__securityPathMock = { calls: [], pathResolve: null, pathReject: null, profileFailure: initial.profileFailure === true, source: initial.source || 'builtin', builtinMode: initial.builtinMode || 'auto', builtinError: false, deferBuiltin: false, builtinResolve: null };
+    const mock = window.__securityPathMock = { devices: initial.devices || [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true, allow_ssh: true, services: ['ssh', 'vertical-security'] }, { device_id: 'fixture-no-access', display_name: '无维护权限 DSP', online: true, allow_ssh: false, services: [] }, { device_id: 'fixture-offline', display_name: '离线 DSP', online: false, allow_ssh: true, services: [] }, { device_id: 'fixture-no-services', display_name: '未开放服务 DSP', online: true, allow_ssh: true, services: [] }], deviceListError: false, deferDevices: false, deviceListResolve: null, calls: [], pathResolve: null, pathReject: null, profileFailure: initial.profileFailure === true, source: initial.source || 'builtin', builtinMode: initial.builtinMode || 'auto', builtinError: false, deferBuiltin: false, builtinResolve: null };
     const profile = () => ({ configured: true, source: mock.source, builtin_mode: mock.source === 'builtin' ? mock.builtinMode : null, label: mock.source === 'builtin' ? '内置配套证书（fixture）' : '虚构自定义证书', client_certificate_path: mock.source === 'builtin' ? null : 'C:\\fixture\\client.p12', trust_certificate_path: mock.source === 'builtin' ? null : 'C:\\fixture\\trust.pem', server_name: '11.22.33.44' });
     let callback = 0;
     window.__TAURI_INTERNALS__ = {
@@ -58,7 +58,11 @@ async function openFixture(options = {}) {
       invoke: async (command, args) => {
         mock.calls.push({ command, args });
         if (command === 'get_vertical_security_access_capabilities') return { remote_ip_available: initial.remoteAvailable === true, remote_ip_reason: '远程网络通道待接入（fixture）' };
-        if (command === 'remote_list_devices') return [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true, allow_ssh: true, services: ['ssh', 'vertical-security'] }, { device_id: 'fixture-no-access', display_name: '无维护权限 DSP', online: true, allow_ssh: false, services: [] }];
+        if (command === 'remote_list_devices') {
+          if (mock.deviceListError) throw new Error('fixture 设备列表读取失败');
+          if (mock.deferDevices) return new Promise(resolve => { mock.deviceListResolve = resolve; });
+          return mock.devices;
+        }
         if (command === 'get_vertical_security_login_capabilities') return { direct_available: true, remote_available: false, password_change_available: false, reason: '虚构 TLS 能力，仅用于 UI 测试' };
         if (command === 'get_vertical_security_certificate_profile') { if (mock.profileFailure) throw new Error('fixture profile failure'); return profile(); }
         if (command === 'configure_vertical_security_access_path') return new Promise((resolve, reject) => { mock.pathResolve = resolve; mock.pathReject = reject; });
@@ -96,10 +100,82 @@ async function fillPath() { await dialog().getByLabel('访问通路 SSH 上传�
 async function resolvePath(applied = true) {
   await page.evaluate(value => window.__securityPathMock.pathResolve({ target_ip: '11.22.33.44', applied: value, exit_code: value ? 0 : 1, message: value ? 'fixture 配置完成；目标连通性尚未检查' : 'fixture 预检查拒绝，未完成配置', steps: ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'].map(id => ({ id, name: id === 'persistence' ? '开机恢复' : id, state: value ? 'success' : id === 'preflight' ? 'failed' : 'pending', message: value ? 'fixture 检查通过' : id === 'preflight' ? 'fixture 固定地址冲突' : 'fixture 阶段未执行' })) }), applied);
 }
-async function check(name, run) { await run(); results.push(name); }
+async function check(name, run) {
+  if (process.argv.includes('--device-filter-only') && !/^(平台候选|刷新移除|空列表|刷新等待)/.test(name)) return;
+  await run(); results.push(name);
+}
 
 try {
   browser = await chromium.launch({ headless: true, args: ['--no-proxy-server'], ...(process.env.MSKDSP_BROWSER_EXECUTABLE ? { executablePath: process.env.MSKDSP_BROWSER_EXECUTABLE } : {}) });
+  await check('平台候选仅展示在线且有维护权限的设备，不按服务过滤', async () => {
+    await openFixture({ remoteAvailable: true });
+    await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
+    await page.getByRole('combobox', { name: '目标 DSP', exact: true }).click();
+    assert.equal(await page.getByText('离线 DSP · 离线', { exact: true }).count(), 0, '离线设备不应出现在候选列表');
+    assert.equal(await page.getByText('无维护权限 DSP · 在线', { exact: true }).count(), 0, '无维护权限设备不应出现在候选列表');
+    assert.equal(await page.getByText('测试 DSP · 在线', { exact: true }).count(), 1);
+    await page.screenshot({ path: path.join(output, 'filtered-devices.png'), fullPage: true });
+    await page.getByText('未开放服务 DSP · 在线', { exact: true }).click();
+    await page.getByText('所选 DSP 尚未开放 SSH 服务，无法远程配置通路', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: /配置纵密访问通路/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /检查远程通路/ }).isDisabled(), true);
+  });
+  await check('刷新移除失去资格的当前目标并清除旧通路检查结果', async () => {
+    for (const reason of ['offline', 'unauthorized', 'removed', 'list-error']) {
+      await openFixture({ remoteAvailable: true });
+      await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
+      await page.getByRole('combobox', { name: '目标 DSP', exact: true }).click();
+      await page.getByText('测试 DSP · 在线', { exact: true }).click();
+      await page.getByRole('button', { name: /检查远程通路/ }).click();
+      await page.waitForFunction(() => Boolean(window.__securityPathMock.checkResolve));
+      await page.evaluate(() => window.__securityPathMock.checkResolve({ mode: 'remote', target_ip: '11.22.33.44', device_id: 'fixture-dsp', state: 'ready', session_id: null, checked_at_ms: Date.now(), steps: ['platform-device', 'remote-channel', 'management-tcp', 'management-tls'].map(id => ({ id, name: id, state: 'success', message: 'fixture 远程通过' })) }));
+      await page.getByText('远程管理通路检查通过', { exact: true }).waitFor();
+      await page.evaluate(kind => {
+        const mock = window.__securityPathMock;
+        if (kind === 'list-error') mock.deviceListError = true;
+        else if (kind === 'removed') mock.devices = [];
+        else mock.devices = [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: kind !== 'offline', allow_ssh: kind !== 'unauthorized', services: ['ssh', 'vertical-security'] }];
+      }, reason);
+      await page.getByRole('button', { name: '刷新平台设备', exact: true }).click();
+      await page.getByText('目标 DSP：尚未选择', { exact: true }).waitFor();
+      assert.equal(await page.getByText('远程管理通路检查通过', { exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: /检查远程通路/ }).isDisabled(), true);
+      assert.equal(await page.getByRole('button', { name: /配置纵密访问通路/ }).isDisabled(), true);
+      assert.equal((await calls('check_vertical_security_access')).length, 1, '刷新不能自动检查');
+      assert.equal((await calls('login_vertical_security')).length, 0, '刷新不能触发认证');
+      assert.equal((await calls('remote_select_device')).length, 0, '刷新不改变全局目标');
+      await page.getByRole('combobox', { name: '目标 DSP', exact: true }).click();
+      assert.equal(await page.getByText('测试 DSP · 在线', { exact: true }).count(), 0);
+      await page.getByText('暂无有权限且在线的设备', { exact: true }).waitFor();
+    }
+  });
+  await check('空列表明确展示无有权限在线设备且不能操作', async () => {
+    await openFixture({ remoteAvailable: true, devices: [] });
+    await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
+    await page.getByRole('combobox', { name: '目标 DSP', exact: true }).click();
+    await page.getByText('暂无有权限且在线的设备', { exact: true }).waitFor();
+    await page.screenshot({ path: path.join(output, 'empty-devices.png'), fullPage: true });
+    assert.equal(await page.getByRole('button', { name: /配置纵密访问通路/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /检查远程通路/ }).isDisabled(), true);
+    assert.equal((await calls('check_vertical_security_access')).length, 0);
+  });
+  await check('刷新等待期间禁止选择或对旧目标发起配置与检查', async () => {
+    await openFixture({ remoteAvailable: true });
+    await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
+    await page.getByRole('combobox', { name: '目标 DSP', exact: true }).click();
+    await page.getByText('测试 DSP · 在线', { exact: true }).click();
+    await page.evaluate(() => { window.__securityPathMock.deferDevices = true; });
+    await page.getByRole('button', { name: '刷新平台设备', exact: true }).click();
+    await page.waitForFunction(() => Boolean(window.__securityPathMock.deviceListResolve));
+    assert.equal(await page.getByRole('combobox', { name: '目标 DSP', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /配置纵密访问通路/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /检查远程通路/ }).isDisabled(), true);
+    await page.evaluate(() => window.__securityPathMock.deviceListResolve(window.__securityPathMock.devices));
+    await page.getByRole('button', { name: /检查远程通路/ }).waitFor();
+    assert.equal(await page.getByRole('combobox', { name: '目标 DSP', exact: true }).isDisabled(), false);
+    assert.equal((await calls('configure_vertical_security_access_path')).length, 0);
+    assert.equal((await calls('check_vertical_security_access')).length, 0);
+  });
   await check('内置证书自动加载，不手选证书即可尝试登录；加载页面不自动配置/检查/登录', async () => {
     await openFixture({ view: 'login' });
     await page.getByText('内置配套证书 · 自动匹配', { exact: true }).waitFor();
@@ -260,7 +336,8 @@ try {
     assert.equal((await calls('login_vertical_security')).length, 0, '通路检测不登录纵密');
     await page.screenshot({ path: path.join(output, 'remote-access-result.png'), fullPage: true });
     await page.getByRole('combobox', { name: '目标 DSP', exact: true }).click();
-    await page.getByText('无维护权限 DSP · 在线', { exact: true }).click();
+    assert.equal(await page.getByText('无维护权限 DSP · 在线', { exact: true }).count(), 0, '新需求：无权限设备从候选列表隐藏');
+    await page.getByText('未开放服务 DSP · 在线', { exact: true }).click();
     assert.equal(await page.getByRole('button', { name: /配置纵密访问通路/ }).isDisabled(), true);
     assert.equal(await page.getByRole('button', { name: /检查远程通路/ }).isDisabled(), true);
     assert.equal(await page.getByText('远程管理通路检查通过', { exact: true }).count(), 0, '切换DSP必须失效旧结果');

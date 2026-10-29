@@ -58,7 +58,7 @@ try {
         if (command === 'get_vertical_security_access_capabilities') return { remote_ip_available: false, remote_ip_reason: '远程网络通道待接入（fixture）' };
         if (command === 'get_vertical_security_login_capabilities') return { direct_available: false, remote_available: false, password_change_available: false, reason: '此回归仅验证网络检查与配置（fixture）' };
         if (command === 'get_vertical_security_certificate_profile') return { configured: false, client_certificate_path: null, trust_certificate_path: null, server_name: null };
-        if (command === 'remote_list_devices') return [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true }];
+        if (command === 'remote_list_devices') return [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true, allow_ssh: true, services: ['ssh', 'vertical-security'] }];
         if (command === 'check_vertical_security_access') return new Promise((resolve, reject) => { mock.resolve = resolve; mock.reject = reject; });
         if (command === 'deploy_vertical_security_script') return { remote_path: '/home/fixture/vertical-security.sh', service_name: 'fixture-security', exit_code: 0, stdout: '', stderr: '', success: true };
         if (command === 'get_vertical_security_status') return { service_name: 'fixture-security', active_state: 'active', sub_state: 'running', result: 'success', exit_code: 0, restart_count: 0, steps: ['precheck', 'forwarding', 'local_security', 'local_rtu', 'ppp0_wait', 'remote_security_route', 'dnat', 'snat', 'conntrack', 'save_config'].map(id => ({ step_id: id, name: id, state: 'success', message: '虚构执行结果', updated_at: 1 })) };

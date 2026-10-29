@@ -27,12 +27,13 @@ export default function SecurityAccess() {
   const [pathBusy, setPathBusy] = useState(false);
   const generationRef = useRef(0);
   const deviceGenerationRef = useRef(0);
+  const deviceIdRef = useRef<string | undefined>(undefined);
   const sessionRef = useRef<string | null>(null);
   const mountedRef = useRef(false);
   const desktop = '__TAURI_INTERNALS__' in window;
   const selectedDevice = devices.find(device => device.device_id === deviceId);
-  const remoteConfigAvailable = Boolean(selectedDevice?.online && selectedDevice.allow_ssh && selectedDevice.services?.includes('ssh'));
-  const remoteCheckAvailable = Boolean(capabilities?.remote_ip_available && selectedDevice?.online && selectedDevice.allow_ssh && selectedDevice.services?.includes('vertical-security'));
+  const remoteConfigAvailable = Boolean(!loadingDevices && selectedDevice?.online && selectedDevice.allow_ssh && selectedDevice.services?.includes('ssh'));
+  const remoteCheckAvailable = Boolean(!loadingDevices && capabilities?.remote_ip_available && selectedDevice?.online && selectedDevice.allow_ssh && selectedDevice.services?.includes('vertical-security'));
   const connected = result?.state === 'ready' && Boolean(result.session_id);
   const locked = busy || connected || pathBusy;
 
@@ -40,13 +41,31 @@ export default function SecurityAccess() {
     if (!desktop) return;
     const generation = ++deviceGenerationRef.current;
     setLoadingDevices(true);
+    const updateDevices = (list: PlatformDevice[]) => {
+      const available = list.filter(device => device.online && device.allow_ssh);
+      setDevices(available);
+      console.info('[纵密访问通路] 已刷新在线且具备维护权限的设备列表', { count: available.length });
+      if (deviceIdRef.current && !available.some(device => device.device_id === deviceIdRef.current)) {
+        deviceIdRef.current = undefined;
+        setDeviceId(undefined);
+        generationRef.current += 1;
+        setResult(null); setError(null); setBusy(false);
+        const session = sessionRef.current;
+        sessionRef.current = null;
+        if (session) void api.closeVerticalSecurityAccess(session).catch(() => {});
+        console.info('[纵密访问通路] 原设备已不可选，清除选择及旧检查结果');
+      }
+    };
     try {
       const list = await invoke<PlatformDevice[]>('remote_list_devices');
       if (!mountedRef.current || generation !== deviceGenerationRef.current) return;
-      setDevices(list);
+      updateDevices(list);
       setDeviceError(null);
     } catch (cause) {
-      if (mountedRef.current && generation === deviceGenerationRef.current) setDeviceError(`读取平台设备失败：${cause}`);
+      if (mountedRef.current && generation === deviceGenerationRef.current) {
+        updateDevices([]);
+        setDeviceError(`读取平台设备失败：${cause}`);
+      }
     } finally {
       if (mountedRef.current && generation === deviceGenerationRef.current) setLoadingDevices(false);
     }
@@ -120,7 +139,7 @@ export default function SecurityAccess() {
     <header className="security-workbench-heading"><h1>纵密访问通路</h1><p>配置纵密访问通路，检查电脑、DSP 与纵密装置之间的网络连接。</p></header>
     <div className="security-access-connection-bar">
       <Segmented value={mode} disabled={locked} onChange={value => { clearResult(); setMode(value as VerticalSecurityAccessMode); }} options={[{ value: 'direct', label: '101 口直连', icon: <UsbOutlined /> }, { value: 'remote', label: '平台远程', icon: <CloudOutlined /> }]} />
-      {mode === 'remote' && <Space.Compact className="security-access-device-picker"><Select id="security-access-device" aria-label="目标 DSP" value={deviceId} disabled={locked || !desktop} loading={loadingDevices} placeholder="选择平台设备" onChange={value => { clearResult(); setDeviceId(value); }} options={devices.map(device => ({ value: device.device_id, label: `${device.display_name || device.device_id} · ${device.online ? '在线' : '离线'}` }))} /><Button aria-label="刷新平台设备" icon={<ReloadOutlined />} disabled={locked || !desktop} loading={loadingDevices} onClick={() => void loadDevices()} /></Space.Compact>}
+      {mode === 'remote' && <Space.Compact className="security-access-device-picker"><Select id="security-access-device" aria-label="目标 DSP" value={deviceId} disabled={locked || !desktop || loadingDevices} loading={loadingDevices} placeholder="选择平台设备" notFoundContent="暂无有权限且在线的设备" onChange={value => { clearResult(); deviceIdRef.current = value; setDeviceId(value); }} options={devices.map(device => ({ value: device.device_id, label: `${device.display_name || device.device_id} · 在线` }))} /><Button aria-label="刷新平台设备" icon={<ReloadOutlined />} disabled={locked || !desktop} loading={loadingDevices} onClick={() => void loadDevices()} /></Space.Compact>}
     </div>
     <div className="security-access-columns">
       <Card title="访问路径" className="security-access-path"><ol>{path.map(([name, detail]) => <li key={name}><strong>{name}</strong><span>{detail}</span></li>)}</ol><dl><div><dt>访问范围</dt><dd>{mode === 'direct' ? '仅目标 IP，端口不限' : '上位机内部管理通路 · TCP 8888'}</dd></div><div><dt>回程</dt><dd>{mode === 'direct' ? '经 DSP 返回 101 口电脑' : '沿本次平台远程通道返回'}</dd></div><div><dt>接入网络</dt><dd>{mode === 'direct' ? '101 口网线直连' : '由 DSP 当前网络路由决定'}</dd></div></dl></Card>
