@@ -1,6 +1,7 @@
 //! 独立配置固定 101/108 纵密维护通路，并由专属服务在重启后恢复。
 use super::lower_update::{
-    execute_root_ssh_command, parse_upload_account, shell_quote, LowerUpdateSshAuthDto,
+    execute_root_ssh_command, resolve_update_target, shell_quote, LowerUpdateRemoteTargetDto,
+    LowerUpdateSshAuthDto,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::io::Write;
@@ -40,6 +41,8 @@ const PHASES: [(&str, &str, &str); 6] = [
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccessPathRequest {
+    #[serde(default)]
+    pub device_id: Option<String>,
     pub upload_account: String,
     #[serde(deserialize_with = "deserialize_auth")]
     pub auth: LowerUpdateSshAuthDto,
@@ -119,7 +122,25 @@ fn ssh_failure_result(error: &str) -> AccessPathResult {
         }
         return result;
     }
+    for reason in [
+        "远程设备 SSH 主机身份尚未信任，请先在远程终端核验并确认主机指纹",
+        "设备 SSH 主机密钥已变化，已拒绝更新；请先核实设备身份",
+        "远程设备 SSH 信任记录损坏，已拒绝更新",
+    ] {
+        if error == format!("SSH命令未完成（阶段：SSH连接）：{reason}") {
+            return not_started("DSP的SSH主机身份未通过核验，本次尚未执行访问通路配置。请先在远程终端核实设备身份并确认主机指纹；指纹变化时须核实原设备及信任记录。");
+        }
+    }
     unavailable("SSH 或 sudo 执行未成功返回，未确认远端操作是否开始或停止，DSP 可能保留部分配置；请核对连接凭据与当前网络")
+}
+
+fn not_started(message: &str) -> AccessPathResult {
+    let mut result = unavailable(message);
+    for step in &mut result.steps {
+        step.state = "pending";
+        step.message = "连接前置条件未满足，该阶段未执行".into();
+    }
+    result
 }
 
 fn installer_script() -> String {
@@ -311,9 +332,48 @@ fn parse_result(exit_code: Option<u32>, output: &str) -> AccessPathResult {
 
 #[tauri::command]
 pub async fn configure_vertical_security_access_path(
+    state: tauri::State<'_, crate::state::AppState>,
     request: AccessPathRequest,
 ) -> Result<AccessPathResult, String> {
-    let target = parse_upload_account(&request.upload_account)?;
+    let mut remote_generation = None;
+    let remote = if let Some(device_id) = &request.device_id {
+        if let Err(message) = validate_remote_path(device_id, &request.auth) {
+            return Ok(not_started(&format!("{message}；本次尚未执行访问通路配置")));
+        }
+        let (endpoint, _, generation) = match state.platform_auth.remote_credentials() {
+            Ok(credentials) => credentials,
+            Err(_) => {
+                return Ok(not_started(
+                    "平台尚未登录或登录已失效，本次尚未执行访问通路配置；请登录后重新选择DSP",
+                ))
+            }
+        };
+        remote_generation = Some(generation);
+        Some(LowerUpdateRemoteTargetDto {
+            endpoint,
+            device_id: device_id.clone(),
+        })
+    } else {
+        None
+    };
+    let target = match resolve_update_target(
+        &state,
+        &request.upload_account,
+        remote.as_ref(),
+        &request.auth,
+    )
+    .await {
+        Ok(target) => target,
+        Err(_) if remote.is_some() => return Ok(not_started("无法准备所选DSP的远程SSH连接，本次尚未执行访问通路配置。请检查平台登录、设备在线状态与SSH维护权限。")),
+        Err(error) => return Err(error),
+    };
+    if remote_generation
+        .is_some_and(|generation| !state.platform_auth.remote_generation_valid(generation))
+    {
+        return Ok(not_started(
+            "平台登录已切换，已停止通路配置；请重新选择设备",
+        ));
+    }
     let command = command()?;
     let Ok(_guard) = APPLY_LOCK.try_lock() else {
         return Ok(unavailable(
@@ -323,6 +383,7 @@ pub async fn configure_vertical_security_access_path(
     tracing::info!(
         operation = "vertical_security_access_path",
         phase = "start",
+        device_id = request.device_id.as_deref().unwrap_or("直连"),
         "开始配置纵密维护通路与开机恢复"
     );
     let result = tokio::time::timeout(
@@ -330,6 +391,11 @@ pub async fn configure_vertical_security_access_path(
         execute_root_ssh_command(&target, &request.auth, &request.sudo_password, &command),
     )
     .await;
+    if remote_generation
+        .is_some_and(|generation| !state.platform_auth.remote_generation_valid(generation))
+    {
+        return Ok(unavailable("平台登录已改变，无法确认原DSP配置结果；设备可能已经应用部分变更，请核对原设备实际网络状态"));
+    }
     let result = match result {
         Ok(Ok(output)) => parse_result(output.exit_code, &output.stdout),
         Ok(Err(error)) => ssh_failure_result(&error),
@@ -346,13 +412,70 @@ pub async fn configure_vertical_security_access_path(
     Ok(result)
 }
 
+fn validate_remote_path(device_id: &str, auth: &LowerUpdateSshAuthDto) -> Result<(), String> {
+    if device_id.trim().is_empty() || device_id.len() > 256 {
+        return Err("请选择有效的平台DSP设备".into());
+    }
+    if !matches!(auth, LowerUpdateSshAuthDto::Password { .. }) {
+        return Err(
+            "平台远程配置通路仅支持SSH密码认证；首次访问请先在远程终端确认设备主机指纹".into(),
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
+    // 远程目标必须显式绑定设备，缺省请求仍保留直连兼容。
+    #[test]
+    fn remote_path_request_binds_device_without_changing_direct_requests() {
+        let direct: AccessPathRequest = serde_json::from_value(valid_request()).unwrap();
+        assert!(direct.device_id.is_none());
+        let mut remote = valid_request();
+        remote["device_id"] = json!("field-original");
+        let request: AccessPathRequest = serde_json::from_value(remote).unwrap();
+        assert_eq!(request.device_id.as_deref(), Some("field-original"));
+    }
+
+    // 远程请求不允许使用空设备或证书认证进入SSH连接阶段。
+    #[test]
+    fn remote_path_rejects_empty_device_and_certificate() {
+        assert!(validate_remote_path(
+            "",
+            &LowerUpdateSshAuthDto::Password {
+                password: "test".into()
+            }
+        )
+        .is_err());
+        assert!(validate_remote_path("field", &LowerUpdateSshAuthDto::Certificate).is_err());
+        assert!(validate_remote_path(
+            "field",
+            &LowerUpdateSshAuthDto::Password {
+                password: "test".into()
+            }
+        )
+        .is_ok());
+    }
+
     fn valid_request() -> serde_json::Value {
         json!({"upload_account":"fixture@192.0.2.5:22", "auth":{"method":"password","password":"fixture"}, "sudo_password":"fixture"})
+    }
+
+    // 固定本机主机身份拒绝发生在命令发送前，明确未执行且不透传异常细节。
+    #[test]
+    fn remote_host_trust_rejection_reports_not_started() {
+        let error = "SSH命令未完成（阶段：SSH连接）：远程设备 SSH 主机身份尚未信任，请先在远程终端核验并确认主机指纹";
+        let result = ssh_failure_result(error);
+        assert!(!result.applied);
+        assert!(result.steps.iter().all(|step| step.state == "pending"));
+        assert!(result.message.contains("远程终端"));
+        assert!(ssh_failure_result(&format!("{error} secret-output"))
+            .steps
+            .iter()
+            .all(|step| step.state == "unknown"));
     }
 
     // 明确的密码认证拒绝发生在命令发送前，全部配置阶段都应标为未执行。

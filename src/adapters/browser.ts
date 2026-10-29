@@ -2068,7 +2068,7 @@ export const browserApi: typeof tauriApi = {
   },
   getVerticalSecurityAccessCapabilities: async (): Promise<VerticalSecurityAccessCapabilities> => ({
     remote_ip_available: false,
-    remote_ip_reason: '远程网络通道待接入；当前版本尚未提供到纵密目标 IP 的网络访问。',
+    remote_ip_reason: '浏览器模式不能检测平台远程通路，请使用桌面版上位机。',
   }),
   checkVerticalSecurityAccess: async (request: VerticalSecurityAccessRequest): Promise<VerticalSecurityAccessResult> => ({
     mode: request.mode,
@@ -2082,7 +2082,7 @@ export const browserApi: typeof tauriApi = {
       name: request.mode === 'remote' ? '网络访问连接' : '电脑网络',
       state: 'unsupported',
       message: request.mode === 'remote'
-        ? '远程网络通道待接入，平台在线或 SSH 可达不代表纵密网络访问已建立。'
+        ? '浏览器模式不能检测平台远程通路，平台在线或 SSH 可达不代表纵密管理通路可用。'
         : '浏览器开发模式不能检查本机网络，请在 Windows 桌面版中执行直连检查。',
     }],
   }),

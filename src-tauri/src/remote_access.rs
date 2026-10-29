@@ -230,6 +230,51 @@ impl RemoteConnection {
             .connect()
             .await?)
     }
+
+    /// 仅供纵密探测：等待下位机固定目标TCP真正就绪后才返回内部流。
+    pub(crate) async fn vertical_security_socket(&self) -> Result<TcpStream> {
+        if !self.active() {
+            bail!("平台远程连接已失效");
+        }
+        let (_, token, generation) = self.auth.remote_credentials().map_err(|e| anyhow!(e))?;
+        if generation != self.generation {
+            bail!("平台登录已切换");
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let socket = TcpStream::connect(listener.local_addr()?).await?;
+        let (peer, _) = listener.accept().await?;
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let endpoint = self.endpoint.clone();
+        let device_id = self.device.device_id.clone();
+        let canceled = self.subscribe();
+        let task = tokio::spawn(async move {
+            tokio::select! {
+                _ = wait_canceled(canceled) => {},
+                result = tunnel_with_ready(peer, &endpoint, &token, &device_id, "vertical-security", Some(ready_tx)) => {
+                    if let Err(error) = result { tracing::warn!(device_id, %error, "纵密远程探测通道关闭"); }
+                }
+            }
+        });
+        struct PendingProbe(Option<tokio::task::JoinHandle<()>>);
+        impl Drop for PendingProbe {
+            fn drop(&mut self) {
+                if let Some(task) = self.0.take() {
+                    task.abort();
+                }
+            }
+        }
+        let mut pending = PendingProbe(Some(task));
+        // 未取得就绪确认时释放任务；调用方连接守卫负责探测结束和取消时清理。
+        match timeout(OPEN_TIMEOUT, ready_rx).await {
+            Ok(Ok(())) if self.active() => {
+                pending.0.take();
+                Ok(socket)
+            }
+            _ => {
+                bail!("远程通道未就绪；请检查平台授权、DSP在线状态及DSP到纵密管理端口的连接");
+            }
+        }
+    }
 }
 
 fn frame(payload: Payload) -> TunnelFrame {
@@ -250,6 +295,17 @@ pub(crate) async fn tunnel(
     token: &str,
     device_id: &str,
     service: &str,
+) -> Result<()> {
+    tunnel_with_ready(socket, endpoint, token, device_id, service, None).await
+}
+
+async fn tunnel_with_ready(
+    socket: TcpStream,
+    endpoint: &str,
+    token: &str,
+    device_id: &str,
+    service: &str,
+    ready: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Result<()> {
     let (tx, rx) = mpsc::channel(8);
     send(
@@ -276,6 +332,9 @@ pub(crate) async fn tunnel(
     })
     .await
     .map_err(|_| anyhow!("等待远程服务超时"))??;
+    if let Some(ready) = ready {
+        let _ = ready.send(());
+    }
     let (mut read, mut write) = socket.into_split();
     let (half_tx, mut half_rx) = tokio::sync::oneshot::channel();
     let sender = async {
@@ -295,7 +354,10 @@ pub(crate) async fn tunnel(
         let mut half_tx = Some(half_tx);
         loop {
             let message = inbound.message().await?;
-            if message.as_ref().is_some_and(|frame| frame.payload.is_none()) {
+            if message
+                .as_ref()
+                .is_some_and(|frame| frame.payload.is_none())
+            {
                 bail!("隧道帧缺少内容");
             }
             match message.and_then(|f| f.payload) {

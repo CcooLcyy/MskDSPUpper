@@ -160,7 +160,7 @@ try {
   await page.getByLabel('纵密用户名', { exact: true }).waitFor();
   await page.waitForFunction(() => window.__securityNavigationMock.calls.some(call => call.command === 'get_vertical_security_certificate_profile'));
   assert.equal(await page.getByRole('heading', { name: '网络连接检查', exact: true }).count(), 0);
-  assert.equal(await page.getByRole('button', { name: /检查直连|建立访问连接|配置纵密访问通路/ }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: /检查直连|检查远程通路|配置纵密访问通路/ }).count(), 0);
   assert.equal((await calls()).some(call => /^(get_vertical_security_access_capabilities|check_vertical_security_access|configure_vertical_security_access_path)$/.test(call.command)), false);
   await capture('login');
   results.push('登录子页真实表单、选中状态及标题正确，不挂载或加载网络检查和通路配置');

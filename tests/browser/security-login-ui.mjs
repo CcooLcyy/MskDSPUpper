@@ -93,7 +93,7 @@ async function openFixture(options = {}) {
   await page.getByRole('button', { name: /登录纵密/ }).waitFor({ timeout: 45000 });
   await page.waitForFunction(() => window.__securityLoginMock.calls.some(call => call.command === 'get_vertical_security_certificate_profile'));
   assert.equal((await page.evaluate(() => window.__securityLoginMock.calls)).some(call => /^(get_vertical_security_access_capabilities|check_vertical_security_access|configure_vertical_security_access_path)$/.test(call.command)), false, '登录页不加载网络检查能力、不检查或配置访问通路');
-  assert.equal(await page.getByRole('button', { name: /检查直连|建立访问连接|配置纵密访问通路/ }).count(), 0, '登录页不显示网络检查或访问通路配置');
+  assert.equal(await page.getByRole('button', { name: /检查直连|检查远程通路|配置纵密访问通路/ }).count(), 0, '登录页不显示网络检查或访问通路配置');
   assert.equal(await page.getByRole('heading', { name: '网络连接检查', exact: true }).count(), 0);
   await page.getByRole('heading', { name: '纵密登录', level: 1, exact: true }).waitFor();
   assert.equal(await page.getByRole('heading', { level: 1 }).count(), 1, '独立登录页只有一个主标题');

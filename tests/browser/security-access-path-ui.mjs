@@ -57,11 +57,12 @@ async function openFixture(options = {}) {
       transformCallback: () => ++callback, unregisterCallback: () => {},
       invoke: async (command, args) => {
         mock.calls.push({ command, args });
-        if (command === 'get_vertical_security_access_capabilities') return { remote_ip_available: false, remote_ip_reason: '远程网络通道待接入（fixture）' };
-        if (command === 'remote_list_devices') return [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true }];
+        if (command === 'get_vertical_security_access_capabilities') return { remote_ip_available: initial.remoteAvailable === true, remote_ip_reason: '远程网络通道待接入（fixture）' };
+        if (command === 'remote_list_devices') return [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true, allow_ssh: true, services: ['ssh', 'vertical-security'] }, { device_id: 'fixture-no-access', display_name: '无维护权限 DSP', online: true, allow_ssh: false, services: [] }];
         if (command === 'get_vertical_security_login_capabilities') return { direct_available: true, remote_available: false, password_change_available: false, reason: '虚构 TLS 能力，仅用于 UI 测试' };
         if (command === 'get_vertical_security_certificate_profile') { if (mock.profileFailure) throw new Error('fixture profile failure'); return profile(); }
         if (command === 'configure_vertical_security_access_path') return new Promise((resolve, reject) => { mock.pathResolve = resolve; mock.pathReject = reject; });
+        if (command === 'check_vertical_security_access') return new Promise(resolve => { mock.checkResolve = resolve; });
         if (command === 'use_builtin_vertical_security_certificates') {
           if (mock.builtinError) throw new Error('fixture certificate mode failure');
           const apply = () => { mock.source = 'builtin'; mock.builtinMode = args?.request?.mode || 'auto'; return profile(); };
@@ -225,11 +226,45 @@ try {
     assert.equal(await dialog().getByLabel('访问通路独立 sudo 密码', { exact: true }).inputValue(), '');
     await resolvePath();
   });
-  await check('远程模式不把平台DSP选择冒充SSH配置目标', async () => {
+  await check('远程未选择设备时禁止配置且不自动执行', async () => {
     await openFixture(); await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
     assert.equal(await page.getByRole('button', { name: /配置纵密访问通路/ }).isDisabled(), true);
-    await page.getByText('访问通路配置当前仅支持 SSH 直连。', { exact: true }).waitFor();
     assert.equal((await calls('configure_vertical_security_access_path')).length, 0);
+  });
+  await check('远程配置绑定所选DSP，经手动应用后另行检测管理通路', async () => {
+    await openFixture({ remoteAvailable: true });
+    await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
+    await page.getByRole('combobox', { name: '目标 DSP', exact: true }).click();
+    await page.getByText('测试 DSP · 在线', { exact: true }).click();
+    await openPath();
+    await dialog().getByText('目标 DSP：测试 DSP', { exact: true }).waitFor();
+    assert.equal(await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).count(), 0, '远程模式只输入设备SSH用户名，不输入现场主机地址');
+    await dialog().getByLabel('访问通路 SSH 用户名', { exact: true }).fill('fixture');
+    assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '', '远程目标不得预填真机密码');
+    await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).fill('fixture-remote-secret');
+    await dialog().getByRole('button', { name: '应用访问通路', exact: true }).click();
+    await page.waitForFunction(() => Boolean(window.__securityPathMock.pathResolve));
+    assert.deepEqual((await calls('configure_vertical_security_access_path'))[0].args.request, { upload_account: 'fixture@remote:22', device_id: 'fixture-dsp', auth: { method: 'password', password: 'fixture-remote-secret' }, sudo_password: 'fixture-remote-secret' });
+    assert.equal(await page.getByRole('combobox', { name: '目标 DSP', exact: true }).isDisabled(), true);
+    assert.equal(await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).inputValue(), '');
+    await resolvePath();
+    await dialog().getByText('访问通路已应用', { exact: true }).waitFor();
+    assert.equal((await calls('check_vertical_security_access')).length, 0, '配置成功不自动检测');
+    await dialog().getByRole('button', { name: /关\s*闭/ }).click();
+    await page.getByRole('button', { name: /检查远程通路/ }).click();
+    await page.waitForFunction(() => Boolean(window.__securityPathMock.checkResolve));
+    assert.deepEqual((await calls('check_vertical_security_access'))[0].args.request, { mode: 'remote', device_id: 'fixture-dsp' });
+    await page.evaluate(() => window.__securityPathMock.checkResolve({ mode: 'remote', target_ip: '11.22.33.44', device_id: 'fixture-dsp', state: 'ready', session_id: null, checked_at_ms: Date.now(), steps: ['platform-device', 'remote-channel', 'management-tcp', 'management-tls'].map(id => ({ id, name: id, state: 'success', message: 'fixture 真实阶段的模拟结果' })) }));
+    await page.getByText('远程管理通路检查通过', { exact: true }).waitFor();
+    assert.equal(await page.getByText('纵密网络访问已建立', { exact: true }).count(), 0, '只读探测不能声称建立持久网络');
+    assert.equal((await calls('login_vertical_security')).length, 0, '通路检测不登录纵密');
+    await page.screenshot({ path: path.join(output, 'remote-access-result.png'), fullPage: true });
+    await page.getByRole('combobox', { name: '目标 DSP', exact: true }).click();
+    await page.getByText('无维护权限 DSP · 在线', { exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: /配置纵密访问通路/ }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: /检查远程通路/ }).isDisabled(), true);
+    assert.equal(await page.getByText('远程管理通路检查通过', { exact: true }).count(), 0, '切换DSP必须失效旧结果');
+    assert.equal((await calls('remote_select_device')).length, 0, '不改其他业务页面的全局目标');
   });
   await check('高级自定义证书可显式恢复内置，恢复时清口令', async () => {
     await openFixture({ view: 'login', source: 'custom' });

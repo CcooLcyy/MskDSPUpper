@@ -136,6 +136,32 @@ fn device() -> RemoteDevice {
     }
 }
 
+// 固定纵密探测必须等平台Ready，非法首帧不能被环回连接误报为成功。
+#[tokio::test]
+async fn vertical_probe_socket_waits_for_actual_ready_and_rejects_invalid_first_frame() {
+    for mode in [0, 4] {
+        let (endpoint, _, _server) = platform(mode).await;
+        let auth = Arc::new(PlatformAuthManager::test_session(endpoint));
+        let remote = RemoteConnection::new(device(), auth).unwrap();
+        let result = timeout(Duration::from_secs(3), remote.vertical_security_socket())
+            .await
+            .unwrap();
+        assert_eq!(result.is_ok(), mode == 0);
+        remote.cancel();
+    }
+}
+
+// 注销或主动取消后不得创建新的纵密探测连接。
+#[tokio::test]
+async fn vertical_probe_rejects_canceled_connection() {
+    let auth = Arc::new(PlatformAuthManager::test_session(
+        "http://127.0.0.1:1".into(),
+    ));
+    let remote = RemoteConnection::new(device(), auth).unwrap();
+    remote.cancel();
+    assert!(remote.vertical_security_socket().await.is_err());
+}
+
 #[test]
 fn remote_control_uses_existing_http_endpoint_and_rejects_other_schemes_or_invalid_urls() {
     for endpoint in [

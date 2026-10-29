@@ -860,6 +860,13 @@ impl ManagementError {
 async fn connect_management(
     profile: Arc<LoadedProfile>,
 ) -> Result<ManagementConnection, ManagementError> {
+    connect_management_via(profile, None).await
+}
+
+async fn connect_management_via(
+    profile: Arc<LoadedProfile>,
+    remote: Option<&crate::remote_access::RemoteConnection>,
+) -> Result<ManagementConnection, ManagementError> {
     let Ok(now) = current_unix_time() else {
         return Err(ManagementError::profile(
             "certificate_time_invalid",
@@ -893,7 +900,13 @@ async fn connect_management(
             let outcome = async {
             let stream = tokio::time::timeout(
                 Duration::from_secs(10),
-                tokio::net::TcpStream::connect((TARGET_IP, TARGET_PORT)),
+                async {
+                    if let Some(remote) = remote {
+                        remote.vertical_security_socket().await.map_err(std::io::Error::other)
+                    } else {
+                        tokio::net::TcpStream::connect((TARGET_IP, TARGET_PORT)).await
+                    }
+                },
             )
             .await
             .map_err(|_| TlsAttemptError::ConnectionTimeout(None))?
@@ -931,13 +944,20 @@ async fn connect_management(
 pub(super) async fn probe_management_connection(
     manager: &SecurityLoginManager,
 ) -> Result<(), ManagementError> {
+    probe_management_connection_via(manager, None).await
+}
+
+pub(super) async fn probe_management_connection_via(
+    manager: &SecurityLoginManager,
+    remote: Option<&crate::remote_access::RemoteConnection>,
+) -> Result<(), ManagementError> {
     run_management_probe(manager, || async {
         let profile = initialize_builtin_profile(manager, false, BuiltinMode::Auto)
             .await
             .map_err(|message| {
                 ManagementError::profile("certificate_configuration_failed", &message)
             })?;
-        let connection = connect_management(profile.clone()).await?;
+        let connection = connect_management_via(profile.clone(), remote).await?;
         if !manager
             .inner
             .lock()

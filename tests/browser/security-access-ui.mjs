@@ -145,7 +145,7 @@ try {
   const combo = page.getByRole('combobox', { name: '目标 DSP', exact: true });
   await combo.click();
   await page.getByText('测试 DSP · 在线', { exact: true }).click();
-  assert.equal(await page.getByRole('button', { name: /建立访问连接/ }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: /检查远程通路/ }).isDisabled(), true);
   const calls = await page.evaluate(() => window.__securityMock.calls);
   assert.equal(calls.some(call => call.command === 'remote_select_device'), false, '独立页面不得修改全局业务目标');
   assert.equal(calls.filter(call => call.command === 'check_vertical_security_access').every(call => call.args.request.mode === 'direct'), true);

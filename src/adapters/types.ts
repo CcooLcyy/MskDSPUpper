@@ -317,6 +317,7 @@ export interface VerticalSecurityCertificateRequest {
 }
 
 export interface VerticalSecurityAccessPathRequest {
+  device_id?: string;
   upload_account: string;
   auth: LowerUpdateSshAuth;
   sudo_password: string;

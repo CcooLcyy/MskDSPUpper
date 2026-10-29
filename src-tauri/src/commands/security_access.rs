@@ -1,11 +1,14 @@
-//! 纵密访问检查只读本机网络并探测固定目标，不创建网络通道。
-use super::security_login::{probe_management_connection, ManagementError, SecurityLoginManager};
+//! 纵密访问检查探测固定目标；远程通道仅供内部探测并在结束时释放。
+use super::security_login::{
+    probe_management_connection, probe_management_connection_via, ManagementError,
+    SecurityLoginManager,
+};
+use crate::remote_access::{self, RemoteConnection, RemoteDevice};
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 
 const TARGET_IP: &str = "11.22.33.44";
-const REMOTE_REASON: &str =
-    "远程网络通道待接入，请等待后续网络通道方案；平台在线或 SSH 可达不代表纵密可访问";
+const REMOTE_REASON: &str = "通过平台探测所选DSP的纵密管理服务；平台在线不代表纵密可达";
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -249,7 +252,7 @@ fn unavailable_result(
 #[tauri::command]
 pub fn get_vertical_security_access_capabilities() -> AccessCapabilities {
     AccessCapabilities {
-        remote_ip_available: false,
+        remote_ip_available: true,
         remote_ip_reason: REMOTE_REASON,
     }
 }
@@ -259,7 +262,191 @@ pub async fn check_vertical_security_access(
     state: tauri::State<'_, AppState>,
     request: AccessRequest,
 ) -> Result<AccessResult, String> {
+    if matches!(request.mode, AccessMode::Remote) {
+        return Ok(check_remote_access(&state, request.device_id).await);
+    }
     check_access(&state.security_login, request).await
+}
+
+fn validate_remote_device(device: &RemoteDevice) -> Result<(), &'static str> {
+    if !device.online {
+        return Err("所选DSP当前离线");
+    }
+    if !device.allow_ssh {
+        return Err("所选DSP未授权SSH维护访问");
+    }
+    if !device
+        .services
+        .iter()
+        .any(|service| service == "vertical-security")
+    {
+        return Err("所选DSP未提供纵密管理服务，请检查下位机版本和平台维护能力配置");
+    }
+    Ok(())
+}
+
+fn remote_result(device_id: Option<String>) -> AccessResult {
+    AccessResult {
+        mode: AccessMode::Remote,
+        target_ip: TARGET_IP,
+        device_id,
+        state: "failed",
+        session_id: None,
+        checked_at_ms: checked_at_ms(),
+        steps: vec![
+            step(
+                "platform-device",
+                "平台设备",
+                "success",
+                "所选DSP已在线并获维护服务授权",
+            ),
+            step(
+                "remote-channel",
+                "远程管理通道",
+                "unsupported",
+                "尚未取得下位机固定目标连接就绪确认",
+            ),
+            step(
+                "management-tcp",
+                "管理端口 TCP 8888",
+                "unsupported",
+                "尚未检查管理端口",
+            ),
+            step(
+                "management-tls",
+                "管理连接 TLS",
+                "unsupported",
+                "尚未检查证书握手",
+            ),
+        ],
+    }
+}
+
+fn remote_management_result(
+    mut result: AccessResult,
+    outcome: Result<(), ManagementError>,
+) -> AccessResult {
+    let tcp_connected = outcome
+        .as_ref()
+        .map_or_else(|error| error.tcp_connected, |_| true);
+    if tcp_connected {
+        result.steps[1] = step(
+            "remote-channel",
+            "远程管理通道",
+            "success",
+            "平台及下位机已确认固定纵密目标TCP连接就绪",
+        );
+        result.steps[2] = step(
+            "management-tcp",
+            "管理端口 TCP 8888",
+            "success",
+            "纵密管理端口接受连接",
+        );
+    }
+    match outcome {
+        Ok(()) => {
+            result.state = "ready";
+            result.steps[3] = step(
+                "management-tls",
+                "管理连接 TLS",
+                "success",
+                "已完成证书握手；未发送账号，探测连接已释放",
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                code = error.code,
+                tcp_connected,
+                "纵密远程管理连接检查失败，未发送账号"
+            );
+            if error.step_index == 1 {
+                result.steps[3] = step("management-tls", "管理连接 TLS", "failed", &error.message);
+            } else {
+                result.steps[1] = step("remote-channel", "远程管理通道", "failed", "远程通道未取得固定目标TCP就绪确认，请检查平台连接、授权及DSP到纵密管理端口的访问");
+            }
+        }
+    }
+    result.checked_at_ms = checked_at_ms();
+    result
+}
+
+fn prepare_remote_connection(
+    auth: std::sync::Arc<crate::platform_auth::PlatformAuthManager>,
+    endpoint: &str,
+    generation: u64,
+    device: RemoteDevice,
+) -> Result<std::sync::Arc<RemoteConnection>, &'static str> {
+    if !auth.remote_generation_valid(generation) {
+        return Err("平台登录已切换，请刷新所选设备后重新检查");
+    }
+    let connection =
+        RemoteConnection::new(device, auth.clone()).map_err(|_| "平台登录已失效，请重新登录")?;
+    if connection.endpoint != endpoint || !auth.remote_generation_valid(generation) {
+        connection.cancel();
+        return Err("平台登录已切换，请刷新所选设备后重新检查");
+    }
+    Ok(connection)
+}
+
+async fn check_remote_access(state: &AppState, device_id: Option<String>) -> AccessResult {
+    let mut result = remote_result(device_id.clone());
+    let preparation = async {
+        let (endpoint, _, generation) = state
+            .platform_auth
+            .remote_credentials()
+            .map_err(|_| "平台登录已失效，请重新登录")?;
+        let id = device_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty() && id.len() <= 256)
+            .ok_or("请选择平台DSP设备")?;
+        let device = remote_access::list_devices(&state.platform_auth)
+            .await
+            .map_err(|_| "无法读取当前平台设备及授权，请检查平台登录和网络")?
+            .into_iter()
+            .find(|device| device.device_id == id)
+            .ok_or("所选DSP不可访问或已撤权")?;
+        validate_remote_device(&device)?;
+        prepare_remote_connection(state.platform_auth.clone(), &endpoint, generation, device)
+    }
+    .await;
+    let connection = match preparation {
+        Ok(connection) => connection,
+        Err(message) => {
+            result.steps[0] = step("platform-device", "平台设备", "failed", message);
+            tracing::warn!(reason = message, "纵密远程设备前置检查失败");
+            return result;
+        }
+    };
+    // 包括请求取消和未来分支在内，均主动清理内部探测连接。
+    struct ProbeGuard(std::sync::Arc<RemoteConnection>);
+    impl Drop for ProbeGuard {
+        fn drop(&mut self) {
+            self.0.cancel();
+        }
+    }
+    let _guard = ProbeGuard(connection.clone());
+    tracing::info!(
+        device_id = connection.device.device_id,
+        "开始纵密远程只读检查"
+    );
+    let outcome = tokio::select! {
+        biased;
+        _ = remote_access::wait_canceled(connection.subscribe()) => {
+            result.steps[0] = step("platform-device", "平台设备", "failed", "平台登录或远程连接已改变，请重新检查");
+            return result;
+        }
+        outcome = probe_management_connection_via(&state.security_login, Some(&connection)) => outcome,
+    };
+    if !connection.active() {
+        result.steps[0] = step(
+            "platform-device",
+            "平台设备",
+            "failed",
+            "平台登录或远程连接已改变，请重新检查",
+        );
+        return result;
+    }
+    remote_management_result(result, outcome)
 }
 
 async fn check_access(
@@ -267,12 +454,12 @@ async fn check_access(
     request: AccessRequest,
 ) -> Result<AccessResult, String> {
     if matches!(request.mode, AccessMode::Remote) {
-        tracing::info!("纵密远程访问检查：网络通道尚未接入");
+        tracing::warn!("纵密远程检查必须提供平台状态");
         return Ok(unavailable_result(
             request.mode,
             request.device_id,
             "unsupported",
-            REMOTE_REASON,
+            "远程检查需要当前平台登录状态",
         ));
     }
     tracing::info!("开始纵密直连只读检查，目标固定为 11.22.33.44");
@@ -351,6 +538,75 @@ pub async fn close_vertical_security_access(session_id: String) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 列表请求期间退出平台后，迟到的同名设备记录不能创建新平台连接。
+    #[tokio::test]
+    async fn security_access_remote_stale_device_list_cannot_cross_platform_generation() {
+        let auth = std::sync::Arc::new(crate::platform_auth::PlatformAuthManager::test_session(
+            "http://127.0.0.1:1".into(),
+        ));
+        let (endpoint, _, generation) = auth.remote_credentials().unwrap();
+        let device = RemoteDevice {
+            device_id: "same-id".into(),
+            display_name: "旧平台设备".into(),
+            online: true,
+            allow_grpc: true,
+            allow_ssh: true,
+            services: vec!["vertical-security".into()],
+            agent_version: "test".into(),
+        };
+        assert!(prepare_remote_connection(
+            auth.clone(),
+            "http://127.0.0.1:2",
+            generation,
+            device.clone()
+        )
+        .is_err());
+        auth.logout().await.unwrap();
+        assert!(prepare_remote_connection(auth, &endpoint, generation, device).is_err());
+    }
+
+    // 远程检测必须同时具有在线设备、SSH维护权限和专用服务。
+    #[test]
+    fn security_access_remote_requires_fixed_service_and_maintenance_permission() {
+        let mut device = crate::remote_access::RemoteDevice {
+            device_id: "field".into(),
+            display_name: "现场".into(),
+            online: true,
+            allow_grpc: true,
+            allow_ssh: true,
+            services: vec!["vertical-security".into()],
+            agent_version: "test".into(),
+        };
+        assert!(validate_remote_device(&device).is_ok());
+        device.allow_ssh = false;
+        assert!(validate_remote_device(&device).is_err());
+        device.allow_ssh = true;
+        device.services = vec!["ssh".into()];
+        assert!(validate_remote_device(&device).is_err());
+        device.services.push("vertical-security".into());
+        device.online = false;
+        assert!(validate_remote_device(&device).is_err());
+    }
+
+    // TLS失败只有在远端实际TCP已就绪时才可报告远程通道与端口通过。
+    #[test]
+    fn security_access_remote_tls_failure_keeps_real_tcp_evidence() {
+        let result = remote_management_result(
+            remote_result(Some("field".into())),
+            Err(ManagementError {
+                tcp_connected: true,
+                step_index: 1,
+                code: "tls_timeout",
+                message: "证书握手超时".into(),
+            }),
+        );
+        assert_eq!(result.steps[1].state, "success");
+        assert_eq!(result.steps[2].state, "success");
+        assert_eq!(result.steps[3].state, "failed");
+        assert_eq!(result.state, "failed");
+        assert!(result.session_id.is_none());
+    }
 
     // ping 成功只代表网络诊断通过，不能独立判定管理连接可用。
     #[test]
@@ -527,7 +783,8 @@ mod tests {
         assert_eq!(result.device_id.as_deref(), Some("device-1"));
         assert!(result.session_id.is_none());
         assert!(result.steps.iter().all(|step| step.state == "unsupported"));
-        assert!(!get_vertical_security_access_capabilities().remote_ip_available);
+        // 桌面版本现在支持远程内部检查；脱离平台状态的私有直连入口仍不能伪造成功。
+        assert!(get_vertical_security_access_capabilities().remote_ip_available);
         assert!(close_vertical_security_access("unknown".into())
             .await
             .is_err());
