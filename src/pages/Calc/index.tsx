@@ -1,6 +1,6 @@
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { UNSAFE_DataRouterContext } from 'react-router-dom';
-import { Alert, Button, Card, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography, message } from 'antd';
+import { App, Alert, Button, Card, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, EditOutlined, MoreOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { api } from '../../adapters';
@@ -37,6 +37,7 @@ async function loadPointOptions(): Promise<{ options: PointOption[]; warning: st
 }
 
 const CalcPage: React.FC = () => {
+  const { modal } = App.useApp();
   const dataRouter = useContext(UNSAFE_DataRouterContext);
   const [messageApi, contextHolder] = message.useMessage();
   const [groups, setGroups] = useState<CalcGroupInfo[]>([]);
@@ -87,7 +88,7 @@ const CalcPage: React.FC = () => {
   const guard = (action: () => void) => {
     if (busyRef.current) return;
     if (pending) { messageApi.warning('请先完成待重试的路由同步或恢复运行'); return; }
-    if (dirty) Modal.confirm({ title: '放弃未保存修改？', content: '当前计算与点位关联尚未保存。', okText: '放弃修改', cancelText: '继续编辑', onOk: action });
+    if (dirty) modal.confirm({ title: '放弃未保存修改？', content: '当前计算与点位关联尚未保存。', okText: '放弃修改', cancelText: '继续编辑', onOk: action });
     else action();
   };
   const begin = () => { if (busyRef.current) return false; busyRef.current = true; setBusy(true); return true; };
@@ -147,7 +148,7 @@ const CalcPage: React.FC = () => {
     try { await retryCalcRoutes(pending, api); setPending(null); setEditor(null); await refresh(); messageApi.success('计算与关联同步完成'); }
     catch (error) { handleSaveError(error); } finally { end(); }
   };
-  const reloadPending = () => Modal.confirm({
+  const reloadPending = () => modal.confirm({
     title: '放弃旧重试计划并重新加载？',
     content: '计算配置可能已保存，部分路由可能已同步。重新加载将放弃当前草稿和旧重试计划，读取当前实际配置供你重新检查；不会修改设备配置或运行状态。',
     okText: '放弃并重新加载', cancelText: '继续处理',
@@ -173,7 +174,7 @@ const CalcPage: React.FC = () => {
   });
   const closeGroup = () => {
     if (busyRef.current) return;
-    if (groupDirty) Modal.confirm({ title: '放弃未保存的分组修改？', okText: '放弃修改', cancelText: '继续编辑', onOk: () => setGroupDraft(null) });
+    if (groupDirty) modal.confirm({ title: '放弃未保存的分组修改？', okText: '放弃修改', cancelText: '继续编辑', onOk: () => setGroupDraft(null) });
     else setGroupDraft(null);
   };
   const saveGroup = async () => {
@@ -266,7 +267,7 @@ const CalcPage: React.FC = () => {
     { title: '运算摘要', key: 'formula', render: (_, item) => <div className="calc-item-summary"><Text>{operators.find((operator) => operator.value === item.operator_kind)?.label ?? '未知运算'}</Text><Text type="secondary" ellipsis={{ tooltip: formula(draftFromItem(groupName ?? '', item, routes)) }}>{formula(draftFromItem(groupName ?? '', item, routes))}</Text></div> },
     { title: '结果去向', key: 'output', width: '20%', responsive: ['lg'], render: (_, item) => { const outputs = draftFromItem(groupName ?? '', item, routes).outputs; return <Text type="secondary" ellipsis={{ tooltip: outputs.map(endpointLabel).join('；') }}>{outputs.length ? outputs.length === 1 ? endpointLabel(outputs[0]) : `${outputs.length} 个关联目标` : '仅生成结果点'}</Text>; } },
     { title: '状态', key: 'state', width: 100, render: (_, item) => itemStatus(item) },
-    { title: '操作', key: 'actions', width: 120, render: (_, item, index) => <Space size={4}><Button size="small" disabled={locked || loading} onClick={() => guard(() => { if (editor?.index === index) setEditor(null); else void openEditor(index); })}>{editor?.index === index ? '收起' : '编辑'}</Button><Button size="small" danger aria-label={`删除${item.item_name}`} disabled={locked || loading} icon={<DeleteOutlined />} onClick={() => guard(() => Modal.confirm({ title: '删除计算项及相关路由？', content: item.item_name, okText: '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteItem(item) }))} /></Space> },
+    { title: '操作', key: 'actions', width: 120, render: (_, item, index) => <Space size={4}><Button size="small" disabled={locked || loading} onClick={() => guard(() => { if (editor?.index === index) setEditor(null); else void openEditor(index); })}>{editor?.index === index ? '收起' : '编辑'}</Button><Button size="small" danger aria-label={`删除${item.item_name}`} disabled={locked || loading} icon={<DeleteOutlined />} onClick={() => guard(() => modal.confirm({ title: '删除计算项及相关路由？', content: item.item_name, okText: '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteItem(item) }))} /></Space> },
   ];
   const state = groupStates[group?.state ?? 0] ?? groupStates[0];
   return <div className="calc-page">
@@ -277,7 +278,7 @@ const CalcPage: React.FC = () => {
     {catalogWarning ? <Alert type="warning" showIcon title={catalogWarning} /> : null}
     {pending ? <Alert type="warning" showIcon title={pending.phase === 'restart' ? '计算与关联已保存，恢复分组运行失败' : '计算已保存，路由同步失败'} description={formatErrorText(pending)} action={<Space wrap><Button disabled={busy} onClick={reloadPending}>重新加载当前配置</Button><Button loading={busy} onClick={() => void retry()}>{pending.phase === 'restart' ? '重试恢复运行' : '重试路由同步'}</Button></Space>} /> : null}
     <div className="calc-group-toolbar"><Space wrap><Select aria-label="计算分组" placeholder="请选择计算分组" className="calc-group-select" value={groupName} disabled={locked || loading} options={groups.map((value) => ({ value: value.config?.group_name, label: value.config?.group_name }))} onChange={(name: string) => guard(() => { setEditor(null); setGroupName(name); })} />{config ? <><Tag color={state.color}>{state.label}</Tag><Text type="secondary">{config.trigger_mode === 2 ? `每 ${config.period_ms} ms 计算` : '输入变化时计算'} · {config.items.length} 项</Text></> : null}</Space>
-      {config ? <Space wrap><Button type="primary" disabled={locked || loading} icon={<PlusOutlined />} onClick={() => guard(() => { void openEditor(null); })}>新增计算项</Button><Button disabled={locked} icon={group?.state === 2 ? <PauseCircleOutlined /> : <PlayCircleOutlined />} onClick={() => guard(() => { setEditor(null); void toggleGroup(); })}>{group?.state === 2 ? '停止分组' : '启动分组'}</Button><Dropdown disabled={locked} trigger={['click']} menu={{ items: [{ key: 'edit', label: '编辑分组', icon: <EditOutlined /> }, { key: 'delete', label: '删除分组', danger: true, icon: <DeleteOutlined /> }], onClick: ({ key }) => key === 'edit' ? openGroup(false) : guard(() => Modal.confirm({ title: '删除计算分组？', content: groupName, okText: '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: deleteGroup })) }}><Button disabled={locked} icon={<MoreOutlined />} aria-label="更多分组操作" /></Dropdown></Space> : null}
+      {config ? <Space wrap><Button type="primary" disabled={locked || loading} icon={<PlusOutlined />} onClick={() => guard(() => { void openEditor(null); })}>新增计算项</Button><Button disabled={locked} icon={group?.state === 2 ? <PauseCircleOutlined /> : <PlayCircleOutlined />} onClick={() => guard(() => { setEditor(null); void toggleGroup(); })}>{group?.state === 2 ? '停止分组' : '启动分组'}</Button><Dropdown disabled={locked} trigger={['click']} menu={{ items: [{ key: 'edit', label: '编辑分组', icon: <EditOutlined /> }, { key: 'delete', label: '删除分组', danger: true, icon: <DeleteOutlined /> }], onClick: ({ key }) => key === 'edit' ? openGroup(false) : guard(() => modal.confirm({ title: '删除计算分组？', content: groupName, okText: '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: deleteGroup })) }}><Button disabled={locked} icon={<MoreOutlined />} aria-label="更多分组操作" /></Dropdown></Space> : null}
     </div>
     <Card className="calc-list-card" size="small">{config ? <>
       {group?.last_error ? <details className="calc-group-diagnostic"><summary>分组诊断</summary><Text type="warning">{group.last_error}</Text></details> : null}
