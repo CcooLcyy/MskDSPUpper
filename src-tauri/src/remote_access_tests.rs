@@ -76,6 +76,12 @@ impl RemoteAccessService for Platform {
                 let _ = tx.send(Ok(TunnelFrame { payload: None })).await;
                 return;
             }
+            if mode == 7 || mode == 8 {
+                revoke.notified().await;
+                let status = if mode == 7 { Status::cancelled("设备更新时关闭隧道") } else { Status::permission_denied("授权撤销") };
+                let _ = tx.send(Err(status)).await;
+                return;
+            }
             while let Ok(Some(message)) = input.message().await {
                 match message.payload.unwrap() {
                     Payload::Data(bytes) => {
@@ -353,4 +359,67 @@ async fn closing_one_service_does_not_cancel_other_service_or_device_selection()
         .unwrap()
         .unwrap();
     assert_eq!(&bytes, b"still-online");
+}
+
+// 会话专属关闭通知必须打断挂起输入，不等待原任务30秒时限。
+#[tokio::test]
+async fn update_tunnel_interrupts_pending_input_and_keeps_permission_errors_permanent() {
+    for mode in [7, 8] {
+        let (endpoint, service, _server) = platform(mode).await;
+        let auth = Arc::new(PlatformAuthManager::test_session(endpoint));
+        let remote = RemoteConnection::new(device(), auth).unwrap();
+        let (_socket, mut guard) = remote.update_ssh_socket().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        service.revoke.notify_one();
+        let result: Result<(), String> = timeout(Duration::from_secs(2), guard.run(std::future::pending(), || None)).await.unwrap();
+        assert_eq!(result.unwrap_err().contains("LOWER_UPDATE_TUNNEL_INTERRUPTED:"), mode == 7);
+        assert!(remote.active());
+    }
+}
+
+// 已有完整结果优先于同时到达的关闭信号，认证拒绝也不得变为可重试。
+#[tokio::test]
+async fn update_tunnel_preserves_complete_result_and_identity_rejection() {
+    let (endpoint, service, _server) = platform(7).await;
+    let auth = Arc::new(PlatformAuthManager::test_session(endpoint));
+    let remote = RemoteConnection::new(device(), auth).unwrap();
+    let (_socket, mut guard) = remote.update_ssh_socket().await.unwrap();
+    service.revoke.notify_one();
+    timeout(Duration::from_secs(2), async {
+        while guard.closed.borrow().is_none() { guard.closed.changed().await.unwrap(); }
+    }).await.unwrap();
+    assert_eq!(guard.run(async { Ok::<_,String>(42) }, || None).await.unwrap(), 42);
+    let error = guard.run(async { Err::<(),_>("连接已关闭".to_string()) }, || Some("SSH 主机指纹已变化".into())).await.unwrap_err();
+    assert_eq!(error, "SSH 主机指纹已变化");
+    let error = guard.run(async { Err::<(),_>("未收到命令退出状态".into()) }, || None).await.unwrap_err();
+    assert!(error.contains(UPDATE_TUNNEL_INTERRUPTED));
+    assert_eq!(guard.run(async { Ok::<_,String>((1, "sudo 权限拒绝")) }, || None).await.unwrap(), (1, "sudo 权限拒绝"));
+}
+
+// 等待关闭原因期间才确认的协议拒绝，仍必须优先于可恢复断线。
+#[tokio::test]
+async fn update_tunnel_rechecks_late_permanent_rejection() {
+    let (endpoint, service, _server) = platform(7).await;
+    let auth = Arc::new(PlatformAuthManager::test_session(endpoint));
+    let remote = RemoteConnection::new(device(), auth).unwrap();
+    let (_socket, mut guard) = remote.update_ssh_socket().await.unwrap();
+    let rejection = Arc::new(parking_lot::Mutex::new(None));
+    let checked = Arc::new(Notify::new());
+    let deferred_rejection = rejection.clone();
+    let deferred_checked = checked.clone();
+    let report = tokio::spawn(async move {
+        deferred_checked.notified().await;
+        *deferred_rejection.lock() = Some("SSH 响应协议失败".to_string());
+        service.revoke.notify_one();
+    });
+    let result: std::result::Result<(), String> = timeout(
+        Duration::from_secs(2),
+        guard.run(async { Err("SSH 响应暂时结束".into()) }, || {
+            let current = rejection.lock().clone();
+            checked.notify_one();
+            current
+        }),
+    ).await.unwrap();
+    assert_eq!(result.unwrap_err(), "SSH 响应协议失败");
+    report.await.unwrap();
 }

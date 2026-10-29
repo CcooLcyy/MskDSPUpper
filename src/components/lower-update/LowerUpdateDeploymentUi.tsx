@@ -21,7 +21,7 @@ const STAGE_LABELS: Record<DeploymentTask['stage'], string> = {
   remote_unknown: '暂时无法确认更新结果',
   task_missing: '原任务不存在，待核验结束记录',
   task_closed: '本地记录已结束',
-  waiting_reconnect: '正在查询原任务',
+  waiting_reconnect: '等待连接恢复，安装结果待确认',
   rolling_back: '正在自动回退',
   rolled_back: '更新失败，已自动恢复上一版本',
   rollback_failed: '自动回退失败，需要人工处理',
@@ -54,7 +54,7 @@ function formatBytes(bytes: number): string {
 function getResultTitle(task: DeploymentTask): string {
   if (task.stage === 'task_missing') return '原任务不存在，本地记录待核验';
   if (task.stage === 'task_closed') return '本地记录已结束，未执行安装';
-  if (task.stage === 'remote_unknown') return task.status;
+  if (task.stage === 'remote_unknown' || task.stage === 'waiting_reconnect') return task.status;
   if (task.stage === 'rolled_back') return '更新失败，已自动恢复上一版本';
   if (task.stage === 'rollback_failed') return '自动回退失败，需要人工处理';
   if (task.stage !== 'succeeded') {
@@ -79,7 +79,7 @@ export function LowerUpdateDeploymentHeader() {
       : <WarningOutlined />;
   const label = task.runtimeRefreshError && succeeded ? '更新完成，连接待恢复'
     : task.cleanupError && succeeded ? '更新完成，清理失败'
-    : task.alreadyCurrent && succeeded ? '已是指定版本' : task.stage === 'remote_unknown' ? task.status : STAGE_LABELS[task.stage];
+    : task.alreadyCurrent && succeeded ? '已是指定版本' : task.stage === 'remote_unknown' || task.stage === 'waiting_reconnect' ? task.status : STAGE_LABELS[task.stage];
 
   return (
     <Button size="small" icon={icon} onClick={openDetails} title={`目标下位机：${task.remoteTarget ? `${task.remoteTarget.device_id} · ${task.remoteTarget.endpoint}` : task.uploadAccount}`}>
@@ -117,7 +117,7 @@ function LowerUpdateDeploymentTaskUi() {
   const closed = task.stage === 'task_closed';
   const missing = task.stage === 'task_missing';
   const uncertain = task.stage === 'remote_unknown' || missing;
-  const stageLabel = task.stage === 'remote_unknown' ? task.status : STAGE_LABELS[task.stage];
+  const stageLabel = task.stage === 'remote_unknown' || task.stage === 'waiting_reconnect' ? task.status : STAGE_LABELS[task.stage];
   const failed = !isRunning && !succeeded && !uncertain && !closed;
   const hasWarning = Boolean(task.cleanupError || task.runtimeRefreshError);
   const statusColor = uncertain ? 'warning' : isRunning ? 'processing' : closed ? 'default' : succeeded ? hasWarning ? 'warning' : 'success' : 'error';

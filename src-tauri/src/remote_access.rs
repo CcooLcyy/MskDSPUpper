@@ -22,6 +22,74 @@ pub mod protocol {
 use protocol::{remote_access_service_client::RemoteAccessServiceClient, tunnel_frame::Payload, *};
 
 pub const FRAME_LIMIT: usize = 65536;
+pub(crate) const UPDATE_TUNNEL_INTERRUPTED: &str = "LOWER_UPDATE_TUNNEL_INTERRUPTED:";
+
+/// 每条更新 SSH 会话独有的终止信号；释放时只取消这条隧道。
+pub(crate) struct UpdateTunnelGuard {
+    closed: watch::Receiver<Option<String>>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Drop for UpdateTunnelGuard {
+    fn drop(&mut self) { self.task.abort(); }
+}
+impl UpdateTunnelGuard {
+    pub(crate) async fn run<T>(
+        &mut self,
+        operation: impl std::future::Future<Output = std::result::Result<T, String>>,
+        permanent: impl Fn() -> Option<String>,
+    ) -> std::result::Result<T, String> {
+        let mut closed = self.closed.clone();
+        let ended = async move {
+            loop {
+                if let Some(reason) = closed.borrow().clone() { return reason; }
+                if closed.changed().await.is_err() { return "更新 SSH 隧道观察已结束".into(); }
+            }
+        };
+        tokio::pin!(operation, ended);
+        let outcome = tokio::select! {
+            biased;
+            result = &mut operation => {
+                match result {
+                    Ok(value) => return Ok(value),
+                    Err(error) => {
+                        if let Some(reason) = permanent() { return Err(reason); }
+                        // SSH 可能先观察到 EOF，稍后桥接任务才发布关闭原因。
+                        let current = self.closed.borrow().clone();
+                        let reason = match current {
+                            Some(reason) => Some(reason),
+                            None => timeout(Duration::from_millis(100), &mut ended).await.ok(),
+                        };
+                        return Err(permanent().or(reason).unwrap_or(error));
+                    }
+                }
+            },
+            reason = &mut ended => reason,
+        };
+        // 给已进入本地 socket 的完整终态或认证拒绝一个短暂排空窗口，不能被断线覆盖。
+        match timeout(Duration::from_millis(100), &mut operation).await {
+            Ok(Ok(value)) => Ok(value),
+            _ => Err(permanent().unwrap_or(outcome)),
+        }
+    }
+}
+
+pub(crate) fn update_tunnel_end(result: Result<()>) -> String {
+    match result {
+        Ok(()) => format!("{UPDATE_TUNNEL_INTERRUPTED} 平台 SSH 隧道已关闭，等待连接恢复"),
+        Err(error) => {
+            let status = error.chain().find_map(|cause| cause.downcast_ref::<tonic::Status>());
+            let transient = if let Some(status) = status {
+                matches!(status.code(), tonic::Code::Cancelled | tonic::Code::Unavailable)
+            } else { error.chain().any(|cause| {
+                cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                    matches!(error.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionRefused)
+                })
+            }) };
+            if transient { format!("{UPDATE_TUNNEL_INTERRUPTED} 平台 SSH 隧道暂时中断，等待连接恢复") }
+            else { format!("平台 SSH 隧道失败: {error}") }
+        }
+    }
+}
 const BLOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -124,6 +192,29 @@ impl Drop for RemoteConnection {
     }
 }
 impl RemoteConnection {
+    /// 更新命令专用连接，不经过共享 adapter，避免旧会话关闭影响新查询。
+    pub(crate) async fn update_ssh_socket(&self) -> Result<(TcpStream, UpdateTunnelGuard)> {
+        if !self.active() { bail!("平台远程连接已失效，请恢复原平台登录后查询原任务"); }
+        let (_, token, generation) = self.auth.remote_credentials().map_err(|error| anyhow!(error))?;
+        if generation != self.generation { bail!("平台登录已切换"); }
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let socket = TcpStream::connect(listener.local_addr()?).await?;
+        let (peer, _) = listener.accept().await?;
+        let endpoint = self.endpoint.clone();
+        let device_id = self.device.device_id.clone();
+        let canceled = self.subscribe();
+        let (closed_tx, closed) = watch::channel(None);
+        let task = tokio::spawn(async move {
+            let reason = tokio::select! {
+                biased;
+                _ = wait_canceled(canceled) => "平台登录或远程连接已失效，请核验原设备身份".into(),
+                result = tunnel(peer, &endpoint, &token, &device_id, "ssh") => update_tunnel_end(result),
+            };
+            tracing::info!(device_id, reason, "更新 SSH 会话隧道结束");
+            let _ = closed_tx.send(Some(reason));
+        });
+        Ok((socket, UpdateTunnelGuard { closed, task }))
+    }
     pub fn new(device: RemoteDevice, auth: Arc<PlatformAuthManager>) -> Result<Arc<Self>> {
         let (endpoint, _, generation) = auth.remote_credentials().map_err(|e| anyhow!(e))?;
         validate_remote_endpoint(&endpoint)?;

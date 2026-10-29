@@ -118,6 +118,8 @@ export interface LowerUpdateDeploymentOperations {
 const runningStages = new Set<LowerUpdateDeploymentStage>(['checking', 'uploading', 'installing', 'verifying', 'cleaning', 'reconnecting', 'waiting_reconnect', 'rolling_back']);
 const observationStopped = Symbol('原任务本地观测已停止');
 const remoteTerminalPhases = new Set<LowerUpdateTaskStatus['phase']>(['succeeded', 'rolled_back', 'rollback_failed', 'failed']);
+const tunnelInterruptedMarker = 'LOWER_UPDATE_TUNNEL_INTERRUPTED:';
+const rawErrorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 /** 流程独立于 React 和路由；私有输入仅保留在内存，公开快照不包含连接凭据。 */
 export function createLowerUpdateDeploymentController(operations: LowerUpdateDeploymentOperations) {
@@ -149,7 +151,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     return secrets.filter(Boolean).sort((a, b) => b.length - a.length)
       .reduce((text, secret) => text.split(secret).join('[已隐藏]'), value);
   };
-  const errorText = (error: unknown): string => redact(error instanceof Error ? error.message : String(error));
+  const errorText = (error: unknown): string => redact(rawErrorText(error)).split(tunnelInterruptedMarker).join('');
   const publish = (changes: Partial<LowerUpdateDeploymentSnapshot>): void => {
     snapshot = { ...snapshot, ...changes, hasPendingRemote: Boolean(pendingRemote) || invalidPending };
     for (const listener of listeners) listener();
@@ -327,14 +329,33 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     const startedAt = now();
     const deadline = startedAt + 180_000;
     const budgetMessage = '自动观测已达 180 秒，本轮本地等待已结束；请稍后查询原任务，不要重复安装';
+    let consecutiveInterruptions = 0;
     publish({ canStopWaiting: true });
     try {
       while (isCurrentObservation(observation)) {
         const remaining = deadline - now();
         if (!once && remaining <= 0) throw new Error(budgetMessage);
         const request = remoteRecoveryRequest(recoveryOptions);
-        const result = await boundedRead(() => operations.queryTask!(request), once ? 35_000 : Math.min(35_000, remaining),
-          !once && remaining <= 35_000 ? budgetMessage : '原任务查询等待已达 35 秒，未收到完整响应，请检查连接后重试', observation);
+        let result: LowerUpdateTaskStatus;
+        try {
+          result = await boundedRead(() => operations.queryTask!(request), once ? 35_000 : Math.min(35_000, remaining),
+            !once && remaining <= 35_000 ? budgetMessage : '原任务查询等待已达 35 秒，未收到完整响应，请检查连接后重试', observation);
+        } catch (error) {
+          if (!isCurrentObservation(observation) || error === observationStopped) throw error;
+          // 仅自动观测重试后端明确分类的临时隧道中断，人工查询和业务错误保持单次语义。
+          if (once || recoveryOptions.recovery_direct_account || !rawErrorText(error).includes(tunnelInterruptedMarker)) throw error;
+          if (consecutiveInterruptions >= 12) throw new Error('等待连接恢复已重试 12 次，结果仍未确认；请稍后查询原任务，不要重复安装');
+          consecutiveInterruptions++;
+          const waitBudget = deadline - now();
+          if (waitBudget <= 0) throw new Error(budgetMessage);
+          update({ stage: 'waiting_reconnect', status: '等待连接恢复，安装结果待确认', error: null,
+            verificationMessage: `更新通信暂时中断，正在等待连接恢复并重新查询原任务（第 ${consecutiveInterruptions}/12 次）。${errorText(error)}。安装结果待确认，不会重复安装。`,
+            cleanupMessage: '保留原任务及恢复材料' });
+          operations.log?.(`等待原任务查询连接恢复：任务 ${pendingRemote?.operation_id ?? '-'}，第 ${consecutiveInterruptions}/12 次，${errorText(error)}`);
+          await boundedRead(() => operations.sleep(Math.min(3000, waitBudget)), waitBudget, budgetMessage, observation);
+          continue;
+        }
+        consecutiveInterruptions = 0;
         if (!isCurrentObservation(observation)) return;
         // 终态消费会写本地恢复记录；关闭停止入口后才能进入该异步事务。
         if (remoteTerminalPhases.has(result.phase)) publish({ canStopWaiting: false });

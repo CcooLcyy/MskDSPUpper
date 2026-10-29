@@ -424,6 +424,126 @@ function fakeClock() {
 async function flush() { for (let index = 0; index < 25; index++) await Promise.resolve(); }
 const recoveryAuth = { method: 'password', password: 'recovery-secret' };
 
+// 只有明确的临时隧道中断才等待新连接，并始终复查同一个已提交任务。
+test('临时隧道中断恢复后自动确认原任务且仅提交一次', async () => {
+  const requests = [];
+  const states = [];
+  const logs = [];
+  const f = fixture({ queryTask: async request => {
+    requests.push(structuredClone(request));
+    if (requests.length === 1) throw Error('查询未完成（阶段 sudo输入）：LOWER_UPDATE_TUNNEL_INTERRUPTED: 隧道已断开 ssh-secret');
+    return status(request);
+  }, sleep: async ms => { assert.equal(ms, 3000); states.push(f.controller.getSnapshot()); }, log: message => logs.push(message) });
+  await f.controller.start(input());
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0], requests[1]);
+  assert.equal(states[0].task.stage, 'waiting_reconnect');
+  assert.equal(states[0].task.status, '等待连接恢复，安装结果待确认');
+  assert.equal(states[0].task.error, null);
+  assert.equal(states[0].canStopWaiting, true);
+  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
+  assert.equal(f.calls.filter(([name]) => name === 'submit').length, 1);
+  assert.equal(f.calls.filter(([name]) => name === 'upload').length, 1);
+  assert.equal(f.saved(), null);
+  assert.equal(JSON.stringify([states, logs]).includes('LOWER_UPDATE_TUNNEL_INTERRUPTED:'), false);
+  assert.equal(JSON.stringify([states, logs]).includes('ssh-secret'), false);
+});
+
+// 重试次数有上限，耗尽后只保留原任务，不重复上传或提交。
+test('临时隧道连续中断最多重试12次并保留原任务', async () => {
+  let queries = 0;
+  let sleeps = 0;
+  const f = fixture({ queryTask: async () => { queries++; throw Error('LOWER_UPDATE_TUNNEL_INTERRUPTED: 暂时离线'); }, sleep: async () => { sleeps++; } });
+  await f.controller.start(input());
+  assert.equal(queries, 13);
+  assert.equal(sleeps, 12);
+  assert.equal(f.controller.getSnapshot().task.stage, 'remote_unknown');
+  assert.match(f.controller.getSnapshot().task.verificationMessage, /12.*次/);
+  assert.ok(f.saved());
+  assert.equal(f.calls.filter(([name]) => name === 'submit').length, 1);
+  assert.equal(f.calls.filter(([name]) => name === 'upload').length, 1);
+});
+
+// 等待恢复的请求耗时和间隔也受原有总预算约束。
+test('临时隧道恢复等待计入180秒总预算', async () => {
+  const clock = fakeClock();
+  let queries = 0;
+  const f = fixture({ ...clock, queryTask: async () => {
+    queries++;
+    clock.advance(Math.min(30_000, 180_000 - clock.now()));
+    throw Error('LOWER_UPDATE_TUNNEL_INTERRUPTED: 下位机暂时离线');
+  }, sleep: async ms => { clock.advance(ms); } });
+  await f.controller.start(input());
+  assert.equal(queries, 6);
+  assert.equal(clock.now(), 180_000);
+  assert.match(f.controller.getSnapshot().task.verificationMessage, /180.*秒/);
+  assert.ok(f.saved());
+  assert.equal(clock.pending(), 0);
+});
+
+// 正常取得执行中状态会重置连续中断计数，不会把断续恢复误当连续失败。
+test('取得执行中状态后重置连续隧道重试计数', async () => {
+  let queries = 0;
+  const f = fixture({ queryTask: async request => {
+    queries++;
+    if (queries === 12) return status(request, 'installing');
+    if (queries === 24) return status(request);
+    throw Error('LOWER_UPDATE_TUNNEL_INTERRUPTED: 暂时离线');
+  } });
+  await f.controller.start(input());
+  assert.equal(queries, 24);
+  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
+  assert.equal(f.calls.filter(([name]) => name === 'submit').length, 1);
+});
+
+// 手工恢复仍然只读一次，内部分类标记不进入界面快照。
+test('手工查询临时隧道中断也不自动重试且隐藏标记', async () => {
+  let queries = 0;
+  const f = fixture({ loadPending: pendingRecord, queryTask: async () => { queries++; throw Error('LOWER_UPDATE_TUNNEL_INTERRUPTED: 隧道中断 recovery-secret'); } });
+  await f.controller.resumeRemote(recoveryAuth, 'sudo-recovery');
+  assert.equal(queries, 1);
+  assert.equal(f.controller.getSnapshot().task.stage, 'remote_unknown');
+  assert.equal(JSON.stringify(f.controller.getSnapshot()).includes('LOWER_UPDATE_TUNNEL_INTERRUPTED:'), false);
+  assert.equal(JSON.stringify(f.controller.getSnapshot()).includes('recovery-secret'), false);
+});
+
+// 认证、指纹、权限及协议错误不能被自动恢复策略掩盖。
+test('自动观测的认证指纹权限和协议错误立即停止不重试', async () => {
+  for (const detail of ['SSH认证失败 ssh-secret', '主机指纹不匹配', '平台授权已撤销', '隧道帧顺序或大小无效']) {
+    let queries = 0;
+    let sleeps = 0;
+    const f = fixture({ queryTask: async () => { queries++; throw Error(detail); }, sleep: async () => { sleeps++; } });
+    await f.controller.start(input());
+    assert.equal(queries, 1);
+    assert.equal(sleeps, 0);
+    assert.equal(f.controller.getSnapshot().task.stage, 'remote_unknown');
+    assert.ok(f.saved());
+    assert.equal(JSON.stringify(f.controller.getSnapshot()).includes('ssh-secret'), false);
+  }
+});
+
+// 等待恢复期间停止后不能继续查询，也不能接收迟到等待完成。
+test('临时隧道恢复等待可停止且迟到完成不重查或清记录', async () => {
+  let queries = 0;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const clock = fakeClock();
+  const f = fixture({ ...clock, queryTask: async () => { queries++; throw Error('LOWER_UPDATE_TUNNEL_INTERRUPTED: 隧道中断'); }, sleep: () => gate });
+  const running = f.controller.start(input());
+  await flush();
+  assert.equal(f.controller.getSnapshot().task.stage, 'waiting_reconnect');
+  f.controller.stopObservingRemote();
+  await running;
+  const snapshot = f.controller.getSnapshot();
+  release();
+  await flush();
+  assert.deepEqual(f.controller.getSnapshot(), snapshot);
+  assert.equal(queries, 1);
+  assert.ok(f.saved());
+  assert.equal(f.calls.filter(([name]) => name === 'persist').length, 1);
+  assert.equal(clock.pending(), 0);
+});
+
 test('手工恢复仅查询一次，首个认证或通信错误立即去密显示并保留原记录', async () => {
   for (const detail of ['SSH认证失败 recovery-secret', '平台授权被拒绝', '指纹不匹配', '会话通道超时', '任务响应格式错误']) {
     let queries = 0;

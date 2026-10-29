@@ -258,6 +258,7 @@ fn authorized_update_device(
     let device = devices.into_iter().find(|device| device.device_id == device_id)
         .ok_or("原远程设备不可访问，已停止更新操作")?;
     if !device.allow_ssh { return Err("原远程设备未授权 SSH 访问".into()); }
+    if !device.online { return Err(format!("{} 原设备暂时离线，等待连接恢复", remote_access::UPDATE_TUNNEL_INTERRUPTED)); }
     Ok(device)
 }
 
@@ -272,7 +273,7 @@ pub(super) async fn resolve_update_target(
         let (endpoint, _, _) = state.platform_auth.remote_credentials()?;
         validate_remote_update_target(remote, auth, &endpoint)?;
         let devices = remote_access::list_devices(&state.platform_auth)
-            .await.map_err(|_| "无法核验原远程设备授权，请恢复平台连接后查询原任务".to_string())?;
+            .await.map_err(|error| remote_access::update_tunnel_end(Err(error)))?;
         let device = authorized_update_device(devices, &remote.device_id)?;
         // 固定任务原设备，避免更新期间切换界面设备后将操作发送到另一台设备。
         let connection = RemoteConnection::new(device, state.platform_auth.clone())
@@ -523,6 +524,23 @@ struct PasswordSshHandler {
 impl russh::client::Handler for PasswordSshHandler {
     type Error = russh::Error;
 
+    async fn disconnected(&mut self, reason: russh::client::DisconnectReason<Self::Error>) -> Result<(), Self::Error> {
+        match reason {
+            russh::client::DisconnectReason::Error(error) => {
+                if !ssh_transport_error(&error) {
+                    *self.trust_error.lock() = Some(format!("SSH 响应协议失败: {error}"));
+                }
+                Err(error)
+            }
+            russh::client::DisconnectReason::ReceivedDisconnect(info) => {
+                if !matches!(info.reason_code, russh::Disconnect::ConnectionLost | russh::Disconnect::ByApplication) {
+                    *self.trust_error.lock() = Some(format!("SSH 服务拒绝连接: {:?}", info.reason_code));
+                }
+                Ok(())
+            }
+        }
+    }
+
     async fn check_server_key(
         &mut self,
         server_public_key: &russh::keys::ssh_key::PublicKey,
@@ -605,6 +623,33 @@ async fn connect_password_ssh_observed(
     password: &str,
     observer: &UpdateSshObserver,
 ) -> Result<russh::client::Handle<PasswordSshHandler>, String> {
+    connect_password_ssh_with_socket(target, password, observer, None, Arc::new(parking_lot::Mutex::new(None))).await
+}
+
+fn observed_ssh_error(error: russh::Error, phase: &str, rejection: &Arc<parking_lot::Mutex<Option<String>>>) -> String {
+    let message = format!("{phase}: {error}");
+    // 仅传输错误可由会话断线信号补充分类；SSH 协议及认证错误必须优先保留。
+    if !ssh_transport_error(&error) {
+        *rejection.lock() = Some(message.clone());
+    }
+    message
+}
+
+fn ssh_transport_error(error: &russh::Error) -> bool {
+    match error {
+        russh::Error::IO(error) => matches!(error.kind(), io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted | io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionRefused | io::ErrorKind::TimedOut),
+        russh::Error::Disconnect | russh::Error::HUP | russh::Error::SendError | russh::Error::RecvError | russh::Error::ConnectionTimeout | russh::Error::KeepaliveTimeout | russh::Error::InactivityTimeout => true,
+        _ => false,
+    }
+}
+
+async fn connect_password_ssh_with_socket(
+    target: &LowerUpdateUploadTarget,
+    password: &str,
+    observer: &UpdateSshObserver,
+    socket: Option<tokio::net::TcpStream>,
+    trust_error: Arc<parking_lot::Mutex<Option<String>>>,
+) -> Result<russh::client::Handle<PasswordSshHandler>, String> {
     observer.stage("SSH连接");
     if target.recovery_trust.is_some() {
         observer.stage("直连原设备 SSH 连接与身份核验");
@@ -623,20 +668,16 @@ async fn connect_password_ssh_observed(
         inactivity_timeout: Some(LOWER_UPDATE_SSH_INACTIVITY_TIMEOUT),
         ..Default::default()
     };
-    let trust_error = Arc::new(parking_lot::Mutex::new(None));
+    let handler = PasswordSshHandler {
+        host: target.host.clone(), port: target.port, remote: target.remote.clone(),
+        recovery_trust: target.recovery_trust.clone(), trust_error: trust_error.clone(),
+    };
     let mut session = tokio::time::timeout(
         Duration::from_secs(15),
-        russh::client::connect(
-            Arc::new(config),
-            (target.host.as_str(), target.port),
-            PasswordSshHandler {
-                host: target.host.clone(),
-                port: target.port,
-                remote: target.remote.clone(),
-                recovery_trust: target.recovery_trust.clone(),
-                trust_error: trust_error.clone(),
-            },
-        ),
+        async move { match socket {
+            Some(socket) => russh::client::connect_stream(Arc::new(config), socket, handler).await,
+            None => russh::client::connect(Arc::new(config), (target.host.as_str(), target.port), handler).await,
+        } },
     )
     .await
     .map_err(|_| {
@@ -646,18 +687,18 @@ async fn connect_password_ssh_observed(
             .unwrap_or_else(|| "SSH 连接超时，请恢复原设备连接后查询原任务".to_string())
     })?
     .map_err(|e| {
-        trust_error
-            .lock()
-            .clone()
-            .unwrap_or_else(|| format!("SSH 密码连接失败: {e}"))
+        let trusted = trust_error.lock().clone();
+        trusted.unwrap_or_else(|| observed_ssh_error(e, "SSH 密码连接失败", &trust_error))
     })?;
     observer.stage("SSH密码认证");
     let auth = session
         .authenticate_password(target.user.clone(), password.to_string())
         .await
-        .map_err(|e| format!("SSH 密码认证失败: {e}"))?;
+        .map_err(|e| observed_ssh_error(e, "SSH 密码认证失败", &trust_error))?;
     if !auth.success() {
-        return Err("SSH 用户名或密码错误，或下位机未启用密码认证".into());
+        let message = "SSH 用户名或密码错误，或下位机未启用密码认证".to_string();
+        *trust_error.lock() = Some(message.clone());
+        return Err(message);
     }
     Ok(session)
 }
@@ -843,28 +884,48 @@ async fn execute_password_ssh_command_observed(
     input_stage: &'static str,
     observer: &UpdateSshObserver,
 ) -> Result<RemoteCommandOutput, String> {
-    let session = connect_password_ssh_observed(target, password, observer).await?;
+    if password.is_empty() { return Err("SSH 密码不能为空".into()); }
+    let rejection = Arc::new(parking_lot::Mutex::new(None));
+    if let Some(remote) = &target.remote {
+        let (socket, mut guard) = remote.connection.update_ssh_socket().await.map_err(|error| error.to_string())?;
+        guard.run(execute_password_command_with_socket(target, password, remote_command, stdin, input_stage, observer, Some(socket), rejection.clone()), || rejection.lock().clone()).await
+    } else {
+        execute_password_command_with_socket(target, password, remote_command, stdin, input_stage, observer, None, rejection).await
+    }
+}
+
+async fn execute_password_command_with_socket(
+    target: &LowerUpdateUploadTarget,
+    password: &str,
+    remote_command: &str,
+    stdin: Option<&[u8]>,
+    input_stage: &'static str,
+    observer: &UpdateSshObserver,
+    socket: Option<tokio::net::TcpStream>,
+    rejection: Arc<parking_lot::Mutex<Option<String>>>,
+) -> Result<RemoteCommandOutput, String> {
+    let session = connect_password_ssh_with_socket(target, password, observer, socket, rejection.clone()).await?;
     observer.stage("SSH会话通道");
     let mut channel = session
         .channel_open_session()
         .await
-        .map_err(|e| format!("打开 SSH 命令通道失败: {e}"))?;
+        .map_err(|e| observed_ssh_error(e, "打开 SSH 命令通道失败", &rejection))?;
     observer.stage("SSH命令发送");
     channel
         .exec(true, remote_command)
         .await
-        .map_err(|e| format!("执行 SSH 命令失败: {e}"))?;
+        .map_err(|e| observed_ssh_error(e, "执行 SSH 命令失败", &rejection))?;
 
     if let Some(stdin) = stdin {
         observer.stage(input_stage);
         channel
             .data_bytes(stdin.to_vec())
             .await
-            .map_err(|e| format!("发送远端命令输入失败: {e}"))?;
+            .map_err(|e| observed_ssh_error(e, "发送远端命令输入失败", &rejection))?;
         channel
             .eof()
             .await
-            .map_err(|e| format!("结束远端命令输入失败: {e}"))?;
+            .map_err(|e| observed_ssh_error(e, "结束远端命令输入失败", &rejection))?;
     }
 
     observer.stage("SSH响应接收");
@@ -882,6 +943,7 @@ async fn execute_password_ssh_command_observed(
         }
     }
     observer.stage("SSH响应已接收");
+    if exit_code.is_none() { return Err("SSH 连接结束前未收到完整命令退出状态".into()); }
     let output = RemoteCommandOutput {
         exit_code,
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
