@@ -384,6 +384,33 @@ export interface VerticalSecurityPasswordChangeResult {
   message: string;
 }
 
+export type VerticalSecurityAdminAction = 'status' | 'generate_sm2' | 'export_csr' | 'list_certificates' | 'read_certificate' | 'import_certificate' | 'delete_certificate';
+
+export interface VerticalSecurityAdminCertificate {
+  name: string;
+  certificate_type: number;
+}
+
+export interface VerticalSecurityAdminRequest {
+  session_id: string;
+  action: VerticalSecurityAdminAction;
+  certificate_type?: number;
+  name?: string;
+  data?: number[];
+}
+
+export interface VerticalSecurityAdminResult {
+  message: string;
+  status: string | null;
+  certificates: VerticalSecurityAdminCertificate[];
+  data: number[] | null;
+}
+
+export interface VerticalSecurityCertificateFile {
+  name: string;
+  data: number[];
+}
+
 export interface VerticalSecurityDeployRequest {
   script_content: string;
   upload_account: string;

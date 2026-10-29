@@ -1046,6 +1046,78 @@ async fn execute_user_ssh_command(
     }
 }
 
+/// 仅复用与当前直连 DSP 完全匹配的已保存 SSH 身份，读取 ppp0 地址；不提权。
+pub(super) async fn query_saved_ppp_address(state: &AppState) -> Result<Option<String>, String> {
+    use zeroize::Zeroize;
+    struct SecretAuth(LowerUpdateSshAuthDto);
+    impl Drop for SecretAuth {
+        fn drop(&mut self) {
+            if let LowerUpdateSshAuthDto::Password { password } = &mut self.0 {
+                password.zeroize();
+            }
+        }
+    }
+    let snapshot = state.conn_manager.runtime_refresh_snapshot();
+    if snapshot.connection.is_remote() {
+        return Ok(None);
+    }
+    let host = snapshot.connection.manager_host();
+    let saved = state.settings_store.load()?;
+    let Some(value) = saved.get(super::app_storage::LOWER_UPDATE_CONNECTION_KEY) else {
+        return Ok(None);
+    };
+    let settings: LowerUpdateConnectionSettingsDto =
+        serde_json::from_value(value.clone()).map_err(|_| "已保存的 SSH 连接配置无效")?;
+    let settings = settings.normalize()?;
+    let target = parse_upload_account(&settings.upload_account)?;
+    if !super::security_admin_files::matches_sim_target(
+        &host,
+        &target.host,
+        snapshot.connection.is_remote(),
+    ) {
+        return Ok(None);
+    }
+    let auth = match settings.auth_method.as_str() {
+        "certificate" => SecretAuth(LowerUpdateSshAuthDto::Certificate),
+        "password" if settings.remember_password => {
+            let password = {
+                let _guard = LOWER_UPDATE_CREDENTIAL_LOCK
+                    .lock()
+                    .map_err(|_| "SSH 凭据锁已损坏")?;
+                load_ssh_password_with_store(
+                    &mut WindowsLowerUpdateCredentialStore,
+                    &credential_target(&target),
+                )?
+            };
+            let Some(password) = password else {
+                return Ok(None);
+            };
+            SecretAuth(LowerUpdateSshAuthDto::Password { password })
+        }
+        _ => return Ok(None),
+    };
+    if !state.conn_manager.runtime_refresh_is_current(&snapshot) {
+        return Ok(None);
+    }
+    // 只读取固定接口的 IPv4，不接受前端传入的命令、接口或主机。
+    let command = "ip -4 -o addr show dev ppp0 2>/dev/null | awk '{split($4,a,\"/\"); print a[1]}'";
+    let output = tokio::time::timeout(
+        Duration::from_secs(8),
+        execute_user_ssh_command(&target, &auth.0, command),
+    )
+    .await;
+    if !state.conn_manager.runtime_refresh_is_current(&snapshot) {
+        return Ok(None);
+    }
+    match output {
+        Ok(Ok(output)) if output.exit_code == Some(0) => Ok(Some(output.stdout)),
+        _ => {
+            tracing::info!("当前 DSP 的 ppp0 地址查询未完成，将使用无 IP 的默认导出名");
+            Ok(None)
+        }
+    }
+}
+
 async fn query_lower_update_architecture(
     target: &LowerUpdateUploadTarget,
     auth: &LowerUpdateSshAuthDto,

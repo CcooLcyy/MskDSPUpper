@@ -88,6 +88,9 @@ import type {
   VerticalSecurityLoginResult,
   VerticalSecurityPasswordChangeRequest,
   VerticalSecurityPasswordChangeResult,
+  VerticalSecurityAdminRequest,
+  VerticalSecurityAdminResult,
+  VerticalSecurityCertificateFile,
   VerticalSecurityDeployRequest,
   VerticalSecurityDeployResult,
   VerticalSecurityStatusResult,
@@ -2147,6 +2150,18 @@ export const browserApi: typeof tauriApi = {
     void sessionId;
     throw new Error('浏览器模式没有可退出的纵密会话。');
   },
+  runVerticalSecurityAdmin: async (request: VerticalSecurityAdminRequest): Promise<VerticalSecurityAdminResult> => {
+    void request;
+    throw new Error('浏览器模式不支持纵密初始化与证书管理，请使用桌面版上位机。');
+  },
+  chooseVerticalSecurityCertificateFile: async (): Promise<VerticalSecurityCertificateFile | null> => {
+    throw new Error('浏览器模式不支持选择纵密装置证书，请使用桌面版上位机。');
+  },
+  saveVerticalSecurityFile: async (file: VerticalSecurityCertificateFile): Promise<string | null> => {
+    void file;
+    throw new Error('浏览器模式不支持导出纵密文件，请使用桌面版上位机。');
+  },
+  getVerticalSecuritySimIp: async (): Promise<string | null> => null,
   changeVerticalSecurityPassword: async (request: VerticalSecurityPasswordChangeRequest): Promise<VerticalSecurityPasswordChangeResult> => {
     void request;
     return { changed: false, message: '浏览器模式不能修改纵密装置密码。' };

@@ -26,5 +26,6 @@ pub mod remote;
 pub mod security_access;
 pub mod security_access_path;
 pub mod security_login;
+pub mod security_admin_files;
 pub mod template_apply;
 pub mod workspace;

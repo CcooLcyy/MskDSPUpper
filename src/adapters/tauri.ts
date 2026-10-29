@@ -1,7 +1,7 @@
 import type { ModbusPointTableSaveOptions, ModbusTemplateContext, ModbusTemplateApplyResult } from './types';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 import type {
@@ -80,6 +80,9 @@ import type {
   VerticalSecurityLoginResult,
   VerticalSecurityPasswordChangeRequest,
   VerticalSecurityPasswordChangeResult,
+  VerticalSecurityAdminRequest,
+  VerticalSecurityAdminResult,
+  VerticalSecurityCertificateFile,
   VerticalSecurityDeployRequest,
   VerticalSecurityDeployResult,
   VerticalSecurityStatusRequest,
@@ -279,6 +282,22 @@ export const api = {
     invoke<boolean>('is_vertical_security_login_active', { connectionId }),
   changeVerticalSecurityPassword: (request: VerticalSecurityPasswordChangeRequest) =>
     invoke<VerticalSecurityPasswordChangeResult>('change_vertical_security_password', { request }),
+  runVerticalSecurityAdmin: (request: VerticalSecurityAdminRequest) =>
+    invoke<VerticalSecurityAdminResult>('run_vertical_security_admin', { request }),
+  chooseVerticalSecurityCertificateFile: async (): Promise<VerticalSecurityCertificateFile | null> => {
+    const path = await open({ title: '选择导入纵密装置的证书', multiple: false, directory: false,
+      filters: [{ name: '证书', extensions: ['cer', 'crt', 'pem'] }] });
+    if (typeof path !== 'string') return null;
+    return invoke<VerticalSecurityCertificateFile>('read_vertical_security_certificate_file', { path });
+  },
+  saveVerticalSecurityFile: async (file: VerticalSecurityCertificateFile): Promise<string | null> => {
+    const extension = file.name.split('.').pop()?.toLowerCase() || 'cer';
+    const path = await save({ title: extension === 'csr' ? '导出 SM2 证书申请文件' : '导出纵密证书', defaultPath: file.name,
+      filters: [{ name: extension === 'csr' ? '证书申请文件' : '证书', extensions: [extension] }] });
+    if (!path) return null;
+    return invoke<string>('save_vertical_security_file', { path, data: file.data });
+  },
+  getVerticalSecuritySimIp: () => invoke<string | null>('get_vertical_security_sim_ip'),
   deployVerticalSecurityScript: (request: VerticalSecurityDeployRequest) =>
     invoke<VerticalSecurityDeployResult>('deploy_vertical_security_script', { request }),
   getVerticalSecurityStatus: (request: VerticalSecurityStatusRequest) =>

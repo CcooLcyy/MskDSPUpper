@@ -13,6 +13,7 @@ import type {
 import { canAttemptLogin, getBuiltinCertificateMode, getCertificateMatchPresentation, isAuthenticatedLogin, isPasswordChangeRequired, LOGIN_STAGES, loginContextMatches, validateNewPassword, type LoginIdentity } from './login-state';
 import { reportLoginConnectionFailure } from './access-state';
 import { checkRetainedLogin, clearRetainedLogin, getRetainedLogin, retainLogin, subscribeRetainedLoginInvalidation } from './login-session';
+import SecurityAdmin from './SecurityAdmin';
 
 const ROLE_OPTIONS = [{ value: 1, label: '系统管理员' }, { value: 2, label: '安全操作员' }, { value: 3, label: '日志审计员' }];
 const ROLE_HINTS = { 1: '管理装置账号与系统设置。', 2: '配置网络、隧道与策略。', 3: '查看运行日志与审计信息。' };
@@ -21,12 +22,13 @@ type ActiveRequest = { identity: LoginIdentity; generation: number; cancelled: b
 type PasswordChallenge = { id: string; identity: LoginIdentity };
 type ActivePasswordChange = { challenge: PasswordChallenge; generation: number };
 
-export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy, onLockChange, modeControls }: {
+export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy, onLockChange, onAuthenticatedChange, modeControls }: {
   mode: VerticalSecurityAccessMode;
   deviceId?: string;
   deviceLabel?: string;
   accessBusy: boolean;
   onLockChange: (locked: boolean) => void;
+  onAuthenticatedChange?: (authenticated: boolean) => void;
   modeControls?: ReactNode;
 }) {
   const [capabilities, setCapabilities] = useState<VerticalSecurityLoginCapabilities | null>(null);
@@ -44,6 +46,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const [cancelling, setCancelling] = useState(false);
   const [certificateBusy, setCertificateBusy] = useState(false);
   const [logoutBusy, setLogoutBusy] = useState(false);
+  const [adminBusy, setAdminBusy] = useState(false);
   const [changeBusy, setChangeBusy] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -68,6 +71,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const builtinSummary = appliedBuiltinMode === 'auto' ? '内置配套证书 · 自动匹配' : appliedBuiltinMode === 'old' ? '内置配套证书 · 仅旧版' : '内置配套证书 · 仅新版';
 
   useEffect(() => { onLockChange(locked); }, [locked, onLockChange]);
+  useEffect(() => { onAuthenticatedChange?.(Boolean(session)); }, [session, onAuthenticatedChange]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -260,7 +264,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
 
   const logout = async () => {
     const id = sessionRef.current;
-    if (!id || logoutBusy) return;
+    if (!id || logoutBusy || adminBusy) return;
     const generation = generationRef.current;
     clearSecrets(); setLogoutBusy(true); setError(null);
     try {
@@ -319,17 +323,21 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   };
 
   return <section className="security-login-workbench" aria-label="纵密登录工作台">
-    <div className="security-login-context" aria-label={`当前连接：${mode === 'direct' ? '101 口直连' : `平台远程 · ${deviceLabel || deviceId || '尚未选择 DSP'}`}`}>
+    {!session && <div className="security-login-context" aria-label={`当前连接：${mode === 'direct' ? '101 口直连' : `平台远程 · ${deviceLabel || deviceId || '尚未选择 DSP'}`}`}>
       {modeControls && <div className="security-login-mode-controls">{modeControls}</div>}
       <div className="security-login-target-summary"><span>纵密目标 <strong>11.22.33.44</strong></span><span>出口：DSP 108 口</span></div>
-    </div>
-    <div className="security-access-columns security-login-columns">
+    </div>}
+    {session ? <>
+      <header className="security-admin-session" aria-label="当前纵密会话">
+        <div><h2>已登录纵密装置</h2><dl><div><dt>当前账号</dt><dd>{session.username}</dd></div><div><dt>当前角色</dt><dd>{ROLE_OPTIONS.find(item => item.value === session.role)?.label}</dd></div><div><dt>装置版本</dt><dd>{session.device_version || '未提供'}</dd></div><div><dt>装置地址</dt><dd>{session.target_ip}</dd></div></dl></div>
+        <Button icon={<LogoutOutlined />} loading={logoutBusy} disabled={adminBusy} onClick={() => void logout()}>退出纵密登录</Button>
+      </header>
+      {error && <Alert className="security-access-notice" type="error" showIcon title={error} />}
+      {notice && <Alert className="security-access-notice" type="info" showIcon title={notice} />}
+      {session.role !== 1 && <Alert className="security-access-notice" type="info" showIcon title={`${ROLE_OPTIONS.find(item => item.value === session.role)?.label || '当前角色'}业务功能待接入`} />}
+    </> : <div className="security-access-columns security-login-columns">
       <Card className="security-login-auth" title="装置身份认证" extra={<Tag color={session ? 'success' : busy ? 'processing' : 'default'}>{session ? '已登录' : busy ? '认证中' : '未登录'}</Tag>}>
-        {session ? <>
-          <Alert type="success" showIcon title="已登录纵密装置" description="已完成身份认证与账号、版本资料只读初始化；纵密业务入口尚未接入。" />
-          <dl className="security-login-session"><dt>当前账号</dt><dd>{session.username}</dd><dt>当前角色</dt><dd>{ROLE_OPTIONS.find(item => item.value === session.role)?.label}</dd><dt>装置地址</dt><dd>{session.target_ip}</dd><dt>装置版本</dt><dd>{session.device_version || '未提供'}</dd><dt>上次登录</dt><dd>{session.last_login_at || '未提供'}</dd></dl>
-          <Button icon={<LogoutOutlined />} loading={logoutBusy} onClick={() => void logout()}>退出纵密登录</Button>
-        </> : mustChangePassword ? <>
+        {mustChangePassword ? <>
           <Alert type="warning" showIcon title="设置新密码" description={<><p>{result?.code === 'default_password' ? '当前密码为默认密码，必须修改后重新登录。' : '密码已过期，必须修改后重新登录。'}</p><p>{result?.message}</p><p>当前账号尚未登录。新密码须为 8 至 16 位，至少包含大写字母、小写字母、数字、特殊字符中的三类，不能包含用户名或空格。允许的特殊字符：!@#$_.-+=*?。</p></>} />
           {!capabilities?.password_change_available ? <Alert className="security-access-notice" type="info" title="密码修改流程尚未验证，当前不可修改" description="此状态不代表已经登录纵密装置。" /> : <div className="security-login-fields"><label>新密码<Input.Password aria-label="纵密新密码" value={newPassword} maxLength={16} autoComplete="new-password" disabled={changeBusy} onChange={event => setNewPassword(event.target.value)} ref={node => { secretInputs.current[2] = node?.input ?? null; }} /></label><label>确认新密码<Input.Password aria-label="确认纵密新密码" value={confirmPassword} maxLength={16} autoComplete="new-password" disabled={changeBusy} onChange={event => setConfirmPassword(event.target.value)} ref={node => { secretInputs.current[3] = node?.input ?? null; }} /></label><Button type="primary" loading={changeBusy} onClick={() => void changePassword()}>修改密码并返回登录</Button></div>}
           <Button className="security-access-notice" disabled={changeBusy} onClick={() => void dismissChallenge()}>取消并返回登录</Button>
@@ -367,6 +375,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
         const step = result?.steps.find(item => item.id === stage.id);
         return <div className="security-access-step" key={stage.id}><Badge status={step?.state === 'success' ? 'success' : step?.state === 'failed' ? 'error' : step?.state === 'unsupported' ? 'warning' : 'default'} /><div><strong>{stage.name}</strong><p>{step?.message || (busy ? '等待装置返回本次检查结果' : '尚未执行')}</p></div><span>{step?.state === 'success' ? '通过' : step?.state === 'failed' ? '失败' : step?.state === 'unsupported' ? '不支持' : '待确认'}</span></div>;
       })}</div>{certificateMatch ? <Alert className="security-access-notice" type={certificateMatch.legacy ? 'warning' : 'info'} showIcon title={certificateMatch.label} description={<>{certificateMatch.compatibility}{certificateMatch.legacy && <p>仅此固定纵密目标、精确配套旧证书允许受限日期与名称兼容；不代表账号已经通过认证。</p>}</>} /> : profile?.source === 'builtin' && <p className="security-login-hint">证书组别待 TLS 匹配确认。</p>}<p className="security-access-boundary">使用纵密装置账号与连接证书。网络检查与身份认证分别显示；ICMP 无响应不阻止尝试登录。</p></aside>
-    </div>
+    </div>}
+    {session?.state === 'authenticated' && session.role === 1 && session.session_id && <SecurityAdmin key={session.session_id} sessionId={session.session_id} disabled={logoutBusy || accessBusy} onBusyChange={setAdminBusy} />}
   </section>;
 }

@@ -17,6 +17,10 @@ use tokio::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+#[path = "security_login_admin.rs"]
+mod admin;
+pub use admin::{AdminRequest, AdminResult};
+
 #[path = "security_login_builtin.rs"]
 mod builtin;
 
@@ -1203,6 +1207,13 @@ pub async fn login_vertical_security(
             if *cancellation.borrow() { Ok(cancelled) } else { Ok(response) }
         }
     }
+}
+#[tauri::command]
+pub async fn run_vertical_security_admin(
+    state: tauri::State<'_, AppState>,
+    request: AdminRequest,
+) -> Result<AdminResult, String> {
+    state.security_login.run_admin(request).await
 }
 #[tauri::command]
 pub fn cancel_vertical_security_login(
