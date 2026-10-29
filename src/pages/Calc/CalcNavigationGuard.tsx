@@ -1,16 +1,17 @@
 import { useEffect, useReducer, useRef } from 'react';
 import { useBlocker } from 'react-router-dom';
-import { Modal } from 'antd';
+import { App } from 'antd';
 
 /** 站内路由不会触发 beforeunload，需单独保护编辑草稿和未完成的同步计划。 */
 export default function CalcNavigationGuard({ blocked, locked }: { blocked: boolean; locked: boolean }) {
+  const { modal } = App.useApp();
   const blocker = useBlocker(blocked);
   const showing = useRef(false);
   const [closedRevision, notifyClosed] = useReducer((value: number) => value + 1, 0);
   useEffect(() => {
     if (blocker.state !== 'blocked' || showing.current) return;
     showing.current = true;
-    Modal.confirm({
+    modal.confirm({
       title: locked ? '请先处理未完成的保存' : '放弃未保存修改并离开？',
       content: locked ? '计算或关联同步尚未完成，请返回处理或明确重新加载当前配置。' : '离开后将放弃本次尚未保存的计算与关联修改。',
       okText: locked ? '返回处理' : '放弃并离开', cancelText: '继续编辑',
@@ -20,6 +21,6 @@ export default function CalcNavigationGuard({ blocked, locked }: { blocked: bool
       afterClose: () => { showing.current = false; notifyClosed(); },
     });
     console.info('数值计算已阻止站内导航', { 保存未完成: locked });
-  }, [blocker, locked, closedRevision]);
+  }, [blocker, locked, closedRevision, modal]);
   return null;
 }
