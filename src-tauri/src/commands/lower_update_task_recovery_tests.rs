@@ -1,5 +1,5 @@
 use super::*;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 const ID: &str = "f727e860-5923-4a50-8e2a-c4e114530bbb";
 
@@ -13,11 +13,22 @@ fn unquote(value: &str) -> String {
 }
 
 fn run_python(script: &str) -> std::process::Output {
-    Command::new(if cfg!(windows) { "python" } else { "python3" })
-        .args(["-B", "-c", script])
+    // 完整助手载荷通过标准输入传递，避免触及 Windows 命令行长度上限。
+    let mut child = Command::new(if cfg!(windows) { "python" } else { "python3" })
+        .args(["-B", "-"])
         .env("PYTHONIOENCODING", "utf-8")
-        .output()
-        .expect("运行生成命令的 Python 隔离测试")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("启动生成命令的 Python 隔离测试");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .expect("传递隔离测试源码");
+    child.wait_with_output().expect("读取 Python 隔离测试结果")
 }
 
 // 执行真正生成的内存命令，只替换外部系统观察，任何 mkdir 都使测试失败。
@@ -63,6 +74,7 @@ fn preflight_generated_command_never_installs_helper() {
 namespace['os'].geteuid=lambda:0
 namespace['ensure_secure_existing']=lambda path:checked.append(str(path))
 namespace['Backend'].environment_preflight=lambda self:None
+namespace['scan_business_sources']=lambda:[]
 def forbidden(*args,**kwargs): raise AssertionError('预检不能创建目录')
 namespace['Path'].mkdir=forbidden
 namespace['Backend'].schedule=forbidden
@@ -79,6 +91,41 @@ namespace['Backend'].schedule=forbidden
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("\"ok\": true"));
+}
+
+// 上传前运行真实生成的命令，业务目录聚合错误必须完整返回且不能写目录或调度任务。
+#[test]
+fn preflight_generated_command_reports_business_source_problems_without_writes() {
+    let command = readonly_command("preflight", None).unwrap();
+    let mut source = unquote(command.strip_prefix("exec python3 -B -c ").unwrap());
+    let setup = r#"namespace['os'].geteuid=lambda:0
+namespace['ensure_secure_existing']=lambda path:None
+namespace['Backend'].environment_preflight=lambda self:None
+namespace['scan_business_sources']=lambda:[
+    '模块文件可写: /data/mskdsp/module/test.so',
+    '配置符号链接: /data/mskdsp/conf/link']
+def forbidden(*args,**kwargs): raise AssertionError('预检不能写入或调度任务')
+namespace['Path'].mkdir=forbidden
+namespace['os'].chmod=forbidden
+namespace['Backend'].schedule=forbidden
+"#;
+    source = source.replace(
+        "sys.exit(namespace['readonly_main']",
+        &format!("{setup}\nsys.exit(namespace['readonly_main']"),
+    );
+    let script = format!(
+        "try:\n    exec({})\nexcept SystemExit as status:\n    assert status.code == 1\nelse:\n    raise AssertionError('业务目录异常必须拒绝上传')\n",
+        serde_json::to_string(&source).unwrap()
+    );
+    let output = run_python(&script);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(errors.contains("/data/mskdsp/module/test.so"), "{errors}");
+    assert!(errors.contains("/data/mskdsp/conf/link"), "{errors}");
 }
 
 // bootstrap 的权限拒绝发生在首次目录写入前，且明确拒绝标记不能覆盖后续 helper 执行。

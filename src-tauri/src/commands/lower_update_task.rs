@@ -411,7 +411,7 @@ pub async fn preflight_lower_update_task(
             let detail = observer
                 .redact(&output.stderr)
                 .chars()
-                .take(2048)
+                .take(MAX_LOG_BYTES)
                 .collect::<String>();
             return Err(format!("更新环境预检失败，未上传安装包：{detail}"));
         }
@@ -420,6 +420,7 @@ pub async fn preflight_lower_update_task(
         if response.get("ok").and_then(|value| value.as_bool()) != Some(true) {
             return Err("宿主机未确认更新环境预检通过".into());
         }
+        tracing::info!("下位机上传前预检通过，已检查可信执行路径及模块、配置备份来源");
         observer.stage("观测完成");
         Ok(())
     })

@@ -266,6 +266,28 @@ test('远程环境预检在上传前执行，拒绝及缺少接口时不上传�
   }
 });
 
+// 业务目录检查应在上传前提示，完整保留聚合问题且不能受理安装任务。
+test('远程预检说明模块和配置备份检查并显示聚合错误', async () => {
+  let reportEntered;
+  const entered = new Promise(resolve => { reportEntered = resolve; });
+  let rejectPreflight;
+  const gate = new Promise((_, reject) => { rejectPreflight = reject; });
+  const f = fixture({ preflightTask: async () => { reportEntered(); await gate; } });
+  const running = f.controller.start(input());
+  await entered;
+  const prompt = f.controller.getSnapshot().task.verificationMessage;
+  const detail = '业务目录检查失败：模块文件可写 /data/mskdsp/module/test.so；配置符号链接 /data/mskdsp/conf/link';
+  rejectPreflight(Error(detail));
+  await running;
+  assert.match(prompt, /模块/);
+  assert.match(prompt, /配置.*备份/);
+  assert.equal(f.controller.getSnapshot().task.stage, 'check_failed');
+  assert.match(f.controller.getSnapshot().task.verificationMessage, /模块文件可写/);
+  assert.match(f.controller.getSnapshot().task.verificationMessage, /配置符号链接/);
+  assert.equal(f.calls.some(([name]) => ['upload', 'submit', 'persist'].includes(name)), false);
+  assert.equal(f.saved(), null);
+});
+
 test('平台固定设备先核对架构，不匹配和探测失败均不上传或提交安装', async () => {
   for (const queryArchitecture of [
     async request => {

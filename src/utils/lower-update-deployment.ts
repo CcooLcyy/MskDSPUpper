@@ -428,7 +428,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
       }
       if (privateInput!.connection.remote_target) {
         if (!operations.preflightTask) throw new Error('远程更新预检接口未初始化，已停止上传');
-        update({ stage: 'checking', status: '检查远程安装环境', verificationMessage: '检查 Python、sudo、systemd、Docker 与安装助手目录权限' });
+        update({ stage: 'checking', status: '检查远程安装环境', verificationMessage: '检查 Python、sudo、systemd、Docker、安装助手权限、模块代码与配置备份来源' });
         await operations.preflightTask(connection());
       }
       if (!snapshot.task!.uploadResult) {
