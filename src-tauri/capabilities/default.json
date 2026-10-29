@@ -9,6 +9,7 @@
     "core:event:allow-unlisten",
     "core:window:allow-current-monitor",
     "core:window:allow-is-maximized",
+    "core:window:allow-maximize",
     "core:window:allow-set-size",
     "core:window:allow-center",
     "dialog:allow-open",
