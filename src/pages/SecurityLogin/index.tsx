@@ -4,18 +4,19 @@ import { CloudOutlined, ReloadOutlined, UsbOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import type { VerticalSecurityAccessMode } from '../../adapters';
 import SecurityLogin from '../SecurityAccess/SecurityLogin';
+import { getRetainedLogin } from '../SecurityAccess/login-session';
 import '../SecurityAccess/index.css';
 import './index.css';
 
 interface PlatformDevice { device_id: string; display_name: string; online: boolean }
 
 export default function SecurityLoginPage() {
-  const [mode, setMode] = useState<VerticalSecurityAccessMode>('direct');
+  const [mode, setMode] = useState<VerticalSecurityAccessMode>(() => getRetainedLogin()?.mode ?? 'direct');
   const [devices, setDevices] = useState<PlatformDevice[]>([]);
-  const [deviceId, setDeviceId] = useState<string>();
+  const [deviceId, setDeviceId] = useState<string | undefined>(() => getRetainedLogin()?.device_id ?? undefined);
   const [deviceError, setDeviceError] = useState<string | null>(null);
   const [loadingDevices, setLoadingDevices] = useState(false);
-  const [locked, setLocked] = useState(false);
+  const [locked, setLocked] = useState(() => Boolean(getRetainedLogin()));
   const mountedRef = useRef(false);
   const deviceGenerationRef = useRef(0);
   const desktop = '__TAURI_INTERNALS__' in window;

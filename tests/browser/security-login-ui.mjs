@@ -53,7 +53,7 @@ async function openFixture(options = {}) {
   await page.addInitScript(initial => {
     const mock = window.__securityLoginMock = {
       calls: [], login: [], checks: [], changes: [], activeChecks: [],
-      connectionActive: true, deferActiveCheck: false,
+      connectionActive: true, deferActiveCheck: false, deferLogout: false, logouts: [],
       configured: initial.configured !== false,
       configureError: null,
       capabilities: { direct_available: true, remote_available: initial.remoteAvailable === true, password_change_available: initial.passwordChangeAvailable === true, reason: '虚构登录能力（fixture）' },
@@ -81,7 +81,8 @@ async function openFixture(options = {}) {
         }
         if (command === 'login_vertical_security') return new Promise((resolve, reject) => mock.login.push({ resolve, reject, request: args.request }));
         if (command === 'check_vertical_security_access') return new Promise((resolve, reject) => mock.checks.push({ resolve, reject }));
-        if (command === 'cancel_vertical_security_login' || command === 'logout_vertical_security' || command === 'close_vertical_security_access') return null;
+        if (command === 'logout_vertical_security') return mock.deferLogout ? new Promise((resolve, reject) => mock.logouts.push({ resolve, reject })) : null;
+        if (command === 'cancel_vertical_security_login' || command === 'close_vertical_security_access') return null;
         if (command === 'change_vertical_security_password') return new Promise((resolve, reject) => mock.changes.push({ resolve, reject, request: args.request }));
         if (command === 'is_vertical_security_login_active') return mock.deferActiveCheck ? new Promise((resolve, reject) => mock.activeChecks.push({ resolve, reject, connectionId: args.connectionId })) : mock.connectionActive;
         return null;
@@ -144,6 +145,117 @@ async function assertNoPersistedSecret() {
 
 try {
   browser = await chromium.launch({ headless: true, args: ['--no-proxy-server'], ...(process.env.MSKDSP_BROWSER_EXECUTABLE ? { executablePath: process.env.MSKDSP_BROWSER_EXECUTABLE } : {}) });
+  // 切页只保留已完成认证的会话，返回时先确认连接仍有效，不重复发送认证材料。
+  await openFixture();
+  await submitLogin();
+  await resolveLogin();
+  await page.getByText('fixture-version', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
+  assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
+  assert.equal((await calls()).some(call => call.command === 'logout_vertical_security'), false, '已认证会话切页不能退出登录');
+  await page.evaluate(() => { window.__securityLoginMock.deferActiveCheck = true; });
+  await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
+  await page.waitForFunction(() => window.__securityLoginMock.activeChecks.length > 0);
+  assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0, '活性查询完成前不能展示缓存身份');
+  await page.evaluate(() => { for (const check of window.__securityLoginMock.activeChecks.splice(0)) check.resolve(true); window.__securityLoginMock.deferActiveCheck = false; });
+  await page.getByText('fixture-version', { exact: true }).waitFor();
+  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1, '返回页面不自动重新认证或续期');
+  assert.equal((await calls()).filter(call => call.command === 'is_vertical_security_login_active').every(call => call.args.connectionId === 'fixture-session'), true);
+  await assertNoPersistedSecret();
+  await page.screenshot({ path: path.join(output, 'session-restored.png'), fullPage: true });
+  await page.getByRole('button', { name: /退出纵密登录/ }).click();
+  await loginButton().waitFor();
+  await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
+  await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
+  await loginButton().waitFor();
+  assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
+  assert.equal((await calls()).filter(call => call.command === 'logout_vertical_security' && call.args.sessionId === 'fixture-session').length, 1);
+  results.push('已认证会话跨页保留、返回先检查活性、主动退出后不恢复且不重复认证');
+
+  // 返回页面时的即时查询必须先于缓存身份展示，不能等待下一轮定时检查。
+  for (const failure of ['disconnected', 'query-error']) {
+    await openFixture();
+    await submitLogin();
+    await resolveLogin();
+    await page.getByText('fixture-version', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
+    await page.evaluate(() => { window.__securityLoginMock.deferActiveCheck = true; });
+    await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
+    await page.waitForFunction(() => window.__securityLoginMock.activeChecks.length > 0);
+    assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
+    await page.evaluate(kind => {
+      for (const check of window.__securityLoginMock.activeChecks.splice(0)) {
+        if (kind === 'query-error') check.reject(new Error('fixture 返回页面查询失败'));
+        else check.resolve(false);
+      }
+      window.__securityLoginMock.deferActiveCheck = false;
+      window.__securityLoginMock.connectionActive = false;
+    }, failure);
+    await loginButton().waitFor();
+    assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
+    assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1);
+  }
+  results.push('返回页面即时查询失败或连接已失效时，不展示缓存身份且不自动认证');
+
+  // 登录页不在场时仍检查真实连接；断线和查询失败均不保留可恢复身份。
+  for (const failure of ['disconnected', 'query-error']) {
+    await openFixture();
+    await submitLogin();
+    await resolveLogin();
+    await page.getByText('fixture-version', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
+    await page.evaluate(() => { window.__securityLoginMock.deferActiveCheck = true; });
+    await page.waitForFunction(() => window.__securityLoginMock.activeChecks.length > 0);
+    await page.evaluate(kind => {
+      for (const check of window.__securityLoginMock.activeChecks.splice(0)) {
+        if (kind === 'query-error') check.reject(new Error('fixture 状态查询失败'));
+        else check.resolve(false);
+      }
+      window.__securityLoginMock.deferActiveCheck = false;
+      window.__securityLoginMock.connectionActive = false;
+    }, failure);
+    await page.waitForFunction(() => window.__securityLoginMock.calls.some(call => call.command === 'logout_vertical_security' && call.args.sessionId === 'fixture-session'));
+    await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
+    await loginButton().waitFor();
+    assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
+    assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1);
+  }
+  results.push('离页后仍检测断线和查询失败，失效会话无法恢复');
+
+  // 主动退出请求的结果不依赖原页面仍然挂载。
+  await openFixture();
+  await submitLogin();
+  await resolveLogin();
+  await page.getByText('fixture-version', { exact: true }).waitFor();
+  await page.evaluate(() => { window.__securityLoginMock.deferLogout = true; });
+  await page.getByRole('button', { name: /退出纵密登录/ }).click();
+  await page.waitForFunction(() => window.__securityLoginMock.logouts.length > 0);
+  await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
+  await page.evaluate(() => { for (const pending of window.__securityLoginMock.logouts.splice(0)) pending.resolve(null); window.__securityLoginMock.deferLogout = false; });
+  await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
+  await loginButton().waitFor();
+  assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
+  results.push('退出请求期间切页，迟到成功仍撤销共享身份');
+
+  // 未完成认证或改密挑战不属于可跨页保留的已登录会话。
+  for (const pending of ['login', 'challenge']) {
+    await openFixture({ passwordChangeAvailable: true });
+    const identity = await submitLogin();
+    if (pending === 'challenge') { await requirePasswordChange(); await page.getByLabel('纵密新密码', { exact: true }).waitFor(); }
+    await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
+    await page.waitForFunction(requestId => window.__securityLoginMock.calls.some(call => call.command === 'cancel_vertical_security_login' && call.args.requestId === requestId), pending === 'challenge' ? 'fixture-challenge' : identity.request_id);
+    if (pending === 'login') {
+      await resolveLogin({ session_id: 'fixture-late-navigation-session' });
+      await page.waitForFunction(() => window.__securityLoginMock.calls.some(call => call.command === 'logout_vertical_security' && call.args.sessionId === 'fixture-late-navigation-session'));
+    }
+    await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
+    await loginButton().waitFor();
+    assert.equal(await password().inputValue(), '');
+    assert.equal(await page.getByLabel('纵密新密码', { exact: true }).count(), 0);
+  }
+  results.push('切页继续清理未完成认证、迟到认证结果与改密挑战');
+
+  if (!process.argv.includes('--session-only')) {
   await openFixture({ configured: false });
   // 默认选择系统管理员，仍需手动输入账号与密码才能提交认证。
   assert.equal(await page.locator('.ant-select').filter({ has: page.getByRole('combobox', { name: '纵密登录角色', exact: true }) }).innerText(), '系统管理员');
@@ -454,6 +566,7 @@ try {
   await page.screenshot({ path: path.join(output, 'remote-unavailable.png'), fullPage: true });
   results.push('远程能力未接入时禁止登录，不发起认证或改动全局目标');
 
+  }
   assert.deepEqual(failures, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ results, failures }, null, 2));
   console.log(JSON.stringify({ output, results }, null, 2));

@@ -12,6 +12,7 @@ import type {
 } from '../../adapters';
 import { canAttemptLogin, getBuiltinCertificateMode, getCertificateMatchPresentation, isAuthenticatedLogin, isPasswordChangeRequired, LOGIN_STAGES, loginContextMatches, validateNewPassword, type LoginIdentity } from './login-state';
 import { reportLoginConnectionFailure } from './access-state';
+import { checkRetainedLogin, clearRetainedLogin, getRetainedLogin, retainLogin, subscribeRetainedLoginInvalidation } from './login-session';
 
 const ROLE_OPTIONS = [{ value: 1, label: '系统管理员' }, { value: 2, label: '安全操作员' }, { value: 3, label: '日志审计员' }];
 const ROLE_HINTS = { 1: '管理装置账号与系统设置。', 2: '配置网络、隧道与策略。', 3: '查看运行日志与审计信息。' };
@@ -55,11 +56,12 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const generationRef = useRef(0);
   const activeRef = useRef<ActiveRequest | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const restoringRef = useRef(getRetainedLogin()?.session_id ?? null);
   const challengeRef = useRef<PasswordChallenge | null>(null);
   const passwordChangeRef = useRef<ActivePasswordChange | null>(null);
   const secretInputs = useRef<Array<HTMLInputElement | null>>([]);
   const mustChangePassword = Boolean(challenge);
-  const locked = busy || certificateBusy || logoutBusy || changeBusy || Boolean(session) || mustChangePassword;
+  const locked = busy || certificateBusy || logoutBusy || changeBusy || Boolean(session) || mustChangePassword || Boolean(getRetainedLogin());
   const allowed = !initializing && canAttemptLogin(mode, deviceId, capabilities, profile);
   const certificateMatch = getCertificateMatchPresentation(result);
   const appliedBuiltinMode = getBuiltinCertificateMode(profile);
@@ -71,32 +73,44 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
     mountedRef.current = true;
     const inputs = secretInputs.current;
     let current = true;
-    void Promise.all([api.getVerticalSecurityLoginCapabilities(), api.getVerticalSecurityCertificateProfile()]).then(([available, configured]) => {
+    const unsubscribe = subscribeRetainedLoginInvalidation((id, invalidated) => {
+      if (!current || (sessionRef.current !== id && restoringRef.current !== id)) return;
+      sessionRef.current = null; restoringRef.current = null;
+      setSession(null); setResult(null);
+      if (invalidated) setError('纵密连接已失效或状态无法确认，请重新登录。');
+    });
+    void Promise.all([api.getVerticalSecurityLoginCapabilities(), api.getVerticalSecurityCertificateProfile(), checkRetainedLogin()]).then(([available, configured, restored]) => {
       if (!current) return;
       setCapabilities(available); setProfile(configured);
       setClientPath(configured.client_certificate_path ?? '');
       setTrustPath(configured.trust_certificate_path ?? '');
       setServerName(configured.server_name || '11.22.33.44');
       setBuiltinMode(getBuiltinCertificateMode(configured));
+      if (restored && getRetainedLogin() === restored && restored.mode === mode && restored.device_id === (mode === 'remote' ? deviceId : null)) {
+        sessionRef.current = restored.session_id;
+        setSession(restored); setResult(restored);
+        setUsername(restored.username!); setRole(restored.role!);
+        console.info('[纵密会话] 返回登录页，原连接检查通过');
+      }
+      restoringRef.current = null;
     }).catch(() => { if (current) setError('读取纵密登录能力或证书配置失败，请离开此页后重试。'); })
       .finally(() => { if (current) setInitializing(false); });
     return () => {
       current = false;
+      unsubscribe();
       mountedRef.current = false;
       generationRef.current += 1;
       const active = activeRef.current;
       if (active) { active.cancelled = true; void api.cancelVerticalSecurityLogin(active.identity.request_id).catch(() => {}); }
-      if (sessionRef.current) void api.logoutVerticalSecurity(sessionRef.current).catch(() => {});
       if (challengeRef.current) void api.cancelVerticalSecurityLogin(challengeRef.current.id).catch(() => {});
       for (const input of inputs) if (input) input.value = '';
       onLockChange(false);
     };
-  }, [onLockChange]);
+  }, [onLockChange, mode, deviceId]);
 
   useEffect(() => {
-    const sessionId = session?.session_id;
     const pending = challenge;
-    const connectionId = sessionId || pending?.id;
+    const connectionId = pending?.id;
     if (!connectionId || changeBusy) return;
     const generation = generationRef.current;
     let current = true;
@@ -108,12 +122,9 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
       try { connected = await api.isVerticalSecurityLoginActive(connectionId); } catch { /* 状态无法确认时退出当前身份。 */ }
       checking = false;
       if (!current || !mountedRef.current || generationRef.current !== generation || passwordChangeRef.current
-        || (sessionId ? sessionRef.current !== sessionId : challengeRef.current !== pending) || connected) return;
+        || challengeRef.current !== pending || connected) return;
       generationRef.current += 1;
-      if (sessionId) {
-        sessionRef.current = null;
-        void api.logoutVerticalSecurity(sessionId).catch(() => {});
-      } else if (pending) {
+      if (pending) {
         challengeRef.current = null;
         void api.cancelVerticalSecurityLogin(pending.id).catch(() => {});
       }
@@ -123,7 +134,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
     };
     const timer = window.setInterval(() => { void check(); }, 3000);
     return () => { current = false; window.clearInterval(timer); };
-  }, [session, challenge, changeBusy]);
+  }, [challenge, changeBusy]);
 
   const clearSecrets = () => { setPassword(''); setCertificatePassword(''); setNewPassword(''); setConfirmPassword(''); };
   const cleanupReturnedSession = async (value: VerticalSecurityLoginResult) => {
@@ -165,6 +176,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
           return;
         }
         sessionRef.current = value.session_id;
+        retainLogin(value);
         setSession(value); setResult(value);
       } else {
         if (value.state === 'password_change_required') {
@@ -253,7 +265,10 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
     clearSecrets(); setLogoutBusy(true); setError(null);
     try {
       await api.logoutVerticalSecurity(id);
-      if (!mountedRef.current || generationRef.current !== generation || sessionRef.current !== id) return;
+      const appliesToPage = mountedRef.current && generationRef.current === generation && sessionRef.current === id;
+      // 退出应答可能在切页之后到达，仍须清除进程内的共享身份。
+      clearRetainedLogin(id);
+      if (!appliesToPage) return;
       sessionRef.current = null;
       setSession(null); setResult(null); setNotice('已退出纵密登录。');
     } catch { if (mountedRef.current && generationRef.current === generation && sessionRef.current === id) setError('退出纵密登录失败，会话记录仍保留，请重试。'); }
