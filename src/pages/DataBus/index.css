@@ -1,5 +1,304 @@
 .data-bus-config-grid {
+  min-width: 0;
   overflow: hidden;
+}
+
+.data-bus-config-grid.is-catalog-collapsed > .resizable-split-pane--first,
+.data-bus-config-grid.is-catalog-collapsed > .resizable-split-divider {
+  display: none;
+}
+
+.data-bus-connection-card,
+.data-bus-route-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.data-bus-connection-card > .ant-card-head,
+.data-bus-route-card > .ant-card-head {
+  flex: 0 0 auto;
+}
+
+.data-bus-connection-card .ant-card-head-wrapper,
+.data-bus-route-card .ant-card-head-wrapper {
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-block: 8px;
+}
+
+.data-bus-route-card .ant-card-extra {
+  max-width: 100%;
+}
+
+.data-bus-connection-card > .ant-card-body,
+.data-bus-route-card > .ant-card-body {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.data-bus-catalog-hint {
+  flex: 0 0 auto;
+  padding: 10px 12px 6px;
+  color: #aaa;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.data-bus-connection-search,
+.data-bus-tag-search {
+  flex: 0 0 auto;
+  padding: 6px 12px 8px;
+}
+
+.data-bus-connection-list {
+  flex: 0 1 40%;
+  min-height: 100px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.data-bus-connection-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-inline-start: 3px solid transparent;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.data-bus-connection-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.data-bus-connection-item.is-active {
+  border-inline-start-color: #1677ff;
+  background: #37373d;
+}
+
+.data-bus-connection-item:focus-visible {
+  outline: 2px solid #69b1ff;
+  outline-offset: -2px;
+}
+
+.data-bus-connection-heading,
+.data-bus-tag-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.data-bus-connection-heading > .ant-typography,
+.data-bus-tag-header > .ant-typography {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.data-bus-connection-heading .ant-tag,
+.data-bus-tag-header .ant-tag {
+  margin-inline-end: 0;
+}
+
+.data-bus-connection-item > .ant-typography {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.data-bus-tag-directory {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid #3e3e42;
+}
+
+.data-bus-tag-header {
+  flex: 0 0 auto;
+  padding: 12px 12px 4px;
+}
+
+.data-bus-tag-actions {
+  flex: 0 0 auto;
+  padding: 0 12px 8px;
+}
+
+.data-bus-tag-list {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0 12px 8px;
+  overflow: auto;
+  list-style: none;
+  scrollbar-gutter: stable;
+}
+
+.data-bus-tag-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid #3e3e42;
+}
+
+.data-bus-tag-list li:last-child {
+  border-bottom: 0;
+}
+
+.data-bus-tag-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.data-bus-tag-name {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.6;
+}
+
+.data-bus-tag-row > .ant-tag {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
+}
+
+.data-bus-catalog-empty {
+  padding: 12px;
+  color: #aaa;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.data-bus-route-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.data-bus-route-card .ant-table-wrapper {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.data-bus-route-hint {
+  display: flex;
+  align-items: flex-start;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #3e3e42;
+  color: #aaa;
+  line-height: 1.6;
+}
+
+.data-bus-route-hint > .anticon {
+  flex: 0 0 auto;
+  margin-top: 4px;
+}
+
+.data-bus-route-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 220px;
+  padding: 24px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.data-bus-route-empty .ant-typography {
+  max-width: 520px;
+  margin: 0;
+  line-height: 1.7;
+}
+
+.data-bus-route-selection {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #3e3e42;
+  background: rgba(22, 119, 255, 0.1);
+}
+
+@media (max-width: 900px) {
+  .data-bus-config-grid.resizable-split:not(.resizable-split--vertical) {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .data-bus-config-grid.resizable-split:not(.resizable-split--vertical) > .resizable-split-pane--first {
+    flex-basis: 320px !important;
+    min-height: 320px;
+    max-height: 320px;
+  }
+
+  .data-bus-config-grid.resizable-split:not(.resizable-split--vertical) > .resizable-split-pane--second {
+    flex: 1 0 auto;
+    min-height: 400px;
+  }
+
+  .data-bus-config-grid .data-bus-connection-list {
+    flex: 0 0 96px;
+    min-height: 72px;
+  }
+
+  .data-bus-config-grid .data-bus-connection-card > .ant-card-body {
+    overflow-y: auto;
+  }
+
+  .data-bus-config-grid .data-bus-tag-directory {
+    flex: 0 0 auto;
+    min-height: 200px;
+  }
+
+  .data-bus-config-grid .data-bus-tag-list {
+    flex: 0 0 auto;
+    min-height: 80px;
+    max-height: 160px;
+  }
+
+  .data-bus-config-grid .data-bus-catalog-hint {
+    display: none;
+  }
+
+  .data-bus-config-grid .data-bus-tag-header {
+    padding-top: 6px;
+  }
+
+  .data-bus-config-grid .route-filter-search {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .data-bus-config-grid .route-filter-toolbar > .ant-select {
+    max-width: 100%;
+  }
 }
 
 .route-filter-toolbar {
