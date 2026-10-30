@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Popconfirm, Select, Space, Table, Tag } from 'antd';
+import { Alert, Button, Card, Popconfirm, Select, Space, Table } from 'antd';
 import { api } from '../../adapters';
 import './SecurityAdmin.css';
 
@@ -16,7 +16,6 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
   const [certificates, setCertificates] = useState<Certificate[]>([]);
   const [listed, setListed] = useState(false);
   const [certificateType, setCertificateType] = useState(0);
@@ -33,7 +32,7 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
   useEffect(() => {
     generation.current += 1;
     active.current = false;
-    setBusy(false); setError(null); setNotice(null); setWarning(null); setStatus(null);
+    setBusy(false); setError(null); setNotice(null); setWarning(null);
     setCertificates([]); setListed(false);
     onBusyChange?.(false);
     return () => { generation.current += 1; onBusyChange?.(false); };
@@ -63,14 +62,6 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
     const value = await request({ action: 'list_certificates' });
     if (current()) { setCertificates(value.certificates); setListed(true); }
   };
-  const queryStatus = () => run(async current => {
-    const value = await request({ action: 'status' });
-    if (current()) { setStatus(value.status); setNotice(value.message); }
-  });
-  const generate = () => run(async current => {
-    const value = await request({ action: 'generate_sm2' });
-    if (current()) { setNotice(value.message); setStatus(null); }
-  });
   const exportCsr = () => run(async current => {
     const value = await request({ action: 'export_csr' });
     if (!current()) return;
@@ -109,13 +100,9 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
   });
 
   return <section className="security-admin" aria-label="纵密系统管理员工作台" aria-busy={busy}>
-    <Card title="初始化网关" extra={<Tag>{status === null ? '状态待查询' : status === 'initialized' ? '已初始化' : status === 'uninitialized' ? '未初始化' : '状态未确认'}</Tag>}>
-      <p>查询装置初始化状态，生成 SM2 密钥并导出证书请求。CSR 使用固定信息生成，导出不会重新生成密钥。</p>
-      <Space wrap>
-        <Button disabled={blocked} onClick={queryStatus}>查询初始化状态</Button>
-        <Popconfirm title="生成 SM2 密钥？" description="该操作会请求装置生成密钥，请确认当前装置允许执行。" okText="确认生成" cancelText="取消" disabled={blocked} onConfirm={generate}><Button disabled={blocked}>生成 SM2 密钥</Button></Popconfirm>
-        <Button type="primary" disabled={blocked} onClick={exportCsr}>导出 SM2 CSR</Button>
-      </Space>
+    <Card title="初始化网关">
+      <p>点击导出时自动生成 SM2 密钥并导出证书申请文件；装置确认密钥已存在时继续使用现有密钥。</p>
+      <Button type="primary" disabled={blocked} onClick={exportCsr}>导出 SM2 CSR</Button>
     </Card>
     <Card title="证书管理" extra={<Button disabled={blocked} onClick={() => run(refresh)}>刷新证书列表</Button>}>
       <div className="security-admin-import"><strong>主站证书</strong><span>请按证书用途选择类别，再选择文件导入。</span><Space wrap><Select aria-label="主站证书类别" value={masterType} options={CERTIFICATE_TYPES.filter(item => item.value === 4 || item.value === 5).map(item => item.value === 5 ? { ...item, label: '加密网关证书（隧道对端）' } : item)} onChange={setMasterType} disabled={blocked} /><Button type="primary" disabled={blocked} onClick={() => importCertificate(masterType)}>导入主站证书</Button></Space><small>当前类别：{CERTIFICATE_TYPES[masterType].label}（类型 {masterType}）</small></div>

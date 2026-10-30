@@ -246,6 +246,19 @@ async fn upload<S: AsyncRead + AsyncWrite + Unpin>(
         _ => Err("证书上传结束状态未知".into()),
     }
 }
+// 单独生成与CSR导出共用同一已核实的41应答语义，不自动重试或重建已有密钥。
+async fn generate_sm2<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+) -> Result<&'static str, AdminError> {
+    send(stream, 41, 0, &[]).await?;
+    match answer(stream, 41).await? {
+        1 => Ok("SM2密钥生成成功"),
+        3 => Ok("SM2密钥已经生成，继续使用现有密钥"),
+        0 => Err(rejected("SM2密钥生成失败")),
+        2 => Err(rejected("请插入系统密钥卡后重新生成SM2密钥")),
+        _ => Err("SM2密钥生成应答未知".into()),
+    }
+}
 pub(super) async fn execute<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     request: &AdminRequest,
@@ -278,16 +291,11 @@ pub(super) async fn execute<S: AsyncRead + AsyncWrite + Unpin>(
             }
         }
         "generate_sm2" => {
-            send(stream, 41, 0, &[]).await?;
-            match answer(stream, 41).await? {
-                1 => result.message = "SM2密钥生成成功".into(),
-                3 => result.message = "SM2密钥已经生成，继续使用现有密钥".into(),
-                0 => return Err(rejected("SM2密钥生成失败")),
-                2 => return Err(rejected("请插入系统密钥卡后重新生成SM2密钥")),
-                _ => return Err("SM2密钥生成应答未知".into()),
-            }
+            result.message = generate_sm2(stream).await?.into();
         }
         "export_csr" => {
+            // 同一会话单次操作内准备密钥，只有成功或已存在时才申请并下载CSR。
+            generate_sm2(stream).await?;
             send(stream, 33, CSR_SUBJECT.len() as i32, CSR_SUBJECT).await?;
             match answer(stream, 33).await? {
                 0 => return Err(rejected("SM2证书申请生成失败")),
@@ -420,20 +428,46 @@ mod tests {
         send(peer, 6, 0, &[]).await.unwrap();
         expect_frame(peer, 6, &[]).await;
     }
-    // 固定主体必须只发一个33头，下载原样CSR并确认终止帧。
+    // 密钥新生成或已存在时均先41再发送唯一33头，原样下载CSR并确认终止帧。
     #[tokio::test]
     async fn security_admin_csr_wire_fixture() {
-        let (mut client, mut peer) = tokio::io::duplex(4096);
-        let task = tokio::spawn(async move {
-            expect_frame(&mut peer, 33, CSR_SUBJECT).await;
-            send(&mut peer, 33, 1, &[]).await.unwrap();
-            fixture_download(&mut peer, "device.csr", "/log/device.csr", b"CSR fixture").await;
-        });
-        let result = execute(&mut client, &request("export_csr"), &mut vec![])
-            .await
-            .unwrap();
-        assert_eq!(result.data.unwrap(), b"CSR fixture");
-        task.await.unwrap();
+        for key_result in [1, 3] {
+            let (mut client, mut peer) = tokio::io::duplex(4096);
+            let task = tokio::spawn(async move {
+                expect_frame(&mut peer, 41, &[]).await;
+                send(&mut peer, 41, key_result, &[]).await.unwrap();
+                expect_frame(&mut peer, 33, CSR_SUBJECT).await;
+                send(&mut peer, 33, 1, &[]).await.unwrap();
+                fixture_download(&mut peer, "device.csr", "/log/device.csr", b"CSR fixture").await;
+            });
+            let result = execute(&mut client, &request("export_csr"), &mut vec![])
+                .await
+                .unwrap();
+            assert_eq!(result.data.unwrap(), b"CSR fixture");
+            task.await.unwrap();
+        }
+    }
+    // 密钥生成失败、缺卡或未知结果立即停止，不能继续申请或下载CSR。
+    #[tokio::test]
+    async fn security_admin_csr_key_failure_stops_before_request() {
+        for key_result in [0, 2, 99] {
+            let (mut client, mut peer) = tokio::io::duplex(4096);
+            let task = tokio::spawn(async move {
+                expect_frame(&mut peer, 41, &[]).await;
+                send(&mut peer, 41, key_result, &[]).await.unwrap();
+                peer
+            });
+            let error = execute(&mut client, &request("export_csr"), &mut vec![])
+                .await
+                .unwrap_err();
+            assert_eq!(error.fatal, key_result == 99);
+            let mut peer = task.await.unwrap();
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(10), peer.read_u8())
+                    .await
+                    .is_err()
+            );
+        }
     }
     // 上传是1/2/3传输后35类别，222不得出现在网络上；整块需补零帧。
     #[tokio::test]

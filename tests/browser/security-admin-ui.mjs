@@ -77,12 +77,12 @@ try {
   });
   const url = `http://127.0.0.1:${server.httpServer.address().port}/__security-admin`;
   await page.goto(url, { waitUntil: 'commit' });
-  await page.getByRole('button', { name: '查询初始化状态', exact: true }).waitFor({ timeout: 45000 });
+  await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).waitFor({ timeout: 45000 });
   const calls = () => page.evaluate(() => window.__admin.calls.filter(call => call.command === 'run_vertical_security_admin').map(call => call.args.request));
   assert.equal((await calls()).length, 0);
-  await page.getByRole('button', { name: '查询初始化状态', exact: true }).click();
-  await page.getByText('已初始化', { exact: true }).waitFor();
-  results.push('进入不自动发送操作，查询后展示装置状态');
+  assert.equal(await page.getByRole('button', { name: '查询初始化状态', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: '生成 SM2 密钥', exact: true }).count(), 0);
+  results.push('进入不自动发送操作，移除状态查询与单独生成入口');
 
   await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).click();
   await page.getByText('CSR 已保存。', { exact: true }).waitFor();
@@ -92,7 +92,7 @@ try {
   await page.evaluate(() => { window.__admin.ip = null; });
   await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).click();
   await page.getByText('无法获取当前 DSP 的 SIM IP，CSR 将使用 SM2.csr 文件名。', { exact: true }).waitFor();
-  results.push('CSR 不重生成密钥，IP 命名与失败回退');
+  results.push('一键请求后端完成密钥准备及CSR导出，IP 命名与失败回退');
 
   await page.getByRole('button', { name: '导入主站证书', exact: true }).click();
   await page.getByText('master.cer', { exact: true }).waitFor();
@@ -112,10 +112,10 @@ try {
   results.push('主站5/4分类导入，移除内容查看并保留导出与删除确认');
 
   await page.getByRole('button', { name: '测试：退出中', exact: true }).click();
-  assert.equal(await page.getByRole('button', { name: '查询初始化状态', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).isDisabled(), true);
   await page.getByRole('button', { name: '测试：退出中', exact: true }).click();
   await page.evaluate(() => { window.__admin.fail = true; });
-  await page.getByRole('button', { name: '查询初始化状态', exact: true }).click();
+  await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).click();
   await page.getByText('装置拒绝请求（测试）', { exact: true }).waitFor();
   await page.evaluate(() => { window.__admin.fail = false; window.__admin.defer = true; });
   await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).click();

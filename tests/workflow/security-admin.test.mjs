@@ -42,16 +42,15 @@ function fixture(overrides = {}) {
   return { api, calls, render, nodes, button, unmount: () => effects.forEach(id => slots[id]?.cleanup?.()) };
 }
 
-test('管理员工作台进入时不自动初始化装置，状态仅来自装置应答', async () => {
+test('进入工作台不自动操作装置，仅提供一键导出而无查询或单独生成入口', () => {
   const f = fixture();
   assert.equal(f.calls.length, 0);
-  await f.button('查询初始化状态').props.onClick();
-  f.render();
-  assert.deepEqual(f.calls[0], { session_id: 'session-a', action: 'status' });
-  assert.ok(f.nodes().some(node => node.props.children === '已初始化'));
+  assert.equal(f.button('查询初始化状态'), undefined);
+  assert.equal(f.button('生成 SM2 密钥'), undefined);
+  assert.ok(f.button('导出 SM2 CSR'));
 });
 
-test('导出 CSR 不生成密钥，采用 SIM IP 文件名，无法读取时提示并使用 SM2.csr', async () => {
+test('导出 CSR 通过单个后端操作完成密钥准备并采用 SIM IP 命名与无IP回退', async () => {
   for (const ip of ['192.0.2.10', null, '0.0.0.0', '127.0.0.1', '169.254.1.1']) {
     const f = fixture({ getVerticalSecuritySimIp: async () => ip });
     await f.button('导出 SM2 CSR').props.onClick();
@@ -86,10 +85,10 @@ test('忙时拒绝重复操作，卸载后不保存迟到 CSR', async () => {
 test('退出中禁用操作，设备失败保持为错误', async () => {
   const f = fixture({ runVerticalSecurityAdmin: async () => { throw new Error('装置拒绝该操作'); } });
   f.render({ disabled: true });
-  await f.button('查询初始化状态').props.onClick();
+  await f.button('导出 SM2 CSR').props.onClick();
   assert.equal(f.calls.length, 0);
   f.render({ disabled: false });
-  await f.button('查询初始化状态').props.onClick();
+  await f.button('导出 SM2 CSR').props.onClick();
   f.render();
   assert.ok(f.nodes().some(node => node.type === 'Alert' && node.props.type === 'error' && node.props.title === '装置拒绝该操作'));
 });
@@ -107,25 +106,26 @@ test('证书请求保留装置名称，导出保存仅用basename，删除须确
   assert.deepEqual(f.calls[2], { session_id: 'session-a', action: 'delete_certificate', ...certificate });
 });
 
-test('取消保存不报已导出，切换会话后不接收旧状态', async () => {
+test('取消保存不报已导出，切换会话后不保存旧 CSR', async () => {
   const cancelled = fixture({ saveVerticalSecurityFile: async () => null });
   await cancelled.button('导出 SM2 CSR').props.onClick();
   cancelled.render();
   assert.ok(cancelled.nodes().some(node => node.props.title === '已取消保存 CSR。'));
   let resolve;
   const f = fixture({ runVerticalSecurityAdmin: () => new Promise(done => { resolve = done; }) });
-  const task = f.button('查询初始化状态').props.onClick();
+  const task = f.button('导出 SM2 CSR').props.onClick();
   f.render({ sessionId: 'session-b' });
-  resolve({ message: '旧会话', status: '已初始化', certificates: [], data: null });
+  resolve({ message: '旧会话', status: null, certificates: [], data: [7] });
   await task;
   f.render();
-  assert.ok(!f.nodes().some(node => node.props.children === '已初始化' || node.props.title === '旧会话'));
+  assert.equal(f.calls.some(call => call.save), false);
+  assert.ok(!f.nodes().some(node => node.props.title === 'CSR 已保存。' || node.props.title === '旧会话'));
 });
 
 test('Tauri字符串拒绝保留装置详细原因', async () => {
   const detail = '请插入系统密钥卡后重试。';
   const f = fixture({ runVerticalSecurityAdmin: async () => { throw detail; } });
-  await f.button('查询初始化状态').props.onClick();
+  await f.button('导出 SM2 CSR').props.onClick();
   f.render();
   assert.ok(f.nodes().some(node => node.type === 'Alert' && node.props.type === 'error' && node.props.title === detail));
 });
