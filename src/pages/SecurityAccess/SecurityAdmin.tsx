@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Popconfirm, Select, Space, Table } from 'antd';
+import { Alert, Button, Card, Empty, Modal, Popconfirm, Segmented, Select, Space, Table, Tabs, Tag } from 'antd';
+import type { VerticalSecurityTunnelStatus } from '../../adapters';
 import { api } from '../../adapters';
 import './SecurityAdmin.css';
 
@@ -18,8 +19,14 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
   const [warning, setWarning] = useState<string | null>(null);
   const [certificates, setCertificates] = useState<Certificate[]>([]);
   const [listed, setListed] = useState(false);
-  const [certificateType, setCertificateType] = useState(0);
-  const [masterType, setMasterType] = useState(5);
+  const [certificateType, setCertificateType] = useState(5);
+  const [importOpen, setImportOpen] = useState(false);
+  const [page, setPage] = useState('certificates');
+  const [view, setView] = useState<string>('list');
+  const [tunnels, setTunnels] = useState<VerticalSecurityTunnelStatus[]>([]);
+  const [tunnelRead, setTunnelRead] = useState<'pending' | 'ready' | 'failed'>('pending');
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [selectedTunnel, setSelectedTunnel] = useState<number | null>(null);
   const active = useRef(false);
   const generation = useRef(0);
   const mounted = useRef(false);
@@ -33,7 +40,8 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
     generation.current += 1;
     active.current = false;
     setBusy(false); setError(null); setNotice(null); setWarning(null);
-    setCertificates([]); setListed(false);
+    setCertificates([]); setListed(false); setImportOpen(false); setCertificateType(5);
+    setTunnels([]); setTunnelRead('pending'); setUpdatedAt(null); setSelectedTunnel(null); setPage('certificates'); setView('list');
     onBusyChange?.(false);
     return () => { generation.current += 1; onBusyChange?.(false); };
   }, [sessionId, onBusyChange]);
@@ -82,6 +90,7 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
     const value = await request({ action: 'import_certificate', certificate_type: type, name: file.name, data: file.data });
     if (!current()) return;
     setNotice(value.message);
+    setImportOpen(false);
     await refresh(current);
   });
   const exportCertificate = (certificate: Certificate) => run(async current => {
@@ -99,20 +108,58 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
     await refresh(current);
   });
 
+  const refreshTunnels = () => run(async current => {
+    setSelectedTunnel(null);
+    try {
+      const value = await request({ action: 'list_tunnels' });
+      if (current()) { setTunnels(value.tunnels); setTunnelRead('ready'); setUpdatedAt(new Date().toLocaleString()); }
+    } catch (reason) {
+      if (current()) setTunnelRead('failed');
+      throw reason;
+    }
+  });
+  const resetTunnel = () => run(async current => {
+    if (selectedTunnel === null || tunnelRead !== 'ready' || !tunnels.some(item => item.id === selectedTunnel)) return;
+    await request({ action: 'reset_tunnel', tunnel_id: selectedTunnel });
+    if (current()) { setNotice('重置命令已受理，请刷新核对隧道状态。'); setSelectedTunnel(null); }
+  });
+  const tunnelEmpty = tunnelRead === 'failed' ? '隧道读取失败，请重新刷新' : tunnelRead === 'ready' ? '装置当前没有隧道' : '请刷新隧道状态';
+  const tunnelState = (state: number) => ({ 0: '未连接', 1: '连接中', 2: '连接中', 3: '已连接' })[state] ?? `未知状态（${state}）`;
+  const hotState = (state: number) => state === 1 ? '主用' : state === 0 ? '备用' : `未知（${state}）`;
+  const stateTag = (state: number) => <Tag color={state === 3 ? 'success' : state === 1 || state === 2 ? 'processing' : 'default'}>{tunnelState(state)}</Tag>;
+
   return <section className="security-admin" aria-label="纵密系统管理员工作台" aria-busy={busy}>
-    <Card title="初始化网关">
-      <p>点击导出时自动生成 SM2 密钥并导出证书申请文件；装置确认密钥已存在时继续使用现有密钥。</p>
-      <Button type="primary" disabled={blocked} onClick={exportCsr}>导出 SM2 CSR</Button>
-    </Card>
-    <Card title="证书管理" extra={<Button disabled={blocked} onClick={() => run(refresh)}>刷新证书列表</Button>}>
-      <div className="security-admin-import"><strong>主站证书</strong><span>请按证书用途选择类别，再选择文件导入。</span><Space wrap><Select aria-label="主站证书类别" value={masterType} options={CERTIFICATE_TYPES.filter(item => item.value === 4 || item.value === 5).map(item => item.value === 5 ? { ...item, label: '加密网关证书（隧道对端）' } : item)} onChange={setMasterType} disabled={blocked} /><Button type="primary" disabled={blocked} onClick={() => importCertificate(masterType)}>导入主站证书</Button></Space><small>当前类别：{CERTIFICATE_TYPES[masterType].label}（类型 {masterType}）</small></div>
-      <details className="security-admin-advanced"><summary>其他证书导入</summary><Space wrap><Select aria-label="通用证书类别" value={certificateType} options={CERTIFICATE_TYPES} onChange={setCertificateType} disabled={blocked} /><Button disabled={blocked} onClick={() => importCertificate(certificateType)}>导入所选类别证书</Button></Space></details>
+    <Tabs activeKey={page} onChange={next => { setPage(next); setImportOpen(false); setSelectedTunnel(null); }} items={[{ key: 'certificates', label: '初始化与证书' }, { key: 'tunnels', label: '隧道管理' }]} />
+    {page === 'certificates' && <Card className="security-admin-panel">
+      <div className="security-admin-initialize"><div><h3>初始化网关</h3><p>导出证书申请文件时准备 SM2 密钥；已有密钥继续使用。</p></div><Button type="primary" disabled={blocked} onClick={exportCsr}>导出 SM2 CSR</Button></div>
+      <div className="security-admin-toolbar"><h3>证书管理</h3><Space wrap><Button disabled={blocked} onClick={() => run(refresh)}>刷新证书列表</Button><Button type="primary" disabled={blocked} onClick={() => setImportOpen(true)}>导入证书</Button></Space></div>
       <Table<Certificate> size="small" rowKey={item => `${item.certificate_type}:${item.name}`} dataSource={certificates} pagination={false} scroll={{ x: 600 }} locale={{ emptyText: listed ? '装置未返回证书记录' : '请刷新证书列表' }} columns={[
         { title: '证书名称', dataIndex: 'name', ellipsis: true },
         { title: '类别', dataIndex: 'certificate_type', render: type => CERTIFICATE_TYPES[type]?.label ?? `未知类别 ${type}` },
         { title: '操作', width: 140, render: (_, certificate) => <Space size="small"><Button size="small" disabled={blocked} onClick={() => exportCertificate(certificate)}>导出</Button><Popconfirm title={`删除证书 ${certificate.name}？`} description="删除会影响装置使用该证书的业务。" okText="删除" cancelText="取消" disabled={blocked} onConfirm={() => deleteCertificate(certificate)}><Button size="small" danger disabled={blocked}>删除</Button></Popconfirm></Space> },
       ]} />
-    </Card>
+    </Card>}
+    {importOpen && <Modal title="导入证书" open onCancel={() => { if (!blocked) setImportOpen(false); }} closable={!blocked} mask={{ closable: !blocked }} okText="选择文件并导入" cancelText="取消" confirmLoading={busy} okButtonProps={{ disabled: blocked }} cancelButtonProps={{ disabled: blocked }} onOk={() => importCertificate(certificateType)}>
+      <label className="security-admin-import">证书用途<Select aria-label="证书用途" value={certificateType} options={CERTIFICATE_TYPES.map(item => item.value === 5 ? { ...item, label: '加密网关证书（隧道对端）' } : item)} onChange={setCertificateType} disabled={blocked} /></label>
+      <p>主站隧道对端通常使用加密网关证书，请按证书用途选择类别。</p>
+    </Modal>}
+    {page === 'tunnels' && <Card className="security-admin-panel">
+      <div className="security-admin-toolbar"><div><h3>隧道管理</h3><span className="security-admin-update">{updatedAt ? `最后刷新：${updatedAt}` : '尚未读取装置隧道状态'}</span></div><Space wrap><Segmented aria-label="隧道展示方式" value={view} options={[{ label: '列表', value: 'list' }, { label: '图示', value: 'diagram' }]} onChange={setView} /><Button disabled={blocked} onClick={refreshTunnels}>刷新隧道</Button><Popconfirm title={`重置隧道 ${selectedTunnel ?? ''}？`} description="可能短暂中断该隧道业务；命令受理后请刷新核对状态。" okText="重置" cancelText="取消" disabled={blocked || selectedTunnel === null || tunnelRead !== 'ready'} onConfirm={resetTunnel}><Button danger disabled={blocked || selectedTunnel === null || tunnelRead !== 'ready'}>重置选中隧道</Button></Popconfirm></Space></div>
+      {tunnelRead === 'failed' && tunnels.length > 0 && <Alert type="warning" showIcon title="刷新失败，以下为上次读取的快照，当前状态未确认。" />}
+      {view === 'list' ? <Table<VerticalSecurityTunnelStatus> size="small" rowKey="id" dataSource={tunnels} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 1320 }} locale={{ emptyText: tunnelEmpty }} rowSelection={{ type: 'radio', selectedRowKeys: selectedTunnel === null ? [] : [selectedTunnel], onChange: keys => setSelectedTunnel(keys.length ? Number(keys[0]) : null), getCheckboxProps: () => ({ disabled: blocked || tunnelRead !== 'ready' }) }} columns={[
+        { title: 'ID', dataIndex: 'id', width: 65 },
+        { title: '状态', dataIndex: 'state', width: 115, render: stateTag },
+        { title: '热备', dataIndex: 'hot_state', width: 90, render: hotState },
+        { title: '本端地址', dataIndex: 'local_ip', width: 145 },
+        { title: '对端地址', dataIndex: 'peer_ip', width: 145 },
+        { title: '加密次数', dataIndex: 'encrypt_count', width: 130 },
+        { title: '解密次数', dataIndex: 'decrypt_count', width: 130 },
+        { title: '加密错误次数', dataIndex: 'encrypt_errors', width: 115 },
+        { title: '解密错误次数', dataIndex: 'decrypt_errors', width: 115 },
+        { title: '算法', dataIndex: 'algorithm', width: 100, render: value => value || '未提供' },
+        { title: '错误信息', dataIndex: 'error_info', width: 180, render: value => value || '未提供' },
+      ]} /> : tunnels.length === 0 ? <Empty description={tunnelEmpty} /> : <div className="security-tunnel-diagram">{tunnels.map(tunnel => <button key={tunnel.id} type="button" className={`security-tunnel-link${selectedTunnel === tunnel.id ? ' is-selected' : ''}`} aria-label={`隧道 ${tunnel.id} 图示`} aria-pressed={selectedTunnel === tunnel.id} disabled={blocked || tunnelRead !== 'ready'} onClick={() => setSelectedTunnel(tunnel.id)}><span className="security-tunnel-endpoint"><strong>本端</strong><span>{tunnel.local_ip}</span></span><span className="security-tunnel-connection"><strong>隧道 {tunnel.id}</strong>{stateTag(tunnel.state)}<span>{hotState(tunnel.hot_state)} →</span></span><span className="security-tunnel-endpoint"><strong>对端</strong><span>{tunnel.peer_ip}</span></span></button>)}</div>}
+    </Card>}
     {busy && <p role="status">正在处理管理员操作，请等待装置应答…</p>}
     {error && <Alert type="error" showIcon title={error} />}
     {warning && <Alert type="warning" showIcon title={warning} />}

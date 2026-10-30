@@ -1,4 +1,5 @@
 //! 系统管理员业务协议；复用已认证连接，不建立新身份。
+use super::tunnels::{self, TunnelStatus};
 use serde::{Deserialize, Serialize};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -8,6 +9,7 @@ pub struct AdminRequest {
     pub certificate_type: Option<u8>,
     pub name: Option<String>,
     pub data: Option<Vec<u8>>,
+    pub tunnel_id: Option<i32>,
 }
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AdminCertificate {
@@ -20,6 +22,7 @@ pub struct AdminResult {
     pub status: Option<String>,
     pub certificates: Vec<AdminCertificate>,
     pub data: Option<Vec<u8>>,
+    pub tunnels: Vec<TunnelStatus>,
 }
 fn parse_certificates(data: &[u8]) -> Result<Vec<AdminCertificate>, &'static str> {
     let text = std::str::from_utf8(data).map_err(|_| "证书列表编码无效")?;
@@ -101,17 +104,23 @@ fn rejected(message: &str) -> AdminError {
 }
 impl AdminRequest {
     pub(super) fn validate(&self) -> Result<(), String> {
-        let no_extra =
+        let no_certificate =
             self.certificate_type.is_none() && self.name.is_none() && self.data.is_none();
+        let no_extra = no_certificate && self.tunnel_id.is_none();
         let valid = match self.action.as_str() {
-            "status" | "generate_sm2" | "export_csr" | "list_certificates" => no_extra,
+            "status" | "generate_sm2" | "export_csr" | "list_certificates" | "list_tunnels" => {
+                no_extra
+            }
+            "reset_tunnel" => no_certificate && self.tunnel_id.is_some_and(tunnels::valid_id),
             "read_certificate" | "delete_certificate" => {
-                self.data.is_none()
+                self.tunnel_id.is_none()
+                    && self.data.is_none()
                     && self.certificate_type.is_none_or(|n| n <= 5)
                     && self.name.as_deref().is_some_and(valid_catalog_name)
             }
             "import_certificate" => {
-                self.certificate_type.is_some_and(|n| n <= 5)
+                self.tunnel_id.is_none()
+                    && self.certificate_type.is_some_and(|n| n <= 5)
                     && self.name.as_deref().is_some_and(valid_upload_name)
                     && self.data.as_ref().is_some_and(|d| safe_certificate_data(d))
             }
@@ -267,6 +276,36 @@ pub(super) async fn execute<S: AsyncRead + AsyncWrite + Unpin>(
     request.validate().map_err(|m| rejected(&m))?;
     let mut result = AdminResult::default();
     match request.action.as_str() {
+        "list_tunnels" => {
+            let bytes = download(stream, "tunnel", true).await?;
+            // 完整下载已结束，格式错误不代表协议失步；旧数据由前端标记历史结果。
+            result.tunnels = tunnels::parse(&bytes).map_err(rejected)?;
+            tracing::info!(
+                count = result.tunnels.len(),
+                "纵密隧道状态已解析，不记录状态文件正文"
+            );
+            result.message = "隧道列表已刷新".into();
+        }
+        "reset_tunnel" => {
+            let id = request.tunnel_id.ok_or("缺少隧道ID")?;
+            // TunFrame实际使用18，RESET_TUNNEL=17的旧常量与调用不一致，不采用该常量。
+            tracing::info!(
+                tunnel_id = id,
+                frame = format!("00000012{id:08x}"),
+                "发送单隧道重置请求，无正文且不自动重试"
+            );
+            send(stream, 18, id, &[]).await?;
+            let value = answer(stream, 18).await?;
+            tracing::info!(
+                tunnel_id = id,
+                response = value,
+                "收到单隧道重置应答，正值仅表示受理"
+            );
+            if value <= 0 {
+                return Err(rejected("装置拒绝重置隧道，请核对状态后再操作"));
+            }
+            result.message = format!("隧道 {id} 重置命令已受理，请刷新核对隧道状态");
+        }
         "status" => {
             send(stream, 25, 0, &[]).await?;
             let value = answer(stream, 25).await?;
@@ -370,6 +409,123 @@ pub(super) async fn execute<S: AsyncRead + AsyncWrite + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 新增隧道查询必须被白名单接受，且固定读取运行状态文件而非配置文件。
+    #[tokio::test]
+    async fn security_admin_tunnel_download_fixture() {
+        let req = request("list_tunnels");
+        assert!(req.validate().is_ok());
+        let (mut client, mut peer) = tokio::io::duplex(4096);
+        let task = tokio::spawn(async move {
+            fixture_download(
+                &mut peer,
+                "tunnel",
+                "tunnel",
+                b"1,3,1,10.0.0.1,10.0.0.2,9007199254740993,22,0,0,a,b,c,d,e,,SM2,\n",
+            )
+            .await;
+        });
+        let result = execute(&mut client, &req, &mut vec![]).await.unwrap();
+        assert!(result.message.contains("刷新"));
+        assert_eq!(result.tunnels[0].encrypt_count, "9007199254740993");
+        assert_eq!(result.tunnels[0].error_info, None);
+        assert_eq!(result.tunnels[0].algorithm.as_deref(), Some("SM2"));
+        task.await.unwrap();
+    }
+    // 成功空列表与坏数据必须区分；完整下载后的格式错误不需要关闭已同步连接。
+    #[tokio::test]
+    async fn security_admin_tunnel_empty_and_bad_download() {
+        for bytes in [b"".as_slice(), b"broken"] {
+            let (mut client, mut peer) = tokio::io::duplex(4096);
+            let task = tokio::spawn(async move {
+                fixture_download(&mut peer, "tunnel", "/log/tunnel", bytes).await;
+            });
+            let result = execute(&mut client, &request("list_tunnels"), &mut vec![]).await;
+            if bytes.is_empty() {
+                assert!(result.unwrap().tunnels.is_empty());
+            } else {
+                assert!(!result.unwrap_err().fatal);
+            }
+            task.await.unwrap();
+        }
+    }
+    // 重置仅发送18和隧道ID，不附正文、不发17、不自动追加查询或重试。
+    #[tokio::test]
+    async fn security_admin_reset_tunnel_response_branches() {
+        for value in [-1, 0, 1, 9] {
+            let (mut client, mut peer) = tokio::io::duplex(1024);
+            let task = tokio::spawn(async move {
+                assert_eq!(peer.read_i32().await.unwrap(), 18);
+                assert_eq!(peer.read_i32().await.unwrap(), 102400);
+                send(&mut peer, 18, value, &[]).await.unwrap();
+                peer
+            });
+            let mut req = request("reset_tunnel");
+            req.tunnel_id = Some(102400);
+            let result = execute(&mut client, &req, &mut vec![]).await;
+            if value > 0 {
+                let text = result.unwrap().message;
+                assert!(text.contains("命令已受理"));
+                assert!(text.contains("刷新核对"));
+            } else {
+                assert!(!result.unwrap_err().fatal);
+            }
+            let mut peer = task.await.unwrap();
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(10), peer.read_u8())
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    // 错命令与截断应答属于不确定结果，必须关闭会话且不得自动重试。
+    #[tokio::test]
+    async fn security_admin_reset_tunnel_uncertain_response() {
+        for truncate in [false, true] {
+            let (mut client, mut peer) = tokio::io::duplex(1024);
+            let task = tokio::spawn(async move {
+                assert_eq!(peer.read_i32().await.unwrap(), 18);
+                assert_eq!(peer.read_i32().await.unwrap(), 7);
+                if truncate {
+                    peer.write_i32(18).await.unwrap();
+                } else {
+                    send(&mut peer, 17, 1, &[]).await.unwrap();
+                }
+            });
+            let mut req = request("reset_tunnel");
+            req.tunnel_id = Some(7);
+            assert!(
+                execute(&mut client, &req, &mut vec![])
+                    .await
+                    .unwrap_err()
+                    .fatal
+            );
+            task.await.unwrap();
+        }
+    }
+    // IPC不能绕过ID校验、夹带证书参数或把隧道ID混入其他业务。
+    #[test]
+    fn security_admin_tunnel_ipc_boundaries() {
+        let mut req = request("reset_tunnel");
+        for id in [None, Some(0), Some(-1), Some(102401)] {
+            req.tunnel_id = id;
+            assert!(req.validate().is_err());
+        }
+        req.tunnel_id = Some(1);
+        assert!(req.validate().is_ok());
+        req.name = Some("tunnel".into());
+        assert!(req.validate().is_err());
+        req.name = None;
+        for action in [
+            "status",
+            "list_tunnels",
+            "list_certificates",
+            "read_certificate",
+            "import_certificate",
+        ] {
+            req.action = action.into();
+            assert!(req.validate().is_err());
+        }
+    }
     // 原厂证书表去掉首字段五字节前缀，六种类别均保留。
     #[test]
     fn security_admin_certificate_catalog_fixture() {
@@ -404,6 +560,7 @@ mod tests {
             certificate_type: None,
             name: None,
             data: None,
+            tunnel_id: None,
         }
     }
     async fn expect_frame(peer: &mut tokio::io::DuplexStream, cmd: i32, body: &[u8]) {

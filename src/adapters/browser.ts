@@ -2152,7 +2152,7 @@ export const browserApi: typeof tauriApi = {
   },
   runVerticalSecurityAdmin: async (request: VerticalSecurityAdminRequest): Promise<VerticalSecurityAdminResult> => {
     void request;
-    throw new Error('浏览器模式不支持纵密初始化与证书管理，请使用桌面版上位机。');
+    throw new Error('浏览器模式不支持纵密管理员业务，请使用桌面版上位机。');
   },
   chooseVerticalSecurityCertificateFile: async (): Promise<VerticalSecurityCertificateFile | null> => {
     throw new Error('浏览器模式不支持选择纵密装置证书，请使用桌面版上位机。');

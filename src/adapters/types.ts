@@ -384,7 +384,21 @@ export interface VerticalSecurityPasswordChangeResult {
   message: string;
 }
 
-export type VerticalSecurityAdminAction = 'status' | 'generate_sm2' | 'export_csr' | 'list_certificates' | 'read_certificate' | 'import_certificate' | 'delete_certificate';
+export type VerticalSecurityAdminAction = 'status' | 'generate_sm2' | 'export_csr' | 'list_certificates' | 'read_certificate' | 'import_certificate' | 'delete_certificate' | 'list_tunnels' | 'reset_tunnel';
+
+export interface VerticalSecurityTunnelStatus {
+  id: number;
+  state: number;
+  hot_state: number;
+  local_ip: string;
+  peer_ip: string;
+  encrypt_count: string;
+  decrypt_count: string;
+  encrypt_errors: string;
+  decrypt_errors: string;
+  error_info: string | null;
+  algorithm: string | null;
+}
 
 export interface VerticalSecurityAdminCertificate {
   name: string;
@@ -397,12 +411,14 @@ export interface VerticalSecurityAdminRequest {
   certificate_type?: number;
   name?: string;
   data?: number[];
+  tunnel_id?: number;
 }
 
 export interface VerticalSecurityAdminResult {
   message: string;
   status: string | null;
   certificates: VerticalSecurityAdminCertificate[];
+  tunnels: VerticalSecurityTunnelStatus[];
   data: number[] | null;
 }
 

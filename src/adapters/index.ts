@@ -49,6 +49,7 @@ export type {
   VerticalSecurityPasswordChangeRequest,
   VerticalSecurityPasswordChangeResult,
   VerticalSecurityAdminAction,
+  VerticalSecurityTunnelStatus,
   VerticalSecurityAdminCertificate,
   VerticalSecurityAdminRequest,
   VerticalSecurityAdminResult,

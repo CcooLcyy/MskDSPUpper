@@ -478,6 +478,7 @@ mod tests {
             certificate_type: None,
             name: None,
             data: None,
+            tunnel_id: None,
         }
     }
     // 非管理员及改密挑战不能借用同一TLS连接执行管理协议。

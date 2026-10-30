@@ -13,8 +13,9 @@
   margin-inline: auto;
 }
 
-.security-login-page.is-authenticated { justify-content: flex-start; }
-.security-login-page.is-authenticated .security-login-frame { max-width: 1040px; }
+.security-login-page.is-authenticated { justify-content: flex-start; padding-block: 24px; }
+.security-login-page.is-authenticated .security-login-frame { max-width: 1440px; }
+.security-login-page.is-authenticated .security-workbench-heading { margin-bottom: 16px; }
 
 .security-login-page .security-workbench-heading {
   margin-bottom: 28px;

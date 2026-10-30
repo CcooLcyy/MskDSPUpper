@@ -17,6 +17,9 @@ use tokio::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+#[path = "security_login_tunnels.rs"]
+mod tunnels;
+
 #[path = "security_login_admin.rs"]
 mod admin;
 pub use admin::{AdminRequest, AdminResult};

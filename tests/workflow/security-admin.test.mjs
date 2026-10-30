@@ -16,7 +16,7 @@ function fixture(overrides = {}) {
   let props = { sessionId: 'session-a', disabled: false };
   const calls = [];
   const api = {
-    runVerticalSecurityAdmin: async request => { calls.push(request); return { message: '装置操作成功', status: 'initialized', certificates: [{ name: 'master.cer', certificate_type: 5 }], data: [65, 66] }; },
+    runVerticalSecurityAdmin: async request => { calls.push(request); return { message: '装置操作成功', status: 'initialized', certificates: [{ name: 'master.cer', certificate_type: 5 }], tunnels: [], data: [65, 66] }; },
     getVerticalSecuritySimIp: async () => '192.0.2.10',
     chooseVerticalSecurityCertificateFile: async () => ({ name: 'chosen.cer', data: [65] }),
     saveVerticalSecurityFile: async value => { calls.push({ save: value }); return value.name; },
@@ -28,7 +28,7 @@ function fixture(overrides = {}) {
     useEffect(effect, deps) { const id = cursor++; if (!slots[id] || deps.some((v, i) => v !== slots[id].deps[i])) { slots[id]?.cleanup?.(); slots[id] = { deps, cleanup: effect() }; effects.push(id); } },
   };
   const element = (type, p) => ({ type, props: p ?? {} });
-  const widgets = Object.fromEntries(['Alert', 'Button', 'Card', 'Select', 'Space', 'Table', 'Tag', 'Popconfirm'].map(name => [name, name]));
+  const widgets = Object.fromEntries(['Alert', 'Button', 'Card', 'Select', 'Space', 'Table', 'Tag', 'Popconfirm', 'Tabs', 'Modal', 'Segmented', 'Empty'].map(name => [name, name]));
   widgets.Input = { TextArea: 'TextArea' };
   const loaded = new Module(filename);
   loaded.require = name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx: element, jsxs: element, Fragment: 'Fragment' } : name === 'antd' ? widgets : name === '../../adapters' ? { api } : name.endsWith('.css') ? {} : require(name);
@@ -63,10 +63,12 @@ test('导出 CSR 通过单个后端操作完成密钥准备并采用 SIM IP 命�
 
 test('主站导入默认加密网关类别，取消选文件不发送设备请求', async () => {
   const f = fixture();
-  await f.button('导入主站证书').props.onClick();
+  f.button('导入证书').props.onClick(); f.render();
+  await f.nodes().find(node => node.type === 'Modal').props.onOk();
   assert.deepEqual(f.calls[0], { session_id: 'session-a', action: 'import_certificate', certificate_type: 5, name: 'chosen.cer', data: [65] });
   const cancelled = fixture({ chooseVerticalSecurityCertificateFile: async () => null });
-  await cancelled.button('导入主站证书').props.onClick();
+  cancelled.button('导入证书').props.onClick(); cancelled.render();
+  await cancelled.nodes().find(node => node.type === 'Modal').props.onOk();
   assert.equal(cancelled.calls.length, 0);
 });
 
@@ -128,4 +130,94 @@ test('Tauri字符串拒绝保留装置详细原因', async () => {
   await f.button('导出 SM2 CSR').props.onClick();
   f.render();
   assert.ok(f.nodes().some(node => node.type === 'Alert' && node.props.type === 'error' && node.props.title === detail));
+});
+
+
+const tunnel = { id: 7, state: 3, hot_state: 1, local_ip: '192.0.2.1', peer_ip: '192.0.2.2', encrypt_count: '9007199254740993', decrypt_count: '2', encrypt_errors: '0', decrypt_errors: '0', error_info: null, algorithm: 'SM4' };
+function switchPage(f, page) { f.nodes().find(node => node.type === 'Tabs').props.onChange(page); f.render(); }
+
+test('管理员分页隔离功能，进入隧道页不自动查询，刷新与图示共享同一数据', async () => {
+  const f = fixture({ runVerticalSecurityAdmin: async request => { f.calls.push(request); return { message: '已读取', certificates: [], tunnels: [tunnel] }; } });
+  switchPage(f, 'tunnels');
+  assert.equal(f.button('导出 SM2 CSR'), undefined);
+  assert.equal(f.calls.length, 0);
+  await f.button('刷新隧道').props.onClick(); f.render();
+  assert.deepEqual(f.calls, [{ session_id: 'session-a', action: 'list_tunnels' }]);
+  const table = f.nodes().find(node => node.type === 'Table');
+  assert.equal(table.props.dataSource[0].encrypt_count, '9007199254740993');
+  f.nodes().find(node => node.type === 'Segmented').props.onChange('diagram'); f.render();
+  assert.ok(f.nodes().some(node => node.props['aria-label'] === '隧道 7 图示'));
+  assert.equal(f.calls.length, 1);
+});
+
+test('单隧道重置须选择与确认，仅声明受理，不自动重试或刷新', async () => {
+  const f = fixture({ runVerticalSecurityAdmin: async request => { f.calls.push(request); return { message: '命令已受理，请刷新核对隧道状态。', certificates: [], tunnels: [tunnel] }; } });
+  switchPage(f, 'tunnels');
+  assert.equal(f.button('重置选中隧道').props.disabled, true);
+  await f.button('刷新隧道').props.onClick(); f.render();
+  f.nodes().find(node => node.type === 'Table').props.rowSelection.onChange([7]); f.render();
+  assert.equal(f.calls.length, 1);
+  await f.nodes().find(node => node.type === 'Popconfirm').props.onConfirm(); f.render();
+  assert.deepEqual(f.calls[1], { session_id: 'session-a', action: 'reset_tunnel', tunnel_id: 7 });
+  assert.equal(f.calls.length, 2);
+  assert.ok(f.nodes().some(node => String(node.props.title).includes('命令已受理')));
+});
+
+test('隧道空列表、失败及旧快照清楚区分，切换会话丢弃迟到结果', async () => {
+  let reject = false;
+  const f = fixture({ runVerticalSecurityAdmin: async () => { if (reject) throw new Error('读取失败'); return { tunnels: [], certificates: [] }; } });
+  switchPage(f, 'tunnels');
+  await f.button('刷新隧道').props.onClick(); f.render();
+  assert.equal(f.nodes().find(node => node.type === 'Table').props.locale.emptyText, '装置当前没有隧道');
+  reject = true; await f.button('刷新隧道').props.onClick(); f.render();
+  assert.ok(f.nodes().some(node => node.props.title === '读取失败'));
+  assert.equal(f.nodes().find(node => node.type === 'Table').props.locale.emptyText, '隧道读取失败，请重新刷新');
+  let resolve;
+  const late = fixture({ runVerticalSecurityAdmin: () => new Promise(done => { resolve = done; }) });
+  switchPage(late, 'tunnels'); const task = late.button('刷新隧道').props.onClick();
+  late.render({ sessionId: 'session-b' }); resolve({ tunnels: [tunnel], certificates: [] }); await task;
+  switchPage(late, 'tunnels');
+  assert.equal(late.nodes().find(node => node.type === 'Table').props.dataSource.length, 0);
+});
+
+test('切换分页保持共享忙状态并拒绝并发设备操作', async () => {
+  let resolve;
+  const f = fixture({ runVerticalSecurityAdmin: request => { f.calls.push(request); return new Promise(done => { resolve = done; }); } });
+  switchPage(f, 'tunnels'); const task = f.button('刷新隧道').props.onClick();
+  switchPage(f, 'certificates'); await f.button('导出 SM2 CSR').props.onClick();
+  assert.equal(f.calls.length, 1);
+  resolve({ tunnels: [tunnel], certificates: [] }); await task;
+  switchPage(f, 'tunnels'); assert.equal(f.nodes().find(node => node.type === 'Table').props.dataSource.length, 1);
+});
+
+
+test('未知隧道状态保留原码，缺失算法与错误信息明确显示未提供', async () => {
+  const f = fixture({ runVerticalSecurityAdmin: async () => ({ tunnels: [{ ...tunnel, state: 88, hot_state: 9, algorithm: null }], certificates: [] }) });
+  switchPage(f, 'tunnels'); await f.button('刷新隧道').props.onClick(); f.render();
+  const table = f.nodes().find(node => node.type === 'Table');
+  const column = key => table.props.columns.find(item => item.dataIndex === key);
+  assert.equal(column('state').render(88).props.children, '未知状态（88）');
+  assert.equal(column('hot_state').render(9), '未知（9）');
+  assert.equal(column('algorithm').render(null), '未提供');
+  assert.equal(column('error_info').render(null), '未提供');
+});
+
+test('重置失败不显示已受理且不自动重试；卸载后的迟到应答不更新页面', async () => {
+  for (const fail of [true, false]) {
+    let resolve;
+    const f = fixture({ runVerticalSecurityAdmin: async request => {
+      f.calls.push(request);
+      if (request.action === 'list_tunnels') return { tunnels: [tunnel] };
+      if (fail) throw new Error('重置应答超时，结果未确认');
+      return new Promise(done => { resolve = done; });
+    } });
+    switchPage(f, 'tunnels'); await f.button('刷新隧道').props.onClick(); f.render();
+    f.nodes().find(node => node.type === 'Table').props.rowSelection.onChange([7]); f.render();
+    const task = f.nodes().find(node => node.type === 'Popconfirm').props.onConfirm();
+    if (!fail) { f.unmount(); resolve({ message: '命令已受理' }); }
+    await task; f.render();
+    assert.equal(f.calls.length, 2);
+    assert.ok(!f.nodes().some(node => String(node.props.title).includes('重置命令已受理')));
+    if (fail) assert.ok(f.nodes().some(node => node.props.title === '重置应答超时，结果未确认'));
+  }
 });
