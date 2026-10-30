@@ -97,7 +97,7 @@ const menuItems: MenuItemConfig[] = [
     children: [
       { key: '/security-login', label: '登录' },
       { key: '/security-access', label: '访问通路' },
-      { key: '/security-config', label: '网络配置' },
+      { key: '/security-config', label: 'DSP 网络配置' },
     ],
   },
   {

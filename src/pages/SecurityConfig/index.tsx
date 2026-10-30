@@ -389,7 +389,7 @@ const SecurityConfig: React.FC = () => {
     <div className="security-config-page">
       {contextHolder}
       <div className="security-config-workspace">
-      <header className="security-config-heading"><h1>纵密网络配置</h1><p>配置 DSP 上的纵密业务地址、路由与转发规则。</p></header>
+      <header className="security-config-heading"><h1>DSP 纵密网络配置</h1><p>配置目标 DSP 设备的纵密业务地址、路由与转发规则。</p></header>
         {deployResult ? (
           <Card className="security-config-execution-card">
           <Alert
@@ -602,7 +602,7 @@ const SecurityConfig: React.FC = () => {
           </section>
           </div>
           <div className="security-config-actions">
-            <span>应用后修改设备网络，并设置开机自动应用；PPP 重拨后自动更新业务路由和双向地址转换。</span>
+            <span>应用后修改目标 DSP 设备的纵密网络，并设置开机自动应用；PPP 重拨后自动更新业务路由和双向地址转换。</span>
             <Space wrap>
               <Button htmlType="button" onClick={handleReset}>
                 重置
@@ -621,7 +621,7 @@ const SecurityConfig: React.FC = () => {
                 loading={isGenerating}
                 disabled={!selectedDevice}
               >
-                应用网络配置
+                应用 DSP 网络配置
               </Button>
             </Space>
           </div>

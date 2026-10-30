@@ -19,11 +19,11 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   const rustLibText = fs.readFileSync(path.join(repoRoot, 'src-tauri/src/lib.rs'), 'utf8');
 
   assert.match(layoutText, /key: '\/security-config'/);
-  assert.match(layoutText, /label: '网络配置'/);
+  assert.match(layoutText, /label: 'DSP 网络配置'/);
   assert.match(routeComponentsText, /SecurityConfigPage = lazy\(\(\) => import\('\.\/pages\/SecurityConfig'\)\)/);
   assert.match(routeText, /path: 'security-config'/);
   assert.match(routeText, /<SecurityConfigPage \/>/);
-  assert.match(pageText, /纵密网络配置/);
+  assert.match(pageText, /<h1>DSP 纵密网络配置<\/h1>/);
   assert.doesNotMatch(pageText, /101 \/ 108 维护访问参数|fixed_network/);
   assert.match(pageText, /id: 'forwarding'/);
   assert.match(pageText, /id: 'snat'/);
@@ -42,7 +42,7 @@ test('纵密配置可以从侧边栏切换到独立页面', () => {
   assert.match(pageText, /label="对端 RTU 地址"/);
   assert.match(pageText, /label="对端纵密地址"/);
   assert.match(pageText, /label="对端网关地址"/);
-  assert.match(pageText, />\s*应用网络配置\s*<\/Button>/);
+  assert.match(pageText, />\s*应用 DSP 网络配置\s*<\/Button>/);
   assert.match(pageText, /buildVerticalSecurityScript/);
   assert.match(pageText, />\s*配置预览\s*<\/Button>/);
   assert.match(pageText, /title="纵密配置脚本预览"/);
@@ -141,7 +141,7 @@ test('纵密菜单分组包含登录、访问通路和网络配置', () => {
   const router = read('src/router.tsx');
   const components = read('src/route-components.tsx');
   assert.match(layout, /key: '\/security',[\s\S]*?label: '纵密',[\s\S]*?children:/);
-  for (const [key, label] of [['security-login', '登录'], ['security-access', '访问通路'], ['security-config', '网络配置']]) {
+  for (const [key, label] of [['security-login', '登录'], ['security-access', '访问通路'], ['security-config', 'DSP 网络配置']]) {
     assert.match(layout, new RegExp(`key: '/${key}', label: '${label}'`));
     assert.match(router, new RegExp(`path: '${key}'`));
   }

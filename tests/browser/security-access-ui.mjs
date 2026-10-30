@@ -161,7 +161,7 @@ try {
   assert.equal(await page.getByRole('button', { name: /复制目标 IP/ }).count(), 0, '离开页面的结果不得污染新页面');
   results.push('页面卸载和重新进入不会保留迟到检查结果');
   await page.getByRole('button', { name: '测试：配置页', exact: true }).click();
-  await page.getByRole('heading', { name: '纵密网络配置', exact: true }).waitFor();
+  await page.getByRole('heading', { name: 'DSP 纵密网络配置', exact: true }).waitFor();
   assert.equal(await page.locator('.security-config-maintenance').count(), 0, '业务页移除维护参数详情');
   assert.equal(/11\.22\.33\.44|101\s*\/\s*108\s*维护|代理\s*ARP|SNAT/.test(await page.locator('.security-config-page').innerText()), false, '业务页不展示维护配置');
   assert.equal(await page.getByRole('button', { name: '返回纵密访问', exact: true }).count(), 0);
@@ -184,12 +184,12 @@ try {
   await page.screenshot({ path: path.join(output, 'network-config-preview.png'), fullPage: true });
   await previewDialog.getByRole('button', { name: 'Close', exact: true }).click();
   await previewDialog.waitFor({ state: 'hidden' });
-  await page.getByRole('button', { name: /应用网络配置/ }).click();
+  await page.getByRole('button', { name: /应用 DSP 网络配置/ }).click();
   await page.waitForFunction(() => document.querySelector('.security-config-auth')?.open === true);
   assert.equal((await page.evaluate(() => window.__securityMock.calls)).some(call => call.command === 'deploy_vertical_security_script'), false, '认证缺失时应用不能下发');
   await page.getByLabel('SSH 上传账号', { exact: true }).fill('fixture-user@192.0.2.1:10022');
   await page.getByLabel('SSH 密码', { exact: true }).fill('fixture-password');
-  await page.getByRole('button', { name: /应用网络配置/ }).click();
+  await page.getByRole('button', { name: /应用 DSP 网络配置/ }).click();
   await page.waitForFunction(() => window.__securityMock.calls.some(call => call.command === 'get_vertical_security_status'));
   assert.equal(await page.getByRole('dialog').count(), 0, '应用直接下发，不打开预览或确认弹窗');
   assert.equal((await page.evaluate(() => window.__securityMock.calls)).filter(call => call.command === 'deploy_vertical_security_script').length, 1);

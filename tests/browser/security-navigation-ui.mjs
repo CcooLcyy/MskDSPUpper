@@ -89,7 +89,7 @@ const results = [];
 const pages = [
   { path: '/security-login', label: '登录', title: '纵密登录' },
   { path: '/security-access', label: '访问通路', title: '纵密访问通路' },
-  { path: '/security-config', label: '网络配置', title: '纵密网络配置' },
+  { path: '/security-config', label: 'DSP 网络配置', title: 'DSP 纵密网络配置' },
 ];
 const parent = () => page.locator('.main-layout-sider-menu > .ant-menu-submenu').filter({ has: page.locator('.ant-menu-submenu-title').filter({ hasText: /^纵密$/ }) });
 const parentTitle = () => parent().locator(':scope > .ant-menu-submenu-title');
@@ -290,7 +290,7 @@ try {
     await goDirect(expected);
     const summary = page.locator(expected.path === '/security-login' ? '.security-login-certificate > summary' : '.security-config-auth > summary');
     await summary.click();
-    const action = page.getByRole('button', { name: expected.path === '/security-login' ? '应用连接证书' : /应用网络配置/ });
+    const action = page.getByRole('button', { name: expected.path === '/security-login' ? '应用连接证书' : /应用 DSP 网络配置/ });
     await action.scrollIntoViewIfNeeded();
     const content = page.locator('.ant-layout-content');
     const contentBox = await content.boundingBox();

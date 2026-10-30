@@ -81,7 +81,7 @@ try {
   };
   const start = async () => {
     await page.goto(url, { waitUntil: 'commit', timeout: 15000 });
-    await page.getByRole('heading', { name: '纵密网络配置', exact: true }).waitFor({ timeout: 45000 });
+    await page.getByRole('heading', { name: 'DSP 纵密网络配置', exact: true }).waitFor({ timeout: 45000 });
     await page.locator('.security-config-auth summary').click();
   };
 
