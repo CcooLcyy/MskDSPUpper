@@ -30,3 +30,5 @@ public/icons.svg
 *.njsproj
 *.sln
 *.sw?
+# CI 作业内备用 Node 工具缓存不进入源码。
+/.ci-tools/

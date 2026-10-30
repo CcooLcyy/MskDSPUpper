@@ -35,10 +35,16 @@ entry = {"kind": kind, "arguments": arguments, "started": time.time(),
          "incremental": os.environ.get("CARGO_INCREMENTAL"),
          "units": os.environ.get("CARGO_PROFILE_RELEASE_CODEGEN_UNITS"),
          "optimization": os.environ.get("CARGO_PROFILE_RELEASE_OPT_LEVEL"),
-         "include": os.environ.get("INCLUDE"), "lib": os.environ.get("LIB")}
+         "include": os.environ.get("INCLUDE"), "lib": os.environ.get("LIB"),
+         "node_path_first": os.environ.get("PATH", "").split(os.pathsep)[0]}
 if kind == "python" and arguments[-1:] == ["scripts/gitlab/verify.py"]:
     sys.exit(subprocess.run([sys.executable, *arguments]).returncode)
-exit_code = 17 if kind == os.environ.get("FAIL_TOOL") else 0
+is_runtime = kind == "python" and "scripts/gitlab/ensure_node_runtime.py" in arguments
+if is_runtime:
+    entry["kind"] = "node-runtime"
+exit_code = 17 if entry["kind"] == os.environ.get("FAIL_TOOL") else 0
+if is_runtime and not exit_code:
+    print(json.dumps({"directory": str(Path.cwd() / "pinned-node"), "version": "v24.22.2", "source": "cache"}))
 if kind in ("cargo", "dependencies"):
     # Synchronize real processes instead of assuming a VM starts both within a fixed sleep.
     events = Path(os.environ["STUB_EVENTS"])
@@ -63,6 +69,10 @@ sys.exit(exit_code)
             (workspace / f"{tool}.cmd").write_text(
                 f'@echo off\n"{sys.executable}" "{driver}" {tool} %*\nexit /b %errorlevel%\n',
                 encoding="utf-8", newline="\r\n")
+        pinned = workspace / "pinned-node"
+        pinned.mkdir()
+        for tool in ("npm", "node"):
+            shutil.copyfile(workspace / f"{tool}.cmd", pinned / f"{tool}.cmd")
         (scripts / "ensure_node_modules.py").write_text(
             f'import subprocess, sys\nsys.exit(subprocess.run([sys.executable, {str(driver)!r}, "dependencies"]).returncode)\n',
             encoding="utf-8")
@@ -122,6 +132,27 @@ class ParallelVerificationTests(unittest.TestCase):
         self.assertIn("END cargo-test: exit=0", logs["verify-rust.log"])
         self.assertIn("END lint: exit=0", logs["verify-frontend.log"])
         self.assertEqual(timing["exit_code"], 0)
+
+    # 固定运行环境必须先于测试与打包，且只在当前作业的 PATH 生效。
+    def test_pinned_node_precedes_verification_and_packaging(self):
+        result, events, _ = run_isolated_pipeline()
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        runtime = [event for event in events if event["kind"] == "node-runtime"]
+        self.assertEqual(len(runtime), 2)
+        dependencies = next(event for event in events if event["kind"] == "dependencies")
+        package = next(event for event in events if event["kind"] == "node")
+        self.assertLess(runtime[0]["finished"], dependencies["started"])
+        self.assertLess(runtime[1]["finished"], package["started"])
+        for event in (event for event in events if event["kind"] in ("npm", "node")):
+            self.assertEqual(Path(event["node_path_first"]).name, "pinned-node")
+        self.assertIn("v24.22.2", result.stdout.decode("utf-8", errors="replace"))
+
+    # 不能在固定运行环境准备失败后回退旧 Node 或继续执行其他分支。
+    def test_pinned_node_failure_blocks_verification_and_packaging(self):
+        result, events, logs = run_isolated_pipeline(fail_tool="node-runtime")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([event["kind"] for event in events if event["kind"] != "python"], ["node-runtime"])
+        self.assertNotIn("verify-timing.json", logs)
 
     def test_windows_powershell_runs_overlapping_children(self):
         self.assert_successful_overlap("powershell.exe")

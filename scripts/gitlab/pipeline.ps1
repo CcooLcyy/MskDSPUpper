@@ -32,6 +32,25 @@ if ($Stage -in @('verify', 'package')) {
         throw 'MSVC 或 Windows SDK 环境不完整'
     }
     Write-Host '已导入 x64 MSVC 与 Windows SDK 环境'
+
+    # 仅当前作业使用包含测试运行器修复的固定 Node，不覆盖 Runner 全局工具。
+    $previousNode = Get-Command node -ErrorAction SilentlyContinue
+    if ($previousNode) {
+        $previousVersion = (Get-Item -LiteralPath $previousNode.Source).VersionInfo.ProductVersion
+        Write-Host "Runner 原有 Node：version=$previousVersion，path=$($previousNode.Source)"
+    }
+    $nodeCacheRoot = if ($env:RUNNER_ENV_ROOT) {
+        Join-Path $env:RUNNER_ENV_ROOT 'cache/mskdsp-upper-node'
+    } else {
+        Join-Path $PWD '.ci-tools/node'
+    }
+    $nodeRuntimeJson = Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/ensure_node_runtime.py', '--cache-root', $nodeCacheRoot)
+    $nodeRuntime = $nodeRuntimeJson | ConvertFrom-Json
+    if (-not $nodeRuntime.directory -or -not (Test-Path -LiteralPath $nodeRuntime.directory -PathType Container)) {
+        throw '固定 Node 运行环境返回的目录无效'
+    }
+    $env:PATH = $nodeRuntime.directory + [IO.Path]::PathSeparator + $env:PATH
+    Write-Host "固定 Node 运行环境：version=$($nodeRuntime.version)，source=$($nodeRuntime.source)，path=$($nodeRuntime.directory)"
 }
 
 if ($Stage -in @('verify', 'package')) {
