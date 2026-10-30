@@ -15,12 +15,12 @@ import {
   Space,
   Switch,
   Table,
-  Tabs,
   Tag,
   Typography,
 } from 'antd';
 import {
   CheckCircleOutlined,
+  CloseCircleFilled,
   DeleteOutlined,
   HolderOutlined,
   PlusOutlined,
@@ -35,7 +35,7 @@ import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/real
 import { DATA_BUS_VIEW_QUERY_KEY, normalizeDataBusView } from '../../components/data-bus/data-bus-view';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import { usePointerReorder } from '../../components/interaction/use-pointer-reorder';
-import { createRouteDirectionDraft, hasDraftSelection, changeDraftConnection, getDraftPairs, removeDraftPair, buildDirectionRoutes, classifyDraftRoutes, filterTags, selectFilteredTags, matchSameNameTags, findInvalidConnectionGroups } from './route-draft';
+import { createRouteDirectionDraft, hasDraftSelection, changeDraftConnection, getDraftPairs, removeDraftPair, classifyDraftRoutes, filterTags, selectFilteredTags, matchSameNameTags, findInvalidConnectionGroups } from './route-draft';
 import type { RouteBatchMode, RouteDirectionDraft } from './route-draft';
 import './index.css';
 
@@ -141,6 +141,8 @@ const DataBus: React.FC = () => {
   const [routeSubmitting, setRouteSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const nextDraftId = useRef(0);
+  const activeGroupButtonRef = useRef<HTMLButtonElement | null>(null);
+  const groupEditorRef = useRef<HTMLElement | null>(null);
   const [connectionChange, setConnectionChange] = useState<{ draftId: number; side: 'source' | 'destination'; connId: number } | null>(null);
   const [sourceTagSearch, setSourceTagSearch] = useState('');
   const [destinationTagSearch, setDestinationTagSearch] = useState('');
@@ -276,7 +278,13 @@ const DataBus: React.FC = () => {
     setRouteDrag(null);
     setSourceTagSearch('');
     setDestinationTagSearch('');
+    groupEditorRef.current?.scrollTo({ top: 0 });
+    console.info('数据总线切换映射组，保留各组草稿', { id });
   }, []);
+
+  useEffect(() => {
+    if (routeModalOpen) activeGroupButtonRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [activeRouteDirectionId, routeModalOpen]);
 
   const addMappingGroup = useCallback(() => {
     if (submittingRef.current) return;
@@ -577,7 +585,7 @@ const DataBus: React.FC = () => {
     { title: '状态', key: 'status', width: 100, render: () => <Tag color="green" icon={<CheckCircleOutlined />}>已配置</Tag> },
     {
       title: '操作', key: 'action', width: 74,
-      render: (_, route) => <Popconfirm title="确认删除该路由？" description={`${endpointLabel(route.src)} → ${endpointLabel(route.dst)}`} onConfirm={() => void handleDeleteRoute(route)}><Button danger type="text" size="small">删除</Button></Popconfirm>,
+      render: (_, route) => <Popconfirm title="确认删除该路由？" okText="删除" cancelText="取消" description={`${endpointLabel(route.src)} → ${endpointLabel(route.dst)}`} onConfirm={() => void handleDeleteRoute(route)}><Button danger type="text" size="small">删除</Button></Popconfirm>,
     },
   ];
 
@@ -644,7 +652,7 @@ const DataBus: React.FC = () => {
     <Card
       title={<Space size={8}><span>连接与标签</span><Tag>{connections.length}</Tag></Space>}
       size="small"
-      extra={<Button type="text" size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => void refreshConnections()} />}
+      extra={<Button type="text" size="small" title="刷新连接列表" aria-label="刷新连接列表" icon={<ReloadOutlined aria-hidden />} loading={loading} onClick={() => void refreshConnections()} />}
       styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', minHeight: 0 } }}
       style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
     >
@@ -678,7 +686,7 @@ const DataBus: React.FC = () => {
       storageKey="mskdsp.layout.data-bus.config"
     >
       <div style={{ minHeight: 0 }}>{connectionPanel}</div>
-      <Card title={<Space size={8}><span>路由配置</span><Tag color="blue">{visibleRoutes.length}</Tag></Space>} size="small" extra={<Space><Button danger icon={<DeleteOutlined />} disabled={selectedRouteKeys.length === 0} loading={routeDeleting} onClick={handleDeleteSelectedRoutes}>删除选中</Button><Button danger type="text" disabled={visibleRoutes.length === 0} loading={routeDeleting} onClick={handleDeleteAllRoutes}>全部删除</Button><Button icon={<ReloadOutlined />} onClick={() => void refreshRoutes()}>刷新</Button><Button type="primary" icon={<PlusOutlined />} onClick={openCreateRoute}>新增路由</Button></Space>} styles={{ body: { padding: 0, minHeight: 0, height: '100%' } }} style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <Card title={<Space size={8}><span>路由配置</span><Tag color="blue">{visibleRoutes.length}</Tag></Space>} size="small" extra={<Space><Button danger icon={<DeleteOutlined aria-hidden />} disabled={selectedRouteKeys.length === 0} loading={routeDeleting} onClick={handleDeleteSelectedRoutes}>删除选中</Button><Button danger type="text" disabled={visibleRoutes.length === 0} loading={routeDeleting} onClick={handleDeleteAllRoutes}>全部删除</Button><Button icon={<ReloadOutlined aria-hidden />} onClick={() => void refreshRoutes()}>刷新</Button><Button type="primary" icon={<PlusOutlined aria-hidden />} onClick={openCreateRoute}>新增路由</Button></Space>} styles={{ body: { padding: 0, minHeight: 0, height: '100%' } }} style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '12px 16px', borderBottom: '1px solid #3e3e42' }}><Text type="secondary">单向转发绑定。源端点的最新值会转发到目标端点；同一对点位不允许同时配置两个方向。控制编排自动维护的内部路由不在本页显示。</Text></div>
         <div className="route-filter-toolbar">
           <Select<number | 'all'>
@@ -698,7 +706,7 @@ const DataBus: React.FC = () => {
             style={{ width: 190 }}
           />
           <Input
-            allowClear
+            allowClear={{ clearIcon: <CloseCircleFilled aria-label="清空" /> }}
             prefix={<SearchOutlined />}
             placeholder="筛选端点、标签或连接编号"
             value={routeSearch}
@@ -728,56 +736,79 @@ const DataBus: React.FC = () => {
           locale={{ emptyText: visibleRoutes.length > 0 ? '没有符合条件的路由' : '暂无路由配置，点击右上角新增第一条路由' }}
         />
       </Card>
-    </ResizableSplit> : <Card title={<Space size={8}><span>实时值</span><Tag color={autoRefresh ? 'green' : 'default'} icon={autoRefresh ? <SyncOutlined spin /> : undefined}>{autoRefresh ? '自动刷新 3 秒' : '已暂停'}</Tag></Space>} size="small" extra={<Space><Text type="secondary" style={{ fontSize: 12 }}>{lastRealtimeAt ? `上次更新 ${formatTimestamp(lastRealtimeAt)}` : '尚未更新'}</Text><Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="暂停" onChange={setAutoRefresh} /><Button icon={<ReloadOutlined />} loading={realtimeLoading} onClick={() => void refreshRealtime()}>刷新</Button></Space>} styles={{ body: { padding: 0, minHeight: 0 } }} style={{ flex: 1, minHeight: 0 }}>
-      <div style={{ padding: '12px 16px', display: 'flex', gap: 12, borderBottom: '1px solid #3e3e42' }}><Select value={monitorConnId} onChange={setMonitorConnId} style={{ width: 220 }} options={[{ value: 'all', label: '全部连接' }, ...connections.map((conn) => ({ value: conn.conn_id, label: `${conn.module_name}/${conn.conn_name}` }))]} /><Input allowClear prefix={<SearchOutlined />} placeholder="筛选标签或连接编号" value={monitorSearch} onChange={(event) => setMonitorSearch(event.target.value)} style={{ maxWidth: 320 }} /><Text type="secondary" style={{ marginLeft: 'auto', alignSelf: 'center', fontSize: 12 }}>共 {filteredRealtimeData.length} 条快照</Text></div>
+    </ResizableSplit> : <Card title={<Space size={8}><span>实时值</span><Tag color={autoRefresh ? 'green' : 'default'} icon={autoRefresh ? <SyncOutlined spin /> : undefined}>{autoRefresh ? '自动刷新 3 秒' : '已暂停'}</Tag></Space>} size="small" extra={<Space><Text type="secondary" style={{ fontSize: 12 }}>{lastRealtimeAt ? `上次更新 ${formatTimestamp(lastRealtimeAt)}` : '尚未更新'}</Text><Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="暂停" onChange={setAutoRefresh} /><Button icon={<ReloadOutlined aria-hidden />} loading={realtimeLoading} onClick={() => void refreshRealtime()}>刷新</Button></Space>} styles={{ body: { padding: 0, minHeight: 0 } }} style={{ flex: 1, minHeight: 0 }}>
+      <div style={{ padding: '12px 16px', display: 'flex', gap: 12, borderBottom: '1px solid #3e3e42' }}><Select value={monitorConnId} onChange={setMonitorConnId} style={{ width: 220 }} options={[{ value: 'all', label: '全部连接' }, ...connections.map((conn) => ({ value: conn.conn_id, label: `${conn.module_name}/${conn.conn_name}` }))]} /><Input allowClear={{ clearIcon: <CloseCircleFilled aria-label="清空" /> }} prefix={<SearchOutlined />} placeholder="筛选标签或连接编号" value={monitorSearch} onChange={(event) => setMonitorSearch(event.target.value)} style={{ maxWidth: 320 }} /><Text type="secondary" style={{ marginLeft: 'auto', alignSelf: 'center', fontSize: 12 }}>共 {filteredRealtimeData.length} 条快照</Text></div>
       <Table rowKey="key" columns={realtimeColumns} dataSource={filteredRealtimeData} pagination={false} size="middle" scroll={{ x: 1100, y: 'calc(100vh - 290px)' }} locale={{ emptyText: connections.length ? '暂无最新值，请确认目标连接已启动并产生数据' : '暂无已注册连接' }} />
     </Card>}
     <Modal
       title="批量新增路由"
+      className="route-mapping-modal"
       open={routeModalOpen}
       onOk={() => void handleRouteSubmit()}
       okText={readyRoutes.length > 0 ? `创建 ${readyRoutes.length} 条新路由` : '创建路由'}
+      cancelText="取消"
       confirmLoading={routeSubmitting}
       onCancel={closeRouteModal}
-      closable={!routeSubmitting}
+      closable={{ disabled: routeSubmitting, 'aria-label': '关闭' }}
       maskClosable={!routeSubmitting}
       keyboard={!routeSubmitting}
-      cancelButtonProps={{ disabled: routeSubmitting }}
+      cancelButtonProps={{ disabled: routeSubmitting, autoInsertSpace: false }}
       okButtonProps={{ disabled: routeSubmitting }}
-      styles={{ body: { maxHeight: 'calc(100dvh - 230px)', overflowY: 'auto' } }}
-      style={{ top: 32 }}
-      width={1080}
+      styles={{ body: { padding: 0 } }}
+      style={{ top: 24 }}
+      width={1280}
       destroyOnClose
+      footer={(_, { OkBtn, CancelBtn }) => <div className="route-modal-footer">
+        <div className="route-total-summary" aria-live="polite">
+          <Text>共 {routeDirections.length} 组 · 可创建 <Text strong>{readyRoutes.length}</Text> 条路由</Text>
+          {existingRouteCount + duplicateRouteCount > 0 && <Tag color="orange">重复 {existingRouteCount + duplicateRouteCount} 条</Tag>}
+          {bidirectionalRouteCount + selfRouteCount > 0 && <Tag color="red">冲突 {bidirectionalRouteCount + selfRouteCount} 条</Tag>}
+          {incompletePairCount > 0 && <Tag color="orange">未配对 {incompletePairCount} 个</Tag>}
+        </div>
+        <Space><CancelBtn /><OkBtn /></Space>
+      </div>}
     >
       <ConfigProvider componentDisabled={routeSubmitting}>
-      <Space direction="vertical" size={14} className={routeSubmitting ? 'route-editor-submitting' : undefined} style={{ width: '100%' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text type="secondary">一对一模式按顺序匹配且两侧数量需一致；自定义映射支持一对一、一对多和多对一，也不能配置反向路由。可添加多组连接映射，切换组会保留草稿；两种模式的配对都会纳入提交。</Text>
+      <div className={`route-mapping-workspace${routeSubmitting ? ' route-editor-submitting' : ''}`}>
+        <nav className="route-group-sidebar" aria-label="映射组列表">
+          <div className="route-group-sidebar-header"><Text strong>映射组</Text><Tag>{routeDirections.length} 组</Tag></div>
+          <Button block icon={<PlusOutlined aria-hidden />} onClick={addMappingGroup} disabled={routeSubmitting}>添加映射组</Button>
+          <div className="route-group-list">
+            {routeDirections.map((direction, index) => {
+              const source = connections.find((conn) => conn.conn_id === direction.sourceConnId);
+              const destination = connections.find((conn) => conn.conn_id === direction.destinationConnId);
+              const rows = draftRouteStatuses.filter((row) => row.directionId === direction.id);
+              const conflict = rows.some((row) => row.status === 'self' || row.status === 'bidirectional');
+              const incomplete = getDraftPairs(direction).some((pair) => !pair.sourceTag || !pair.destinationTag);
+              const pending = !source || !destination || incomplete || !hasDraftSelection(direction);
+              const active = direction.id === activeRouteDirectionId;
+              return <button key={direction.id} type="button"
+                ref={active ? activeGroupButtonRef : undefined}
+                className={`route-group-card${active ? ' is-active' : ''}`}
+                aria-current={active ? 'true' : undefined}
+                aria-label={`映射组 ${index + 1}：${groupLabel(direction)}，${rows.length} 条路由，${conflict ? '有冲突' : pending ? '待完善' : '已配对'}`}
+                disabled={routeSubmitting} onClick={() => focusGroup(direction.id)}>
+                <span className="route-group-card-heading"><strong>映射组 {index + 1}</strong><Tag color={conflict ? 'red' : pending ? 'orange' : 'green'}>{conflict ? '有冲突' : pending ? '待完善' : '已配对'}</Tag></span>
+                <span className="route-group-endpoint" title={source ? `${source.module_name}/${source.conn_name}` : undefined}><span>源</span><span>{source ? `${source.module_name}/${source.conn_name}` : '待选择源连接'}</span></span>
+                <span className="route-group-endpoint" title={destination ? `${destination.module_name}/${destination.conn_name}` : undefined}><span>目标</span><span>{destination ? `${destination.module_name}/${destination.conn_name}` : '待选择目标连接'}</span></span>
+                <span className="route-group-card-count">{rows.length} 条完整映射</span>
+              </button>;
+            })}
+          </div>
+          <Text type="secondary" className="route-group-sidebar-hint">各组草稿独立保留，创建时统一提交。</Text>
+        </nav>
+        <section ref={groupEditorRef} className="route-group-editor" aria-label="当前映射组配置">
+        <div className="route-group-editor-heading">
+          <div><Text strong>配置映射组 {routeDirections.findIndex((group) => group.id === activeRouteDirectionId) + 1}</Text><Text type="secondary">选择连接和点位，完成本组映射。</Text></div>
+          <Button danger icon={<DeleteOutlined aria-hidden />} onClick={removeActiveDirection} disabled={routeSubmitting || !activeRouteDirection || routeDirections.length <= 1}>删除当前组</Button>
+        </div>
+        <div className="route-mode-toolbar">
           <Segmented<RouteBatchMode>
             value={routeBatchMode}
             onChange={(value) => { updateActiveDirection({ mode: value }); console.info('数据总线切换配对模式，保留两种模式草稿', { mode: value }); }}
             options={[{ label: '一对一批量配对', value: 'ordered' }, { label: '自定义映射', value: 'custom' }]}
           />
-        </div>
-
-        <div className="route-direction-toolbar">
-          <Tabs
-            className="app-view-tabs route-direction-tabs"
-            activeKey={activeRouteDirectionId === null ? undefined : String(activeRouteDirectionId)}
-            onChange={(key) => focusGroup(Number(key))}
-            items={routeDirections.map((direction, index) => {
-              const count = buildDirectionRoutes(direction, connections).length;
-              return {
-                key: String(direction.id),
-                label: <span title={groupLabel(direction)}>组 {index + 1} · {groupLabel(direction)} · {count} 条</span>,
-                disabled: routeSubmitting,
-              };
-            })}
-          />
-          <Space size={8}>
-            <Button icon={<PlusOutlined />} onClick={addMappingGroup} disabled={routeSubmitting}>添加映射组</Button>
-            <Button danger icon={<DeleteOutlined />} onClick={removeActiveDirection} disabled={routeSubmitting || !activeRouteDirection || routeDirections.length <= 1}>删除当前组</Button>
-          </Space>
+          <Text type="secondary">{routeBatchMode === 'ordered' ? '两侧点位按顺序一对一配对。' : '逐行选择点位，可重复使用源点或目标点。'}</Text>
         </div>
 
         <div className="route-connection-pickers">
@@ -812,12 +843,12 @@ const DataBus: React.FC = () => {
           <div className="route-builder-grid">
             <div className="route-builder-panel route-builder-panel-source">
               <Text strong>源点位</Text>
-              <div className="route-tag-tools"><Input allowClear placeholder="搜索源标签" value={sourceTagSearch} onChange={(event) => setSourceTagSearch(event.target.value)} /><Button size="small" disabled={routeSubmitting || filteredSourceTags.length === 0} onClick={() => updateActiveDirection({ sourceTags: selectFilteredTags(selectedSourceTags, filteredSourceTags) })}>全选筛选结果</Button></div>
+              <div className="route-tag-tools"><Input allowClear={{ clearIcon: <CloseCircleFilled aria-label="清空" /> }} placeholder="搜索源标签" value={sourceTagSearch} onChange={(event) => setSourceTagSearch(event.target.value)} /><Button size="small" disabled={routeSubmitting || filteredSourceTags.length === 0} onClick={() => updateActiveDirection({ sourceTags: selectFilteredTags(selectedSourceTags, filteredSourceTags) })}>全选筛选结果</Button></div>
               <Text type="secondary" className="route-builder-caption">点选标签，按点击顺序编号</Text>
               <Select
                 mode="multiple"
                 showSearch
-                allowClear
+                allowClear={{ clearIcon: <CloseCircleFilled aria-label="清空" /> }}
                 value={selectedSourceTags}
                 placeholder={routeSourceConnId ? '选择源标签' : '请先选择源连接'}
                 options={filteredSourceTags.map((tag) => ({ value: tag, label: tag }))}
@@ -848,7 +879,7 @@ const DataBus: React.FC = () => {
                       <HolderOutlined />
                       <span className="route-selected-index">{index + 1}</span>
                       <span className="route-selected-label">{tag}</span>
-                      <Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('source', tag)} />
+                      <Button type="text" size="small" title="移除源点位" aria-label={`移除源点位：${tag}`} icon={<DeleteOutlined aria-hidden />} onClick={() => toggleRouteTag('source', tag)} />
                     </div>
                   );
                 })}
@@ -856,12 +887,12 @@ const DataBus: React.FC = () => {
             </div>
             <div className="route-builder-panel route-builder-panel-destination">
               <Text strong>目标点位</Text>
-              <div className="route-tag-tools"><Input allowClear placeholder="搜索目标标签" value={destinationTagSearch} onChange={(event) => setDestinationTagSearch(event.target.value)} /><Button size="small" disabled={routeSubmitting || filteredDestinationTags.length === 0} onClick={() => updateActiveDirection({ destinationTags: selectFilteredTags(selectedDestinationTags, filteredDestinationTags) })}>全选筛选结果</Button></div>
+              <div className="route-tag-tools"><Input allowClear={{ clearIcon: <CloseCircleFilled aria-label="清空" /> }} placeholder="搜索目标标签" value={destinationTagSearch} onChange={(event) => setDestinationTagSearch(event.target.value)} /><Button size="small" disabled={routeSubmitting || filteredDestinationTags.length === 0} onClick={() => updateActiveDirection({ destinationTags: selectFilteredTags(selectedDestinationTags, filteredDestinationTags) })}>全选筛选结果</Button></div>
               <Text type="secondary" className="route-builder-caption">点选标签，按点击顺序编号</Text>
               <Select
                 mode="multiple"
                 showSearch
-                allowClear
+                allowClear={{ clearIcon: <CloseCircleFilled aria-label="清空" /> }}
                 value={selectedDestinationTags}
                 placeholder={routeDestinationConnId ? '选择目标标签' : '请先选择目标连接'}
                 options={filteredDestinationTags.map((tag) => ({
@@ -895,7 +926,7 @@ const DataBus: React.FC = () => {
                       <HolderOutlined />
                       <span className="route-selected-index">{index + 1}</span>
                       <span className="route-selected-label">{tag}</span>
-                      <Button type="text" size="small" icon={<DeleteOutlined />} onClick={() => toggleRouteTag('destination', tag)} />
+                      <Button type="text" size="small" title="移除目标点位" aria-label={`移除目标点位：${tag}`} icon={<DeleteOutlined aria-hidden />} onClick={() => toggleRouteTag('destination', tag)} />
                     </div>
                   );
                 })}
@@ -911,21 +942,24 @@ const DataBus: React.FC = () => {
             <div className="route-custom-header"><Text strong>源点位</Text><span className="route-pair-arrow">→</span><Text strong>目标点位</Text><span /></div>
             {customMappings.map((mapping) => {
               return <div className="route-custom-row" key={mapping.id}>
-              <Select showSearch allowClear value={mapping.sourceTag} placeholder="选择源标签" options={routeSourceTags.map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateCustomMapping(mapping.id, 'sourceTag', value)} disabled={routeSubmitting || !routeSourceConnId} optionFilterProp="label" />
+              <Select showSearch allowClear={{ clearIcon: <CloseCircleFilled aria-label="清空" /> }} value={mapping.sourceTag} placeholder="选择源标签" options={routeSourceTags.map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateCustomMapping(mapping.id, 'sourceTag', value)} disabled={routeSubmitting || !routeSourceConnId} optionFilterProp="label" />
               <span className="route-pair-arrow">→</span>
-              <Select showSearch allowClear value={mapping.destinationTag} placeholder="选择目标标签" options={routeDestinationTags.map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateCustomMapping(mapping.id, 'destinationTag', value)} disabled={routeSubmitting || !routeDestinationConnId} optionFilterProp="label" />
-              <Button type="text" danger icon={<DeleteOutlined />} onClick={() => removeCustomMapping(mapping.id)} />
+              <Select showSearch allowClear={{ clearIcon: <CloseCircleFilled aria-label="清空" /> }} value={mapping.destinationTag} placeholder="选择目标标签" options={routeDestinationTags.map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateCustomMapping(mapping.id, 'destinationTag', value)} disabled={routeSubmitting || !routeDestinationConnId} optionFilterProp="label" />
+              <Button type="text" danger title="删除映射行" aria-label="删除映射行" icon={<DeleteOutlined aria-hidden />} onClick={() => removeCustomMapping(mapping.id)} />
             </div>;
             })}
-            <Button type="dashed" icon={<PlusOutlined />} onClick={addCustomMapping}>添加映射行</Button>
+            <Button type="dashed" icon={<PlusOutlined aria-hidden />} onClick={addCustomMapping}>添加映射行</Button>
             <Text type="secondary">源点和目标点均可重复使用；多对一时后到值覆盖，不做求和或平均；同一对点位不能双向。</Text>
           </div>
         )}
 
-        <div className="route-submit-summary">
-          <Text strong>全部映射组提交预览</Text>
-          <Text type="secondary">共 {routeDirections.length} 组，已配置 {draftRoutes.length} 条，其中 {readyRoutes.length} 条可创建；重复 {existingRouteCount + duplicateRouteCount} 条，冲突 {bidirectionalRouteCount + selfRouteCount} 条，未配对 {incompletePairCount} 个。点击组名返回调整。</Text>
+        <details className="route-all-preview">
+          <summary>全部映射明细（{draftRoutes.length} 条）</summary>
+          <div className="route-submit-summary">
+          <Text type="secondary">两种模式的配对均纳入提交。同一对点位不能双向转发。点击组名返回调整。</Text>
+          {!routeDirections.some(hasDraftSelection) && <Text type="secondary">暂无映射，请先选择连接和点位。</Text>}
           {routeDirections.map((direction, index) => {
+            if (!hasDraftSelection(direction)) return null;
             const rows = draftRouteStatuses.filter((row) => row.directionId === direction.id);
             const incomplete = getDraftPairs(direction).filter((pair) => !pair.sourceTag || !pair.destinationTag).length;
             return <div key={direction.id} className="route-group-summary">
@@ -933,11 +967,13 @@ const DataBus: React.FC = () => {
               {rows.map(({ route, status, kind, id }) => <div key={`${kind}-${id}`} className="route-summary-row"><span>{kind === 'ordered' ? '批量' : '自定'}</span><span title={route.src.tag}>{route.src.tag}</span><span className="route-pair-arrow">→</span><span title={route.dst.tag}>{route.dst.tag}</span>{pairStatusTag(status)}</div>)}
             </div>;
           })}
-        </div>
-      </Space>
+          </div>
+        </details>
+        </section>
+      </div>
       </ConfigProvider>
     </Modal>
-    <Modal title="更换连接将影响已选点位" open={connectionChange !== null} onCancel={() => setConnectionChange(null)} footer={[
+    <Modal title="更换连接将影响已选点位" closable={{ 'aria-label': '关闭' }} open={connectionChange !== null} onCancel={() => setConnectionChange(null)} footer={[
       <Button key="cancel" onClick={() => setConnectionChange(null)}>取消</Button>,
       <Button key="replace" danger onClick={() => applyConnectionChange(false)}>更换并清空本侧</Button>,
       <Button key="new" type="primary" onClick={() => applyConnectionChange(true)}>保留当前组并新建</Button>,
