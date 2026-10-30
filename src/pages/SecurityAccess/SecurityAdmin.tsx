@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Input, Popconfirm, Select, Space, Table, Tag } from 'antd';
+import { Alert, Button, Card, Popconfirm, Select, Space, Table, Tag } from 'antd';
 import { api } from '../../adapters';
 import './SecurityAdmin.css';
 
@@ -21,7 +21,6 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
   const [listed, setListed] = useState(false);
   const [certificateType, setCertificateType] = useState(0);
   const [masterType, setMasterType] = useState(5);
-  const [content, setContent] = useState<{ name: string; text: string } | null>(null);
   const active = useRef(false);
   const generation = useRef(0);
   const mounted = useRef(false);
@@ -35,7 +34,7 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
     generation.current += 1;
     active.current = false;
     setBusy(false); setError(null); setNotice(null); setWarning(null); setStatus(null);
-    setCertificates([]); setListed(false); setContent(null);
+    setCertificates([]); setListed(false);
     onBusyChange?.(false);
     return () => { generation.current += 1; onBusyChange?.(false); };
   }, [sessionId, onBusyChange]);
@@ -91,28 +90,21 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
     if (!current() || !file) return;
     const value = await request({ action: 'import_certificate', certificate_type: type, name: file.name, data: file.data });
     if (!current()) return;
-    setNotice(value.message); setContent(null);
+    setNotice(value.message);
     await refresh(current);
   });
-  const readCertificate = (certificate: Certificate, save: boolean) => run(async current => {
+  const exportCertificate = (certificate: Certificate) => run(async current => {
     const value = await request({ action: 'read_certificate', ...certificate });
     if (!current()) return;
     if (!value.data?.length) throw new Error('装置未返回证书内容。');
-    if (save) {
-      const name = certificate.name.split(/[\\/]/).pop() || 'certificate.cer';
-      const path = await api.saveVerticalSecurityFile({ name, data: value.data });
-      if (current()) setNotice(path ? '证书已导出。' : '已取消导出证书。');
-    } else {
-      let text: string;
-      try { text = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(value.data)); }
-      catch { text = '二进制证书（十六进制）\n' + value.data.map(byte => byte.toString(16).padStart(2, '0')).join(' '); }
-      setContent({ name: certificate.name, text });
-    }
+    const name = certificate.name.split(/[\\/]/).pop() || 'certificate.cer';
+    const path = await api.saveVerticalSecurityFile({ name, data: value.data });
+    if (current()) setNotice(path ? '证书已导出。' : '已取消导出证书。');
   });
   const deleteCertificate = (certificate: Certificate) => run(async current => {
     const value = await request({ action: 'delete_certificate', ...certificate });
     if (!current()) return;
-    setNotice(value.message); setContent(null);
+    setNotice(value.message);
     await refresh(current);
   });
 
@@ -131,9 +123,8 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
       <Table<Certificate> size="small" rowKey={item => `${item.certificate_type}:${item.name}`} dataSource={certificates} pagination={false} scroll={{ x: 600 }} locale={{ emptyText: listed ? '装置未返回证书记录' : '请刷新证书列表' }} columns={[
         { title: '证书名称', dataIndex: 'name', ellipsis: true },
         { title: '类别', dataIndex: 'certificate_type', render: type => CERTIFICATE_TYPES[type]?.label ?? `未知类别 ${type}` },
-        { title: '操作', width: 200, render: (_, certificate) => <Space size="small"><Button size="small" disabled={blocked} onClick={() => readCertificate(certificate, false)}>查看内容</Button><Button size="small" disabled={blocked} onClick={() => readCertificate(certificate, true)}>导出</Button><Popconfirm title={`删除证书 ${certificate.name}？`} description="删除会影响装置使用该证书的业务。" okText="删除" cancelText="取消" disabled={blocked} onConfirm={() => deleteCertificate(certificate)}><Button size="small" danger disabled={blocked}>删除</Button></Popconfirm></Space> },
+        { title: '操作', width: 140, render: (_, certificate) => <Space size="small"><Button size="small" disabled={blocked} onClick={() => exportCertificate(certificate)}>导出</Button><Popconfirm title={`删除证书 ${certificate.name}？`} description="删除会影响装置使用该证书的业务。" okText="删除" cancelText="取消" disabled={blocked} onConfirm={() => deleteCertificate(certificate)}><Button size="small" danger disabled={blocked}>删除</Button></Popconfirm></Space> },
       ]} />
-      {content && <div className="security-admin-content"><strong>{content.name} · 原始证书内容</strong><Input.TextArea aria-label="原始证书内容" value={content.text} readOnly autoSize={{ minRows: 5, maxRows: 14 }} /><p>此处显示装置返回的原始内容；不代表证书链或有效期已经验证。</p></div>}
     </Card>
     {busy && <p role="status">正在处理管理员操作，请等待装置应答…</p>}
     {error && <Alert type="error" showIcon title={error} />}

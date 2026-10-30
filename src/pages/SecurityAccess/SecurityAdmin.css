@@ -5,9 +5,6 @@
 .security-admin .ant-select { min-width: 200px; }
 .security-admin-advanced { margin: 14px 0 20px; }
 .security-admin-advanced summary { cursor: pointer; margin-bottom: 12px; }
-.security-admin-content { display: grid; gap: 10px; margin-top: 16px; }
-.security-admin-content textarea { font-family: Consolas, monospace; }
-.security-admin-content p { color: var(--ant-color-text-secondary); margin: 0; font-size: 12px; }
 .security-admin-session { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px; border: 1px solid var(--ant-color-border-secondary); border-radius: 8px; background: var(--ant-color-bg-container); }
 .security-admin-session h2 { margin: 0 0 12px; font-size: 15px; }
 .security-admin-session dl { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; font-size: 13px; }

@@ -101,14 +101,15 @@ try {
   await page.getByText('装置管理系统证书', { exact: true }).last().click();
   await page.getByRole('button', { name: '导入主站证书', exact: true }).click();
   await page.waitForFunction(() => window.__admin.calls.some(call => call.args?.request?.action === 'import_certificate' && call.args.request.certificate_type === 4));
-  await page.getByRole('button', { name: '查看内容', exact: true }).click();
-  await page.getByLabel('原始证书内容', { exact: true }).waitFor();
-  assert.equal(await page.getByLabel('原始证书内容', { exact: true }).inputValue(), 'AB');
+  assert.equal(await page.getByRole('button', { name: '查看内容', exact: true }).count(), 0);
+  assert.equal(await page.getByLabel('原始证书内容', { exact: true }).count(), 0);
+  await page.getByRole('button', { name: /^导\s*出$/ }).click();
+  await page.waitForFunction(() => window.__admin.calls.some(call => call.command === 'save_vertical_security_file' && call.args?.path?.endsWith('master.cer')));
   await page.getByRole('button', { name: /^删\s*除$/ }).click();
   assert.equal((await calls()).some(call => call.action === 'delete_certificate'), false);
   await page.getByRole('tooltip').getByRole('button', { name: /^删\s*除$/ }).click();
   await page.waitForFunction(() => window.__admin.calls.some(call => call.args?.request?.action === 'delete_certificate'));
-  results.push('主站5/4分类导入，查看内容与删除确认');
+  results.push('主站5/4分类导入，移除内容查看并保留导出与删除确认');
 
   await page.getByRole('button', { name: '测试：退出中', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '查询初始化状态', exact: true }).isDisabled(), true);
