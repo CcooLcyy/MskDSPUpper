@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   App as AntApp,
   Button,
   Card,
+  ConfigProvider,
   Input,
   List,
   message,
@@ -34,6 +35,8 @@ import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/real
 import { DATA_BUS_VIEW_QUERY_KEY, normalizeDataBusView } from '../../components/data-bus/data-bus-view';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import { usePointerReorder } from '../../components/interaction/use-pointer-reorder';
+import { createRouteDirectionDraft, hasDraftSelection, changeDraftConnection, getDraftPairs, removeDraftPair, buildDirectionRoutes, classifyDraftRoutes, filterTags, selectFilteredTags, matchSameNameTags, findInvalidConnectionGroups } from './route-draft';
+import type { RouteBatchMode, RouteDirectionDraft } from './route-draft';
 import './index.css';
 
 const { Text } = Typography;
@@ -58,26 +61,6 @@ const isControlOrchestratorConnection = (connection: { module_name: string; conn
 
 const isControlOrchestratorRoute = (route: DcRoute): boolean =>
   isControlOrchestratorConnection(route.src) || isControlOrchestratorConnection(route.dst);
-
-type RouteBatchMode = 'ordered' | 'custom';
-
-type CustomMapping = {
-  id: number;
-  sourceTag?: string;
-  destinationTag?: string;
-};
-
-type RouteDirectionDraft = {
-  id: number;
-  mode: RouteBatchMode;
-  sourceConnId: number | null;
-  destinationConnId: number | null;
-  sourceTags: string[];
-  destinationTags: string[];
-  customMappings: CustomMapping[];
-};
-
-type RouteDraftStatus = 'ready' | 'existing' | 'duplicate' | 'bidirectional' | 'self';
 
 type RouteTagDrag = {
   side: 'source' | 'destination';
@@ -134,20 +117,6 @@ const formatPointValue = (value: DcPointUpdate['value']): string => {
   }
 };
 
-const createRouteDirectionDraft = (
-  id: number,
-  sourceConnId: number | null,
-  destinationConnId: number | null,
-): RouteDirectionDraft => ({
-  id,
-  mode: 'ordered',
-  sourceConnId,
-  destinationConnId,
-  sourceTags: [],
-  destinationTags: [],
-  customMappings: [{ id: id + 1 }],
-});
-
 const DataBus: React.FC = () => {
   const { modal } = AntApp.useApp();
   const [searchParams] = useSearchParams();
@@ -170,6 +139,11 @@ const DataBus: React.FC = () => {
   const [activeRouteDirectionId, setActiveRouteDirectionId] = useState<number | null>(null);
   const [routeDrag, setRouteDrag] = useState<RouteTagDrag | null>(null);
   const [routeSubmitting, setRouteSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const nextDraftId = useRef(0);
+  const [connectionChange, setConnectionChange] = useState<{ draftId: number; side: 'source' | 'destination'; connId: number } | null>(null);
+  const [sourceTagSearch, setSourceTagSearch] = useState('');
+  const [destinationTagSearch, setDestinationTagSearch] = useState('');
   const [selectedRouteKeys, setSelectedRouteKeys] = useState<string[]>([]);
   const [routeDeleting, setRouteDeleting] = useState(false);
   const [routeSourceFilter, setRouteSourceFilter] = useState<number | 'all'>('all');
@@ -276,7 +250,9 @@ const DataBus: React.FC = () => {
     .filter((connection) => !isControlOrchestratorConnection(connection))
     .map((connection) => ({ value: connection.conn_id, label: `${connection.module_name}/${connection.conn_name}` }));
   const openCreateRoute = useCallback(() => {
-    const directionId = Date.now();
+    const directionId = ++nextDraftId.current;
+    setSourceTagSearch('');
+    setDestinationTagSearch('');
     const selectedConnection = connections.find((connection) => connection.conn_id === selectedConnId) ?? null;
     const defaultSourceConnId = isControlOrchestratorConnection(selectedConnection)
       ? connections.find((connection) => !isControlOrchestratorConnection(connection))?.conn_id ?? null
@@ -288,93 +264,80 @@ const DataBus: React.FC = () => {
   }, [connections, selectedConnId]);
 
   const updateActiveDirection = useCallback((patch: Partial<RouteDirectionDraft>) => {
-    if (activeRouteDirectionId === null) return;
+    if (activeRouteDirectionId === null || submittingRef.current) return;
     setRouteDirections((current) => current.map((direction) => (
       direction.id === activeRouteDirectionId ? { ...direction, ...patch } : direction
     )));
   }, [activeRouteDirectionId]);
 
-  const addReverseDirection = useCallback(() => {
-    if (!activeRouteDirection || routeDirections.length >= 2) return;
-    const directionId = Date.now();
-    const nextDirection = createRouteDirectionDraft(
-      directionId,
-      activeRouteDirection.destinationConnId,
-      activeRouteDirection.sourceConnId,
-    );
-    setRouteDirections((current) => [...current, nextDirection]);
-    setActiveRouteDirectionId(directionId);
+  const focusGroup = useCallback((id: number) => {
+    if (submittingRef.current) return;
+    setActiveRouteDirectionId(id);
     setRouteDrag(null);
-  }, [activeRouteDirection, routeDirections.length]);
+    setSourceTagSearch('');
+    setDestinationTagSearch('');
+  }, []);
+
+  const addMappingGroup = useCallback(() => {
+    if (submittingRef.current) return;
+    const id = ++nextDraftId.current;
+    setRouteDirections((current) => [...current, createRouteDirectionDraft(id, null, null)]);
+    focusGroup(id);
+    console.info('数据总线已添加映射组', { id });
+  }, [focusGroup]);
 
   const removeActiveDirection = useCallback(() => {
-    if (activeRouteDirectionId === null || routeDirections.length <= 1) return;
-    const activeIndex = routeDirections.findIndex((direction) => direction.id === activeRouteDirectionId);
-    const remainingDirections = routeDirections.filter((direction) => direction.id !== activeRouteDirectionId);
-    const nextActiveIndex = Math.min(Math.max(activeIndex, 0), remainingDirections.length - 1);
-    setRouteDirections(remainingDirections);
-    setActiveRouteDirectionId(remainingDirections[nextActiveIndex]?.id ?? null);
-    setRouteDrag(null);
-  }, [activeRouteDirectionId, routeDirections]);
+    if (!activeRouteDirection || routeDirections.length <= 1 || submittingRef.current) return;
+    const remove = () => {
+      const remaining = routeDirections.filter((direction) => direction.id !== activeRouteDirection.id);
+      setRouteDirections(remaining);
+      focusGroup(remaining[0].id);
+      console.info('数据总线已删除映射组', { id: activeRouteDirection.id });
+    };
+    if (hasDraftSelection(activeRouteDirection)) {
+      modal.confirm({ title: '删除当前映射组？', content: '该组已选点位和配对草稿将被删除。其他组保留。', okText: '删除映射组', cancelText: '保留', okButtonProps: { danger: true }, onOk: remove });
+    } else remove();
+  }, [activeRouteDirection, routeDirections, focusGroup, modal]);
 
-  const buildEndpoint = useCallback((conn: DcConnectionInfo | null, tag: string): DcRoute['src'] => ({
-    module_name: conn?.module_name ?? '',
-    conn_name: conn?.conn_name ?? '',
-    conn_id: conn?.conn_id,
-    tag,
-  }), []);
+  const requestConnectionChange = (side: 'source' | 'destination', connId: number) => {
+    if (!activeRouteDirection || submittingRef.current) return;
+    const next = changeDraftConnection(activeRouteDirection, side, connId);
+    if (next === activeRouteDirection) return;
+    const affected = side === 'source'
+      ? activeRouteDirection.sourceTags.length + activeRouteDirection.customMappings.filter((row) => row.sourceTag).length
+      : activeRouteDirection.destinationTags.length + activeRouteDirection.customMappings.filter((row) => row.destinationTag).length;
+    if (affected > 0) { console.info('数据总线已保护连接切换前的草稿', { side, affected }); setConnectionChange({ draftId: activeRouteDirection.id, side, connId }); }
+    else updateActiveDirection(next);
+  };
 
-  const buildDirectionRoutes = useCallback((direction: RouteDirectionDraft): DcRoute[] => {
-    const sourceConn = connections.find((conn) => conn.conn_id === direction.sourceConnId) ?? null;
-    const destinationConn = connections.find((conn) => conn.conn_id === direction.destinationConnId) ?? null;
-    const orderedRoutes = direction.sourceTags
-      .map((sourceTag, index) => ({ sourceTag, destinationTag: direction.destinationTags[index] }))
-      .filter((pair): pair is { sourceTag: string; destinationTag: string } => Boolean(pair.sourceTag && pair.destinationTag))
-      .map(({ sourceTag, destinationTag }) => ({
-        src: buildEndpoint(sourceConn, sourceTag),
-        dst: buildEndpoint(destinationConn, destinationTag),
-      }));
-    const customRoutes = direction.customMappings
-      .map((mapping) => ({ sourceTag: mapping.sourceTag, destinationTag: mapping.destinationTag }))
-      .filter((pair): pair is { sourceTag: string; destinationTag: string } => Boolean(pair.sourceTag && pair.destinationTag))
-      .map(({ sourceTag, destinationTag }) => ({
-        src: buildEndpoint(sourceConn, sourceTag),
-        dst: buildEndpoint(destinationConn, destinationTag),
-      }));
-    return [...orderedRoutes, ...customRoutes];
-  }, [buildEndpoint, connections]);
+  const applyConnectionChange = (newGroup: boolean) => {
+    if (!connectionChange || submittingRef.current) return;
+    const current = routeDirections.find((draft) => draft.id === connectionChange.draftId);
+    if (!current) return;
+    const next = changeDraftConnection(current, connectionChange.side, connectionChange.connId);
+    if (newGroup) {
+      const id = ++nextDraftId.current;
+      setRouteDirections((drafts) => [...drafts, { ...next, id }]);
+      focusGroup(id);
+    } else {
+      setRouteDirections((drafts) => drafts.map((draft) => draft.id === current.id ? next : draft));
+    }
+    setConnectionChange(null);
+    console.info('数据总线已更换映射连接', { side: connectionChange.side, newGroup });
+  };
 
-  const draftRoutes = useMemo(
-    () => routeDirections.flatMap((direction) => buildDirectionRoutes(direction)),
-    [buildDirectionRoutes, routeDirections],
-  );
-
-  const getDraftStatus = useCallback((route: DcRoute): RouteDraftStatus => {
-    if (endpointKey(route.src) === endpointKey(route.dst)) return 'self';
-    if (routes.some((item) => routeKey(item) === routeKey(route))) return 'existing';
-    return 'ready';
-  }, [routes]);
+  const closeRouteModal = () => {
+    if (submittingRef.current) return;
+    if (routeDirections.some(hasDraftSelection)) {
+      modal.confirm({ title: '放弃本次路由草稿？', content: '关闭后，所有映射组中尚未创建的点位配对将被丢弃。', okText: '放弃草稿', cancelText: '继续配置', okButtonProps: { danger: true }, onOk: () => setRouteModalOpen(false) });
+    } else setRouteModalOpen(false);
+  };
 
   const draftRouteStatuses = useMemo(
-    () => {
-      const seen = new Set<string>();
-      const draftRouteKeys = new Set(draftRoutes.map(routeKey));
-      const existingRouteKeys = new Set(routes.map(routeKey));
-      return draftRoutes.map((route) => {
-        const key = routeKey(route);
-        const status = getDraftStatus(route);
-        const reverseKey = `${endpointKey(route.dst)}->${endpointKey(route.src)}`;
-        const nextStatus = status === 'ready' && (existingRouteKeys.has(reverseKey) || draftRouteKeys.has(reverseKey))
-          ? 'bidirectional'
-          : status === 'ready' && seen.has(key)
-            ? 'duplicate'
-            : status;
-        seen.add(key);
-        return { route, status: nextStatus as RouteDraftStatus };
-      });
-    },
-    [draftRoutes, getDraftStatus, routes],
+    () => classifyDraftRoutes(routeDirections, connections, routes),
+    [routeDirections, connections, routes],
   );
+  const draftRoutes = draftRouteStatuses.map((item) => item.route);
   const readyRoutes = useMemo(
     () => draftRouteStatuses.filter((item) => item.status === 'ready').map((item) => item.route),
     [draftRouteStatuses],
@@ -394,10 +357,12 @@ const DataBus: React.FC = () => {
   }, 0), [routeDirections]);
 
   const submitRouteBatch = useCallback(async (routesToSubmit: DcRoute[]) => {
+    if (submittingRef.current) return;
     if (routesToSubmit.length === 0) {
       messageApi.info('没有新的路由需要创建');
       return;
     }
+    submittingRef.current = true;
     setRouteSubmitting(true);
     try {
       console.info('DataBus 批量创建路由', {
@@ -414,26 +379,21 @@ const DataBus: React.FC = () => {
     } catch (e) {
       messageApi.error(`批量添加路由失败: ${e}`);
     } finally {
+      submittingRef.current = false;
       setRouteSubmitting(false);
     }
   }, [bidirectionalRouteCount, duplicateRouteCount, existingRouteCount, incompletePairCount, messageApi, refreshRoutes]);
 
   const handleRouteSubmit = useCallback(async () => {
-    const hasDraftSelection = routeDirections.some((direction) => direction.sourceTags.length > 0
-      || direction.destinationTags.length > 0
-      || direction.customMappings.some((mapping) => Boolean(mapping.sourceTag || mapping.destinationTag)));
-    if (!hasDraftSelection) {
+    if (submittingRef.current) return;
+    if (!routeDirections.some(hasDraftSelection)) {
       messageApi.error('请先配置至少一条路由');
       return;
     }
-    const incompleteDirectionCount = routeDirections.filter((direction) => {
-      const hasDirectionSelection = direction.sourceTags.length > 0
-        || direction.destinationTags.length > 0
-        || direction.customMappings.some((mapping) => Boolean(mapping.sourceTag || mapping.destinationTag));
-      return hasDirectionSelection && (direction.sourceConnId === null || direction.destinationConnId === null);
-    }).length;
+    const incompleteDirectionCount = findInvalidConnectionGroups(routeDirections, connections).length;
     if (incompleteDirectionCount > 0) {
-      messageApi.error(`还有 ${incompleteDirectionCount} 个方向没有完整选择源连接和目标连接`);
+      console.warn('数据总线提交被连接校验阻止', { incompleteDirectionCount });
+      messageApi.error(`还有 ${incompleteDirectionCount} 个映射组未选择有效的源连接和目标连接，请重新选择`);
       return;
     }
     if (selfRouteCount > 0) {
@@ -450,7 +410,7 @@ const DataBus: React.FC = () => {
     }
     if (incompletePairCount > 0) {
       modal.confirm({
-        title: '左右点位数量不一致',
+        title: '存在未配对点位',
         content: `当前有 ${readyRoutes.length + existingRouteCount + duplicateRouteCount} 条完整配对，将创建其中 ${readyRoutes.length} 条新路由；已存在或本次重复的 ${existingRouteCount + duplicateRouteCount} 条会跳过，另有 ${incompletePairCount} 个点位未配对。请确认当前顺序是否正确。`,
         okText: `仅创建 ${readyRoutes.length} 条已配对路由`,
         cancelText: '返回调整',
@@ -459,7 +419,7 @@ const DataBus: React.FC = () => {
       return;
     }
     await submitRouteBatch(readyRoutes);
-  }, [bidirectionalRouteCount, duplicateRouteCount, existingRouteCount, incompletePairCount, messageApi, modal, readyRoutes, routeDirections, selfRouteCount, submitRouteBatch]);
+  }, [bidirectionalRouteCount, connections, duplicateRouteCount, existingRouteCount, incompletePairCount, messageApi, modal, readyRoutes, routeDirections, selfRouteCount, submitRouteBatch]);
 
   const toggleRouteTag = useCallback((side: 'source' | 'destination', tag: string) => {
     const current = side === 'source' ? selectedSourceTags : selectedDestinationTags;
@@ -523,6 +483,36 @@ const DataBus: React.FC = () => {
   const removeCustomMapping = useCallback((id: number) => {
     updateActiveDirection({ customMappings: customMappings.filter((mapping) => mapping.id !== id) });
   }, [customMappings, updateActiveDirection]);
+
+  const filteredSourceTags = filterTags(routeSourceTags, sourceTagSearch);
+  const filteredDestinationTags = filterTags(routeDestinationTags, destinationTagSearch);
+  const groupLabel = (draft: RouteDirectionDraft) => {
+    const source = connections.find((conn) => conn.conn_id === draft.sourceConnId);
+    const destination = connections.find((conn) => conn.conn_id === draft.destinationConnId);
+    return `${source ? `${source.module_name}/${source.conn_name}` : '待选源连接'} → ${destination ? `${destination.module_name}/${destination.conn_name}` : '待选目标连接'}`;
+  };
+  const pairStatusLabel = (status?: string) => status === 'ready' ? '可创建' : status === 'existing' ? '已存在' : status === 'duplicate' ? '本次重复' : status === 'bidirectional' ? '双向不允许' : status === 'self' ? '自环' : '未配对';
+  const pairStatusTag = (status?: string) => <Tag color={status === 'ready' ? 'green' : status === 'self' || status === 'bidirectional' ? 'red' : 'orange'}>{pairStatusLabel(status)}</Tag>;
+  const previewSameNameMatch = () => {
+    if (!activeRouteDirection || submittingRef.current) return;
+    const matches = matchSameNameTags(routeSourceTags, routeDestinationTags);
+    if (matches.sourceTags.length === 0) { messageApi.info('两侧暂无完全同名的标签'); return; }
+    modal.confirm({
+      title: `同名匹配预览（${matches.sourceTags.length} 对）`,
+      width: 680,
+      content: <div className="route-match-preview"><Text type="secondary">采用后将替换当前组的一对一选择，自定义映射保留。请核对以下配对。</Text>{matches.sourceTags.map((tag) => <div key={tag}>{tag} → {tag}</div>)}</div>,
+      okText: '采用这些配对', cancelText: '返回配置',
+      onOk: () => { updateActiveDirection(matches); console.info('数据总线已采用同名标签配对', { count: matches.sourceTags.length }); },
+    });
+  };
+  const currentPairs = activeRouteDirection ? getDraftPairs(activeRouteDirection).filter((pair) => pair.kind === routeBatchMode) : [];
+  const pairColumns: ColumnsType<(typeof currentPairs)[number]> = [
+    { title: '序号', width: 60, render: (_, __, index) => index + 1 },
+    { title: '源点位', dataIndex: 'sourceTag', render: (tag?: string) => tag || <Text type="secondary">待选择</Text> },
+    { title: '目标点位', dataIndex: 'destinationTag', render: (tag?: string) => tag || <Text type="secondary">待选择</Text> },
+    { title: '校验结果', width: 120, render: (_, pair) => pairStatusTag(draftRouteStatuses.find((row) => row.directionId === activeRouteDirectionId && row.kind === pair.kind && row.id === pair.id)?.status) },
+    { title: '操作', width: 70, render: (_, pair) => <Button type="text" danger size="small" onClick={() => { if (activeRouteDirection) updateActiveDirection(removeDraftPair(activeRouteDirection, pair.kind, pair.id)); }}>移除</Button> },
+  ];
 
   const deleteRouteBatch = useCallback(async (routesToDelete: DcRoute[], successText: string) => {
     if (routesToDelete.length === 0) {
@@ -748,16 +738,24 @@ const DataBus: React.FC = () => {
       onOk={() => void handleRouteSubmit()}
       okText={readyRoutes.length > 0 ? `创建 ${readyRoutes.length} 条新路由` : '创建路由'}
       confirmLoading={routeSubmitting}
-      onCancel={() => setRouteModalOpen(false)}
+      onCancel={closeRouteModal}
+      closable={!routeSubmitting}
+      maskClosable={!routeSubmitting}
+      keyboard={!routeSubmitting}
+      cancelButtonProps={{ disabled: routeSubmitting }}
+      okButtonProps={{ disabled: routeSubmitting }}
+      styles={{ body: { maxHeight: 'calc(100dvh - 230px)', overflowY: 'auto' } }}
+      style={{ top: 32 }}
       width={1080}
       destroyOnClose
     >
-      <Space direction="vertical" size={14} style={{ width: '100%' }}>
+      <ConfigProvider componentDisabled={routeSubmitting}>
+      <Space direction="vertical" size={14} className={routeSubmitting ? 'route-editor-submitting' : undefined} style={{ width: '100%' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text type="secondary">一对一模式按顺序匹配且两侧数量需一致；自定义映射支持一对一、一对多和多对一，也不能配置反向路由。方向最多保留正向和反向两个。</Text>
+          <Text type="secondary">一对一模式按顺序匹配且两侧数量需一致；自定义映射支持一对一、一对多和多对一，也不能配置反向路由。可添加多组连接映射，切换组会保留草稿；两种模式的配对都会纳入提交。</Text>
           <Segmented<RouteBatchMode>
             value={routeBatchMode}
-            onChange={(value) => updateActiveDirection({ mode: value })}
+            onChange={(value) => { updateActiveDirection({ mode: value }); console.info('数据总线切换配对模式，保留两种模式草稿', { mode: value }); }}
             options={[{ label: '一对一批量配对', value: 'ordered' }, { label: '自定义映射', value: 'custom' }]}
           />
         </div>
@@ -766,19 +764,19 @@ const DataBus: React.FC = () => {
           <Tabs
             className="app-view-tabs route-direction-tabs"
             activeKey={activeRouteDirectionId === null ? undefined : String(activeRouteDirectionId)}
-            onChange={(key) => { setActiveRouteDirectionId(Number(key)); setRouteDrag(null); }}
+            onChange={(key) => focusGroup(Number(key))}
             items={routeDirections.map((direction, index) => {
-              const source = connections.find((conn) => conn.conn_id === direction.sourceConnId);
-              const destination = connections.find((conn) => conn.conn_id === direction.destinationConnId);
+              const count = buildDirectionRoutes(direction, connections).length;
               return {
                 key: String(direction.id),
-                label: source && destination ? `${source.conn_name} → ${destination.conn_name}` : `方向 ${index + 1}`,
+                label: <span title={groupLabel(direction)}>组 {index + 1} · {groupLabel(direction)} · {count} 条</span>,
+                disabled: routeSubmitting,
               };
             })}
           />
           <Space size={8}>
-            <Button icon={<PlusOutlined />} onClick={addReverseDirection} disabled={!activeRouteDirection || routeDirections.length >= 2}>添加反向配置</Button>
-            <Button danger icon={<DeleteOutlined />} onClick={removeActiveDirection} disabled={!activeRouteDirection || routeDirections.length <= 1}>删除当前方向</Button>
+            <Button icon={<PlusOutlined />} onClick={addMappingGroup} disabled={routeSubmitting}>添加映射组</Button>
+            <Button danger icon={<DeleteOutlined />} onClick={removeActiveDirection} disabled={routeSubmitting || !activeRouteDirection || routeDirections.length <= 1}>删除当前组</Button>
           </Space>
         </div>
 
@@ -790,7 +788,7 @@ const DataBus: React.FC = () => {
               value={routeSourceConnId ?? undefined}
               placeholder="选择源连接"
               options={routeConnectionOptions}
-              onChange={(value) => updateActiveDirection({ sourceConnId: value, sourceTags: [], customMappings: [{ id: Date.now() }] })}
+              onChange={(value) => requestConnectionChange('source', value)}
               style={{ width: '100%', marginTop: 8 }}
               optionFilterProp="label"
             />
@@ -803,7 +801,7 @@ const DataBus: React.FC = () => {
               value={routeDestinationConnId ?? undefined}
               placeholder="选择目标连接"
               options={routeConnectionOptions}
-              onChange={(value) => updateActiveDirection({ destinationConnId: value, destinationTags: [], customMappings: [{ id: Date.now() }] })}
+              onChange={(value) => requestConnectionChange('destination', value)}
               style={{ width: '100%', marginTop: 8 }}
               optionFilterProp="label"
             />
@@ -814,6 +812,7 @@ const DataBus: React.FC = () => {
           <div className="route-builder-grid">
             <div className="route-builder-panel route-builder-panel-source">
               <Text strong>源点位</Text>
+              <div className="route-tag-tools"><Input allowClear placeholder="搜索源标签" value={sourceTagSearch} onChange={(event) => setSourceTagSearch(event.target.value)} /><Button size="small" disabled={routeSubmitting || filteredSourceTags.length === 0} onClick={() => updateActiveDirection({ sourceTags: selectFilteredTags(selectedSourceTags, filteredSourceTags) })}>全选筛选结果</Button></div>
               <Text type="secondary" className="route-builder-caption">点选标签，按点击顺序编号</Text>
               <Select
                 mode="multiple"
@@ -821,8 +820,8 @@ const DataBus: React.FC = () => {
                 allowClear
                 value={selectedSourceTags}
                 placeholder={routeSourceConnId ? '选择源标签' : '请先选择源连接'}
-                options={routeSourceTags.map((tag) => ({ value: tag, label: tag }))}
-                disabled={!routeSourceConnId || routeSourceTags.length === 0}
+                options={filteredSourceTags.map((tag) => ({ value: tag, label: tag }))}
+                disabled={routeSubmitting || !routeSourceConnId || routeSourceTags.length === 0}
                 onChange={(value) => updateActiveDirection({ sourceTags: value })}
                 optionFilterProp="label"
                 maxTagCount={0}
@@ -857,6 +856,7 @@ const DataBus: React.FC = () => {
             </div>
             <div className="route-builder-panel route-builder-panel-destination">
               <Text strong>目标点位</Text>
+              <div className="route-tag-tools"><Input allowClear placeholder="搜索目标标签" value={destinationTagSearch} onChange={(event) => setDestinationTagSearch(event.target.value)} /><Button size="small" disabled={routeSubmitting || filteredDestinationTags.length === 0} onClick={() => updateActiveDirection({ destinationTags: selectFilteredTags(selectedDestinationTags, filteredDestinationTags) })}>全选筛选结果</Button></div>
               <Text type="secondary" className="route-builder-caption">点选标签，按点击顺序编号</Text>
               <Select
                 mode="multiple"
@@ -864,11 +864,11 @@ const DataBus: React.FC = () => {
                 allowClear
                 value={selectedDestinationTags}
                 placeholder={routeDestinationConnId ? '选择目标标签' : '请先选择目标连接'}
-                options={routeDestinationTags.map((tag) => ({
+                options={filteredDestinationTags.map((tag) => ({
                   value: tag,
                   label: tag,
                 }))}
-                disabled={!routeDestinationConnId || routeDestinationTags.length === 0}
+                disabled={routeSubmitting || !routeDestinationConnId || routeDestinationTags.length === 0}
                 onChange={(value) => updateActiveDirection({ destinationTags: value })}
                 optionFilterProp="label"
                 maxTagCount={0}
@@ -902,21 +902,8 @@ const DataBus: React.FC = () => {
               </div>
             </div>
             <div className="route-pair-preview">
-              <Text type="secondary">配对预览</Text>
-              {Array.from({ length: Math.max(selectedSourceTags.length, selectedDestinationTags.length) }).map((_, index) => {
-                const sourceTag = selectedSourceTags.length === 1 && selectedDestinationTags.length > 1
-                  ? selectedSourceTags[0]
-                  : selectedSourceTags[index];
-                const destinationTag = selectedDestinationTags.length === 1 && selectedSourceTags.length > 1
-                  ? selectedDestinationTags[0]
-                  : selectedDestinationTags[index];
-                const route = sourceTag && destinationTag ? { src: buildEndpoint(routeSourceConn, sourceTag), dst: buildEndpoint(routeDestinationConn, destinationTag) } : null;
-                const status = route
-                  ? draftRouteStatuses.find(({ route: draftRoute }) => routeKey(draftRoute) === routeKey(route))?.status ?? getDraftStatus(route)
-                  : null;
-                return <div className="route-pair-row" key={index}><span className="route-pair-index">{index + 1}</span><span>{sourceTag ?? '待选择'}</span><span className="route-pair-arrow">→</span><span>{destinationTag ?? '待选择'}</span>{status === 'existing' ? <Tag color="orange">已存在</Tag> : status === 'duplicate' ? <Tag color="orange">本次重复</Tag> : status === 'bidirectional' ? <Tag color="red">双向不允许</Tag> : status === 'self' ? <Tag color="red">自环</Tag> : null}</div>;
-              })}
-              {selectedSourceTags.length === 0 && selectedDestinationTags.length === 0 ? <Text type="secondary">左右选择点位后将在这里显示匹配关系</Text> : null}
+              <Space wrap><Text strong>配对预览</Text><Button size="small" onClick={previewSameNameMatch} disabled={routeSubmitting || !routeSourceConnId || !routeDestinationConnId}>按同名标签匹配</Button><Text type="secondary">调整上方两侧顺序后，按序号配对。</Text></Space>
+              <Table size="small" rowKey={(pair) => `${pair.kind}-${pair.id}`} columns={pairColumns} dataSource={currentPairs} pagination={false} scroll={{ y: 240, x: 560 }} locale={{ emptyText: '左右选择点位后显示配对关系' }} />
             </div>
           </div>
         ) : (
@@ -924,23 +911,38 @@ const DataBus: React.FC = () => {
             <div className="route-custom-header"><Text strong>源点位</Text><span className="route-pair-arrow">→</span><Text strong>目标点位</Text><span /></div>
             {customMappings.map((mapping) => {
               return <div className="route-custom-row" key={mapping.id}>
-              <Select showSearch allowClear value={mapping.sourceTag} placeholder="选择源标签" options={routeSourceTags.map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateCustomMapping(mapping.id, 'sourceTag', value)} disabled={!routeSourceConnId} optionFilterProp="label" />
+              <Select showSearch allowClear value={mapping.sourceTag} placeholder="选择源标签" options={routeSourceTags.map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateCustomMapping(mapping.id, 'sourceTag', value)} disabled={routeSubmitting || !routeSourceConnId} optionFilterProp="label" />
               <span className="route-pair-arrow">→</span>
-              <Select showSearch allowClear value={mapping.destinationTag} placeholder="选择目标标签" options={routeDestinationTags.map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateCustomMapping(mapping.id, 'destinationTag', value)} disabled={!routeDestinationConnId} optionFilterProp="label" />
+              <Select showSearch allowClear value={mapping.destinationTag} placeholder="选择目标标签" options={routeDestinationTags.map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateCustomMapping(mapping.id, 'destinationTag', value)} disabled={routeSubmitting || !routeDestinationConnId} optionFilterProp="label" />
               <Button type="text" danger icon={<DeleteOutlined />} onClick={() => removeCustomMapping(mapping.id)} />
             </div>;
             })}
             <Button type="dashed" icon={<PlusOutlined />} onClick={addCustomMapping}>添加映射行</Button>
-            <Text type="secondary">源点和目标点均可重复使用，以实现一对多或多对一；不能配置反向路由。</Text>
+            <Text type="secondary">源点和目标点均可重复使用；多对一时后到值覆盖，不做求和或平均；同一对点位不能双向。</Text>
           </div>
         )}
 
         <div className="route-submit-summary">
-          <Text strong>提交预览</Text>
-          <Text type="secondary">已配置 {draftRoutes.length} 条，其中 {readyRoutes.length} 条可创建{incompletePairCount > 0 ? `，${incompletePairCount} 个点位未配对` : ''}</Text>
-          {draftRouteStatuses.map(({ route, status }, index) => <div key={`${routeKey(route)}-${index}`} className="route-summary-row"><span>{index + 1}</span><span>{route.src.tag}</span><span className="route-pair-arrow">→</span><span>{route.dst.tag}</span><Tag color={status === 'ready' ? 'green' : status === 'self' || status === 'bidirectional' ? 'red' : 'orange'}>{status === 'ready' ? '可创建' : status === 'existing' ? '已存在' : status === 'duplicate' ? '本次重复' : status === 'bidirectional' ? '双向不允许' : '自环'}</Tag></div>)}
+          <Text strong>全部映射组提交预览</Text>
+          <Text type="secondary">共 {routeDirections.length} 组，已配置 {draftRoutes.length} 条，其中 {readyRoutes.length} 条可创建；重复 {existingRouteCount + duplicateRouteCount} 条，冲突 {bidirectionalRouteCount + selfRouteCount} 条，未配对 {incompletePairCount} 个。点击组名返回调整。</Text>
+          {routeDirections.map((direction, index) => {
+            const rows = draftRouteStatuses.filter((row) => row.directionId === direction.id);
+            const incomplete = getDraftPairs(direction).filter((pair) => !pair.sourceTag || !pair.destinationTag).length;
+            return <div key={direction.id} className="route-group-summary">
+              <Button type="link" size="small" onClick={() => focusGroup(direction.id)}>组 {index + 1} · {groupLabel(direction)} · {rows.length} 条{incomplete ? ` · 未配对 ${incomplete} 个` : ''}</Button>
+              {rows.map(({ route, status, kind, id }) => <div key={`${kind}-${id}`} className="route-summary-row"><span>{kind === 'ordered' ? '批量' : '自定'}</span><span title={route.src.tag}>{route.src.tag}</span><span className="route-pair-arrow">→</span><span title={route.dst.tag}>{route.dst.tag}</span>{pairStatusTag(status)}</div>)}
+            </div>;
+          })}
         </div>
       </Space>
+      </ConfigProvider>
+    </Modal>
+    <Modal title="更换连接将影响已选点位" open={connectionChange !== null} onCancel={() => setConnectionChange(null)} footer={[
+      <Button key="cancel" onClick={() => setConnectionChange(null)}>取消</Button>,
+      <Button key="replace" danger onClick={() => applyConnectionChange(false)}>更换并清空本侧</Button>,
+      <Button key="new" type="primary" onClick={() => applyConnectionChange(true)}>保留当前组并新建</Button>,
+    ]}>
+      <Text>更换{connectionChange?.side === 'source' ? '源' : '目标'}连接会清空本侧已选标签及自定义映射的本侧点位，另一侧选择保留。新建映射组会完整保留当前组草稿。</Text>
     </Modal>
   </div>;
 };

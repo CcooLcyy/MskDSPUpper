@@ -4,7 +4,7 @@ export const DATA_BUS_VIEW_QUERY_KEY = 'view';
 export const DEFAULT_DATA_BUS_VIEW: DataBusViewKey = 'config';
 
 export const DATA_BUS_VIEW_OPTIONS: Array<{ label: string; value: DataBusViewKey }> = [
-  { label: '拓扑配置', value: 'config' },
+  { label: '路由配置', value: 'config' },
   { label: '运行监视', value: 'monitor' },
 ];
 
