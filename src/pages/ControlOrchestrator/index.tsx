@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  App,
   Button,
   Card,
   Form,
@@ -267,6 +268,7 @@ type ExecutionRecord = {
 };
 
 const ControlOrchestratorPage: React.FC = () => {
+  const { modal } = App.useApp();
   const [configs, setConfigs] = useState<ControlOrchestratorWorkflowConfig[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [draft, setDraft] = useState<WorkflowDraft>(emptyDraft);
@@ -389,7 +391,8 @@ const ControlOrchestratorPage: React.FC = () => {
   const closeEditor = () => {
     if (operationRef.current) return;
     if (JSON.stringify(draft) !== baseline.current) {
-      Modal.confirm({
+      console.info('控制编排请求确认放弃未保存的修改');
+      modal.confirm({
         title: '放弃未保存的修改？', content: '本次编辑的内容尚未保存，关闭后将丢弃这些修改。',
         okText: '放弃修改', cancelText: '继续编辑', onOk: () => setModalOpen(false),
       });

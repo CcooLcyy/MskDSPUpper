@@ -681,28 +681,6 @@
   overflow: hidden;
 }
 
-.iec104-config-modal .ant-modal-header {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 16px 20px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.iec104-config-modal .ant-modal-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  padding: 16px 20px;
-  overflow: auto;
-  scrollbar-gutter: stable;
-}
-
-.iec104-config-modal .ant-modal-footer {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 12px 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
 .modbus-page .protocol-top-row {
   display: flex;
   align-items: stretch;
@@ -880,28 +858,6 @@
   overflow: hidden;
 }
 
-.modbus-config-modal .ant-modal-header {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 16px 20px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.modbus-config-modal .ant-modal-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  padding: 16px 20px;
-  overflow: auto;
-  scrollbar-gutter: stable;
-}
-
-.modbus-config-modal .ant-modal-footer {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 12px 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
 .modbus-config-modal .ant-form-item:last-child {
   margin-bottom: 12px;
 }
@@ -916,28 +872,6 @@
   flex-direction: column;
   padding: 0;
   overflow: hidden;
-}
-
-.dlt645-config-modal .ant-modal-header {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 16px 20px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.dlt645-config-modal .ant-modal-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  padding: 16px 20px;
-  overflow: auto;
-  scrollbar-gutter: stable;
-}
-
-.dlt645-config-modal .ant-modal-footer {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 12px 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .dlt645-config-modal .ant-form-item:last-child {
@@ -1098,13 +1032,6 @@
     max-height: calc(100dvh - 16px);
   }
 
-  .modbus-config-modal .ant-modal-header,
-  .modbus-config-modal .ant-modal-body,
-  .modbus-config-modal .ant-modal-footer {
-    padding-right: 16px;
-    padding-left: 16px;
-  }
-
   .dlt645-config-modal {
     width: calc(100vw - 16px) !important;
     max-width: calc(100vw - 16px);
@@ -1115,13 +1042,6 @@
     max-height: calc(100dvh - 16px);
   }
 
-  .dlt645-config-modal .ant-modal-header,
-  .dlt645-config-modal .ant-modal-body,
-  .dlt645-config-modal .ant-modal-footer {
-    padding-right: 16px;
-    padding-left: 16px;
-  }
-
   .iec104-config-modal {
     width: calc(100vw - 16px) !important;
     max-width: calc(100vw - 16px);
@@ -1130,13 +1050,6 @@
 
   .iec104-config-modal .ant-modal-content {
     max-height: calc(100dvh - 16px);
-  }
-
-  .iec104-config-modal .ant-modal-header,
-  .iec104-config-modal .ant-modal-body,
-  .iec104-config-modal .ant-modal-footer {
-    padding-right: 16px;
-    padding-left: 16px;
   }
 
   .iec104-ioa-allocation-item {

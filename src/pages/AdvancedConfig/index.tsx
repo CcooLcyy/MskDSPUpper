@@ -4,6 +4,7 @@ import { usePlatformAuth } from '../../auth/platform-auth-context';
 import {
   AutoComplete,
   Alert,
+  App,
   Button,
   Card,
   Descriptions,
@@ -392,6 +393,7 @@ function formatLowerUpdateCheckError(channel: LowerUpdateChannel, error: unknown
 }
 
 const AdvancedConfigPage: React.FC = () => {
+  const { modal } = App.useApp();
   const { snapshot: platformAuth } = usePlatformAuth();
   const [remoteSelection, setRemoteSelection] = useState<{ endpoint: string; device_id: string; displayName: string } | null>(null);
   const [remoteSelectionReady, setRemoteSelectionReady] = useState(!('__TAURI_INTERNALS__' in window));
@@ -1109,7 +1111,8 @@ const AdvancedConfigPage: React.FC = () => {
       onlineLowerUpdateManifest?.version ?? null,
       onlineLowerUpdateCheckedAt,
     );
-    Modal.confirm({
+    console.info('下位机更新请求确认下发指定缓存版本', { version: cachedPackage.manifest.version });
+    modal.confirm({
       title: `下发已缓存版本 ${cachedPackage.manifest.version}`,
       content: `${freshnessMessage}。该操作不会检查线上最新版本，将按缓存的指定版本下发。确认继续吗？`,
       okText: '继续下发',

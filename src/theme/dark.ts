@@ -16,6 +16,9 @@ export const darkTheme: ThemeConfig = {
       '"Microsoft YaHei", "PingFang SC", -apple-system, BlinkMacSystemFont, sans-serif',
   },
   components: {
+    Modal: {
+      titleFontSize: 16,
+    },
     Layout: {
       siderBg: '#252526',
       headerBg: '#333333',

@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  App,
   Button,
   Card,
   Input,
   InputNumber,
-  Modal,
   Popconfirm,
   Segmented,
   Select,
@@ -126,6 +126,7 @@ const PointTable: React.FC<Props> = ({
   onDelete,
   onDeleteAll,
 }) => {
+  const { modal } = App.useApp();
   const [functionFilter, setFunctionFilter] = useState<number>();
   const [dataTypeFilter, setDataTypeFilter] = useState<number>();
   const [tagSearch, setTagSearch] = useState('');
@@ -273,7 +274,8 @@ const PointTable: React.FC<Props> = ({
   const requestReadPlanApply = (nextReadPlan: ModbusReadPlan, title: string) => {
     const apply = () => persistReadPlan(nextReadPlan);
     if (runtimeRunning) {
-      Modal.confirm({
+      console.info('Modbus RTU 请求确认应用读取策略并重启连接');
+      modal.confirm({
         title,
         content: '当前连接正在运行，应用策略会短暂停止并重新启动连接。',
         okText: '应用并重启',
@@ -319,7 +321,8 @@ const PointTable: React.FC<Props> = ({
     }
 
     if (readPlanStale) {
-      Modal.confirm({
+      console.info('Modbus RTU 请求确认应用存在未覆盖点位的读取区间');
+      modal.confirm({
         title: '仍有寄存器点位未覆盖',
         content: `当前区间未覆盖 ${uncoveredPoints.length} 个寄存器点位，应用后这些点位不会从批量响应中解析。`,
         okText: '仍然应用',

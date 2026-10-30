@@ -1,0 +1,61 @@
+/* 普通弹窗共用外壳；确认框保留图标、正文和按钮的紧凑布局。 */
+.ant-modal:not(.ant-modal-confirm) .ant-modal-container,
+.ant-modal:not(.ant-modal-confirm) .ant-modal-content {
+  padding: 0;
+  overflow: hidden;
+}
+
+.ant-modal:not(.ant-modal-confirm) .ant-modal-header {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 16px 48px 14px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ant-modal:not(.ant-modal-confirm) .ant-modal-close {
+  inset-block-start: 10px;
+  inset-inline-end: 12px;
+}
+
+.ant-modal:not(.ant-modal-confirm) .ant-modal-body {
+  min-height: 0;
+  padding: 16px 20px;
+}
+
+.ant-modal:not(.ant-modal-confirm) .ant-modal-footer {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* 大型编辑器各自保留宽高和内容编排，共用可滚动正文。 */
+:is(.control-config-modal, .iec104-config-modal, .modbus-config-modal, .dlt645-config-modal, .orchestrator-editor-modal) .ant-modal-container {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 48px);
+}
+
+:is(.control-config-modal, .iec104-config-modal, .modbus-config-modal, .dlt645-config-modal, .orchestrator-editor-modal) .ant-modal-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+@media (max-width: 760px) {
+  .ant-modal:not(.ant-modal-confirm) .ant-modal-header {
+    padding: 14px 48px 12px 16px;
+  }
+
+  .ant-modal:not(.ant-modal-confirm) .ant-modal-body {
+    padding: 14px 16px;
+  }
+
+  .ant-modal:not(.ant-modal-confirm) .ant-modal-footer {
+    padding: 10px 16px;
+  }
+
+  :is(.control-config-modal, .iec104-config-modal, .modbus-config-modal, .dlt645-config-modal, .orchestrator-editor-modal) .ant-modal-container {
+    max-height: calc(100dvh - 16px);
+  }
+}

@@ -1,7 +1,7 @@
 import type { ModbusTemplateContext } from '../../adapters/types';
 import type { TemplateCommit } from '../../features/modbus-templates/bindings';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Typography } from 'antd';
+import { Alert, App, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Typography } from 'antd';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import type { ModbusLinkConfig, ModbusLinkInfo, ModbusPoint, ModbusReadPlan, ModbusSerialConfig } from '../../adapters';
@@ -143,6 +143,7 @@ interface LinkFormValues {
 }
 
 const ModbusRTU: React.FC = () => {
+  const { modal } = App.useApp();
   const [links, setLinks] = useState<ModbusLinkInfo[]>([]);
   const [selectedConn, setSelectedConn] = useState<string | null>(null);
   const [points, setPoints] = useState<ModbusPoint[]>([]);
@@ -907,7 +908,8 @@ const ModbusRTU: React.FC = () => {
     }
 
     if (readPlanDirtyRef.current) {
-      Modal.confirm({
+      console.info('Modbus RTU 请求确认放弃读取方案并切换连接');
+      modal.confirm({
         title: '放弃未保存的读取方案？',
         content: '切换连接会丢弃当前连接尚未应用的读取区间修改。',
         okText: '放弃并切换',
@@ -921,7 +923,7 @@ const ModbusRTU: React.FC = () => {
     }
 
     setSelectedConn(connName);
-  }, [actionsDisabled, selectedConn]);
+  }, [actionsDisabled, modal, selectedConn]);
 
   useEffect(() => {
     void refreshLinks();
