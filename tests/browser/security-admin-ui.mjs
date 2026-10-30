@@ -52,7 +52,7 @@ try {
   page.setDefaultTimeout(10000);
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
-    const mock = window.__admin = { calls: [], pending: [], defer: false, fail: false, failLogout: false, ip: '192.0.2.8', active: true, tunnels: [
+    const mock = window.__admin = { calls: [], pending: [], defer: false, fail: new URLSearchParams(location.search).get('failAuto') === '1', failLogout: false, ip: '192.0.2.8', active: true, tunnels: [
       { id: 7, state: 3, hot_state: 1, local_ip: '192.0.2.7', peer_ip: '198.51.100.7', encrypt_count: '9007199254740993', decrypt_count: '25', encrypt_errors: '0', decrypt_errors: '1', error_info: null, algorithm: 'SM4' },
       { id: 8, state: 77, hot_state: 88, local_ip: '192.0.2.8', peer_ip: '198.51.100.8', encrypt_count: '2', decrypt_count: '3', encrypt_errors: '0', decrypt_errors: '0', error_info: '测试错误', algorithm: null },
     ] };
@@ -82,12 +82,13 @@ try {
   await page.goto(url, { waitUntil: 'commit' });
   await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).waitFor({ timeout: 45000 });
   const calls = () => page.evaluate(() => window.__admin.calls.filter(call => call.command === 'run_vertical_security_admin').map(call => call.args.request));
-  assert.equal((await calls()).length, 0);
+  await page.getByText('master.cer', { exact: true }).waitFor();
+  assert.deepEqual(await calls(), [{ session_id: 'fixture-a', action: 'list_certificates' }]);
   await page.getByRole('tab', { name: '初始化与证书', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '刷新隧道', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: '查询初始化状态', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: '生成 SM2 密钥', exact: true }).count(), 0);
-  results.push('进入不自动发送操作，移除状态查询与单独生成入口');
+  results.push('进入后自动读取一次证书，StrictMode不重复且不触发其他装置操作');
 
   await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).click();
   await page.getByText('CSR 已保存。', { exact: true }).waitFor();
@@ -166,10 +167,13 @@ try {
   assert.equal(await page.getByRole('button', { name: '导入证书', exact: true }).isDisabled(), true);
   const savesBefore = await page.evaluate(() => window.__admin.calls.filter(call => call.command === 'save_vertical_security_file').length);
   await page.getByRole('button', { name: '测试：切换会话', exact: true }).click();
+  await page.waitForFunction(() => window.__admin.pending.some(item => item.request.session_id === 'fixture-b' && item.request.action === 'list_certificates'));
   await page.evaluate(() => { window.__admin.pending[0].resolve({ message: '迟到响应', status: '错误会话状态', certificates: [], data: [65] }); });
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(await page.getByText('错误会话状态', { exact: true }).count(), 0);
   assert.equal(await page.evaluate(() => window.__admin.calls.filter(call => call.command === 'save_vertical_security_file').length), savesBefore);
+  await page.evaluate(() => window.__admin.pending.find(item => item.request.session_id === 'fixture-b').resolve({ message: '新会话证书列表', certificates: [{ name: 'new-session.cer', certificate_type: 5 }], data: null }));
+  await page.getByText('new-session.cer', { exact: true }).waitFor();
   results.push('退出中与忙时禁用、错误保持、会话切换隔离迟到 CSR');
   for (const role of [0, 2, 3]) {
     await page.goto(url + '?loginRole=' + role, { waitUntil: 'commit' });
@@ -177,9 +181,12 @@ try {
     if (role === 0) await page.getByText('登录纵密', { exact: true }).waitFor();
     else await page.getByText('退出纵密登录', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('纵密系统管理员工作台', { exact: true }).count(), 0);
+    assert.equal((await calls()).length, 0);
   }
   await page.goto(url + '?loginRole=1', { waitUntil: 'commit' });
   await page.getByLabel('纵密系统管理员工作台', { exact: true }).waitFor();
+  await page.getByText('master.cer', { exact: true }).waitFor();
+  assert.deepEqual(await calls(), [{ session_id: 'fixture-login', action: 'list_certificates' }]);
   assert.equal(await page.locator('.security-login-columns').count(), 0, '登录成功后移除认证双栏');
   assert.equal(await page.getByText('装置身份认证', { exact: true }).count(), 0);
   assert.equal(await page.getByText('登录进度', { exact: true }).count(), 0);
@@ -214,6 +221,15 @@ try {
   await page.getByText('装置身份认证', { exact: true }).waitFor();
   await page.getByText('登录进度', { exact: true }).waitFor();
   results.push('真实登录组件：未登录与非管理员隐藏、管理员可见、过期会话撤销');
+  await page.goto(url + '?loginRole=1&failAuto=1', { waitUntil: 'commit' });
+  await page.getByText('装置拒绝请求（测试）', { exact: true }).waitFor();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.deepEqual(await calls(), [{ session_id: 'fixture-login', action: 'list_certificates' }]);
+  await page.evaluate(() => { window.__admin.fail = false; });
+  await page.getByRole('button', { name: '刷新证书列表', exact: true }).click();
+  await page.getByText('master.cer', { exact: true }).waitFor();
+  assert.equal((await calls()).length, 2);
+  results.push('首次自动读取失败显示原因且不重试，手动刷新可恢复');
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ results, screenshot: path.join(output, 'security-admin.png') }, null, 2));
 } catch (error) {

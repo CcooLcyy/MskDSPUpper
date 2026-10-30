@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Alert, Button, Card, Empty, Modal, Popconfirm, Segmented, Select, Space, Table, Tabs, Tag } from 'antd';
 import type { VerticalSecurityTunnelStatus } from '../../adapters';
 import { api } from '../../adapters';
@@ -30,7 +30,9 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
   const active = useRef(false);
   const generation = useRef(0);
   const mounted = useRef(false);
+  const initialListStarted = useRef(false);
   const blocked = busy || disabled;
+  const notifyBusy = useEffectEvent((value: boolean) => onBusyChange?.(value));
 
   useEffect(() => {
     mounted.current = true;
@@ -39,12 +41,13 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
   useEffect(() => {
     generation.current += 1;
     active.current = false;
+    initialListStarted.current = false;
     setBusy(false); setError(null); setNotice(null); setWarning(null);
     setCertificates([]); setListed(false); setImportOpen(false); setCertificateType(5);
     setTunnels([]); setTunnelRead('pending'); setUpdatedAt(null); setSelectedTunnel(null); setPage('certificates'); setView('list');
-    onBusyChange?.(false);
-    return () => { generation.current += 1; onBusyChange?.(false); };
-  }, [sessionId, onBusyChange]);
+    notifyBusy(false);
+    return () => { generation.current += 1; notifyBusy(false); };
+  }, [sessionId]);
 
   const run = async (work: (current: () => boolean) => Promise<void>) => {
     if (!mounted.current || disabled || active.current || !sessionId) return;
@@ -70,6 +73,19 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
     const value = await request({ action: 'list_certificates' });
     if (current()) { setCertificates(value.certificates); setListed(true); }
   };
+  const loadInitialCertificates = useEffectEvent(() => {
+    if (!mounted.current || disabled || active.current || initialListStarted.current || !sessionId) return;
+    initialListStarted.current = true;
+    console.info('[纵密管理员] 进入会话，自动读取证书列表');
+    void run(refresh);
+  });
+  useEffect(() => {
+    if (disabled || !sessionId) return;
+    let cancelled = false;
+    // 延后到微任务，StrictMode 首轮清理可取消尚未发送的读取。
+    queueMicrotask(() => { if (!cancelled) loadInitialCertificates(); });
+    return () => { cancelled = true; };
+  }, [sessionId, disabled]);
   const exportCsr = () => run(async current => {
     const value = await request({ action: 'export_csr' });
     if (!current()) return;
