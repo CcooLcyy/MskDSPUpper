@@ -18,7 +18,7 @@ export interface TemplateApplication {
   template_snapshot: ModbusTemplate;
   prefix: string;
   address_base: number;
-  /** 初次应用时明确未选择的点，区别于随后接受删除的点。 */
+  /** 初次未选择或来源已迁出的点，区别于随后接受平台删除的点。 */
   excluded_source_ids?: string[];
   mappings: TemplateMapping[];
 }
@@ -101,7 +101,8 @@ export function parseTemplateBindings(json: string | null | undefined): Template
       validateModbusTemplate(app.template_snapshot);
       const sources = new Set<string>();
       for (const mapping of app.mappings) {
-        if (++total > 10000 || !validText(mapping.source_point_id, 128) || sources.has(mapping.source_point_id) || !validText(mapping.target_tag) || tags.has(mapping.target_tag) || !positiveRevision(mapping.source_revision) || !validText(mapping.baseline?.tag) || mapping.source_snapshot?.id !== mapping.source_point_id) throw Error('点位映射不合法或重复');
+        if (++total > 10000 || !validText(mapping.source_point_id, 128) || sources.has(mapping.source_point_id) || !validText(mapping.target_tag) || !positiveRevision(mapping.source_revision) || !validText(mapping.baseline?.tag) || mapping.source_snapshot?.id !== mapping.source_point_id) throw Error('点位映射不合法或重复');
+        if (tags.has(mapping.target_tag)) throw Error(`点位映射重复：标签“${mapping.target_tag}”已关联其他模板应用`);
         sources.add(mapping.source_point_id);
         tags.add(mapping.target_tag);
         validateModbusTemplate({
@@ -160,6 +161,41 @@ export function createApplication(options: {
       }))
     }
   };
+}
+export interface TemplateSourceTransfer {
+  target_tag: string;
+  application_id: string;
+  source_point_id: string;
+}
+/** 仅转移本次重新添加且现场已删除的标签来源，旧应用排除迁出点，防止之后重新认领。 */
+export function planTemplateSourceTransfers(bindings: TemplateBindings, current: ModbusPoint[], additions: ModbusPoint[]): {
+  bindings: TemplateBindings;
+  transfers: TemplateSourceTransfer[];
+} {
+  const currentTags = new Set(current.map(point => point.tag));
+  const selectedTags = new Set<string>();
+  for (const point of additions) {
+    if (currentTags.has(point.tag)) throw Error(`标签“${point.tag}”与已有点位重复，不能重新添加或迁移来源`);
+    if (selectedTags.has(point.tag)) throw Error(`所选点位标签“${point.tag}”重复`);
+    selectedTags.add(point.tag);
+  }
+  const transfers: TemplateSourceTransfer[] = [];
+  const applications = bindings.applications.map(app => {
+    const moved = app.mappings.filter(mapping => selectedTags.has(mapping.target_tag));
+    if (!moved.length) return app;
+    const mappedIds = new Set(app.mappings.map(mapping => mapping.source_point_id));
+    const excluded = new Set(app.excluded_source_ids ?? app.template_snapshot.points.filter(source => !mappedIds.has(source.id)).map(source => source.id));
+    for (const mapping of moved) {
+      excluded.add(mapping.source_point_id);
+      transfers.push({ target_tag: mapping.target_tag, application_id: app.application_id, source_point_id: mapping.source_point_id });
+    }
+    return {
+      ...app,
+      mappings: app.mappings.filter(mapping => !selectedTags.has(mapping.target_tag)),
+      excluded_source_ids: [...excluded]
+    };
+  });
+  return { bindings: transfers.length ? { ...bindings, applications } : bindings, transfers };
 }
 export function planApplicationUpdate(application: TemplateApplication, current: ModbusPoint[], latest: ModbusTemplate, revision: string, addressBase: number, allowHistorical = false): TemplateUpdateRow[] {
   if (!positiveRevision(revision)) throw Error('平台模板版本无效');

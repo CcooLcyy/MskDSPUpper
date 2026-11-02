@@ -144,7 +144,7 @@ export function planTemplateApplication(template: ModbusTemplate, options: Templ
     let conflict: string | null = null;
     if (prefixError) conflict = prefixError;
     else if (finalTag.length > 256 || finalTag !== finalTag.trim()) conflict = '最终标签过长或首尾包含空白';
-    else if (options.existingPoints.some(old => old.tag === finalTag)) conflict = '标签与已有点位重复';
+    else if (options.existingPoints.some(old => old.tag === finalTag)) conflict = `标签“${finalTag}”与已有点位重复`;
     else if (point.address + point.reg_count - 1 > 65535) conflict = '转换后的地址范围超出上位机支持的 65535 上限';
     else if (options.existingPoints.some(old => overlaps(point, old))) conflict = '地址范围与已有点位重叠';
     return { id: source.id, source, point, finalTag, conflict, selected: selected ? selected.has(source.id) : !isTemplateWritePoint(source) && !source.condition && source.default_selected !== false };

@@ -8,7 +8,7 @@ import { platformTemplateCatalog } from './catalog';
 import { normalizePlatformId } from './catalog-core';
 import type { PlatformTemplateEntry, PlatformTemplateSummary } from './catalog-core';
 import { isTemplateWritePoint, planTemplateApplication } from './model';
-import { applyApplicationUpdate, createApplication, parseTemplateBindings, planApplicationUpdate, positiveRevision } from './bindings';
+import { applyApplicationUpdate, createApplication, parseTemplateBindings, planApplicationUpdate, planTemplateSourceTransfers, positiveRevision } from './bindings';
 import type { TemplateBindings, TemplateCommit, TemplateUpdateRow } from './bindings';
 import './templates.css';
 interface Props {
@@ -31,6 +31,7 @@ interface PreviewRow {
   blocked?: string;
   condition?: string;
   write: boolean;
+  sourceTransfer?: boolean;
 }
 const {
   Text,
@@ -39,6 +40,7 @@ const {
 const initialSelection = (entry: PlatformTemplateEntry) => entry.template.points.filter(point => !isTemplateWritePoint(point) && !point.condition && point.default_selected !== false).map(point => point.id);
 const names: Record<string, string> = {
   added: '新增',
+  readded: '重新添加',
   modified: '平台修改',
   deleted: '平台删除',
   conflict: '现场修改，需选择',
@@ -222,6 +224,7 @@ export default function TemplateModal({
         prefix,
         selectedIds: selected
       });
+      const transferTags = new Set(planTemplateSourceTransfers(bindings, table.points, plan.rows.filter(row => !row.conflict).map(row => row.point)).transfers.map(item => item.target_tag));
       return {
         updates: [] as TemplateUpdateRow[],
         error: '',
@@ -229,12 +232,13 @@ export default function TemplateModal({
           id: row.id,
           tag: row.finalTag,
           address: String(row.point.address),
-          kind: 'added',
+          kind: transferTags.has(row.finalTag) ? 'readded' : 'added',
           fields: row.source.group,
           detail: row.source.description,
           blocked: row.conflict ?? undefined,
           condition: row.source.condition,
-          write: isTemplateWritePoint(row.source)
+          write: isTemplateWritePoint(row.source),
+          sourceTransfer: transferTags.has(row.finalTag)
         }))
       };
     } catch (cause) {
@@ -244,7 +248,7 @@ export default function TemplateModal({
         error: String(cause)
       };
     }
-  }, [entry, table, application, addressBase, prefix, selected, isHistorical]);
+  }, [entry, table, application, addressBase, prefix, selected, isHistorical, bindings]);
   const filtered = summaries.filter(item => (!manufacturer || manufacturer === item.manufacturer) && `${item.name} ${item.manufacturer} ${item.models.join(' ')} ${item.protocol_version}`.toLowerCase().includes(search.toLowerCase()));
   const rows = planResult.rows.filter(row => `${row.tag} ${row.address} ${row.fields}`.toLowerCase().includes(pointSearch.toLowerCase()));
   const chosen = planResult.rows.filter(row => selected.includes(row.id) && !row.blocked);
@@ -268,6 +272,7 @@ export default function TemplateModal({
         // 预览期间注销或切换平台时不得提交旧响应。
         if (authRef.current?.snapshot.phase !== 'authenticated' || normalizePlatformId(authRef.current.snapshot.settings?.grpc_endpoint ?? '') !== platformId || authRef.current.snapshot.status?.username !== username) throw Error('平台登录会话已变化，请重新打开模板窗口');
         let commit: TemplateCommit;
+        let transferredTags: string[] = [];
         if (application) {
           const next = applyApplicationUpdate(application, table.points, entry.template, entry.summary.revision, chosen.map(row => row.id), addressBase, isHistorical);
           commit = {
@@ -289,16 +294,21 @@ export default function TemplateModal({
             selectedIds: chosen.map(row => row.id),
             existingPoints: table.points
           });
+          const migration = planTemplateSourceTransfers(bindings, table.points, next.points);
+          transferredTags = migration.transfers.map(item => item.target_tag);
           commit = {
             expected: table,
             points: [...table.points, ...next.points],
             bindings: {
-              ...bindings,
-              applications: [...bindings.applications, next.application]
+              ...migration.bindings,
+              applications: [...migration.bindings.applications, next.application]
             }
           };
         }
-        if (await onApply(commit)) onClose();
+        if (await onApply(commit)) {
+          if (transferredTags.length) console.info('模板重新添加点位并迁移来源已保存', { connectionName, protocol, tags: transferredTags });
+          onClose();
+        }
       } catch (cause) {
         void message.error(`应用平台点表失败：${String(cause)}`);
         console.error('应用平台点表失败', cause);
@@ -334,7 +344,7 @@ export default function TemplateModal({
   }, {
     title: '适用条件 / 冲突',
     width: 230,
-    render: (_, row) => <Text type={row.blocked ? 'danger' : row.condition || row.write ? 'warning' : undefined}>{row.blocked ?? row.condition ?? (row.write ? '写控制点' : '—')}</Text>
+    render: (_, row) => <Text type={row.blocked ? 'danger' : row.condition || row.write || row.sourceTransfer ? 'warning' : undefined}>{row.blocked ?? ([row.sourceTransfer ? '重新添加，将更新模板来源' : '', row.condition || (row.write ? '写控制点' : '')].filter(Boolean).join('；') || '—')}</Text>
   }];
   const blocking = error || bindingsResult.error || planResult.error || (!positiveRevision(table?.revision) ? '当前下位机不支持模板来源记录及并发保护，请更新下位机后再应用模板' : '');
   return <Modal title="平台点表模板" open={open} onCancel={() => {
