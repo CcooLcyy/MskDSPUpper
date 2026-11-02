@@ -436,3 +436,127 @@ export function applyApplicationChanges(application: TemplateApplication, curren
   }
   return { application: next, points };
 }
+
+export interface ConnectionTemplateOptions {
+  bindings: TemplateBindings;
+  current: ModbusPoint[];
+  latest: ModbusTemplate;
+  revision: string;
+  platformId: string;
+  templateId: string;
+  addressBase: number;
+  allowHistorical?: boolean;
+  selectedIds?: string[];
+}
+interface ConnectionTemplateRow extends TemplateChangeRow {
+  application_id?: string;
+  source_point_id: string;
+}
+const connectionApplications = (options: ConnectionTemplateOptions) => options.bindings.applications.filter(app => app.platform_id === options.platformId && app.template_id === options.templateId);
+const excludedSources = (app: TemplateApplication): string[] => app.excluded_source_ids ?? app.template_snapshot.points.filter(source => !app.mappings.some(mapping => mapping.source_point_id === source.id)).map(source => source.id);
+/** 一个连接统一比较全部历史来源；旧记录仅保留基线用途，不再要求用户选择。 */
+export function planConnectionTemplateChanges(options: ConnectionTemplateOptions): { rows: ConnectionTemplateRow[]; acknowledgeOnly: boolean } {
+  const { bindings, current, latest, revision, addressBase, allowHistorical, selectedIds = [] } = options;
+  if (!positiveRevision(revision)) throw Error('平台模板版本无效');
+  validateModbusTemplate(latest);
+  const applications = connectionApplications(options);
+  const currentByTag = new Map(current.map(point => [point.tag, point]));
+  const sourceById = new Map(latest.points.map(point => [point.id, point]));
+  const mappedIds = new Set(applications.flatMap(app => app.mappings.map(mapping => mapping.source_point_id)));
+  const liveIds = new Set(applications.flatMap(app => app.mappings.filter(mapping => currentByTag.has(mapping.target_tag)).map(mapping => mapping.source_point_id)));
+  const rows: ConnectionTemplateRow[] = [];
+  for (const app of applications) {
+    if (addressBase !== app.address_base) throw Error('连接地址基准与模板应用记录不一致，请先恢复或核对连接配置');
+    if (!allowHistorical && [app.revision, ...app.mappings.map(mapping => mapping.source_revision)].some(value => BigInt(value) > BigInt(revision))) throw Error('当前平台或缓存版本旧于已应用版本，请刷新平台目录后再核对，不能以旧缓存回退现场点表');
+    for (const mapping of app.mappings) {
+      const source = sourceById.get(mapping.source_point_id);
+      const now = currentByTag.get(mapping.target_tag);
+      const id = JSON.stringify([app.application_id, mapping.source_point_id]);
+      if (!source) {
+        rows.push({ id, application_id: app.application_id, source_point_id: mapping.source_point_id, kind: now && pointSignature(now) !== pointSignature(mapping.baseline) ? 'conflict' : 'deleted', current: now, selected: false, fields: ['平台已删除点位'] });
+        continue;
+      }
+      // 同源的现场点已由另一条旧记录维护时，不重复补回已删除的历史副本。
+      if (!now && liveIds.has(mapping.source_point_id)) continue;
+      const candidate = planTemplateApplication({ ...latest, points: [source] }, { existingPoints: [], addressBase, selectedIds: [] }).rows[0].point;
+      // 来源标签未改名时保留已有现场标签（包括历史前缀和人工改名）。
+      const next = { ...candidate, tag: now && source.tag === mapping.source_snapshot.tag ? mapping.target_tag : candidate.tag };
+      const baseline = { ...mapping.baseline, tag: mapping.target_tag };
+      const changed = stable(mapping.source_snapshot) !== stable(source) || pointSignature(baseline) !== pointSignature(next);
+      const kind = !now ? 'readded' : !changed ? 'applied' : pointSignature(now) !== pointSignature(mapping.baseline) ? 'conflict' : 'modified';
+      const fields = Object.keys(next).filter(key => stable(next[key as keyof ModbusPoint]) !== stable(mapping.baseline[key as keyof ModbusPoint]));
+      rows.push({ id, application_id: app.application_id, source_point_id: mapping.source_point_id, kind, current: now, next: kind === 'applied' ? now : next, source, selected: false, fields: kind === 'applied' ? [] : fields.length ? fields : ['模板说明或适用条件'] });
+    }
+  }
+  for (const source of latest.points) {
+    if (mappedIds.has(source.id)) continue;
+    const next = planTemplateApplication({ ...latest, points: [source] }, { existingPoints: [], addressBase, selectedIds: [] }).rows[0].point;
+    const stale = bindings.applications.some(app => app.mappings.some(mapping => mapping.target_tag === next.tag)) && !currentByTag.has(next.tag);
+    rows.push({ id: JSON.stringify(['', source.id]), source_point_id: source.id, kind: stale ? 'readded' : 'added', next, source, selected: false, fields: ['新增点位'] });
+  }
+  const chosen = rows.filter(row => selectedIds.includes(row.id) && row.kind !== 'applied');
+  const replacedTags = new Set(chosen.flatMap(row => row.current ? [row.current.tag] : []));
+  // 每个未选候选独立检查；已选项一次性释放旧点后统一检查，允许跨记录地址交换。
+  const validate = (batch: ConnectionTemplateRow[], existing: ModbusPoint[]) => {
+    const candidates = batch.filter(row => row.next && row.source);
+    if (!candidates.length) return;
+    const points = candidates.map((row, index) => ({ ...row.source!, id: `candidate-${index}`, tag: row.next!.tag }));
+    if (new Set(points.map(point => point.tag)).size !== points.length) {
+      // 历史同源映射可能同时改成同名标签，逐行报冲突以保留可取消的预览。
+      candidates.forEach((candidate, index) => {
+        const row = planTemplateApplication({ ...latest, points: [points[index]] }, { existingPoints: [...existing, ...candidates.flatMap((other, otherIndex) => otherIndex !== index ? [other.next!] : [])], addressBase, selectedIds: [points[index].id] }).rows[0];
+        candidate.blocked = row.conflict ?? undefined;
+      });
+      return;
+    }
+    const plan = planTemplateApplication({ ...latest, points }, { existingPoints: existing, addressBase, selectedIds: points.map(point => point.id) });
+    plan.rows.forEach((row, index) => { candidates[index].blocked = row.conflict ?? undefined; });
+  };
+  for (const row of rows.filter(row => row.kind !== 'applied' && !selectedIds.includes(row.id))) validate([row], current.filter(point => point !== row.current));
+  validate(chosen, current.filter(point => !replacedTags.has(point.tag)));
+  const noPending = rows.every(row => row.kind === 'applied' || !row.application_id && applications.every(app => excludedSources(app).includes(row.source_point_id)));
+  return { rows, acknowledgeOnly: !!applications.length && noPending && applications.some(app => app.revision !== revision) };
+}
+
+/** 原子构造点位和全部来源；仅接受所选变更，历史映射与未选择基线继续保留。 */
+export function applyConnectionTemplateChanges(options: ConnectionTemplateOptions): { bindings: TemplateBindings; points: ModbusPoint[]; transfers: TemplateSourceTransfer[] } {
+  const { current, latest, revision, addressBase, selectedIds = [] } = options;
+  const plan = planConnectionTemplateChanges(options);
+  const ids = new Set(selectedIds);
+  if (ids.size !== selectedIds.length || selectedIds.some(id => !plan.rows.some(row => row.id === id))) throw Error('所选点位不存在或包含无效重复选择');
+  if (!ids.size && !plan.acknowledgeOnly) throw Error('请选择需要应用的变更');
+  const chosen = plan.rows.filter(row => ids.has(row.id));
+  if (chosen.some(row => row.kind === 'applied')) throw Error('所选点位已添加且没有平台变更，不能重复选择');
+  if (chosen.some(row => row.blocked)) throw Error('所选点位存在标签或地址冲突，请核对后重试');
+  const additions = chosen.flatMap(row => row.next && !row.current ? [row.next] : []);
+  const transfer = planTemplateSourceTransfers(options.bindings, current, additions);
+  const matching = connectionApplications(options);
+  let applications: TemplateApplication[] = transfer.bindings.applications.map(app => matching.some(previous => previous.application_id === app.application_id) ? { ...app, mappings: [...app.mappings], excluded_source_ids: [...excludedSources(app)] } : app);
+  const pendingAdditions = chosen.filter(row => !row.application_id && row.next);
+  let target = applications.find(app => matching.some(previous => previous.application_id === app.application_id) && app.prefix === '');
+  if (pendingAdditions.length && !target) {
+    target = { application_id: crypto.randomUUID(), platform_id: options.platformId, template_id: options.templateId, revision, template_snapshot: latest, address_base: addressBase, prefix: '', mappings: [], excluded_source_ids: latest.points.map(source => source.id) };
+    applications.push(target);
+  }
+  for (const row of chosen) {
+    const app = row.application_id ? applications.find(item => item.application_id === row.application_id)! : target!;
+    app.mappings = app.mappings.filter(mapping => mapping.source_point_id !== row.source_point_id);
+    if (row.next) {
+      app.mappings.push({ source_point_id: row.source_point_id, target_tag: row.next.tag, baseline: row.next, source_revision: revision, source_snapshot: row.source! });
+      app.excluded_source_ids = excludedSources(app).filter(id => id !== row.source_point_id);
+    }
+  }
+  const replacedTags = new Set(chosen.flatMap(row => row.current ? [row.current.tag] : []));
+  const points = [...current.filter(point => !replacedTags.has(point.tag)), ...chosen.flatMap(row => row.next ? [row.next] : [])];
+  applications = applications.map(app => {
+    if (!matching.some(previous => previous.application_id === app.application_id)) return app;
+    const touched = !ids.size || chosen.some(row => row.application_id === app.application_id || !row.application_id && app === target);
+    const pendingOwn = plan.rows.some(row => row.application_id === app.application_id && row.kind !== 'applied' && !ids.has(row.id));
+    const pendingNew = plan.rows.some(row => !row.application_id && !ids.has(row.id) && !excludedSources(app).includes(row.source_point_id));
+    return touched && !pendingOwn && !pendingNew ? { ...app, revision, template_snapshot: latest } : app;
+  });
+  const bindings: TemplateBindings = { ...options.bindings, applications };
+  parseTemplateBindings(JSON.stringify(bindings));
+  console.info('连接模板所选变更已合并历史来源', { templateId: options.templateId, applications: matching.length, count: chosen.length, transfers: transfer.transfers.length });
+  return { bindings, points, transfers: transfer.transfers };
+}
