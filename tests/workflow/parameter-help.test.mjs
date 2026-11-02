@@ -28,7 +28,6 @@ test('核心协议配置页接入参数提示', () => {
     ['../../src/pages/IEC104/index.tsx', 12],
     ['../../src/pages/ModbusRTU/components/MqttConfigPanel.tsx', 3],
     ['../../src/pages/DLT645/components/MqttConfigPanel.tsx', 3],
-    [['../../src/pages/AGC/index.tsx', '../../src/components/control/AgcMemberEditor.tsx'], 20],
     ['../../src/pages/AVC/index.tsx', 20],
   ];
 
@@ -40,4 +39,23 @@ test('核心协议配置页接入参数提示', () => {
       `${path} 的参数提示数量不足`,
     );
   }
+});
+
+// 验证 AGC 剩余可见配置保留具体字段说明，不再依赖已移除输出区的提示数量。
+test('AGC 可见字段保留参数提示且移除派生输出手工配置区', () => {
+  const page = read('../../src/pages/AGC/index.tsx');
+  const member = read('../../src/components/control/AgcMemberEditor.tsx');
+  for (const [source, helpKeys] of [
+    [page, [
+      'control.controlMode', 'control.allocationMode', 'control.calculationPeriod',
+      'control.commandPeriod', 'control.signalTag', 'control.unit', 'common.scale',
+      'common.offset', 'control.commandMode', 'control.deltaBase', 'control.baseTag',
+    ]],
+    [member, ['control.capacity', 'control.activeLimits', 'control.weight', 'control.commandMode', 'control.deltaBase']],
+  ]) {
+    for (const key of helpKeys) {
+      assert.ok(source.includes(`tooltip={PARAMETER_HELP.${key}}`), `AGC 可见字段缺少 ${key} 提示`);
+    }
+  }
+  assert.doesNotMatch(page, /title="派生输出点"|className="[^"]*control-config-section--outputs/);
 });

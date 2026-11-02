@@ -715,6 +715,7 @@ const AGC: React.FC = () => {
     setRemovedMemberFields([]);
     groupForm.resetFields();
     groupForm.setFieldsValue(buildEmptyConfig());
+    console.info('AGC 新建控制组，派生输出点使用系统默认配置');
     setGroupModalOpen(true);
     void mappings.open('', undefined);
   }, [groupForm, mappings, messageApi, pendingRouteError]);
@@ -755,6 +756,7 @@ const AGC: React.FC = () => {
       members: config.members,
       outputs: config.outputs,
     });
+    console.info('AGC 编辑控制组，保留原有派生输出配置', { 控制组: config.group_name });
     setGroupModalOpen(true);
     void mappings.open(config.group_name, selectedGroup.conn_id);
   }, [groupForm, mappings, messageApi, pendingRouteError, selectedGroup]);
@@ -2224,46 +2226,33 @@ const AGC: React.FC = () => {
             </div>
           </Card>
 
-          <Card className="control-config-section control-config-section--outputs" title="派生输出点" size="small" bordered>
-            {[
-              { key: 'p_total_meas', label: '总有功测量', protocolLabel: 'p_total_meas' },
-              { key: 'p_total_target', label: '总有功目标', protocolLabel: 'p_total_target' },
-              { key: 'p_total_error', label: '总有功偏差', protocolLabel: 'p_total_error' },
-            ].map((item) => (
-              <div key={item.key} style={{ display: 'flex', gap: 16 }}>
-                <div style={{ flex: 1 }}>
-                  <Form.Item name={['outputs', item.key, 'tag']} label={`${item.label}（${item.protocolLabel}）`} tooltip={PARAMETER_HELP.control.signalTag}>
-                    <Input placeholder={item.label} />
-                  </Form.Item>
-                </div>
-                <div style={{ width: 140 }}>
-                  <Form.Item name={['outputs', item.key, 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
-                    <Input placeholder="kW" />
-                  </Form.Item>
-                </div>
-                <div style={{ width: 140 }}>
-                  <Form.Item
-                    name={['outputs', item.key, 'scale_decimal']}
-                    label="缩放系数"
-                    tooltip={PARAMETER_HELP.common.scale}
-                    rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, `${item.label}缩放系数`) }]}
-                  >
-                    <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
-                  </Form.Item>
-                </div>
-                <div style={{ width: 140 }}>
-                  <Form.Item
-                    name={['outputs', item.key, 'offset_decimal']}
-                    label="偏移量"
-                    tooltip={PARAMETER_HELP.common.offset}
-                    rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, `${item.label}偏移量`) }]}
-                  >
-                    <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
-                  </Form.Item>
-                </div>
-              </div>
-            ))}
-          </Card>
+          {/* 保留隐藏字段注册，确保映射观察和最终保存携带原有输出及精确换算参数。 */}
+          {[
+            { key: 'p_total_meas', label: '总有功测量' },
+            { key: 'p_total_target', label: '总有功目标' },
+            { key: 'p_total_error', label: '总有功偏差' },
+          ].map((item) => (
+            <React.Fragment key={item.key}>
+              {['tag', 'unit'].map((field) => (
+                <Form.Item key={field} name={['outputs', item.key, field]} hidden>
+                  <Input type="hidden" />
+                </Form.Item>
+              ))}
+              {[
+                { key: 'scale_decimal', label: '缩放系数' },
+                { key: 'offset_decimal', label: '偏移量' },
+              ].map((field) => (
+                <Form.Item
+                  key={field.key}
+                  name={['outputs', item.key, field.key]}
+                  hidden
+                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, `${item.label}${field.label}`) }]}
+                >
+                  <Input type="hidden" />
+                </Form.Item>
+              ))}
+            </React.Fragment>
+          ))}
 
           <Card
             className="control-config-section control-config-section--members"
