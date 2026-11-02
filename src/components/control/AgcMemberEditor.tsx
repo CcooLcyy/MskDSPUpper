@@ -6,6 +6,8 @@ import { controlEndpointKey } from '../../utils/control-mapping-editor';
 import type { AgcMemberEndpoints, AgcMemberPointKind } from '../../utils/agc-member-bindings';
 import type { ControlAllocationMode } from '../../utils/control-allocation';
 
+import ConnectionPointSelect from './ConnectionPointSelect';
+
 type PointOption = { value: string; label: string; endpoint: DcEndpoint };
 
 /** 在成员弹窗中选择已有点位，协议点表负责工程量和读写配置。 */
@@ -32,23 +34,11 @@ export default function AgcMemberEditor({
   const deltaBase = Form.useWatch(['p_set', 'delta_base'], form) ?? 0;
   const pointPicker = (kind: AgcMemberPointKind, label: string) => {
     const selected = endpoints[kind] ?? [];
-    const allOptions = new Map(options.map((option) => [option.value, option]));
-    for (const endpoint of selected) {
-      const value = controlEndpointKey(endpoint);
-      if (!allOptions.has(value)) allOptions.set(value, {
-        value, endpoint, label: `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag}（已有绑定）`,
-      });
-    }
     const multiple = selected.length > 1;
     return <Form.Item label={label} required>
-      <Select<string | string[]> showSearch allowClear optionFilterProp="label" aria-label={label}
-        mode={multiple ? 'multiple' : undefined}
-        value={multiple ? selected.map(controlEndpointKey) : selected[0] ? controlEndpointKey(selected[0]) : undefined}
-        options={[...allOptions.values()]} loading={loading} disabled={loading || Boolean(error) || submitting}
-        placeholder="搜索协议、连接或点名，选择已有点位"
-        notFoundContent="暂无可选点位，请先在协议点表中建立点位"
-        onChange={(value) => onSelect(kind, (Array.isArray(value) ? value : value ? [value] : []).map((key) => allOptions.get(key)!.endpoint))}
-      />
+      <ConnectionPointSelect label={label} options={options} selected={selected}
+        loading={loading} disabled={loading || Boolean(error) || submitting}
+        onChange={(values) => onSelect(kind, values)} />
       {multiple && <Typography.Text type="secondary" className="agc-member-editor__note">保留全部已有绑定；多来源可能覆盖同一输入值，请确认来源关系。</Typography.Text>}
     </Form.Item>;
   };
