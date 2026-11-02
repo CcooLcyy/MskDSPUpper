@@ -8,7 +8,7 @@ import { platformTemplateCatalog } from './catalog';
 import { normalizePlatformId } from './catalog-core';
 import type { PlatformTemplateEntry, PlatformTemplateSummary } from './catalog-core';
 import { isTemplateWritePoint, planTemplateApplication } from './model';
-import { applyApplicationUpdate, createApplication, parseTemplateBindings, planApplicationUpdate, planTemplateSourceTransfers, positiveRevision } from './bindings';
+import { applyApplicationAdditions, applyApplicationUpdate, createApplication, parseTemplateBindings, planApplicationAdditions, planApplicationUpdate, planTemplateSourceTransfers, positiveRevision } from './bindings';
 import type { TemplateBindings, TemplateCommit, TemplateUpdateRow } from './bindings';
 import './templates.css';
 interface Props {
@@ -32,6 +32,7 @@ interface PreviewRow {
   condition?: string;
   write: boolean;
   sourceTransfer?: boolean;
+  applied?: boolean;
 }
 const {
   Text,
@@ -40,6 +41,7 @@ const {
 const initialSelection = (entry: PlatformTemplateEntry) => entry.template.points.filter(point => !isTemplateWritePoint(point) && !point.condition && point.default_selected !== false).map(point => point.id);
 const names: Record<string, string> = {
   added: '新增',
+  applied: '已添加',
   readded: '重新添加',
   modified: '平台修改',
   deleted: '平台删除',
@@ -93,6 +95,7 @@ export default function TemplateModal({
   const [manufacturer, setManufacturer] = useState('');
   const [prefix, setPrefix] = useState('');
   const [applicationId, setApplicationId] = useState('');
+  const [mode, setMode] = useState<'add' | 'update'>('add');
   const [selected, setSelected] = useState<string[]>([]);
   const [refresh, setRefresh] = useState(0);
   const [versionInput, setVersionInput] = useState('');
@@ -118,6 +121,7 @@ export default function TemplateModal({
   const bindings = bindingsResult.bindings;
   const applications = bindings.applications.filter(app => app.platform_id === platformId && app.template_id === selectedId);
   const application = applications.find(app => app.application_id === applicationId);
+  const updating = !!application && mode === 'update';
   const disabled = busy || working || loading;
   useEffect(() => {
     if (!open) return;
@@ -174,9 +178,11 @@ export default function TemplateModal({
       setPointSearch('');
       const matching = bindings.applications.find(app => app.platform_id === platformId && app.template_id === summary.id);
       setApplicationId(matching?.application_id ?? '');
+      setMode('add');
       if (matching && table) {
         try {
-          setSelected(planApplicationUpdate(matching, table.points, result.template, result.summary.revision, addressBase, result.summary.revision !== summary.revision).filter(row => row.selected).map(row => row.id));
+          const available = planApplicationAdditions(matching, table.points, result.template, result.summary.revision, addressBase, result.summary.revision !== summary.revision);
+          setSelected(available.filter(row => row.selected && !row.conflict).map(row => row.id));
         } catch {
           setSelected([]);
         }
@@ -190,14 +196,14 @@ export default function TemplateModal({
       active = false;
     };
   }, [open, summary, platformId, username, bindings, table, addressBase, requestedRevision, detailRefresh]);
-  const planResult = useMemo(() => {
+  const planResult = useMemo<{ rows: PreviewRow[]; updates: TemplateUpdateRow[]; error: string }>(() => {
     if (!entry || !table) return {
       rows: [] as PreviewRow[],
       updates: [] as TemplateUpdateRow[],
       error: ''
     };
     try {
-      if (application) {
+      if (application && updating) {
         const updates = planApplicationUpdate(application, table.points, entry.template, entry.summary.revision, addressBase, isHistorical);
         return {
           updates,
@@ -215,6 +221,25 @@ export default function TemplateModal({
             blocked: row.blocked,
             condition: row.source?.condition,
             write: !!row.source && isTemplateWritePoint(row.source)
+          }))
+        };
+      }
+      if (application) {
+        const additions = planApplicationAdditions(application, table.points, entry.template, entry.summary.revision, addressBase, isHistorical, selected);
+        return {
+          updates: [] as TemplateUpdateRow[],
+          error: '',
+          rows: additions.map(row => ({
+            id: row.id,
+            tag: row.finalTag,
+            address: String(row.point.address),
+            kind: row.applied ? 'applied' : application.mappings.some(mapping => mapping.source_point_id === row.id) ? 'readded' : 'added',
+            fields: row.source.group,
+            detail: row.source.description,
+            blocked: row.applied ? undefined : row.conflict ?? undefined,
+            condition: row.source.condition,
+            write: isTemplateWritePoint(row.source),
+            applied: row.applied
           }))
         };
       }
@@ -248,18 +273,21 @@ export default function TemplateModal({
         error: String(cause)
       };
     }
-  }, [entry, table, application, addressBase, prefix, selected, isHistorical, bindings]);
+  }, [entry, table, application, updating, addressBase, prefix, selected, isHistorical, bindings]);
   const filtered = summaries.filter(item => (!manufacturer || manufacturer === item.manufacturer) && `${item.name} ${item.manufacturer} ${item.models.join(' ')} ${item.protocol_version}`.toLowerCase().includes(search.toLowerCase()));
   const rows = planResult.rows.filter(row => `${row.tag} ${row.address} ${row.fields}`.toLowerCase().includes(pointSearch.toLowerCase()));
-  const chosen = planResult.rows.filter(row => selected.includes(row.id) && !row.blocked);
-  const acknowledgeOnly = !!application && !!entry && !planResult.rows.length && !planResult.error && application.revision !== entry.summary.revision;
-  const selectApplication = (id: string) => {
+  const chosen = planResult.rows.filter(row => selected.includes(row.id) && !row.blocked && !row.applied);
+  const acknowledgeOnly = updating && !!entry && !planResult.rows.length && !planResult.error && application.revision !== entry.summary.revision;
+  const selectOperation = (nextMode: 'add' | 'update', id = applicationId) => {
     setApplicationId(id);
-    setPrefix('');
+    setMode(nextMode);
+    setPointSearch('');
     if (!entry || !table) return;
     const app = applications.find(item => item.application_id === id);
     try {
-      setSelected(app ? planApplicationUpdate(app, table.points, entry.template, entry.summary.revision, addressBase, isHistorical).filter(row => row.selected).map(row => row.id) : initialSelection(entry));
+      if (!app) setSelected(initialSelection(entry));
+      else if (nextMode === 'update') setSelected(planApplicationUpdate(app, table.points, entry.template, entry.summary.revision, addressBase, isHistorical).filter(row => row.selected).map(row => row.id));
+      else setSelected(planApplicationAdditions(app, table.points, entry.template, entry.summary.revision, addressBase, isHistorical).filter(row => row.selected && !row.conflict).map(row => row.id));
     } catch {
       setSelected([]);
     }
@@ -274,13 +302,17 @@ export default function TemplateModal({
         let commit: TemplateCommit;
         let transferredTags: string[] = [];
         if (application) {
-          const next = applyApplicationUpdate(application, table.points, entry.template, entry.summary.revision, chosen.map(row => row.id), addressBase, isHistorical);
+          const next = (updating ? applyApplicationUpdate : applyApplicationAdditions)(application, table.points, entry.template, entry.summary.revision, chosen.map(row => row.id), addressBase, isHistorical);
+          const otherBindings = { ...bindings, applications: bindings.applications.filter(app => app.application_id !== application.application_id) };
+          const addedPoints = next.points.filter(point => !table.points.some(current => current.tag === point.tag));
+          const migration = updating ? { bindings: otherBindings, transfers: [] } : planTemplateSourceTransfers(otherBindings, table.points, addedPoints);
+          transferredTags = migration.transfers.map(item => item.target_tag);
           commit = {
             expected: table,
             points: next.points,
             bindings: {
               ...bindings,
-              applications: bindings.applications.map(app => app.application_id === application.application_id ? next.application : app)
+              applications: bindings.applications.map(app => app.application_id === application.application_id ? next.application : migration.bindings.applications.find(other => other.application_id === app.application_id)!)
             }
           };
         } else {
@@ -306,6 +338,7 @@ export default function TemplateModal({
           };
         }
         if (await onApply(commit)) {
+          console.info(updating ? '模板所选更新已保存' : '模板所选点位已添加', { connectionName, protocol, applicationId: application?.application_id, count: chosen.length });
           if (transferredTags.length) console.info('模板重新添加点位并迁移来源已保存', { connectionName, protocol, tags: transferredTags });
           onClose();
         }
@@ -330,15 +363,15 @@ export default function TemplateModal({
     width: 210,
     render: (value, row) => <Tooltip title={row.detail}><span>{value}</span></Tooltip>
   }, {
-    title: '地址（现场 → 平台）',
+    title: updating ? '地址（现场 → 平台）' : '地址',
     dataIndex: 'address',
     width: 160
   }, {
     title: '状态',
     width: 155,
-    render: (_, row) => <Tag color={row.blocked || row.kind === 'conflict' ? 'orange' : row.kind === 'deleted' ? 'red' : 'blue'}>{row.blocked ? '冲突，禁止应用' : names[row.kind]}</Tag>
+    render: (_, row) => <Tag color={row.applied ? 'default' : row.blocked || row.kind === 'conflict' ? 'orange' : row.kind === 'deleted' ? 'red' : 'blue'}>{row.blocked ? '冲突，禁止应用' : names[row.kind]}</Tag>
   }, {
-    title: application ? '变更字段' : '分组',
+    title: updating ? '变更字段' : '分组',
     dataIndex: 'fields',
     width: 200
   }, {
@@ -371,7 +404,7 @@ export default function TemplateModal({
     footer: {
       flexShrink: 0
     }
-  }} footer={<div className="mt-footer"><Text>已选 {chosen.length} 项{application ? '；未选差异保留现场配置，下次仍会提示。' : ''}</Text><Space><Button disabled={busy || working} onClick={onClose}>取消</Button><Button type="primary" loading={working || busy} disabled={disabled || !!blocking || !chosen.length && !acknowledgeOnly} onClick={() => void apply()}>{acknowledgeOnly ? '确认版本信息' : application ? '应用所选更新' : '添加所选点位'}</Button></Space></div>}>
+  }} footer={<div className="mt-footer"><Text>已选 {chosen.length} 项{updating ? '；未选差异保留现场配置，下次仍会提示。' : ''}</Text><Space><Button disabled={busy || working} onClick={onClose}>取消</Button><Button type="primary" loading={working || busy} disabled={disabled || !!blocking || !chosen.length && !acknowledgeOnly} onClick={() => void apply()}>{acknowledgeOnly ? '确认版本信息' : updating ? '应用所选更新' : '添加所选点位'}</Button></Space></div>}>
   <div className="mt-intro"><Text>目标连接：<Text strong>{connectionName}</Text> · Modbus {protocol} · {addressBase === 2 ? '1' : '0'} 基</Text><Space wrap>
     <Input aria-label="指定历史版本" placeholder="指定历史版本号" value={versionInput} maxLength={20} disabled={disabled || !summary} style={{
           width: 170
@@ -424,32 +457,24 @@ export default function TemplateModal({
               }}>{entry.template.notes.map((note, index) => <p key={index}>{note}</p>)}</div>,
               okText: '已阅读'
             })}>适用说明</Button></div>
-   <div className="mt-meta"><Text>操作</Text><Select aria-label="模板应用记录" style={{
-              minWidth: 300
-            }} value={applicationId} onChange={selectApplication} options={[{
-              value: '',
-              label: '作为新的模板应用（可使用不同前缀）'
-            }, ...applications.map(app => ({
-              value: app.application_id,
-              label: `更新已应用点位：${app.prefix || '无前缀'} · 完整版本 ${app.revision}`
-            }))]} /></div>
-   {application ? <Alert type="info" title={`完整应用版本 ${application.revision} → 平台版本 ${entry.summary.revision}。勾选采用平台值；不勾选保留现场值，删除及现场冲突默认不选。`} style={{
+   {application && <div className="mt-meta"><Text>操作</Text><Select aria-label="模板操作" disabled={disabled} style={{ minWidth: 180 }} value={mode} onChange={value => selectOperation(value)} options={[{ value: 'add', label: '添加点位' }, { value: 'update', label: '检查模板更新' }]} />{applications.length > 1 && <Select aria-label="模板应用记录" disabled={disabled} style={{ minWidth: 220 }} value={applicationId} onChange={id => selectOperation(mode, id)} options={applications.map(app => ({ value: app.application_id, label: `${app.prefix || '无前缀'} · 版本 ${app.revision}` }))} />}</div>}
+   {updating ? <Alert type="info" title={`完整应用版本 ${application.revision} → 平台版本 ${entry.summary.revision}。勾选采用平台值；不勾选保留现场值，删除及现场冲突默认不选。`} style={{
             marginBottom: 10
-          }} /> : <div className="mt-prefix"><label htmlFor="modbus-template-prefix">标签前缀（可选）</label><Input id="modbus-template-prefix" maxLength={256} value={prefix} onChange={event => setPrefix(event.target.value)} placeholder="例如：逆变器01_" /><Text type="secondary">仅添加，不覆盖已有点位</Text></div>}
+          }} /> : application ? <Alert type="info" title={`已添加点位不可重复选择，可继续勾选未添加点位；仅添加，不覆盖已有配置。标签前缀：${application.prefix || '无前缀'}。`} style={{ marginBottom: 10 }} /> : <div className="mt-prefix"><label htmlFor="modbus-template-prefix">标签前缀（可选）</label><Input id="modbus-template-prefix" maxLength={256} value={prefix} onChange={event => setPrefix(event.target.value)} placeholder="默认不加前缀" /><Text type="secondary">仅添加，不覆盖已有点位</Text></div>}
    <Input prefix={<SearchOutlined />} aria-label="搜索点位" placeholder="搜索点位名称、地址或变更字段" value={pointSearch} onChange={event => setPointSearch(event.target.value)} allowClear />
-   <div className="mt-selection"><Text>共 {planResult.rows.length} 项{application ? '差异' : ''}</Text><Space><Button size="small" onClick={() => setSelected(application ? planResult.updates.filter(row => row.selected).map(row => row.id) : initialSelection(entry))}>默认选择</Button><Button size="small" onClick={() => setSelected([])}>清空选择</Button></Space></div>
+   <div className="mt-selection"><Text>{updating ? `共 ${planResult.rows.length} 项差异` : `共 ${planResult.rows.length} 个点位 · 已添加 ${planResult.rows.filter(row => row.applied).length} 个`}</Text><Space><Button size="small" disabled={disabled} onClick={() => selectOperation(mode)}>默认选择</Button><Button size="small" disabled={disabled} onClick={() => setSelected([])}>清空选择</Button></Space></div>
    <div className="mt-table-area"><Table<PreviewRow> rowKey="id" size="small" columns={columns} dataSource={rows} pagination={false} scroll={{
               x: 1000,
               y: '100%'
             }} rowSelection={{
-              selectedRowKeys: selected,
+              selectedRowKeys: selected.filter(id => !planResult.rows.find(row => row.id === id)?.applied),
               preserveSelectedRowKeys: true,
               onChange: keys => setSelected(keys.map(String)),
               getCheckboxProps: row => ({
-                disabled: disabled || !!row.blocked
+                disabled: disabled || !!row.blocked || !!row.applied
               })
             }} locale={{
-              emptyText: application ? '没有待处理差异' : '没有匹配点位'
+              emptyText: updating ? '没有待处理差异' : '没有匹配点位'
             }} /></div>
   </> : <Empty description="从平台获取模板后选择点位" />}</section></div>
  </Modal>;

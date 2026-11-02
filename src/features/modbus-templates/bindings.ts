@@ -2,7 +2,7 @@ import type { ModbusPoint, ModbusPointTable } from '../../adapters/types.ts';
 import { normalizeModbusPointEngineeringFields } from '../../pages/ModbusRTU/modbus-decimal.ts';
 import { getDecimalTextError } from '../../utils/decimal-input.ts';
 import { createTemplateFromPoints, isTemplateWritePoint, planTemplateApplication, validateModbusTemplate } from './model.ts';
-import type { ModbusTemplate, ModbusTemplatePoint } from './model.ts';
+import type { ModbusTemplate, ModbusTemplatePoint, TemplateApplicationRow } from './model.ts';
 export interface TemplateMapping {
   source_point_id: string;
   target_tag: string;
@@ -196,6 +196,54 @@ export function planTemplateSourceTransfers(bindings: TemplateBindings, current:
     };
   });
   return { bindings: transfers.length ? { ...bindings, applications } : bindings, transfers };
+}
+export interface TemplateAdditionRow extends TemplateApplicationRow {
+  applied: boolean;
+}
+/** 补加只处理现场不存在的模板点；已添加点展示现场配置，不参与更新或覆盖。 */
+export function planApplicationAdditions(application: TemplateApplication, current: ModbusPoint[], latest: ModbusTemplate, revision: string, addressBase: number, allowHistorical = false, selectedIds?: string[]): TemplateAdditionRow[] {
+  if (!positiveRevision(revision)) throw Error('平台模板版本无效');
+  if (!allowHistorical && [application.revision, ...application.mappings.map(mapping => mapping.source_revision)].some(applied => BigInt(applied) > BigInt(revision))) throw Error('当前平台或缓存版本旧于已应用版本，请刷新平台目录后再核对，不能以旧缓存回退现场点表');
+  if (addressBase !== application.address_base) throw Error('连接地址基准与模板应用记录不一致，请先恢复或核对连接配置');
+  const currentByTag = new Map(current.map(point => [point.tag, point]));
+  const applied = new Map<string, ModbusPoint>();
+  for (const mapping of application.mappings) {
+    const point = currentByTag.get(mapping.target_tag);
+    if (point) applied.set(mapping.source_point_id, point);
+  }
+  // 先校验完整模板，再只对可补加点检查现有点及同批选择冲突。
+  const candidates = latest.points.length ? planTemplateApplication(latest, { existingPoints: [], addressBase, prefix: application.prefix, selectedIds: [] }).rows : [];
+  const missing = latest.points.filter(point => !applied.has(point.id));
+  const planned = missing.length ? planTemplateApplication({ ...latest, points: missing }, { existingPoints: current, addressBase, prefix: application.prefix, selectedIds }).rows : [];
+  const missingById = new Map(planned.map(row => [row.id, row]));
+  return candidates.map(candidate => {
+    const point = applied.get(candidate.id);
+    return point ? { ...candidate, point, finalTag: point.tag, conflict: null, selected: false, applied: true } : { ...missingById.get(candidate.id)!, applied: false };
+  });
+}
+/** 补加沿用原应用；仅记录本次接受点的来源，不推进整表版本或改写其他点基线。 */
+export function applyApplicationAdditions(application: TemplateApplication, current: ModbusPoint[], latest: ModbusTemplate, revision: string, selectedIds: string[], addressBase: number, allowHistorical = false): { application: TemplateApplication; points: ModbusPoint[] } {
+  const rows = planApplicationAdditions(application, current, latest, revision, addressBase, allowHistorical, selectedIds);
+  if (!selectedIds.length) throw Error('请选择需要添加的点位');
+  const chosenIds = new Set(selectedIds);
+  if (chosenIds.size !== selectedIds.length || selectedIds.some(id => !rows.some(row => row.id === id))) throw Error('所选点位不存在或包含无效重复选择');
+  const chosen = rows.filter(row => chosenIds.has(row.id));
+  if (chosen.some(row => row.applied)) throw Error('所选点位已添加，不能重复添加');
+  if (chosen.some(row => row.conflict)) throw Error('所选点位存在标签或地址冲突，请核对后重试');
+  // 同标签旧来源已无现场点时，补加应迁移来源，避免一份记录内重复认领标签。
+  const moved = application.mappings.filter(mapping => chosen.some(row => row.point.tag === mapping.target_tag && row.id !== mapping.source_point_id));
+  const mappings = application.mappings.filter(mapping => !moved.includes(mapping));
+  for (const row of chosen) {
+    const mapping: TemplateMapping = { source_point_id: row.id, target_tag: row.point.tag, baseline: row.point, source_revision: revision, source_snapshot: row.source };
+    const index = mappings.findIndex(previous => previous.source_point_id === row.id);
+    if (index < 0) mappings.push(mapping);else mappings[index] = mapping;
+  }
+  const previousIds = new Set(application.mappings.map(mapping => mapping.source_point_id));
+  const excluded = application.excluded_source_ids ?? application.template_snapshot.points.filter(source => !previousIds.has(source.id)).map(source => source.id);
+  return {
+    points: [...current, ...chosen.map(row => row.point)],
+    application: { ...application, mappings, excluded_source_ids: [...new Set([...excluded, ...moved.map(mapping => mapping.source_point_id)])].filter(id => !chosenIds.has(id)) }
+  };
 }
 export function planApplicationUpdate(application: TemplateApplication, current: ModbusPoint[], latest: ModbusTemplate, revision: string, addressBase: number, allowHistorical = false): TemplateUpdateRow[] {
   if (!positiveRevision(revision)) throw Error('平台模板版本无效');
