@@ -5,6 +5,8 @@ import { PARAMETER_HELP } from '../help/parameter-help';
 import { controlEndpointKey } from '../../utils/control-mapping-editor';
 import type { AgcMemberEndpoints, AgcMemberPointKind } from '../../utils/agc-member-bindings';
 import type { ControlAllocationMode } from '../../utils/control-allocation';
+import { compareAgcDecimalTexts } from '../../utils/agc-decimal';
+import { getDecimalTextError, toDecimalInputText } from '../../utils/decimal-input';
 
 import ConnectionPointSelect from './ConnectionPointSelect';
 
@@ -32,6 +34,19 @@ export default function AgcMemberEditor({
   const name = Form.useWatch('member_name', form) || '成员';
   const mode = Form.useWatch(['p_set', 'mode'], form) ?? 1;
   const deltaBase = Form.useWatch(['p_set', 'delta_base'], form) ?? 0;
+  const capacity = Form.useWatch('capacity_kw_decimal', form);
+  const handleValuesChange = (changed: Partial<AgcMemberConfig>) => {
+    if ('capacity_kw_decimal' in changed) {
+      const previousCapacity = toDecimalInputText(capacity);
+      const maximum = toDecimalInputText(form.getFieldValue('max_kw_decimal'));
+      // 上限为空或仍等于原额定容量时继续跟随；保留用户单独设定的上限。
+      const followsCapacity = !maximum || maximum === previousCapacity
+        || (!getDecimalTextError(maximum, '有功上限') && !getDecimalTextError(previousCapacity, '额定容量')
+          && compareAgcDecimalTexts(maximum, previousCapacity) === 0);
+      if (followsCapacity) form.setFieldValue('max_kw_decimal', changed.capacity_kw_decimal);
+    }
+    onDirty();
+  };
   const pointPicker = (kind: AgcMemberPointKind, label: string) => {
     const selected = endpoints[kind] ?? [];
     const multiple = selected.length > 1;
@@ -55,7 +70,7 @@ export default function AgcMemberEditor({
     </div>
     {error && <Alert type="error" showIcon title={error} description="点位与映射读取失败，请刷新后再保存。" />}
     {warning && <Alert type="warning" showIcon title={warning} />}
-    <Form form={form} layout="vertical" size="small" disabled={submitting} onValuesChange={onDirty}>
+    <Form form={form} layout="vertical" size="small" disabled={submitting} onValuesChange={handleValuesChange}>
       <div className="agc-member-editor__identity">
         <Form.Item name="member_name" label="成员名称" rules={[{ required: true, whitespace: true, message: '请输入成员名称' }]}>
           <Input placeholder="例如：逆变器1" />
