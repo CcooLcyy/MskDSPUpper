@@ -56,6 +56,9 @@ try {
     await page.setViewportSize(viewport);
     await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/__template-scroll`);
     await page.locator('.ant-table-body .ant-table-row').first().waitFor();
+    assert.equal(await page.locator('.ant-table-body .ant-table-row').getByRole('checkbox', { checked: true }).count(), 0, '首次打开不自动勾选');
+    assert.equal(await page.getByRole('button', { name: '默认选择', exact: true }).count(), 0, '不再提供默认选择按钮');
+    assert.equal(await page.getByRole('button', { name: '应用所选变更', exact: true }).isDisabled(), true, '没有选择时不能保存');
     await page.waitForTimeout(400);
     const body = page.locator('.mt-table-area .ant-table-body');
     const metrics = await body.evaluate(el => {
@@ -87,6 +90,7 @@ try {
       await page.getByRole('button', { name: /取\s*消/ }).click();
       await page.getByRole('button', { name: '打开模板', exact: true }).click();
       await body.locator('tbody .ant-table-row').first().waitFor();
+      assert.equal(await body.getByRole('checkbox', { checked: true }).count(), 0, '重新打开仍不自动勾选');
       assert.equal(await body.evaluate(el => el.scrollTop), 0, '重新打开后从顶部显示');
       results.push({ viewport, status: 'passed', metrics });
     } catch (error) {

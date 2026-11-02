@@ -2,20 +2,19 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
-// 真实模板弹窗配合内存点表验证补加流程，不连接设备或写入平台。
+// 真实模板弹窗配合内存点表验证统一变更，不连接设备或写入平台。
 const root = fileURLToPath(new URL('../../', import.meta.url)).replaceAll('\\', '/').replace(/\/$/, '');
 const output = await fs.mkdtemp(path.join(os.tmpdir(), 'mskdsp-template-additions-'));
 const { chromium } = await (process.env.MSKDSP_PLAYWRIGHT_MODULE ? import(pathToFileURL(process.env.MSKDSP_PLAYWRIGHT_MODULE)) : import('playwright'));
 const { createServer } = await import(pathToFileURL(root + '/node_modules/vite/dist/node/index.js'));
 const { default: react } = await import(pathToFileURL(root + '/node_modules/@vitejs/plugin-react/dist/index.js'));
 const fixture = JSON.parse(await fs.readFile(root + '/tests/fixtures/modbus-templates/aiswei-inverter-v2-1-5.json', 'utf8'));
-const source = { ...fixture, points: fixture.points.slice(0, 3).map(point => ({ ...point, condition: '', default_selected: true })) };
-const latest = { ...source, points: source.points.map((point, index) => index === 0 ? { ...point, scale: '2' } : point) };
+const source = { ...fixture, points: fixture.points.slice(0, 6).map(point => ({ ...point, condition: '', default_selected: true })) };
+const latest = { ...source, points: source.points.filter((_, index) => index !== 2).map((point, index) => index < 2 ? { ...point, scale: String(index + 2) } : point) };
 const summary = { ...latest, id: 'db-1', revision: '2', point_count: latest.points.length, updated_at: 0 };
-const oldModal = process.env.MSKDSP_TEMPLATE_BASELINE ? execFileSync('git', ['show', 'HEAD:src/features/modbus-templates/TemplateModal.tsx'], { cwd: root, encoding: 'utf8' }) : null;
+
 const entry = path.join(output, 'entry.tsx');
 await fs.writeFile(entry, `
 import React, { useState } from 'react';
@@ -27,8 +26,8 @@ import { createApplication } from ${JSON.stringify('/@fs/' + root + '/src/featur
 import { PlatformAuthContext } from ${JSON.stringify('/@fs/' + root + '/src/auth/platform-auth-context.ts')};
 const auth = { snapshot: { phase: 'authenticated', settings: { grpc_endpoint: 'fixture' }, status: { username: 'fixture' } } };
 const source = ${JSON.stringify(source)};
-const initial = createApplication({ platformId: 'fixture', templateId: 'db-1', revision: '1', template: source, addressBase: 1, prefix: '原前缀_', selectedIds: [source.points[0].id], existingPoints: [], applicationId: 'app-1' });
-const initialPoints = initial.points.map(point => ({ ...point, scale: 7, scale_decimal: '7' }));
+const initial = createApplication({ platformId: 'fixture', templateId: 'db-1', revision: '1', template: source, addressBase: 1, prefix: '原前缀_', selectedIds: source.points.slice(0, 4).map(point => point.id), existingPoints: [], applicationId: 'app-1' });
+const initialPoints = initial.points.map((point, index) => index === 1 ? { ...point, scale: 7, scale_decimal: '7' } : point);
 function Fixture() {
   const [open, setOpen] = useState(true);
   const [table, setTable] = useState({ revision: '1', points: initialPoints, template_bindings_json: JSON.stringify({ schema_version: 1, applications: [initial.application] }) });
@@ -45,8 +44,13 @@ const server = await createServer({ configFile: false, root, cacheDir: path.join
   name: 'template-additions-fixture',
   load(id) {
     const normalized = id.replaceAll('\\', '/');
-    if (oldModal && normalized === root + '/src/features/modbus-templates/TemplateModal.tsx') return oldModal;
-    if (normalized === root + '/src/features/modbus-templates/catalog.ts') return `export const platformTemplateCatalog = () => ({ list: async () => ({ summaries: [${JSON.stringify(summary)}], cached: false }), get: async () => (${JSON.stringify({ summary, template: latest, platformId: 'fixture', cached: false })}) });`;
+    if (normalized === root + '/src/features/modbus-templates/catalog.ts') return `
+      window.fixturePlatform = { summary: ${JSON.stringify(summary)}, template: ${JSON.stringify(latest)}, listCalls: 0, getCalls: 0 };
+      const alternate = ${JSON.stringify({ ...summary, id: 'db-2', name: '另一模板' })};
+      export const platformTemplateCatalog = () => ({
+        list: async () => { const data = window.fixturePlatform; data.listCalls++; return { summaries: [data.summary, alternate], cached: false }; },
+        get: async (_platform, id, revision) => { const data = window.fixturePlatform; data.getCalls++; return { summary: { ...(id === 'db-2' ? alternate : data.summary), revision }, template: revision === '1' ? ${JSON.stringify(source)} : data.template, platformId: 'fixture', cached: false }; }
+      });`;
   },
   configureServer(vite) {
     vite.middlewares.use('/__template-additions', (_req, res) => {
@@ -68,44 +72,64 @@ try {
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/__template-additions`);
   await page.locator('.ant-table-body .ant-table-row').first().waitFor();
   const rows = page.locator('.ant-table-body .ant-table-row');
-  assert.equal(await rows.count(), 3, '重复打开默认应显示全部模板点位，可继续补加');
-  const applied = rows.filter({ hasText: '原前缀_' + source.points[0].tag });
-  assert.match(await applied.innerText(), /已添加/);
-  assert.equal(await applied.getByRole('checkbox').isDisabled(), true, '已添加点位禁止重复勾选');
-  const addition = rows.filter({ hasText: '原前缀_' + source.points[1].tag });
-  await addition.getByRole('checkbox').check();
-  // 只添加一个点，保留另一个未添加项供重新打开核对。
-  const other = rows.filter({ hasText: '原前缀_' + source.points[2].tag });
-  await other.getByRole('checkbox').uncheck();
-  await page.getByRole('button', { name: '添加所选点位', exact: true }).click();
-  await page.waitForFunction(() => window.fixtureTable.points.length === 2);
+  const rowFor = index => rows.filter({ hasText: '原前缀_' + source.points[index].tag });
+  const assertZeroSelection = async () => {
+    assert.equal(await rows.getByRole('checkbox', { checked: true }).count(), 0, '重新加载后必须全部不勾选');
+    assert.equal(await page.getByRole('button', { name: '应用所选变更', exact: true }).isDisabled(), true);
+  };
+  assert.equal(await rows.count(), 6, '同一列表包含未添加、已添加、修改、冲突和删除');
+  assert.equal(await page.getByRole('combobox', { name: '模板操作', exact: true }).count(), 0, '不再切换添加和更新操作');
+  assert.equal(await page.getByRole('button', { name: '默认选择', exact: true }).count(), 0, '移除默认选择按钮');
+  await assertZeroSelection();
+  assert.match(await rowFor(0).innerText(), /平台修改/);
+  assert.match(await rowFor(1).innerText(), /现场修改|现场冲突/);
+  assert.match(await rowFor(2).innerText(), /平台删除/);
+  assert.match(await rowFor(3).innerText(), /已添加/);
+  assert.equal(await rowFor(3).getByRole('checkbox').isDisabled(), true, '无变化已添加点禁止重复勾选');
+  await rowFor(4).getByRole('checkbox').check();
+  assert.match(await page.locator('.mt-footer').innerText(), /新增 1 项.*更新 0 项.*删除 0 项/s);
+  await page.getByRole('button', { name: '应用所选变更', exact: true }).click();
+  await page.waitForFunction(() => window.fixtureTable.points.length === 5);
   const saved = await page.evaluate(() => window.fixtureTable);
   const bindings = JSON.parse(saved.template_bindings_json);
-  assert.equal(bindings.applications.length, 1, '补加应沿用同一应用记录');
+  assert.equal(bindings.applications.length, 1, '补加沿用同一应用记录');
   assert.equal(bindings.applications[0].application_id, 'app-1');
   assert.equal(bindings.applications[0].prefix, '原前缀_');
-  assert.equal(saved.points[0].scale_decimal, '7', '补加不得覆盖现场修改');
-  assert.equal(bindings.applications[0].mappings[0].source_revision, '1', '补加不得接受已有点更新');
+  assert.equal(saved.points.find(point => point.tag.endsWith(source.points[1].tag)).scale_decimal, '7', '未选择的现场修改保持不变');
+  assert.equal(bindings.applications[0].mappings[0].source_revision, '1', '补加不得接受未选择的已有点更新');
+  const calls = await page.evaluate(() => ({ list: window.fixturePlatform.listCalls, get: window.fixturePlatform.getCalls }));
+  // 模拟窗口关闭后平台发布新版本，重新打开必须主动获取而无需点击刷新。
+  await page.evaluate(() => {
+    window.fixturePlatform.summary.revision = '3';
+    window.fixturePlatform.template.points[0].scale = '4';
+    window.fixturePlatform.template.points[0].tag = '平台更新后的标签';
+  });
   await page.getByRole('button', { name: '打开模板', exact: true }).click();
-  await page.locator('.ant-table-body .ant-table-row').first().waitFor();
-  assert.equal(await rows.count(), 3);
-  assert.equal(await rows.filter({ hasText: '原前缀_' + source.points[1].tag }).getByRole('checkbox').isDisabled(), true);
-  assert.equal(await other.getByRole('checkbox').isDisabled(), false);
-  await page.getByRole('combobox', { name: '模板操作', exact: true }).click();
-  assert.equal(await page.getByText('作为新的模板应用（可使用不同前缀）', { exact: true }).count(), 0, '移除重复应用入口');
-  await page.getByTitle('检查模板更新', { exact: true }).click();
-  await page.getByText('现场修改，需选择', { exact: true }).waitFor();
-  assert.equal(await rows.count(), 1, '检查更新仍应保留未接受的平台修改');
-  assert.equal(await rows.first().getByRole('checkbox').isChecked(), false, '现场冲突默认不选');
-  await page.screenshot({ path: path.join(output, 'update.png') });
-  await page.getByRole('combobox', { name: '模板操作', exact: true }).click();
-  await page.getByTitle('添加点位', { exact: true }).click();
-  await page.waitForFunction(() => document.querySelectorAll('.ant-table-body .ant-table-row').length === 3);
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '添加所选点位' && !button.disabled));
-  assert.equal(await page.getByRole('button', { name: '添加所选点位', exact: true }).isEnabled(), true, '切回补加后剩余点位可继续保存');
-  await page.locator('.mt-heading').click();
-  await page.getByTitle('检查模板更新', { exact: true }).waitFor({ state: 'hidden' });
-  await page.screenshot({ path: path.join(output, 'additions.png') });
+  await page.getByText('原前缀_平台更新后的标签', { exact: false }).first().waitFor();
+  const reopenedCalls = await page.evaluate(() => ({ list: window.fixturePlatform.listCalls, get: window.fixturePlatform.getCalls }));
+  assert.ok(reopenedCalls.list > calls.list && reopenedCalls.get > calls.get, '每次打开均重新读取目录和选中模板内容');
+  assert.equal(await rows.count(), 6);
+  await assertZeroSelection();
+  await rowFor(5).getByRole('checkbox').check();
+  await page.getByRole('button', { name: /刷新平台模板$/ }).click();
+  await page.getByText('原前缀_平台更新后的标签', { exact: false }).first().waitFor();
+  await assertZeroSelection();
+  await rowFor(5).getByRole('checkbox').check();
+  await page.getByRole('textbox', { name: '指定历史版本', exact: true }).fill('1');
+  await page.getByRole('button', { name: '读取指定版本', exact: true }).click();
+  await page.getByText('历史版本 1 · 当前版本 3', { exact: true }).waitFor();
+  await assertZeroSelection();
+  await page.getByRole('button', { name: '返回当前版本', exact: true }).click();
+  await page.getByText('原前缀_平台更新后的标签', { exact: false }).first().waitFor();
+  await assertZeroSelection();
+  await rowFor(5).getByRole('checkbox').check();
+  await page.getByRole('button', { name: /另一模板/ }).click();
+  await page.locator('.mt-prefix').waitFor();
+  await assertZeroSelection();
+  await page.getByRole('button', { name: new RegExp(fixture.name) }).click();
+  await page.getByText('原前缀_平台更新后的标签', { exact: false }).first().waitFor();
+  await assertZeroSelection();
+  await page.screenshot({ path: path.join(output, 'unified-changes.png') });
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.waitForTimeout(200);
   const compact = await page.locator('.ant-table-body').evaluate(el => {
@@ -118,19 +142,30 @@ try {
   assert.ok(compact.bottom <= compact.areaBottom + 1, '小窗口表格滚动区不能被裁切');
   assert.ok(footer.y + footer.height <= 720, '小窗口底部操作栏应完整可见');
   await page.screenshot({ path: path.join(output, 'additions-720.png') });
-  await page.getByRole('button', { name: '添加所选点位', exact: true }).click();
-  await page.waitForFunction(() => window.fixtureTable.points.length === 3);
+  await rows.filter({ hasText: '原前缀_平台更新后的标签' }).getByRole('checkbox').check();
+  await rowFor(1).getByRole('checkbox').check();
+  await rowFor(2).getByRole('checkbox').check();
+  await rowFor(5).getByRole('checkbox').check();
+  assert.match(await page.locator('.mt-footer').innerText(), /新增 1 项.*更新 2 项.*删除 1 项/s);
+  await page.getByRole('button', { name: '应用所选变更', exact: true }).click();
+  await page.getByRole('button', { name: '确认应用', exact: true }).click();
+  await page.waitForFunction(() => window.fixtureTable.points.some(point => point.tag === '原前缀_平台更新后的标签'));
+  const mixed = await page.evaluate(() => window.fixtureTable);
+  assert.equal(mixed.points.length, 5, '混合提交同时新增、修改和删除');
+  assert.equal(mixed.points.find(point => point.tag === '原前缀_平台更新后的标签').scale_decimal, '4');
+  assert.equal(mixed.points.find(point => point.tag.endsWith(source.points[1].tag)).scale_decimal, '3', '明确选择冲突后采用平台值');
+  assert.equal(mixed.points.some(point => point.tag.endsWith(source.points[2].tag)), false, '明确选择平台删除后移除现场点');
   await page.getByRole('button', { name: '打开模板', exact: true }).click();
   await page.locator('.ant-table-body .ant-table-row').first().waitFor();
-  assert.equal(await rows.count(), 3);
-  assert.equal(await rows.getByRole('checkbox', { disabled: true }).count(), 3, '全部补加后均应禁选');
-  assert.equal(await page.getByRole('button', { name: '添加所选点位', exact: true }).isDisabled(), true, '全部已添加时不可重复保存');
+  assert.equal(await rows.count(), 5);
+  assert.equal(await rows.getByRole('checkbox', { disabled: true }).count(), 5, '全部应用后已添加点均禁选');
+  await assertZeroSelection();
   const complete = await page.evaluate(() => JSON.parse(window.fixtureTable.template_bindings_json));
   assert.equal(complete.applications.length, 1);
   assert.equal(complete.applications[0].application_id, 'app-1');
-  await page.screenshot({ path: path.join(output, 'all-added-720.png') });
+  await page.screenshot({ path: path.join(output, 'all-applied-720.png') });
   assert.deepEqual(errors, []);
-  results.push({ status: 'passed', checks: ['默认补加全点列表', '已添加禁选', '原记录补加并保留现场值及基线', '重开后可继续补加', '独立检查模板更新', '已有模板小窗口布局', '全部补加后禁止重复保存'], compact });
+  results.push({ status: 'passed', checks: ['统一显示全部变更', '全部手动选择', '重开自动获取最新平台模板', '刷新及切换后零选择', '未选择现场值及基线保留', '新增更新删除一次保存', '小窗口布局', '已应用禁止重复选择'], compact });
 } catch (error) {
   await page?.screenshot({ path: path.join(output, 'failure.png') });
   results.push({ status: 'failed', error: String(error) });
