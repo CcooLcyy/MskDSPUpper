@@ -22,7 +22,15 @@
 .mt-filters { display: grid; grid-template-columns: 1fr 160px; gap: 12px; }
 .mt-selection { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
 .mt-table-area { flex: 1; min-height: 0; overflow: hidden; }
-.mt-table-area .ant-table-body { overscroll-behavior: contain; }
+/* 沿表格容器传递剩余高度，避免滚动条被弹窗裁切。 */
+.mt-table-area .ant-table-wrapper,
+.mt-table-area .ant-table-wrapper > .ant-spin,
+.mt-table-area .ant-spin-container,
+.mt-table-area .ant-table,
+.mt-table-area .ant-table-container { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.mt-table-area .ant-table-wrapper { height: 100%; }
+.mt-table-area .ant-table-header { flex-shrink: 0; }
+.mt-table-area .ant-table-body { flex: 1; min-height: 0; overscroll-behavior: contain; }
 .mt-summary { padding-top: 8px; font-size: 12px; }
 .mt-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; border-top: 1px solid #454545; padding-top: 14px; }
 .mt-import { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 2px 7px; border: 1px solid #454545; border-radius: 4px; color: #ddd; cursor: pointer; overflow: hidden; font-size: 12px; }

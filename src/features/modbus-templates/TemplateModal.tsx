@@ -430,7 +430,7 @@ export default function TemplateModal({
    <div className="mt-selection"><Text>共 {planResult.rows.length} 项{application ? '差异' : ''}</Text><Space><Button size="small" onClick={() => setSelected(application ? planResult.updates.filter(row => row.selected).map(row => row.id) : initialSelection(entry))}>默认选择</Button><Button size="small" onClick={() => setSelected([])}>清空选择</Button></Space></div>
    <div className="mt-table-area"><Table<PreviewRow> rowKey="id" size="small" columns={columns} dataSource={rows} pagination={false} scroll={{
               x: 1000,
-              y: 'max(150px, calc(100dvh - 490px))'
+              y: '100%'
             }} rowSelection={{
               selectedRowKeys: selected,
               preserveSelectedRowKeys: true,
