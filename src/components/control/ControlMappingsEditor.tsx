@@ -5,14 +5,20 @@ import { controlEndpointKey, controlMappingFieldKey } from '../../utils/control-
 import type { ControlMappingField } from '../../utils/control-mapping-editor';
 
 /** 外部映射单独编辑，保留本地 tag 和已有的一对多路由。 */
-export default function ControlMappingsEditor({ mapping, fields, groupName = mapping.groupName }: { mapping: ControlMappingsDraft; fields: ControlMappingField[]; groupName?: string }) {
+export default function ControlMappingsEditor({ mapping, fields, groupName = mapping.groupName, title = '外部点位映射', description, embedded = false, showLocalTags = true }: {
+  mapping: ControlMappingsDraft;
+  fields: ControlMappingField[];
+  groupName?: string;
+  title?: string;
+  description?: string;
+  embedded?: boolean;
+  showLocalTags?: boolean;
+}) {
   const uniqueFields = [...new Map(fields.filter((field) => field.tag?.trim()).map((field) => [controlMappingFieldKey(field), field])).values()];
-  return (
-    <Card className="control-config-section" size="small" title="外部点位映射" extra={
-      <Button size="small" icon={<ReloadOutlined />} loading={mapping.loading} onClick={() => void mapping.refresh()}>刷新点位与映射</Button>
-    }>
+  const refresh = <Button size="small" icon={<ReloadOutlined />} loading={mapping.loading} onClick={() => void mapping.refresh()}>刷新点位与映射</Button>;
+  const content = <>
       <Typography.Paragraph type="secondary">
-        本地点位 tag 与外部点位分别配置。保存控制组时只同步明确修改的映射，其他路由保留。多来源可能覆盖同一输入值，请确认来源关系。
+        {description ?? '本地点位 tag 与外部点位分别配置。保存控制组时只同步明确修改的映射，其他路由保留。多来源可能覆盖同一输入值，请确认来源关系。'}
       </Typography.Paragraph>
       {mapping.error && <Alert type="error" showIcon title={mapping.error} description="已有映射未加载完成，保存已禁用；请刷新重试。" />}
       {mapping.warning && <Alert type="warning" showIcon title={mapping.warning} />}
@@ -29,7 +35,7 @@ export default function ControlMappingsEditor({ mapping, fields, groupName = map
           <Space wrap style={{ marginBottom: 6 }}>
             <Typography.Text strong>{field.label}</Typography.Text>
             <Tag>{field.direction === 'input' ? '数据来源 → 控制组' : '控制组 → 发送目标'}</Tag>
-            <Typography.Text code>{field.tag}</Typography.Text>
+            {showLocalTags && <Typography.Text code>{field.tag}</Typography.Text>}
           </Space>
           <Select mode="multiple" showSearch allowClear style={{ width: '100%' }} loading={mapping.loading}
             disabled={mapping.loading || Boolean(mapping.error)} optionFilterProp="label"
@@ -40,6 +46,9 @@ export default function ControlMappingsEditor({ mapping, fields, groupName = map
           />
         </div>;
       })}
-    </Card>
-  );
+  </>;
+  return embedded ? <section className="control-mappings-inline">
+    <div className="control-mappings-inline__heading"><Typography.Text strong>{title}</Typography.Text>{refresh}</div>
+    {content}
+  </section> : <Card className="control-config-section" size="small" title={title} extra={refresh}>{content}</Card>;
 }

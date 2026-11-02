@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Collapse,
   Descriptions,
   Form,
   Input,
@@ -14,6 +15,7 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from 'antd';
@@ -472,6 +474,8 @@ const AGC: React.FC = () => {
   const runtimeRequestIdRef = useRef(0);
   const runtimeErrorToastRef = useRef<{ text: string; at: number } | null>(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [groupEditorTab, setGroupEditorTab] = useState('basic');
+  const [advancedCommandKeys, setAdvancedCommandKeys] = useState<string[]>([]);
   const [memberEditorOpen, setMemberEditorOpen] = useState(false);
   const [tuningModalOpen, setTuningModalOpen] = useState(false);
   const [tuningStatus, setTuningStatus] = useState<AgcTuningStatus | null>(null);
@@ -501,7 +505,9 @@ const AGC: React.FC = () => {
 
   const controlMode = effectiveControlMode(Form.useWatch('control_mode', groupForm));
   const watchedGroup = Form.useWatch([], groupForm);
-  const mappingFields = collectMappingFields({ ...watchedGroup, members: [] });
+  const allMappingFields = collectMappingFields({ ...watchedGroup, members: [] });
+  const commandMappingFields = allMappingFields.filter((field) => field.direction === 'input');
+  const mappingFields = allMappingFields.filter((field) => field.direction === 'output');
   const memberPointOptions = mappings.options.filter((option) => !(
     option.endpoint.module_name === AGC_MODULE_NAME
     && option.endpoint.conn_name === String(watchedGroup?.group_name ?? '').trim()
@@ -708,6 +714,8 @@ const AGC: React.FC = () => {
     }
     setGroupDirty(false);
     setEditingGroup(null);
+    setGroupEditorTab('basic');
+    setAdvancedCommandKeys([]);
     setAllocationMode('equal');
     setMembersDraft([]);
     setMemberEditorOpen(false);
@@ -739,6 +747,8 @@ const AGC: React.FC = () => {
       outputs: cloneOutputs(selectedGroup.config.outputs),
     });
     setEditingGroup(config);
+    setGroupEditorTab('basic');
+    setAdvancedCommandKeys([]);
     setGroupDirty(false);
     setAllocationMode(inferAllocationMode(config.members));
     setMembersDraft(config.members);
@@ -1185,7 +1195,18 @@ const AGC: React.FC = () => {
       const activeMember = memberEditorOpen ? await handleMemberSubmit() : null;
       if (memberEditorOpen && !activeMember) return;
       const submittedMembers = activeMember?.members ?? membersDraft;
-      const values = await groupForm.validateFields();
+      const values = await groupForm.validateFields().catch((error: unknown) => {
+        const fields = (error as { errorFields?: Array<{ name: Array<string | number> }> }).errorFields;
+        const first = fields?.[0];
+        if (first) {
+          setGroupEditorTab('basic');
+          if (first.name[0] === 'p_cmd' && first.name[1] === 'signal') setAdvancedCommandKeys(['command']);
+          console.info('AGC 保存校验未通过，已定位到基础与总控页', { 字段: first.name });
+          requestAnimationFrame(() => groupForm.scrollToField(first.name, { block: 'center', focus: true }));
+          throw new Error('请检查基础与总控页中标记的配置项');
+        }
+        throw error;
+      });
       const config = normalizeAgcGroupConfigDecimalFields({
         group_name: values.group_name.trim(),
         p_cmd: normalizeValueSpec(values.p_cmd),
@@ -1380,110 +1401,6 @@ const AGC: React.FC = () => {
         <Tag color={record.controllable ? 'green' : 'default'}>
           {record.controllable ? '是' : '否'}
         </Tag>
-      ),
-    },
-  ];
-
-  const modalMemberColumns: ColumnsType<AgcMemberConfig> = [
-    {
-      title: '成员',
-      dataIndex: 'member_name',
-      key: 'member_name',
-      width: 170,
-      ellipsis: true,
-      render: (value: string) => <Text strong title={value}>{value}</Text>,
-    },
-    {
-      title: '额定容量 (kW)',
-      key: 'capacity_kw',
-      width: 125,
-      render: (_, record) => formatDecimalDisplay(resolveAgcDecimalText(record, 'capacity_kw', 'capacity_kw_decimal')),
-    },
-    {
-      title: '调节范围 (kW)',
-      key: 'range',
-      width: 150,
-      render: (_, record) => (
-        `${formatDecimalDisplay(resolveAgcDecimalText(record, 'min_kw', 'min_kw_decimal'))} ~ ${formatDecimalDisplay(resolveAgcDecimalText(record, 'max_kw', 'max_kw_decimal'))}`
-      ),
-    },
-    {
-      title: '测量点',
-      key: 'p_meas_binding',
-      width: 200,
-      render: (_, record) => mappings.getEndpoints({ label: '', tag: record.p_meas?.tag ?? '', direction: 'input' })
-        .map((endpoint) => `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag}`).join('；') || '未绑定',
-    },
-    {
-      title: '设定点',
-      key: 'p_set_binding',
-      width: 200,
-      render: (_, record) => record.controllable ? mappings.getEndpoints({ label: '', tag: record.p_set?.signal?.tag ?? '', direction: 'output' })
-        .map((endpoint) => `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag}`).join('；') || '未绑定' : '仅测量',
-    },
-    {
-      title: '权重',
-      dataIndex: 'weight_decimal',
-      key: 'weight',
-      width: 120,
-      render: (_: string, record, index) => {
-        if (!record.controllable) return <Text type="secondary">—</Text>;
-        const value = resolveAgcDecimalText(record, 'weight', 'weight_decimal', '1');
-        if (allocationMode !== 'custom') return formatDecimalDisplay(value);
-        return (
-          <InputNumber<string>
-            aria-label={`${record.member_name} 调节权重`}
-            value={value}
-            stringMode
-            step="0.1"
-            status={compareAgcDecimalTexts(value, '0') > 0 ? undefined : 'error'}
-            style={{ width: 96 }}
-            onChange={(nextValue) => handleMemberWeightChange(index, nextValue)}
-          />
-        );
-      },
-    },
-    {
-      title: '理论占比（未触限）',
-      key: 'allocation_share',
-      width: 135,
-      render: (_, record, index) => {
-        if (!record.controllable) return <Text type="secondary">未参与</Text>;
-        const share = allocationShares[index] ?? 0;
-        return share > 0
-          ? `${(share * 100).toFixed(1)}%`
-          : <Text type="danger">待设置</Text>;
-      },
-    },
-    {
-      title: '可控',
-      key: 'controllable',
-      width: 80,
-      render: (_, record) => (
-        <Tag color={record.controllable ? 'green' : 'default'}>
-          {record.controllable ? '是' : '否'}
-        </Tag>
-      ),
-    },
-    {
-      title: '操作',
-      key: 'action',
-      width: 96,
-      render: (_, __, index) => (
-        <Space>
-          <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
-            aria-label={`编辑成员 ${membersDraft[index].member_name}`}
-            disabled={groupSubmitting || memberSubmitting || mappings.loading || !!mappings.error}
-            onClick={() => openEditMember(index)}
-          />
-          <Popconfirm title="确认删除该成员？" okText="删除成员" cancelText="取消" onConfirm={() => handleDeleteMember(index)}>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}
-              aria-label={`删除成员 ${membersDraft[index].member_name}`} disabled={groupSubmitting || memberSubmitting || memberEditorOpen} />
-          </Popconfirm>
-        </Space>
       ),
     },
   ];
@@ -2029,7 +1946,7 @@ const AGC: React.FC = () => {
       </Modal>
 
       <Modal
-        title={editingGroup ? '编辑 AGC 控制组' : '新增 AGC 控制组'}
+        title={editingGroup ? `编辑 AGC 控制组 · ${editingGroup.group_name}` : '新增 AGC 控制组'}
         open={groupModalOpen}
         onOk={() => void handleGroupSubmit()}
         onCancel={closeGroupDraft}
@@ -2042,8 +1959,12 @@ const AGC: React.FC = () => {
         keyboard={!groupSubmitting && !memberEditorOpen}
         width={1100}
         centered
-        className="control-config-modal control-group-modal"
+        className="control-config-modal control-group-modal agc-group-modal"
         destroyOnClose
+        footer={(_origin, { OkBtn, CancelBtn }) => <div className="agc-member-modal__footer">
+          <Text type="secondary">全部页签共用草稿，保存后统一生效</Text>
+          <Space><CancelBtn /><OkBtn /></Space>
+        </div>}
       >
         <Form form={groupForm} component="div" layout="vertical" size="small" disabled={groupSubmitting} onValuesChange={() => setGroupDirty(true)}>
           {editingGroup && selectedGroup?.state === 2 ? (
@@ -2052,10 +1973,13 @@ const AGC: React.FC = () => {
           {pendingRouteError ? (
             <Alert type="warning" showIcon message="上次配置已保存，请先完成页面上的映射重试，再保存新的配置。" style={{ marginBottom: 12 }} />
           ) : null}
-          <div className="control-config-intro">
-            <span className="control-config-intro__mark">AGC</span>
-            <span className="control-config-intro__text">控制组配置</span>
-          </div>
+          <Tabs className="agc-group-tabs" activeKey={groupEditorTab}
+            onChange={(key) => {
+              setGroupEditorTab(key);
+              console.info('AGC 控制组编辑页签已切换', { 页签: key });
+            }}
+            items={[
+              { key: 'basic', label: '基础与总控', forceRender: true, children: (<>
           <div className="control-config-section control-config-section--overview">
             <div className="control-config-section__heading">基础信息</div>
             <div className="control-config-grid control-config-grid--overview">
@@ -2130,44 +2054,10 @@ const AGC: React.FC = () => {
             </Text>
           </div>
 
-          <Card className="control-config-section control-config-section--command" title="控制目标（p_cmd）" size="small" bordered>
-            <div style={{ display: 'flex', gap: 16 }}>
-              <div style={{ flex: 1 }}>
-                <Form.Item
-                  name={['p_cmd', 'signal', 'tag']}
-                  label="目标点位 tag"
-                  tooltip={PARAMETER_HELP.control.signalTag}
-                  rules={[{ required: true, whitespace: true, message: '请输入 AGC 总控点 tag' }]}
-                >
-                  <Input placeholder="agc_cmd_tag" />
-                </Form.Item>
-              </div>
-              <div style={{ width: 140 }}>
-                <Form.Item name={['p_cmd', 'signal', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
-                  <Input placeholder="kW" />
-                </Form.Item>
-              </div>
-              <div style={{ width: 140 }}>
-                <Form.Item
-                  name={['p_cmd', 'signal', 'scale_decimal']}
-                  label="缩放系数"
-                  tooltip={PARAMETER_HELP.common.scale}
-                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '控制目标缩放系数') }]}
-                >
-                  <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
-                </Form.Item>
-              </div>
-              <div style={{ width: 140 }}>
-                <Form.Item
-                  name={['p_cmd', 'signal', 'offset_decimal']}
-                  label="偏移量"
-                  tooltip={PARAMETER_HELP.common.offset}
-                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '控制目标偏移量') }]}
-                >
-                  <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
-                </Form.Item>
-              </div>
-            </div>
+          <Card className="control-config-section control-config-section--command" title="总控指令" size="small" bordered>
+            <ControlMappingsEditor mapping={mappings} fields={commandMappingFields}
+              groupName={watchedGroup?.group_name ?? ''} title="指令来源" embedded showLocalTags={false}
+              description="接收外部总控指令；多个来源可能覆盖同一输入值。修改只在保存控制组时生效。" />
             <div style={{ display: 'flex', gap: 16 }}>
               <div style={{ width: 260 }}>
                 <Form.Item name={['p_cmd', 'mode']} label="指令模式" tooltip={PARAMETER_HELP.control.commandMode}>
@@ -2224,8 +2114,103 @@ const AGC: React.FC = () => {
                 }}
               </Form.Item>
             </div>
+            <Collapse ghost activeKey={advancedCommandKeys}
+              onChange={(keys) => setAdvancedCommandKeys(Array.isArray(keys) ? keys : [keys])}
+              items={[{ key: 'command', label: '高级：内部点名与工程量换算', forceRender: true, children: (
+            <div style={{ display: 'flex', gap: 16 }}>
+              <div style={{ flex: 1 }}>
+                <Form.Item
+                  name={['p_cmd', 'signal', 'tag']}
+                  label="目标点位 tag"
+                  tooltip={PARAMETER_HELP.control.signalTag}
+                  rules={[{ required: true, whitespace: true, message: '请输入 AGC 总控点 tag' }]}
+                >
+                  <Input placeholder="agc_cmd_tag" />
+                </Form.Item>
+              </div>
+              <div style={{ width: 140 }}>
+                <Form.Item name={['p_cmd', 'signal', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
+                  <Input placeholder="kW" />
+                </Form.Item>
+              </div>
+              <div style={{ width: 140 }}>
+                <Form.Item
+                  name={['p_cmd', 'signal', 'scale_decimal']}
+                  label="缩放系数"
+                  tooltip={PARAMETER_HELP.common.scale}
+                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '控制目标缩放系数') }]}
+                >
+                  <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
+                </Form.Item>
+              </div>
+              <div style={{ width: 140 }}>
+                <Form.Item
+                  name={['p_cmd', 'signal', 'offset_decimal']}
+                  label="偏移量"
+                  tooltip={PARAMETER_HELP.common.offset}
+                  rules={[{ validator: async (_rule, value) => validateAgcDecimal(value, '控制目标偏移量') }]}
+                >
+                  <InputNumber<string> stringMode step="0.01" style={{ width: '100%' }} />
+                </Form.Item>
+              </div>
+            </div>
+              ) }]} />
           </Card>
 
+              </>) },
+              { key: 'members', label: `成员设备 · ${membersDraft.length}`, forceRender: true, children: (
+          <div className="agc-group-members">
+            <div className="agc-group-members__heading">
+              <Text strong>成员设备（{membersDraft.length}）</Text>
+              <Button size="small" aria-label="添加成员" icon={<PlusOutlined />}
+                disabled={groupSubmitting || mappings.loading || !!mappings.error} onClick={openCreateMember}>添加成员</Button>
+            </div>
+            {membersDraft.length === 0 && <Text type="secondary">暂无成员，请添加</Text>}
+            {membersDraft.map((member, index) => {
+              const measurement = mappings.getEndpoints({ label: '', tag: member.p_meas?.tag ?? '', direction: 'input' });
+              const setpoint = mappings.getEndpoints({ label: '', tag: member.p_set?.signal?.tag ?? '', direction: 'output' });
+              const share = allocationShares[index] ?? 0;
+              const weight = resolveAgcDecimalText(member, 'weight', 'weight_decimal', '1');
+              const bindings = (label: string, endpoints: DcEndpoint[]) => <div className="agc-group-member__point">
+                <Text type="secondary">{label}</Text>
+                <div>{endpoints.length > 0 ? endpoints.map((endpoint) => <div key={controlEndpointKey(endpoint)}>
+                  {endpoint.module_name} / {endpoint.conn_name} / {endpoint.tag}
+                </div>) : <Text type="warning">未绑定</Text>}</div>
+              </div>;
+              return <article className="agc-group-member" key={`${member.member_name}-${index}`} aria-label={`成员 ${member.member_name}`}>
+                <div className="agc-group-member__heading">
+                  <Space wrap><Text strong>{member.member_name}</Text><Tag color={member.controllable ? 'green' : 'default'}>{member.controllable ? '可控' : '仅测量'}</Tag></Space>
+                  <Space>
+                    <Button size="small" icon={<EditOutlined />} aria-label={`编辑成员 ${member.member_name}`}
+                      disabled={groupSubmitting || memberSubmitting || mappings.loading || !!mappings.error} onClick={() => openEditMember(index)}>编辑</Button>
+                    <Popconfirm title="确认删除该成员？" okText="删除成员" cancelText="取消" onConfirm={() => handleDeleteMember(index)}>
+                      <Button size="small" danger icon={<DeleteOutlined />} aria-label={`删除成员 ${member.member_name}`}
+                        disabled={groupSubmitting || memberSubmitting || memberEditorOpen}>删除</Button>
+                    </Popconfirm>
+                  </Space>
+                </div>
+                <div className="agc-group-member__summary">
+                  <span>额定容量 {formatDecimalDisplay(resolveAgcDecimalText(member, 'capacity_kw', 'capacity_kw_decimal'))} kW</span>
+                  <span>调节范围 {formatDecimalDisplay(resolveAgcDecimalText(member, 'min_kw', 'min_kw_decimal'))}～{formatDecimalDisplay(resolveAgcDecimalText(member, 'max_kw', 'max_kw_decimal'))} kW</span>
+                  {member.controllable && <span>理论占比 {share > 0 ? `${(share * 100).toFixed(1)}%` : '待设置'}</span>}
+                  {member.controllable && allocationMode === 'custom' && <label className="agc-group-member__weight">调节权重
+                    <InputNumber<string> aria-label={`${member.member_name} 调节权重`} value={weight} stringMode step="0.1"
+                      status={compareAgcDecimalTexts(weight, '0') > 0 ? undefined : 'error'}
+                      onChange={(nextValue) => handleMemberWeightChange(index, nextValue)} />
+                  </label>}
+                </div>
+                {bindings('测量点', measurement)}
+                {member.controllable ? bindings('设定点', setpoint) : <div className="agc-group-member__point"><Text type="secondary">设定点</Text><Text type="secondary">仅测量</Text></div>}
+              </article>;
+            })}
+          </div>
+              ) },
+              { key: 'report', label: '数据上送', forceRender: true, children: (
+          <ControlMappingsEditor mapping={mappings} fields={mappingFields} groupName={watchedGroup?.group_name ?? ''}
+            title="上送点位" embedded showLocalTags={false}
+            description="选择总有功测量、目标和偏差的外部发送目标。保存时只同步明确修改的映射，其他路由保留。" />
+              ) },
+            ]} />
           {/* 保留隐藏字段注册，确保映射观察和最终保存携带原有输出及精确换算参数。 */}
           {[
             { key: 'p_total_meas', label: '总有功测量' },
@@ -2254,28 +2239,6 @@ const AGC: React.FC = () => {
             </React.Fragment>
           ))}
 
-          <Card
-            className="control-config-section control-config-section--members"
-            title={`成员配置${membersDraft.length ? `（${membersDraft.length}）` : ''}`}
-            size="small"
-            bordered
-            extra={
-              <Button size="small" aria-label="添加成员" icon={<PlusOutlined />} disabled={groupSubmitting || mappings.loading || !!mappings.error} onClick={openCreateMember}>
-                添加成员
-              </Button>
-            }
-          >
-            <Table
-              rowKey={(record, index) => `${record.member_name}-${index}`}
-              columns={modalMemberColumns}
-              dataSource={membersDraft}
-              pagination={false}
-              size="small"
-              scroll={{ x: 1345, y: 280 }}
-              locale={{ emptyText: '暂无成员，请添加' }}
-            />
-          </Card>
-          <ControlMappingsEditor mapping={mappings} fields={mappingFields} groupName={watchedGroup?.group_name ?? ''} />
         </Form>
       </Modal>
 
