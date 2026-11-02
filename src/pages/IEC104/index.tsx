@@ -1223,7 +1223,7 @@ const IEC104: React.FC = () => {
       t1: 15,
       t2: 10,
       t3: 20,
-      point_batch_window_ms: 0,
+      point_batch_window_ms: 3000,
       point_max_asdu_bytes: 249,
       point_use_standard_limit: true,
       point_dedupe: null,
