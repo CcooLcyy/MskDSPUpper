@@ -5,6 +5,32 @@ export type ControlRuntimeUpdates = Record<string, DcPointUpdate>;
 // 展示时钟每秒更新，容忍刚到达的点值比最近一次计时略晚。
 export const CONTROL_RUNTIME_FUTURE_TOLERANCE_MS = 1000;
 
+export interface ControlRuntimePointDetail {
+  tag: string;
+  update: DcPointUpdate | undefined;
+  issues: string[];
+}
+
+/** 展开实际缓存的时间与质量问题，保持与既有运行摘要相同的判定规则。 */
+export const describeControlRuntimePoints = (
+  updates: ControlRuntimeUpdates,
+  expectedTags: string[],
+  nowMs: number,
+  maxAgeMs: number,
+): ControlRuntimePointDetail[] => [...new Set(expectedTags.filter(Boolean))].map((tag) => {
+  const update = updates[tag];
+  const issues: string[] = [];
+  if (!update) return { tag, update, issues: ['点值缺失'] };
+  const ageLimit = Number.isFinite(maxAgeMs) ? Math.max(0, maxAgeMs) : 0;
+  if (!Number.isFinite(update.ts_ms) || update.ts_ms <= 0) issues.push('时间未知');
+  else if (update.ts_ms - nowMs > CONTROL_RUNTIME_FUTURE_TOLERANCE_MS) issues.push('时间超前');
+  else if (nowMs - update.ts_ms > ageLimit) issues.push('数据陈旧');
+  if (update.quality !== 1) {
+    issues.push(({ 0: '质量未指定', 2: '质量无效', 3: '质量不确定' } as Record<number, string>)[update.quality] ?? '质量未知');
+  }
+  return { tag, update, issues };
+});
+
 export interface ControlRuntimeSummary {
   state: 'waiting' | 'ok' | 'stale' | 'quality' | 'missing';
   latestTimestamp: number | null;

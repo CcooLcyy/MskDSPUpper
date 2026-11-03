@@ -22,15 +22,11 @@ import {
 import {
   DeleteOutlined,
   EditOutlined,
-  PauseCircleOutlined,
-  PlayCircleOutlined,
   PlusOutlined,
-  ReloadOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
-import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
 import type {
   AgcDefaultPointInfo,
   AgcDerivedOutputs,
@@ -51,6 +47,7 @@ import ControlEmptyState from '../../components/control/ControlEmptyState';
 import ControlMappingsEditor from '../../components/control/ControlMappingsEditor';
 import ControlRouteRetry from '../../components/control/ControlRouteRetry';
 import ControlRuntimeStatus from '../../components/control/ControlRuntimeStatus';
+import AgcRuntimeOverview from '../../components/control/AgcRuntimeOverview';
 import useControlMappings from '../../components/control/useControlMappings';
 import usePendingControlRoutes from '../../components/control/usePendingControlRoutes';
 import type { ControlMappingField } from '../../utils/control-mapping-editor';
@@ -265,22 +262,6 @@ const cloneOutputs = (outputs: AgcDerivedOutputs | null | undefined): AgcDerived
   p_total_error: cloneSignal(outputs?.p_total_error),
 });
 
-const formatSignal = (signal: AgcSignalSpec | null | undefined): string => {
-  if (!signal?.tag) return '-';
-  const unitPart = signal.unit ? ` (${signal.unit})` : '';
-  const scale = resolveAgcDecimalText(signal, 'scale', 'scale_decimal', '1');
-  const offset = resolveAgcDecimalText(signal, 'offset', 'offset_decimal');
-  return `${signal.tag}${unitPart} | scale=${formatDecimalDisplay(scale)}, offset=${formatDecimalDisplay(offset)}`;
-};
-
-const formatValueSpec = (spec: AgcValueSpec | null | undefined): string => {
-  if (!spec?.signal?.tag) return '-';
-  const basePart = spec.mode === 2
-    ? `, base=${DELTA_BASE_LABELS[spec.delta_base] ?? spec.delta_base}${spec.delta_base === 3 && spec.base_tag ? `:${spec.base_tag}` : ''}`
-    : '';
-  return `${formatSignal(spec.signal)} | ${VALUE_MODE_LABELS[spec.mode] ?? spec.mode}${basePart}`;
-};
-
 const normalizeSignal = (signal: AgcSignalSpec | null | undefined): AgcSignalSpec | null => {
   if (!signal) return null;
   if (!signal.tag.trim()) return null;
@@ -470,6 +451,7 @@ const AGC: React.FC = () => {
   const [runtimeAction, setRuntimeAction] = useState<'start' | 'stop' | 'delete' | null>(null);
   const runtimeActionRef = useRef<'start' | 'stop' | 'delete' | null>(null);
   const [runtimeUpdates, setRuntimeUpdates] = useState<Record<string, DcPointUpdate>>({});
+  const [runtimePublishedUpdates, setRuntimePublishedUpdates] = useState<Record<string, DcPointUpdate>>({});
   const [runtimeOffline, setRuntimeOffline] = useState(false);
   const runtimeRequestIdRef = useRef(0);
   const runtimeErrorToastRef = useRef<{ text: string; at: number } | null>(null);
@@ -611,12 +593,14 @@ const AGC: React.FC = () => {
     const requestId = ++runtimeRequestIdRef.current;
     if (!selectedGroup?.conn_id) {
       setRuntimeUpdates({});
+      setRuntimePublishedUpdates({});
       return;
     }
 
     const tags = collectObservedTags(selectedGroup);
     if (tags.length === 0) {
       setRuntimeUpdates({});
+      setRuntimePublishedUpdates({});
       return;
     }
 
@@ -629,6 +613,7 @@ const AGC: React.FC = () => {
       const nextUpdates = mergeControlRuntimeUpdates(destinationUpdates, sourceUpdates);
       if (requestId !== runtimeRequestIdRef.current) return;
       setRuntimeUpdates(nextUpdates);
+      setRuntimePublishedUpdates(mergeControlRuntimeUpdates([], sourceUpdates));
       setRuntimeOffline(false);
       runtimeErrorToastRef.current = null;
     } catch (e) {
@@ -650,6 +635,7 @@ const AGC: React.FC = () => {
   useEffect(() => {
     runtimeRequestIdRef.current += 1;
     setRuntimeUpdates({});
+    setRuntimePublishedUpdates({});
     setRuntimeOffline(false);
     setRuntimeLoading(false);
     runtimeErrorToastRef.current = null;
@@ -658,6 +644,7 @@ const AGC: React.FC = () => {
   useEffect(() => {
     if ((currentView !== 'strategy' && currentView !== 'default-points') || !selectedGroup?.conn_id) {
       setRuntimeUpdates({});
+      setRuntimePublishedUpdates({});
       return;
     }
 
@@ -697,6 +684,7 @@ const AGC: React.FC = () => {
   const handleSelectGroup = useCallback((groupName: string) => {
     runtimeRequestIdRef.current += 1;
     setRuntimeUpdates({});
+    setRuntimePublishedUpdates({});
     setRuntimeOffline(false);
     setSelectedGroupName(groupName);
   }, []);
@@ -1340,71 +1328,6 @@ const AGC: React.FC = () => {
     }
   };
 
-  const memberColumns: ColumnsType<AgcMemberConfig> = [
-    {
-      title: '成员名称',
-      dataIndex: 'member_name',
-      key: 'member_name',
-      width: 180,
-      render: (value: string) => <Text strong>{value}</Text>,
-    },
-    {
-      title: '权重',
-      dataIndex: 'weight_decimal',
-      key: 'weight',
-      width: 90,
-      render: (_, record) => formatDecimalDisplay(resolveAgcDecimalText(record, 'weight', 'weight_decimal', '1')),
-    },
-    {
-      title: '有功下限 (kW)',
-      key: 'min_kw',
-      width: 110,
-      render: (_, record) => formatDecimalDisplay(resolveAgcDecimalText(record, 'min_kw', 'min_kw_decimal')),
-    },
-    {
-      title: '有功上限 (kW)',
-      key: 'max_kw',
-      width: 110,
-      render: (_, record) => formatDecimalDisplay(resolveAgcDecimalText(record, 'max_kw', 'max_kw_decimal')),
-    },
-    {
-      title: '测量点',
-      key: 'p_meas',
-      width: 180,
-      render: (_, record) => record.p_meas?.tag || '-',
-    },
-    {
-      title: '测量值',
-      key: 'p_meas_value',
-      width: 120,
-      render: (_, record) => formatPointValue(record.p_meas?.tag ? runtimeUpdates[record.p_meas.tag] : null),
-    },
-    {
-      title: '设定点',
-      key: 'p_set',
-      width: 180,
-      render: (_, record) => record.p_set?.signal?.tag || '-',
-    },
-    {
-      title: '设定值',
-      key: 'p_set_value',
-      width: 120,
-      render: (_, record) => (
-        formatPointValue(record.p_set?.signal?.tag ? runtimeUpdates[record.p_set.signal.tag] : null)
-      ),
-    },
-    {
-      title: '可控',
-      key: 'controllable',
-      width: 100,
-      render: (_, record) => (
-        <Tag color={record.controllable ? 'green' : 'default'}>
-          {record.controllable ? '是' : '否'}
-        </Tag>
-      ),
-    },
-  ];
-
   const defaultPointColumns: ColumnsType<AgcDefaultPointInfo> = [
     {
       title: '类型',
@@ -1442,7 +1365,6 @@ const AGC: React.FC = () => {
     },
   ];
 
-  const stateInfo = STATE_MAP[selectedGroup?.state ?? 0] ?? STATE_MAP[0];
   const selectedConfig = selectedGroup?.config ?? null;
   const functionEnabled = readControlRuntimeBool(
     runtimeUpdates,
@@ -1454,21 +1376,6 @@ const AGC: React.FC = () => {
     selectedGroup?.default_points.find((point) => point.kind === 8)?.tag,
     selectedGroup?.remote_enabled ?? false,
   );
-
-  const runtimeRows = [
-    {
-      label: '总有功测量',
-      signal: selectedConfig?.outputs?.p_total_meas,
-    },
-    {
-      label: '总有功目标',
-      signal: selectedConfig?.outputs?.p_total_target,
-    },
-    {
-      label: '总有功偏差',
-      signal: selectedConfig?.outputs?.p_total_error,
-    },
-  ];
 
   const startDisabled = !selectedGroup || selectedGroup.state !== 1 || runtimeAction !== null;
   const stopDisabled = !selectedGroup || selectedGroup.state !== 2 || runtimeAction !== null;
@@ -1510,223 +1417,33 @@ const AGC: React.FC = () => {
             onCreate={openCreateGroup}
           />
 
-          {!selectedConfig ? (
+          {!selectedGroup?.config ? (
             <ControlEmptyState moduleName="AGC" onCreate={openCreateGroup} />
-          ) : <div
-            style={{
-              flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 0,
-              minWidth: 0,
-              minHeight: 0,
-              overflow: 'hidden',
-            }}
-          >
-            <div className="protocol-top-row control-top-row" style={{ flex: '0 1 360px', minHeight: 240 }}>
-              <Card
-                title="组配置"
-                size="small"
-                bordered
-                className="protocol-log-card control-summary-card"
-                style={{ flex: 1, minHeight: 0 }}
-                extra={
-                  selectedConfig ? (
-                    <Space>
-                      <Button type="link" size="small" icon={<EditOutlined />} onClick={openEditGroup}>
-                        编辑
-                      </Button>
-                      <Popconfirm
-                        title={`确认删除 ${selectedConfig.group_name}？${selectedGroup?.state === 2 ? ' 删除前会停止正在运行的控制组。' : ''}`}
-                        onConfirm={() => void handleDeleteGroup(selectedConfig.group_name)}
-                      >
-                        <Button
-                          type="link"
-                          size="small"
-                          danger
-                          icon={<DeleteOutlined />}
-                          loading={runtimeAction === 'delete'}
-                          disabled={runtimeAction !== null || !!pendingRouteError}
-                        >
-                          {selectedGroup?.state === 3 ? '重试删除' : '删除'}
-                        </Button>
-                      </Popconfirm>
-                    </Space>
-                  ) : undefined
-                }
-              >
-                <div className="protocol-log-scroll">
-                  {selectedConfig ? (
-                    <Descriptions size="small" column={2}>
-                      <Descriptions.Item label="控制组名称">{selectedConfig.group_name}</Descriptions.Item>
-                      <Descriptions.Item label="连接 ID">{selectedGroup?.conn_id ?? '-'}</Descriptions.Item>
-                      <Descriptions.Item label="当前状态">
-                        <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
-                      </Descriptions.Item>
-                      <Descriptions.Item label="AGC功能投入">
-                        <Tag color={functionEnabled ? 'green' : 'default'}>
-                          {functionEnabled ? '投入' : '退出'}
-                        </Tag>
-                      </Descriptions.Item>
-                      <Descriptions.Item label="AGC远方操作">
-                        <Tag color={remoteEnabled ? 'green' : 'default'}>
-                          {remoteEnabled ? '远方' : '就地'}
-                        </Tag>
-                      </Descriptions.Item>
-                      <Descriptions.Item label="分配方式">
-                        {allocationModeLabel(selectedConfig.members)}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="控制方式">
-                        {CONTROL_MODE_LABELS[selectedConfig.control_mode ?? 0] ?? 'PI 事件触发（兼容）'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="命令模式">
-                        {VALUE_MODE_LABELS[selectedConfig.p_cmd?.mode ?? 0] ?? '未指定'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="成员数量">
-                        {selectedConfig.members.length}
-                      </Descriptions.Item>
-                      {effectiveControlMode(selectedConfig.control_mode) === CONTROL_MODE_DIRECT_CYCLIC ? (
-                        <Descriptions.Item label="控制周期" span={2}>
-                          计算 {selectedConfig.calculation_execution_period_seconds} 秒 / 命令 {selectedConfig.command_control_period_seconds} 秒
-                        </Descriptions.Item>
-                      ) : null}
-                      <Descriptions.Item label="命令点" span={2}>
-                        <Text className="control-summary-value" title={formatValueSpec(selectedConfig.p_cmd)}>
-                          {selectedConfig.p_cmd?.signal?.tag || '-'}
-                        </Text>
-                      </Descriptions.Item>
-                      <Descriptions.Item label="输出点" span={2}>
-                        <Text className="control-summary-value" title="总测量、总目标、总偏差">
-                          {selectedConfig.outputs
-                            ? `${selectedConfig.outputs.p_total_meas?.tag || '-'} / ${selectedConfig.outputs.p_total_target?.tag || '-'} / ${selectedConfig.outputs.p_total_error?.tag || '-'}`
-                            : '-'}
-                        </Text>
-                      </Descriptions.Item>
-                    </Descriptions>
-                  ) : (
-                    <Text type="secondary">请先在左侧选择控制组</Text>
-                  )}
-                </div>
-              </Card>
-
-              <Card
-                title="运行状态"
-                size="small"
-                bordered
-                className="protocol-log-card control-runtime-card"
-                style={{ width: 360, flexShrink: 0, minHeight: 0 }}
-                extra={
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<ReloadOutlined />}
-                    loading={runtimeLoading}
-                    onClick={() => void refreshRuntime()}
-                    disabled={!selectedGroup}
-                  />
-                }
-              >
-                <div className="protocol-log-scroll">
-                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    <ControlRuntimeStatus
-                      updates={runtimeUpdates}
-                      tags={collectObservedTags(selectedGroup)}
-                      maxAgeMs={Math.max(30000, (selectedConfig.calculation_execution_period_seconds || 1) * 3000, (selectedConfig.command_control_period_seconds || 4) * 3000)}
-                      offline={runtimeOffline}
-                    />
-                    <div>
-                      <Text type="secondary" style={{ marginRight: 12 }}>当前状态</Text>
-                      <Tag color={stateInfo.color}>{stateInfo.label}</Tag>
-                    </div>
-                    <div>
-                      <Text type="secondary" style={{ marginRight: 12 }}>AGC功能</Text>
-                      <Tag color={functionEnabled ? 'green' : 'default'}>
-                        {functionEnabled ? '投入' : '退出'}
-                      </Tag>
-                      <Text type="secondary" style={{ margin: '0 12px 0 20px' }}>远方操作</Text>
-                      <Tag color={remoteEnabled ? 'green' : 'default'}>
-                        {remoteEnabled ? '远方' : '就地'}
-                      </Tag>
-                    </div>
-                    <div>
-                      <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>运行控制</Text>
-                      {/* 离线工作区没有运行态，隐藏启动/停止控制组按钮 */}
-                      <CapabilityGate need="runtime.control">
-                        <Space wrap>
-                          <Button
-                            type="primary"
-                            icon={<PlayCircleOutlined />}
-                            style={{ background: '#4caf50', borderColor: '#4caf50' }}
-                            loading={runtimeAction === 'start'}
-                            disabled={startDisabled}
-                            onClick={() => void handleStartGroup()}
-                          >
-                            启动控制组
-                          </Button>
-                          <Button
-                            danger
-                            icon={<PauseCircleOutlined />}
-                            loading={runtimeAction === 'stop'}
-                            disabled={stopDisabled}
-                            onClick={() => void handleStopGroup()}
-                          >
-                            停止控制组
-                          </Button>
-                        </Space>
-                      </CapabilityGate>
-                      {/* 离线工作区没有运行态，隐藏自动调试入口 */}
-                      <CapabilityGate need="runtime.control">
-                        <Space wrap>
-                          <Button
-                            onClick={openTuning}
-                            disabled={
-                              !selectedGroup
-                              || selectedGroup.state === 3
-                              || (selectedGroup.state === 2 && tuningStatus?.state !== 2)
-                            }
-                          >
-                            自动调试参数
-                          </Button>
-                        </Space>
-                      </CapabilityGate>
-                    </div>
-                    {runtimeRows.map((item) => (
-                      <div key={item.label}>
-                        <Text type="secondary" style={{ display: 'block' }}>{item.label}</Text>
-                        <Text>
-                          {item.signal?.tag || '-'} | {formatPointValue(
-                            item.signal?.tag ? runtimeUpdates[item.signal.tag] : null,
-                          )}
-                        </Text>
-                      </div>
-                    ))}
-                    <div>
-                      <Text type="secondary" style={{ display: 'block' }}>最近错误</Text>
-                      <Text>{selectedGroup?.last_error || '无错误'}</Text>
-                    </div>
-                  </Space>
-                </div>
-              </Card>
-            </div>
-
-            <Card
-              title="成员配置"
-              size="small"
-              bordered
-              className="protocol-point-card"
-            >
-              <div className="protocol-table-scroll">
-                <Table
-                  rowKey={(record, index) => `${record.member_name}-${index}`}
-                  columns={memberColumns}
-                  dataSource={selectedConfig?.members ?? []}
-                  pagination={false}
-                  size="small"
-                  locale={{ emptyText: selectedConfig ? '暂无成员配置' : '请先选择控制组' }}
-                />
-              </div>
-            </Card>
-          </div>}
+          ) : <AgcRuntimeOverview
+            key={selectedGroup.config.group_name}
+            group={selectedGroup}
+            updates={runtimeUpdates}
+            publishedUpdates={runtimePublishedUpdates}
+            offline={runtimeOffline}
+            loading={runtimeLoading}
+            maxAgeMs={Math.max(30000, (selectedConfig?.calculation_execution_period_seconds || 1) * 3000, (selectedConfig?.command_control_period_seconds || 4) * 3000)}
+            controlModeLabel={CONTROL_MODE_LABELS[selectedConfig?.control_mode ?? 0] ?? 'PI 事件触发（兼容）'}
+            allocationLabel={allocationModeLabel(selectedGroup.config.members)}
+            commandModeLabel={VALUE_MODE_LABELS[selectedConfig?.p_cmd?.mode ?? 0] ?? '未指定'}
+            runtimeAction={runtimeAction}
+            startDisabled={startDisabled}
+            stopDisabled={stopDisabled}
+            tuningDisabled={selectedGroup.state === 3 || (selectedGroup.state === 2 && tuningStatus?.state !== 2)}
+            functionEnabled={functionEnabled}
+            remoteEnabled={remoteEnabled}
+            pendingRouteError={!!pendingRouteError}
+            onEdit={openEditGroup}
+            onDelete={() => void handleDeleteGroup(selectedGroup.config!.group_name)}
+            onStart={() => void handleStartGroup()}
+            onStop={() => void handleStopGroup()}
+            onTuning={openTuning}
+            onRefresh={() => void refreshRuntime()}
+          />}
         </ResizableSplit>
       ) : currentView === 'default-points' ? (
         <ResizableSplit
