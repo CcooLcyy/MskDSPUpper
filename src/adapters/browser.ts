@@ -2187,6 +2187,7 @@ export const browserApi: typeof tauriApi = {
       ['precheck', '系统预检查', '必要命令和网络接口检查完成'],
       ['forwarding', '业务 IPv4 转发', '业务 IPv4 转发已启用'],
       ['local_security', '107 本地纵密链路', '107 本地纵密链路配置完成'],
+      ['ppp_policy', '107 PPP 分流', '107 PPP 分流已配置，PPP 未就绪时不会转入普通外网'],
       ['local_rtu', '108 本地 RTU 链路', '108 本地 RTU 链路配置完成'],
       ['ppp0_wait', 'PPP 链路', '已获取 ppp0 IPv4 地址'],
       ['remote_security_route', '远程纵密路由', '远程纵密路由配置完成'],

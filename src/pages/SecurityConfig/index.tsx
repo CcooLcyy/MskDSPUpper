@@ -91,6 +91,7 @@ const EXECUTION_STEPS = [
   { id: 'precheck', name: '系统预检查' },
   { id: 'forwarding', name: '业务 IPv4 转发' },
   { id: 'local_security', name: '107 本地纵密链路' },
+  { id: 'ppp_policy', name: '107 PPP 分流' },
   { id: 'local_rtu', name: '108 本地 RTU 链路' },
   { id: 'ppp0_wait', name: 'PPP 链路' },
   { id: 'remote_security_route', name: '远程纵密路由' },

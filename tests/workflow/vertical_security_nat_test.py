@@ -15,22 +15,30 @@ name=Path(sys.argv[0]).name;args=sys.argv[1:]
 state['calls'].append([name]+args)
 code=0;output=''
 if name=='ip':
-    if 'show' in args and 'ppp0' in args:
+    if args[:3]==['-4','rule','show']:
+        output='\n'.join(state.get('policy_rules',[]))
+    elif args[:3]==['-4','rule','add']:
+        state.setdefault('policy_rules',[]).append('19900: from all iif eth0.107 lookup 18685')
+    elif 'show' in args and 'ppp0' in args:
         if state['ppp'] is None:code=1
         elif 'link' in args:output=str(state['index'])+': ppp0: <POINTOPOINT,UP> mtu 1500'
         else:output=str(state['index'])+': ppp0 inet '+state['ppp']+'/32 scope global ppp0'
     elif args[:2]==['link','show']:output='12: fixture: <UP> mtu 1500'
+    elif args[:2]==['route','replace'] and 'table' in args:
+        state.setdefault('policy_routes',[]).append(args[2:])
     elif args[:2] not in (['addr','replace'],['route','replace']):code=72
 elif name=='iptables':
-    if args[:2]==['-t','nat']:args=args[2:]
+    nat=args[:2]==['-t','nat']
+    if nat:args=args[2:]
+    rules=state['rules'] if nat else state.setdefault('filter_rules',[])
     operation=args[0];rule=args[1:]
     if operation=='-I' and len(rule)>1 and rule[1].isdigit():rule=[rule[0]]+rule[2:]
-    if operation=='-C':code=0 if rule in state['rules'] else 1
+    if operation=='-C':code=0 if rule in rules else 1
     elif operation=='-D':
-        if rule in state['rules']:state['rules'].remove(rule)
+        if rule in rules:rules.remove(rule)
         else:code=1
-    elif operation=='-A':state['rules'].append(rule)
-    elif operation=='-I':state['rules'].insert(0,rule)
+    elif operation=='-A':rules.append(rule)
+    elif operation=='-I':rules.insert(0,rule)
     else:code=73
 elif name=='sysctl':
     if args[0]=='-w':
@@ -74,6 +82,21 @@ def dnat(public, private):
 def snat(public, private, remote, legacy=False):
     return ['POSTROUTING', '-o', 'ppp0'] + (['-p', '253'] if legacy else []) + [
         '-s', private+'/32', '-d', remote+'/32', '-j', 'SNAT', '--to-source', public]
+
+
+def route_107(state, ppp_available):
+    # 按命令桩记录的策略及路由模拟内核选择；PPP 消失后依附接口的路由不再可用。
+    if '19900: from all iif eth0.107 lookup 18685' not in state.get('policy_rules', []):
+        return '684'
+    candidates = []
+    for route in state.get('policy_routes', []):
+        if route[route.index('table') + 1] != '18685':
+            continue
+        if route[0] == 'unreachable':
+            candidates.append((int(route[route.index('metric') + 1]), 'unreachable'))
+        elif ppp_available and 'ppp0' in route:
+            candidates.append((int(route[route.index('metric') + 1]), 'ppp0'))
+    return min(candidates)[1] if candidates else '684'
 
 
 def main():
@@ -137,6 +160,16 @@ def main():
                 interrupted.update(ppp='10.9.1.203', index=18)
                 state_path.write_text(json.dumps(interrupted))
         state = json.loads(state_path.read_text())
+        # 普通出口存在时，107 转发仍必须固定查 PPP 专表，断线时以不可达路由阻止串到普通出口。
+        assert ['ip', 'route', 'replace', 'unreachable', 'default', 'table', '18685', 'metric', '32760'] in state['calls'], '缺少 PPP 断线隔离路由'
+        assert any(call[:4] == ['ip', '-4', 'rule', 'add'] and 'eth0.107' in call and '18685' in call for call in state['calls']), '缺少 107 入站策略路由'
+        if scenario not in ('error', 'terminate'):
+            assert ['ip', 'route', 'replace', 'default', 'dev', 'ppp0', 'table', '18685', 'metric', '10'] in state['calls'], 'PPP 恢复后必须维护专用出口'
+            assert route_107(state, True) == 'ppp0', '107 密文必须选用 PPP 出口'
+        assert route_107(state, False) == 'unreachable', 'PPP 消失后密文不能回落到 684'
+        for source, target in [('eth0.107', 'ppp0'), ('ppp0', 'eth0.107')]:
+            rule = ['FORWARD', '-i', source, '-o', target, '-j', 'ACCEPT']
+            assert state.get('filter_rules', []).count(rule) == 1, 'Docker 默认拒绝转发时需要幂等的纵密双向放行'
         assert state['settings']['net.netfilter.nf_conntrack_generic_timeout'] == '600', '退出后必须恢复600秒'
         assert maintenance in state['rules'] and unrelated in state['rules'], '不能删除其他业务或维护规则'
         assert not any(call[0]=='ip' and call[1:3] in (['addr','flush'], ['route','flush']) for call in state['calls'])

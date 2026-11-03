@@ -2,8 +2,8 @@
 use crate::{
     grpc::connection::ConnectionManager,
     proto::module_manager_proto::{
-        module_manage_client::ModuleManageClient, Empty, PlatformAccessStatus,
-        SetPlatformAccessConfigRequest,
+        module_manage_client::ModuleManageClient, Empty, OrdinaryNetworkConfig,
+        PlatformAccessStatus, SetPlatformAccessConfigRequest,
     },
     state::AppState,
 };
@@ -14,6 +14,7 @@ use tonic::Code;
 
 const PLATFORM_TARGET: &str = "60.208.15.90:50000";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Serialize)]
 pub struct PlatformAccessError {
@@ -36,7 +37,7 @@ impl PlatformAccessError {
     fn invalid() -> Self {
         Self::new(
             "invalid",
-            "平台接入配置不合法，请检查设备 ID、令牌和 SSH 端口",
+            "平台接入或普通外网配置不合法，请检查设备 ID、令牌、SSH 端口、网口、同网段 IPv4 网关和 DNS",
         )
     }
 }
@@ -52,6 +53,10 @@ fn rpc_error(status: tonic::Status) -> PlatformAccessError {
             "下位机配置已被其他操作修改，请重新读取后再保存",
         ),
         Code::InvalidArgument => PlatformAccessError::invalid(),
+        Code::FailedPrecondition => PlatformAccessError::new(
+            "network_apply_failed",
+            "设备普通外网出口网络应用失败，请重新读取设备状态并检查网络运行环境",
+        ),
         Code::Internal | Code::DataLoss => PlatformAccessError::new(
             "persist_failed",
             "下位机读取或持久保存配置失败，请检查配置文件和磁盘状态",
@@ -84,6 +89,50 @@ pub struct PlatformAccessDto {
     last_error: String,
     connection_generation: String,
     manager_address: String,
+    network_config: Option<OrdinaryNetworkDto>,
+    network_applied: bool,
+    network_error: String,
+    network_source_address: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrdinaryNetworkDto {
+    interface_name: String,
+    gateway: String,
+    dns_servers: Vec<String>,
+}
+impl OrdinaryNetworkDto {
+    fn into_proto(self) -> Result<OrdinaryNetworkConfig, PlatformAccessError> {
+        let valid_ip = |value: &str| {
+            value.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| {
+                !ip.is_unspecified()
+                    && !ip.is_loopback()
+                    && !ip.is_multicast()
+                    && !ip.is_broadcast()
+                    && ip.octets()[0] < 224
+            })
+        };
+        let valid = if self.interface_name.is_empty() {
+            self.gateway.is_empty() && self.dns_servers.is_empty()
+        } else {
+            (101..=108).any(|port| self.interface_name == format!("eth0.{port}"))
+                && valid_ip(&self.gateway)
+                && self.dns_servers.len() <= 8
+                && self.dns_servers.iter().all(|ip| valid_ip(ip))
+        };
+        if !valid {
+            return Err(PlatformAccessError::new(
+                "invalid",
+                "普通外网出口网口、IPv4 网关或 DNS 配置不合法",
+            ));
+        }
+        Ok(OrdinaryNetworkConfig {
+            interface_name: self.interface_name,
+            gateway: self.gateway,
+            dns_servers: self.dns_servers,
+        })
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -97,6 +146,7 @@ pub struct PlatformAccessWriteDto {
     clear_device_token: bool,
     connection_generation: String,
     manager_address: String,
+    network_config: Option<OrdinaryNetworkDto>,
 }
 struct DirectContext {
     generation: u64,
@@ -146,6 +196,14 @@ impl DirectContext {
             last_error: response.last_error,
             connection_generation: self.generation.to_string(),
             manager_address: self.address.clone(),
+            network_config: response.network_config.map(|network| OrdinaryNetworkDto {
+                interface_name: network.interface_name,
+                gateway: network.gateway,
+                dns_servers: network.dns_servers,
+            }),
+            network_applied: response.network_applied,
+            network_error: response.network_error,
+            network_source_address: response.network_source_address,
         })
     }
 }
@@ -185,6 +243,10 @@ impl PlatformAccessWriteDto {
                 self.ssh_port
             },
             clear_device_token: self.clear_device_token,
+            network_config: self
+                .network_config
+                .map(OrdinaryNetworkDto::into_proto)
+                .transpose()?,
         })
     }
 }
@@ -234,7 +296,7 @@ pub(crate) async fn write(
     conn: &ConnectionManager,
     request: PlatformAccessWriteDto,
 ) -> Result<PlatformAccessDto, PlatformAccessError> {
-    let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + WRITE_TIMEOUT;
     let context = DirectContext::capture(conn)?;
     if decimal(&request.connection_generation)? != context.generation
         || request.manager_address != context.address
@@ -242,6 +304,17 @@ pub(crate) async fn write(
         return Err(PlatformAccessError::changed());
     }
     let request = request.into_proto()?;
+    let writes_network = request.network_config.is_some();
+    if writes_network {
+        let current = read_before(conn, deadline).await?;
+        context.verify(conn)?;
+        if current.network_config.is_none() {
+            return Err(PlatformAccessError::new(
+                "unsupported",
+                "当前下位机不支持普通外网出口配置，请升级下位机；已有平台设置仍可单独保存",
+            ));
+        }
+    }
     let channel = channel_before(conn, &context, deadline).await?;
     let result = tokio::time::timeout_at(
         deadline,
@@ -254,11 +327,25 @@ pub(crate) async fn write(
         .map_err(rpc_error)?
         .into_inner();
     let response = context.response(response)?;
+    if writes_network && response.network_config.is_none() {
+        return Err(PlatformAccessError::new(
+            "unsupported",
+            "下位机未确认普通外网出口配置，请升级下位机并重新读取",
+        ));
+    }
+    if writes_network && (!response.network_applied || !response.network_error.is_empty()) {
+        return Err(rpc_error(tonic::Status::failed_precondition("")));
+    }
     tracing::info!(
         revision = response.revision,
         device_id = response.device_id,
         enabled = response.enabled,
-        "下位机平台接入配置已持久保存并应用"
+        network_applied = response.network_applied,
+        network_configured = response
+            .network_config
+            .as_ref()
+            .is_some_and(|network| !network.interface_name.is_empty()),
+        "下位机平台接入与普通外网配置请求完成"
     );
     Ok(response)
 }

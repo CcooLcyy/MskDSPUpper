@@ -65,3 +65,57 @@ test('runtime refresh never overwrites an edited credential or applies a stale r
   current = status({ revision: '9007199254740994' }); await controller.refreshRuntime();
   assert.equal(controller.getSnapshot().needsReload, true);
 });
+
+const network = (patch = {}) => ({ interface_name: 'eth0.102', gateway: '192.168.2.1', dns_servers: ['192.168.2.1'], ...patch });
+test('ordinary network saves with platform disabled and legacy devices omit unsupported settings', () => {
+  const request = platformAccessRequest(status({ network_config: network() }), form({ enabled: false, network_mode: 'gateway', network_config: network() }));
+  assert.deepEqual(request.network_config, network());
+  assert.equal('network_mode' in request, false);
+  assert.equal('network_config' in platformAccessRequest(status(), form({ network_mode: 'gateway', network_config: network() })), false);
+  assert.deepEqual(platformAccessRequest(status({ network_config: network() }), form({ network_mode: 'system', network_config: network() })).network_config,
+    { interface_name: '', gateway: '', dns_servers: [] });
+});
+
+test('ordinary network rejects invalid ports, gateways and DNS before saving', () => {
+  for (const value of [network({ interface_name: 'ppp0' }), network({ gateway: '192.168.2.999' }), network({ gateway: '' }), network({ dns_servers: ['8.8.8.999'] }), network({ dns_servers: ['127.0.0.1'] })]) {
+    assert.throws(() => platformAccessRequest(status({ network_config: network() }), form({ network_mode: 'gateway', network_config: value })), /网口|网关|DNS/);
+  }
+});
+
+test('network readback and runtime refresh preserve drafts and failed apply cannot appear saved', async () => {
+  let current = status({ network_config: network(), network_applied: true, network_error: '', network_source_address: '192.168.2.219' });
+  const controller = createPlatformAccessController({ read: async () => current, save: async () => ({ ...current, network_applied: false, network_error: '网络应用失败', revision: '9007199254740994' }) });
+  await controller.read();
+  assert.deepEqual(controller.getSnapshot().form.network_config, network());
+  controller.update({ network_config: network({ gateway: '192.168.2.2' }) });
+  current = { ...current, online: true }; await controller.refreshRuntime();
+  assert.equal(controller.getSnapshot().form.network_config.gateway, '192.168.2.2');
+  await controller.save();
+  assert.equal(controller.getSnapshot().saved, false);
+  assert.equal(controller.getSnapshot().form.network_config.gateway, '192.168.2.2');
+  assert.match(controller.getSnapshot().error, /网络/);
+});
+
+test('network RPC failure retains the draft and requires reread without automatic retry', async () => {
+  let writes = 0;
+  const controller = createPlatformAccessController({
+    read: async () => status({ network_config: network(), network_applied: true }),
+    save: async () => { writes += 1; throw { kind: 'network_apply_failed', message: '网络应用失败，请重新读取' }; },
+  });
+  await controller.read(); controller.update({ network_config: network({ gateway: '192.168.2.2' }) });
+  await controller.save(); await controller.save();
+  assert.equal(writes, 1);
+  assert.equal(controller.getSnapshot().needsReload, true);
+  assert.equal(controller.getSnapshot().saved, false);
+  assert.equal(controller.getSnapshot().form.network_config.gateway, '192.168.2.2');
+});
+
+test('later network runtime failure removes an earlier saved success', async () => {
+  let current = status({ network_config: network(), network_applied: true, network_error: '' });
+  const controller = createPlatformAccessController({ read: async () => current, save: async () => current });
+  await controller.read(); await controller.save();
+  assert.equal(controller.getSnapshot().saved, true);
+  current = { ...current, network_applied: false, network_error: '网络恢复失败' };
+  await controller.refreshRuntime();
+  assert.equal(controller.getSnapshot().saved, false);
+});

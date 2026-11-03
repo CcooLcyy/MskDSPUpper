@@ -62,6 +62,9 @@ impl ModuleManage for Manager {
     ) -> Result<Response<service::PlatformAccessStatus>, Status> {
         let request = request.into_inner();
         self.requests.lock().push(request.clone());
+        if self.mode.load(Ordering::SeqCst) == 2 {
+            return Err(Status::failed_precondition("network-secret-detail"));
+        }
         let mut state = self.state.lock();
         if request.expected_revision != state.revision {
             return Err(Status::aborted("server-detail-must-not-escape"));
@@ -70,6 +73,10 @@ impl ModuleManage for Manager {
         state.device_id = request.device_id;
         state.ssh_enabled = request.ssh_enabled;
         state.ssh_port = request.ssh_port;
+        if let Some(network) = request.network_config {
+            state.network_config = Some(network);
+            state.network_applied = true;
+        }
         if request.clear_device_token {
             state.token_configured = false;
         } else if !request.device_token.is_empty() {
@@ -151,6 +158,7 @@ fn request(status: &PlatformAccessDto) -> PlatformAccessWriteDto {
         clear_device_token: false,
         connection_generation: status.connection_generation.clone(),
         manager_address: status.manager_address.clone(),
+        network_config: None,
     }
 }
 
@@ -256,6 +264,10 @@ fn write_validation_rejects_conflicting_tokens_and_invalid_identifiers_without_e
         last_error: String::new(),
         connection_generation: "0".into(),
         manager_address: "127.0.0.1:17000".into(),
+        network_config: None,
+        network_applied: false,
+        network_error: String::new(),
+        network_source_address: String::new(),
     };
     let mut invalid = request(&status);
     invalid.device_token = "private-secret".into();
@@ -266,6 +278,80 @@ fn write_validation_rejects_conflicting_tokens_and_invalid_identifiers_without_e
     let mut invalid = request(&status);
     invalid.device_id = "not/a/device".into();
     assert!(invalid.into_proto().is_err());
+}
+
+// 普通网络与平台启停独立，省略配置保留原值，网络错误不得泄露远端详情。
+#[tokio::test]
+async fn ordinary_network_roundtrips_and_apply_failure_is_explicit() {
+    let (conn, manager, _server) = manager().await;
+    manager.state.lock().network_config = Some(service::OrdinaryNetworkConfig::default());
+    let status = read(&conn).await.unwrap();
+    assert!(status.network_config.is_some());
+    let mut update = request(&status);
+    update.enabled = false;
+    update.network_config = Some(OrdinaryNetworkDto {
+        interface_name: "eth0.102".into(),
+        gateway: "192.168.2.1".into(),
+        dns_servers: vec!["192.168.2.1".into()],
+    });
+    let saved = write(&conn, update).await.unwrap();
+    assert_eq!(
+        saved.network_config.as_ref().unwrap().interface_name,
+        "eth0.102"
+    );
+    assert!(saved.network_applied);
+    assert!(!saved.enabled);
+    let saved = write(&conn, request(&saved)).await.unwrap();
+    assert!(saved.network_config.is_some());
+    assert!(manager
+        .requests
+        .lock()
+        .last()
+        .unwrap()
+        .network_config
+        .is_none());
+    manager.mode.store(2, Ordering::SeqCst);
+    let error = write(&conn, request(&saved)).await.err().unwrap();
+    assert_eq!(error.kind, "network_apply_failed");
+    assert!(!error.message.contains("network-secret-detail"));
+}
+
+// 旧服务端缺少支持声明时，新的网络字段不得被静默忽略。
+#[tokio::test]
+async fn legacy_network_configuration_is_rejected_before_write() {
+    let (conn, manager, _server) = manager().await;
+    let status = read(&conn).await.unwrap();
+    let mut update = request(&status);
+    update.network_config = Some(OrdinaryNetworkDto {
+        interface_name: String::new(),
+        gateway: String::new(),
+        dns_servers: vec![],
+    });
+    assert_eq!(
+        write(&conn, update).await.err().unwrap().kind,
+        "unsupported"
+    );
+    assert!(manager.requests.lock().is_empty());
+    assert!(write(&conn, request(&status)).await.is_ok());
+}
+
+// Rust 边界独立校验网口、IPv4 网关和 DNS，防止绕过前端校验。
+#[test]
+fn ordinary_network_validation_rejects_invalid_values() {
+    for (interface, gateway, dns) in [
+        ("ppp0", "192.168.2.1", "8.8.8.8"),
+        ("eth0.102", "192.168.2.999", "8.8.8.8"),
+        ("eth0.102", "192.168.2.1", "8.8.8.999"),
+        ("eth0.102", "192.168.2.1", "127.0.0.1"),
+        ("", "192.168.2.1", "8.8.8.8"),
+    ] {
+        let value = OrdinaryNetworkDto {
+            interface_name: interface.into(),
+            gateway: gateway.into(),
+            dns_servers: vec![dns.into()],
+        };
+        assert!(value.into_proto().is_err());
+    }
 }
 
 #[tokio::test]

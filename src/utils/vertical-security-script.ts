@@ -177,6 +177,34 @@ ip addr replace "\${LOCAL_GATEWAY_ADDRESS}/32" dev eth0.107
 ip route replace "\${LOCAL_SECURITY_ADDRESS}/32" dev eth0.107 scope link src "\${LOCAL_GATEWAY_ADDRESS}"
 complete_step '107 本地纵密链路配置完成'
 
+# 107 转发专用出口由纵密功能维护；普通外网出口不管理这里的规则。
+# PPP 断开后内核会移除依附于 ppp0 的路由，不可达默认路由继续阻止回落到普通出口。
+begin_step 'ppp_policy' '107 PPP 分流' '配置 107 专用 PPP 路由及断线隔离'
+existing_ppp_rule="$(ip -4 rule show pref 19900 | awk '{$1=$1; print}')"
+if [[ -n "\${existing_ppp_rule}" && "\${existing_ppp_rule}" != '19900: from all iif eth0.107 lookup 18685' ]]; then
+  echo '107 PPP 策略优先级已被其他配置占用，停止应用' >&2
+  exit 1
+fi
+ip route replace unreachable default table 18685 metric 32760
+if [[ -z "\${existing_ppp_rule}" ]]; then
+  ip -4 rule add pref 19900 iif eth0.107 lookup 18685
+fi
+# Docker 可能将 FORWARD 默认策略设为拒绝，仅放行本功能的双向密文接口组合。
+for direction in 'eth0.107 ppp0' 'ppp0 eth0.107'; do
+  read -r input_interface output_interface <<< "\${direction}"
+  if iptables -C FORWARD -i "\${input_interface}" -o "\${output_interface}" -j ACCEPT 2>/dev/null; then
+    :
+  else
+    check_status="$?"
+    if [[ "\${check_status}" != '1' ]]; then
+      echo '检查纵密转发规则失败，停止应用' >&2
+      exit "\${check_status}"
+    fi
+    iptables -I FORWARD 1 -i "\${input_interface}" -o "\${output_interface}" -j ACCEPT
+  fi
+done
+complete_step '107 PPP 分流已配置，PPP 未就绪时不会转入普通外网'
+
 # 108 口：使用本地 RTU 地址经固定网关访问远程 RTU。
 begin_step 'local_rtu' '108 本地 RTU 链路' '配置本地 RTU 地址和远程 RTU 路由'
 ip addr replace "\${LOCAL_RTU_ADDRESS}/32" dev eth0.108
@@ -281,6 +309,7 @@ apply_ppp_business_network() {
   record_pending_nat
   begin_step 'remote_security_route' '远程纵密路由' '配置远程纵密经 ppp0 的路由'
   ip route replace "\${REMOTE_SECURITY_ADDRESS}/32" dev ppp0
+  ip route replace default dev ppp0 table 18685 metric 10
   complete_step '远程纵密路由配置完成'
 
   begin_step 'dnat' 'DNAT 规则' '清理旧规则并插入 ppp0 入站 DNAT'

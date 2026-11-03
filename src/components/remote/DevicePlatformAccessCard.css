@@ -49,6 +49,14 @@
   margin: 24px 0 16px;
 }
 
+.device-platform-access-network-notice {
+  margin-bottom: 16px;
+}
+
+.device-platform-access-network-status {
+  margin-bottom: 12px;
+}
+
 .device-platform-access-footer {
   display: flex;
   flex-direction: column;
