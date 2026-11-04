@@ -93,6 +93,8 @@ pub struct PlatformAccessDto {
     network_applied: bool,
     network_error: String,
     network_source_address: String,
+    // 使用本次下位机响应的架构，不能从上位机本机或连接地址推断。
+    device_architecture: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -204,6 +206,7 @@ impl DirectContext {
             network_applied: response.network_applied,
             network_error: response.network_error,
             network_source_address: response.network_source_address,
+            device_architecture: response.device_architecture,
         })
     }
 }
@@ -340,6 +343,7 @@ pub(crate) async fn write(
         revision = response.revision,
         device_id = response.device_id,
         enabled = response.enabled,
+        device_architecture = response.device_architecture,
         network_applied = response.network_applied,
         network_configured = response
             .network_config

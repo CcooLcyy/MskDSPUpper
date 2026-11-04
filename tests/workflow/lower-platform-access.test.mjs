@@ -5,7 +5,7 @@ const { createPlatformAccessController, platformAccessRequest } = access;
 
 const status = (patch = {}) => ({ enabled: true, platform_target: '60.208.15.90:50000', device_id: 'field-1', token_configured: true,
   ssh_enabled: true, ssh_port: 22, revision: '9007199254740993', online: false, last_error: '',
-  connection_generation: '4', manager_address: '192.0.2.1:17000', ...patch });
+  connection_generation: '4', manager_address: '192.0.2.1:17000', device_architecture: 'arm64', ...patch });
 const form = (patch = {}) => ({ enabled: true, device_id: 'field-1', device_token: '', clear_device_token: false,
   ssh_enabled: true, ssh_port: 22, ...patch });
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -151,4 +151,87 @@ test('a revised device config shows its pending preset state without overwriting
   assert.equal(access.isOrdinaryNetworkPresetApplied(controller.getSnapshot().status), false);
   assert.equal(controller.getSnapshot().needsReload, true);
   assert.equal(controller.getSnapshot().form.ssh_port, 10022);
+});
+
+const unmanaged = () => ({ interface_name: '', gateway: '', dns_servers: [] });
+test('x64 aliases explicitly clear DSP network state instead of submitting 684 settings', async () => {
+  for (const device_architecture of ['x64', 'x86_64', 'amd64']) {
+    const initial = status({ device_architecture, network_config: preset(), network_applied: false });
+    let captured;
+    const controller = createPlatformAccessController({ read: async () => initial,
+      save: async request => { captured = request; return { ...initial, network_config: unmanaged(), network_applied: true }; } });
+    await controller.read(); await controller.save();
+    assert.deepEqual(captured.network_config, unmanaged());
+    assert.equal(controller.getSnapshot().saved, true);
+    assert.equal(access.isOrdinaryNetworkApplied(controller.getSnapshot().status), true);
+    assert.equal(access.isOrdinaryNetworkPresetApplied(controller.getSnapshot().status), false);
+  }
+});
+test('unknown architecture or old network capability sends platform settings only', () => {
+  for (const device_architecture of [undefined, '', 'riscv64']) {
+    assert.equal('network_config' in platformAccessRequest(status({ device_architecture, network_config: preset() }), form()), false);
+  }
+  for (const device_architecture of ['arm64', 'aarch64', 'x64']) {
+    assert.equal('network_config' in platformAccessRequest(status({ device_architecture, network_config: null }), form()), false);
+  }
+  assert.deepEqual(platformAccessRequest(status({ device_architecture: 'aarch64', network_config: unmanaged() }), form()).network_config, preset());
+});
+test('x64 save rejects 684 acknowledgement, missing acknowledgement, apply errors and changed architecture', async () => {
+  const initial = status({ device_architecture: 'x64', network_config: unmanaged(), network_applied: true });
+  for (const patch of [{ network_config: preset() }, { network_config: null }, { network_applied: false },
+    { network_error: '清理失败' }, { device_architecture: 'arm64' }, { device_architecture: undefined }]) {
+    const controller = createPlatformAccessController({ read: async () => initial, save: async () => ({ ...initial, ...patch }) });
+    await controller.read(); await controller.save();
+    assert.equal(controller.getSnapshot().saved, false);
+    assert.equal(controller.getSnapshot().needsReload, true);
+  }
+});
+test('same revision architecture changes invalidate saved status and preserve drafts until reread', async () => {
+  let current = status({ network_config: preset(), network_applied: true });
+  const controller = createPlatformAccessController({ read: async () => current, save: async () => current });
+  await controller.read(); await controller.save();
+  assert.equal(controller.getSnapshot().saved, true);
+  controller.update({ device_token: 'draft-secret' });
+  current = { ...current, device_architecture: 'x64', network_config: unmanaged() };
+  await controller.refreshRuntime();
+  assert.equal(controller.getSnapshot().needsReload, true);
+  assert.equal(controller.getSnapshot().saved, false);
+  assert.equal(controller.getSnapshot().form.device_token, 'draft-secret');
+  await controller.read(); await controller.save();
+  assert.equal(controller.getSnapshot().saved, true);
+});
+test('platform-only save must not accept a newly changed architecture or connection', async () => {
+  for (const patch of [{ device_architecture: 'arm64' }, { connection_generation: '5' }, { manager_address: 'other:17000' }]) {
+    const initial = status({ device_architecture: undefined, network_config: preset() });
+    const controller = createPlatformAccessController({ read: async () => initial, save: async () => ({ ...initial, ...patch }) });
+    await controller.read(); await controller.save();
+    assert.equal(controller.getSnapshot().saved, false);
+    assert.equal(controller.getSnapshot().needsReload, true);
+  }
+});
+test('unknown and legacy devices can save platform parameters without network acknowledgement', async () => {
+  for (const patch of [{ device_architecture: undefined, network_config: preset() },
+    { device_architecture: 'riscv64', network_config: preset() }, { device_architecture: 'x64', network_config: null },
+    { device_architecture: 'arm64', network_config: undefined }]) {
+    const initial = status(patch);
+    let captured;
+    const controller = createPlatformAccessController({ read: async () => initial,
+      save: async request => { captured = request; return initial; } });
+    await controller.read(); await controller.save();
+    assert.equal('network_config' in captured, false);
+    assert.equal('device_architecture' in captured, false);
+    assert.equal(controller.getSnapshot().saved, true);
+  }
+});
+test('x64 runtime drift clears success while architecture aliases remain equivalent', async () => {
+  let current = status({ device_architecture: 'x64', network_config: unmanaged(), network_applied: true });
+  const controller = createPlatformAccessController({ read: async () => current, save: async () => current });
+  await controller.read(); await controller.save();
+  current = { ...current, device_architecture: 'x86_64' };
+  await controller.refreshRuntime();
+  assert.equal(controller.getSnapshot().saved, true);
+  assert.equal(controller.getSnapshot().needsReload, false);
+  current = { ...current, network_config: preset() };
+  await controller.refreshRuntime();
+  assert.equal(controller.getSnapshot().saved, false);
 });

@@ -12,10 +12,35 @@ export function ordinaryNetworkPreset(): OrdinaryNetworkConfig {
 }
 
 export function isOrdinaryNetworkPresetApplied(status: PlatformAccessStatus | null): boolean {
-  const network = status?.network_config;
-  const preset = ordinaryNetworkPreset();
-  return Boolean(network && status?.network_applied && !status.network_error
-    && network.interface_name === preset.interface_name && network.gateway === preset.gateway
+  return normalizeDeviceArchitecture(status?.device_architecture) === 'arm64' && isOrdinaryNetworkApplied(status);
+}
+
+/** 架构由当前下位机报告，不根据上位机架构或连接地址推断。 */
+export function normalizeDeviceArchitecture(value?: string): 'arm64' | 'x64' | null {
+  const architecture = value?.trim().toLowerCase();
+  if (architecture === 'arm64' || architecture === 'aarch64') return 'arm64';
+  if (architecture === 'x64' || architecture === 'x86_64' || architecture === 'amd64') return 'x64';
+  return null;
+}
+
+function architectureIdentity(status: PlatformAccessStatus): string {
+  return normalizeDeviceArchitecture(status.device_architecture) ?? status.device_architecture?.trim().toLowerCase() ?? '';
+}
+
+function networkForDevice(status: PlatformAccessStatus): OrdinaryNetworkConfig | undefined {
+  if (!status.network_config) return undefined;
+  const architecture = normalizeDeviceArchitecture(status.device_architecture);
+  if (architecture === 'arm64') return ordinaryNetworkPreset();
+  if (architecture === 'x64') return { interface_name: '', gateway: '', dns_servers: [] };
+  return undefined;
+}
+
+export function isOrdinaryNetworkApplied(status: PlatformAccessStatus | null): boolean {
+  if (!status) return false;
+  const expected = networkForDevice(status);
+  const network = status.network_config;
+  return Boolean(expected && network && status.network_applied && !status.network_error
+    && network.interface_name === expected.interface_name && network.gateway === expected.gateway
     && network.dns_servers.length === 0);
 }
 
@@ -31,6 +56,7 @@ export interface PlatformAccessStatus {
   last_error: string;
   connection_generation: string;
   manager_address: string;
+  device_architecture?: string;
   network_config?: OrdinaryNetworkConfig | null;
   network_applied?: boolean;
   network_error?: string;
@@ -71,8 +97,9 @@ export function platformAccessRequest(status: PlatformAccessStatus, form: Platfo
   }
   const sshPort = form.ssh_port === 0 ? 22 : form.ssh_port;
   if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) throw new Error('SSH 端口应为 1～65535');
+  const network = networkForDevice(status);
   return { enabled: form.enabled, device_token: form.device_token, clear_device_token: form.clear_device_token,
-    ssh_enabled: form.ssh_enabled, ...(status.network_config ? { network_config: ordinaryNetworkPreset() } : {}),
+    ssh_enabled: form.ssh_enabled, ...(network ? { network_config: network } : {}),
     device_id: deviceId, ssh_port: sshPort, expected_revision: status.revision,
     connection_generation: status.connection_generation, manager_address: status.manager_address };
 }
@@ -127,12 +154,16 @@ export function createPlatformAccessController(api: PlatformAccessApi) {
       try { request = platformAccessRequest(snapshot.status, snapshot.form); }
       catch (error) { update({ error: failure(error).message }); return; }
       const current = epoch; const requestId = ++operation;
+      const architecture = architectureIdentity(snapshot.status);
       update({ saving: true, saved: false, error: null });
       try {
         const status = await api.save(request);
         if (current === epoch && requestId === operation) {
-          if (request.network_config && !isOrdinaryNetworkPresetApplied(status)) {
-            update({ status, saved: false, needsReload: true, error: '设备未确认固定普通外网出口已应用，请重新读取设备状态后再保存' });
+          if (status.connection_generation !== request.connection_generation || status.manager_address !== request.manager_address
+            || architectureIdentity(status) !== architecture) {
+            update({ status, saved: false, needsReload: true, error: '设备连接或架构已变化，请重新读取当前下位机配置' });
+          } else if (request.network_config && !isOrdinaryNetworkApplied(status)) {
+            update({ status, saved: false, needsReload: true, error: '设备未确认对应架构的普通外网配置已应用，请重新读取设备状态后再保存' });
           } else apply(status, true);
         }
       }
@@ -152,9 +183,11 @@ export function createPlatformAccessController(api: PlatformAccessApi) {
         if (current !== epoch || requestId !== operation || !snapshot.status) return;
         if (status.connection_generation !== snapshot.status.connection_generation || status.manager_address !== snapshot.status.manager_address) {
           update({ saved: false, needsReload: true, error: '现场连接已切换，请重新读取当前下位机配置' });
+        } else if (architectureIdentity(status) !== architectureIdentity(snapshot.status)) {
+          update({ status, saved: false, needsReload: true, error: '设备架构已变化，请重新读取后再保存' });
         } else if (status.revision !== snapshot.status.revision) {
           update({ status, saved: false, needsReload: true, error: '下位机配置已变化，请重新读取后再保存' });
-        } else update({ status, ...(snapshot.status.network_config && !isOrdinaryNetworkPresetApplied(status) ? { saved: false } : {}) });
+        } else update({ status, ...(networkForDevice(snapshot.status) && !isOrdinaryNetworkApplied(status) ? { saved: false } : {}) });
       } catch (error) {
         if (current === epoch && requestId === operation) {
           const problem = failure(error);

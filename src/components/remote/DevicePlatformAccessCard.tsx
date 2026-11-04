@@ -3,7 +3,7 @@ import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Form, Input, Input
 import { SettingOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { useCapability } from '../../offline/use-capability';
-import { createPlatformAccessController, FACTORY_PLATFORM_TARGET, isOrdinaryNetworkPresetApplied, ordinaryNetworkPreset, type PlatformAccessRequest, type PlatformAccessStatus } from '../../utils/lower-platform-access';
+import { createPlatformAccessController, FACTORY_PLATFORM_TARGET, isOrdinaryNetworkApplied, normalizeDeviceArchitecture, ordinaryNetworkPreset, type PlatformAccessRequest, type PlatformAccessStatus } from '../../utils/lower-platform-access';
 import './DevicePlatformAccessCard.css';
 
 const api = {
@@ -24,7 +24,10 @@ export default function DevicePlatformAccessCard({ connectionKey, ready }: { con
   const connectionColor = status?.online ? 'green' : status?.enabled ? 'orange' : 'default';
   const networkSupported = Boolean(status?.network_config);
   const fixedNetwork = ordinaryNetworkPreset();
-  const networkApplied = isOrdinaryNetworkPresetApplied(status);
+  const architecture = normalizeDeviceArchitecture(status?.device_architecture);
+  const networkApplied = isOrdinaryNetworkApplied(status);
+  const architectureLabel = !status ? '未读取' : architecture === 'arm64' ? 'ARM64（DSP 设备）'
+    : architecture === 'x64' ? 'x64（测试环境）' : status.device_architecture ? `${status.device_architecture}（未知架构）` : '未报告架构';
 
   useEffect(() => {
     controller.reset();
@@ -77,12 +80,13 @@ export default function DevicePlatformAccessCard({ connectionKey, ready }: { con
         <Descriptions size="small" column={1} className="device-platform-access-details">
           <Descriptions.Item label="平台地址">{FACTORY_PLATFORM_TARGET}</Descriptions.Item>
           <Descriptions.Item label="当前现场设备">{status?.manager_address ?? '请先连接并读取配置'}</Descriptions.Item>
+          <Descriptions.Item label="设备架构">{architectureLabel}</Descriptions.Item>
           <Descriptions.Item label="平台连接状态"><Tag color={connectionColor}>{connectionStatus}</Tag></Descriptions.Item>
           <Descriptions.Item label="已有设备令牌">{status ? status.token_configured ? '已配置（不显示明文）' : '未配置' : '未读取'}</Descriptions.Item>
         </Descriptions>
         <div className="device-platform-access-messages">
           {state.error && <Alert type="error" title={state.error} showIcon />}
-          {state.saved && <Alert type="success" title="配置已持久保存并应用" description="平台连接状态会持续刷新，是否连接成功请以当前状态为准。" showIcon />}
+          {state.saved && <Alert type="success" title={architecture && networkSupported ? '配置已持久保存并应用' : '平台参数已持久保存'} description="平台连接状态会持续刷新，是否连接成功请以当前状态为准。" showIcon />}
           {status?.last_error && <Alert type="warning" title="平台连接异常" description={status.last_error} showIcon />}
           {status?.network_error && <Alert type="error" title="普通外网出口异常" description={status.network_error} showIcon />}
         </div>
@@ -107,18 +111,25 @@ export default function DevicePlatformAccessCard({ connectionKey, ready }: { con
           </Form.Item>
           <Typography.Title level={5} className="device-platform-access-section-title">设备普通外网出口</Typography.Title>
           <Typography.Paragraph type="secondary">
-            影响整个设备的普通 IPv4 外网流量；关闭平台接入后仍有效。纵密业务网络由纵密页面独立维护。
+            {architecture === 'arm64' ? '普通 IPv4 外网固定通过 102 口连接 684；关闭平台接入后仍有效。纵密业务网络由纵密页面独立维护。'
+              : architecture === 'x64' ? '测试环境沿用服务器现有网络；保存时清理本功能可能遗留的 DSP 出口配置。'
+                : '设备架构确认后才能自动配置普通外网出口。当前仅保存平台参数。'}
           </Typography.Paragraph>
           {status && !networkSupported && <Alert className="device-platform-access-network-notice" type="info" showIcon
             title="当前下位机不支持普通外网出口配置，请升级下位机。已有平台设置仍可保存。" />}
+          {status && networkSupported && !architecture && <Alert className="device-platform-access-network-notice" type="info" showIcon
+            title="当前下位机未报告受支持的架构，仅保存平台参数，不下发网络配置。" />}
           <Descriptions size="small" column={1} className="device-platform-access-network-status">
-            <Descriptions.Item label="固定出口网口">102 口（{fixedNetwork.interface_name}）</Descriptions.Item>
-            <Descriptions.Item label="固定 IPv4 网关">{fixedNetwork.gateway}</Descriptions.Item>
+            {architecture === 'arm64' && <Descriptions.Item label="固定出口网口">102 口（{fixedNetwork.interface_name}）</Descriptions.Item>}
+            {architecture === 'arm64' && <Descriptions.Item label="固定 IPv4 网关">{fixedNetwork.gateway}</Descriptions.Item>}
+            {architecture === 'x64' && <Descriptions.Item label="普通外网出口">使用服务器现有网络</Descriptions.Item>}
             <Descriptions.Item label="DNS">沿用设备已有 DNS</Descriptions.Item>
-            <Descriptions.Item label="固定出口状态">{!status ? '未读取' : !networkSupported ? '当前下位机不支持' : networkApplied ? '已应用' : '待应用'}</Descriptions.Item>
+            <Descriptions.Item label="普通出口状态">{!status ? '未读取' : !networkSupported ? '当前下位机不支持' : !architecture ? '仅保存平台参数' : networkApplied ? '已应用' : '待应用'}</Descriptions.Item>
             <Descriptions.Item label="设备当前源地址">{status?.network_source_address || '--'}</Descriptions.Item>
           </Descriptions>
-          <Typography.Paragraph type="secondary">点击下方“保存并应用”时自动应用固定出口。已应用表示出口配置完成，外网是否可达仍需联调验证。</Typography.Paragraph>
+          <Typography.Paragraph type="secondary">{architecture && networkSupported
+            ? `点击下方“保存并应用”时自动${architecture === 'arm64' ? '应用固定出口' : '切换为服务器现有网络'}。已应用表示出口配置完成，外网是否可达仍需联调验证。`
+            : '点击下方“保存并应用”只保存平台参数。'}</Typography.Paragraph>
           <Typography.Title level={5} className="device-platform-access-section-title">远程 SSH</Typography.Title>
           <Form.Item label="允许远程 SSH">
             <Switch checked={form.ssh_enabled} disabled={disabled} onChange={ssh_enabled => controller.update({ ssh_enabled })} aria-label="允许远程 SSH" />

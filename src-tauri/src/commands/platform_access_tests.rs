@@ -268,6 +268,7 @@ fn write_validation_rejects_conflicting_tokens_and_invalid_identifiers_without_e
         network_applied: false,
         network_error: String::new(),
         network_source_address: String::new(),
+        device_architecture: String::new(),
     };
     let mut invalid = request(&status);
     invalid.device_token = "private-secret".into();
@@ -314,6 +315,57 @@ async fn ordinary_network_roundtrips_and_apply_failure_is_explicit() {
     let error = write(&conn, request(&saved)).await.err().unwrap();
     assert_eq!(error.kind, "network_apply_failed");
     assert!(!error.message.contains("network-secret-detail"));
+}
+
+// 架构仅透传当前管理连接的下位机响应，旧服务空值和未知值均不得猜测。
+#[tokio::test]
+async fn architecture_is_forwarded_from_the_lower_response_without_local_inference() {
+    let (conn, manager, _server) = manager().await;
+    for architecture in ["arm64", "x64", "", "unknown-target"] {
+        manager.state.lock().device_architecture = architecture.into();
+        let status = read(&conn).await.unwrap();
+        assert_eq!(status.device_architecture, architecture);
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["device_architecture"], architecture);
+    }
+}
+
+// x64 测试服务器显式撤销 DSP 普通出口，保存与回读无需 684 网关。
+#[tokio::test]
+async fn x64_explicit_empty_network_saves_and_roundtrips_without_684_gateway() {
+    let (conn, manager, _server) = manager().await;
+    {
+        let mut state = manager.state.lock();
+        state.device_architecture = "x64".into();
+        state.network_config = Some(service::OrdinaryNetworkConfig {
+            interface_name: "eth0.102".into(),
+            gateway: "192.168.2.1".into(),
+            dns_servers: vec!["192.168.2.1".into()],
+        });
+    }
+    let previous = read(&conn).await.unwrap();
+    let mut update = request(&previous);
+    update.network_config = Some(OrdinaryNetworkDto {
+        interface_name: String::new(),
+        gateway: String::new(),
+        dns_servers: vec![],
+    });
+    let saved = write(&conn, update).await.unwrap();
+    assert_eq!(saved.device_architecture, "x64");
+    assert!(saved.network_applied);
+    let network = saved.network_config.as_ref().unwrap();
+    assert!(network.interface_name.is_empty());
+    assert!(network.gateway.is_empty());
+    assert!(network.dns_servers.is_empty());
+    let sent = manager.requests.lock()[0].clone();
+    assert_eq!(
+        sent.network_config.unwrap(),
+        service::OrdinaryNetworkConfig::default()
+    );
+    let reread = read(&conn).await.unwrap();
+    assert_eq!(reread.device_architecture, "x64");
+    assert!(reread.network_config.unwrap().gateway.is_empty());
+    assert_eq!(reread.revision, saved.revision);
 }
 
 // 旧服务端缺少支持声明时，新的网络字段不得被静默忽略。
