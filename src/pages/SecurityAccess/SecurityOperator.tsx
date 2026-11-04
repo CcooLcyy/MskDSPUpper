@@ -121,8 +121,8 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
     if (!editor || unavailable) return;
     for (const field of page.fields) {
       const value = editor.row[field.key] ?? '';
-      if ((!field.optional && !value.trim()) || [...value].some(char => char === ',' || char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) { setError(`请检查“${field.label}”，必填内容不能为空，也不能包含逗号或控制字符。`); return; }
-      if (kind === 'network' && field.key === 'description' && (value.length > 10 || [...value].some(char => char.charCodeAt(0) > 126))) { setError('网络描述请使用最多 10 个英文字符、数字或符号。'); return; }
+      if ((!field.optional && !value.trim()) || Array.from(value).some(char => char === ',' || char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) { setError(`请检查“${field.label}”，必填内容不能为空，也不能包含逗号或控制字符。`); return; }
+      if (kind === 'network' && field.key === 'description' && (value.length > 10 || Array.from(value).some(char => char.charCodeAt(0) > 126))) { setError('网络描述请使用最多 10 个英文字符、数字或符号。'); return; }
       const unusedCertificate = kind === 'tunnels' && field.reference === 'certificates' && (editor.row.mode === '2' || (field.key === 'backup_certificate' && editor.row.backup_ip === '0.0.0.0'));
       if (!unusedCertificate && (field.options || field.reference) && !choices(field).some(option => option.value === value && !option.label.endsWith('（原值，需核实）'))) { setError(`“${field.label}”原值不在当前装置可选范围，请核实后选择。`); return; }
     }

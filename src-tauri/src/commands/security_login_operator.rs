@@ -197,6 +197,181 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    const NETWORK_BEFORE: &[u8] = b"port,6,3,10.0.0.1,255.255.255.0,0,\n";
+    const NETWORK_AFTER: &[u8] = b"port,6,3,10.0.0.2,255.255.255.0,0,\n";
+    const ROUTE_BEFORE: &[u8] = b"main,10.2.0.0/16,255.255.0.0,10.0.0.2,eth6,\n";
+    const ROUTE_AFTER: &[u8] = b"main,10.2.0.0/16,255.255.0.0,10.0.0.3,eth6,\n";
+    const TUNNEL_BEFORE: &[u8] = b"peer,7,0,10.0.0.1,10.0.0.2,primary.pem,10.0.0.3,backup.pem,24,10240,\n";
+    const TUNNEL_AFTER: &[u8] = b"peer,7,0,10.0.0.1,10.0.0.2,primary.pem,10.0.0.3,backup.pem,48,10240,\n";
+    const CERTIFICATES: &[u8] = b"/log/cert_files/primary.pem,5,fixture\n/log/cert_files/backup.pem,5,fixture\n/log/cert_files/management.pem,4,fixture\n";
+    const POLICY_BEFORE: &[u8] = b"1,7,2,10.1.0.1,10.1.0.2,10.2.0.1,10.2.0.2,2,1,0,65535,104,104,original,\n";
+    const POLICY_AFTER: &[u8] = b"1,7,2,10.1.0.1,10.1.0.2,10.2.0.1,10.2.0.2,2,2,0,65535,104,104,changed,\n";
+
+    fn kind_request(action: &str, kind: &str) -> OperatorRequest {
+        let mut req = request(action);
+        req.kind = kind.into();
+        req
+    }
+    async fn expect_upload_start(peer: &mut tokio::io::DuplexStream, name: &str) {
+        assert_eq!(peer.read_i32().await.unwrap(), 1);
+        assert_eq!(peer.read_i32().await.unwrap(), name.len() as i32);
+        let mut actual = vec![0; name.len()];
+        peer.read_exact(&mut actual).await.unwrap();
+        assert_eq!(actual, name.as_bytes());
+    }
+    async fn serve_upload_body(peer: &mut tokio::io::DuplexStream, expected: &[u8], final_status: i32) {
+        // 精确比较已知明文，不从待测编码器计算预期；空表也必须发送零长度块。
+        for chunk in expected.chunks(1452) {
+            assert_eq!(peer.read_i32().await.unwrap(), 2);
+            assert_eq!(peer.read_i32().await.unwrap(), chunk.len() as i32);
+            let mut actual = vec![0; chunk.len()];
+            peer.read_exact(&mut actual).await.unwrap();
+            assert_eq!(actual, chunk);
+        }
+        if expected.len() % 1452 == 0 {
+            assert_eq!(peer.read_i32().await.unwrap(), 2);
+            assert_eq!(peer.read_i32().await.unwrap(), 0);
+        }
+        assert_eq!(peer.read_i32().await.unwrap(), 3);
+        assert_eq!(peer.read_i32().await.unwrap(), 0);
+        peer.write_i32(3).await.unwrap();
+        peer.write_i32(final_status).await.unwrap();
+    }
+    async fn assert_no_more_commands(peer: &mut tokio::io::DuplexStream) {
+        let mut rest = Vec::new();
+        peer.read_to_end(&mut rest).await.unwrap();
+        assert!(rest.is_empty(), "不得发送额外协议命令: {rest:?}");
+    }
+    async fn verified_roundtrip(
+        kind: &'static str, file: &'static str, original: &'static [u8], expected: &'static [u8],
+        dependency: Option<(&'static str, &'static [u8])>,
+    ) {
+        let (mut client, mut peer) = tokio::io::duplex(4096);
+        let server = tokio::spawn(async move {
+            serve_file(&mut peer, file, original).await;
+            if let Some((name, data)) = dependency { serve_file(&mut peer, name, data).await; }
+            // 上传前重读快照和依赖；最终受理之后才允许回读。
+            serve_file(&mut peer, file, original).await;
+            if let Some((name, data)) = dependency { serve_file(&mut peer, name, data).await; }
+            expect_upload_start(&mut peer, file).await;
+            peer.write_i32(1).await.unwrap(); peer.write_i32(0).await.unwrap();
+            serve_upload_body(&mut peer, expected, 0).await;
+            serve_file(&mut peer, file, expected).await;
+            assert_no_more_commands(&mut peer).await;
+        });
+        let mut state = OperatorState::default();
+        let read = execute(&mut client, &kind_request("read", kind), &mut state, Some("fixture")).await.unwrap();
+        assert!(!read.verified);
+        match kind {
+            "network" | "routes" => assert_eq!(read.interfaces, ["eth6"]),
+            "tunnels" => assert_eq!(read.certificates, ["primary.pem", "backup.pem"]),
+            "policies" => assert_eq!(read.tunnel_ids, ["7"]),
+            _ => unreachable!(),
+        }
+        let expected_rows = codec::parse(kind, expected).unwrap();
+        let mut save = kind_request("save", kind);
+        save.revision = Some(read.revision.clone());
+        save.rows = Some(expected_rows.clone());
+        let result = execute(&mut client, &save, &mut state, Some("fixture")).await.unwrap();
+        assert!(result.verified);
+        assert_eq!(result.rows, expected_rows);
+        assert_ne!(result.revision, read.revision);
+        assert!(result.message.contains("实际业务效果请另行核实"));
+        drop(client);
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn security_operator_network_upload_verified_fixture() {
+        verified_roundtrip("network", "ip.txt", NETWORK_BEFORE, NETWORK_AFTER, None).await;
+    }
+    #[tokio::test]
+    async fn security_operator_routes_upload_checks_network_dependency_fixture() {
+        verified_roundtrip("routes", "route.txt", ROUTE_BEFORE, ROUTE_AFTER, Some(("ip.txt", NETWORK_BEFORE))).await;
+    }
+    #[tokio::test]
+    async fn security_operator_tunnels_upload_checks_category_five_certificates_fixture() {
+        verified_roundtrip("tunnels", "tunnel.txt", TUNNEL_BEFORE, TUNNEL_AFTER, Some(("certlist.txt", CERTIFICATES))).await;
+    }
+    #[tokio::test]
+    async fn security_operator_policies_upload_checks_tunnel_dependency_fixture() {
+        verified_roundtrip("policies", "rule.txt", POLICY_BEFORE, POLICY_AFTER, Some(("tunnel.txt", TUNNEL_BEFORE))).await;
+    }
+    #[tokio::test]
+    async fn security_operator_missing_references_never_send_upload_fixture() {
+        for (kind, file, original, draft, dependency, dependency_data, error_text) in [
+            ("routes", "route.txt", ROUTE_BEFORE, ROUTE_AFTER, "ip.txt", b"".as_slice(), "网络接口已不存在"),
+            ("tunnels", "tunnel.txt", TUNNEL_BEFORE, TUNNEL_AFTER, "certlist.txt", b"/log/cert_files/primary.pem,4,fixture\n/log/cert_files/backup.pem,4,fixture\n".as_slice(), "加密网关证书已不存在"),
+            ("policies", "rule.txt", POLICY_BEFORE, POLICY_AFTER, "tunnel.txt", b"".as_slice(), "隧道已不存在"),
+        ] {
+            let (mut client, mut peer) = tokio::io::duplex(4096);
+            let server = tokio::spawn(async move {
+                for _ in 0..2 {
+                    serve_file(&mut peer, file, original).await;
+                    serve_file(&mut peer, dependency, dependency_data).await;
+                }
+                assert_no_more_commands(&mut peer).await;
+            });
+            let mut state = OperatorState::default();
+            let read = execute(&mut client, &kind_request("read", kind), &mut state, Some("fixture")).await.unwrap();
+            let mut save = kind_request("save", kind);
+            save.revision = Some(read.revision);
+            save.rows = Some(codec::parse(kind, draft).unwrap());
+            let error = execute(&mut client, &save, &mut state, Some("fixture")).await.unwrap_err();
+            assert!(!error.fatal);
+            assert!(error.message.contains(error_text), "{}", error.message);
+            drop(client);
+            server.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn security_operator_rule_fix_rejects_bidirectional_before_upload_fixture() {
+        let (mut client, mut peer) = tokio::io::duplex(4096);
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                serve_file(&mut peer, "rule.txt", POLICY_BEFORE).await;
+                serve_file(&mut peer, "tunnel.txt", TUNNEL_BEFORE).await;
+            }
+            assert_no_more_commands(&mut peer).await;
+        });
+        let mut state = OperatorState::default();
+        let read = execute(&mut client, &kind_request("read", "policies"), &mut state, Some("fixture-rule-fix")).await.unwrap();
+        assert!(!read.bidirectional_allowed);
+        let mut rows = read.rows;
+        rows[0].insert("direction".into(), "0".into());
+        let mut save = kind_request("save", "policies");
+        save.revision = Some(read.revision); save.rows = Some(rows);
+        let error = execute(&mut client, &save, &mut state, Some("fixture-rule-fix")).await.unwrap_err();
+        assert!(error.message.contains("不支持双向策略"));
+        drop(client); server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn security_operator_rejected_upload_never_reads_back_fixture() {
+        for reject_prepare in [true, false] {
+            let (mut client, mut peer) = tokio::io::duplex(4096);
+            let server = tokio::spawn(async move {
+                serve_file(&mut peer, "ip.txt", NETWORK_BEFORE).await;
+                serve_file(&mut peer, "ip.txt", NETWORK_BEFORE).await;
+                expect_upload_start(&mut peer, "ip.txt").await;
+                peer.write_i32(1).await.unwrap();
+                peer.write_i32(if reject_prepare { 1 } else { 0 }).await.unwrap();
+                if !reject_prepare { serve_upload_body(&mut peer, NETWORK_AFTER, 1).await; }
+                assert_no_more_commands(&mut peer).await;
+            });
+            let mut state = OperatorState::default();
+            let read = execute(&mut client, &request("read"), &mut state, Some("fixture")).await.unwrap();
+            let mut save = request("save");
+            save.revision = Some(read.revision);
+            save.rows = Some(codec::parse("network", NETWORK_AFTER).unwrap());
+            assert!(execute(&mut client, &save, &mut state, Some("fixture")).await.is_err());
+            assert!(!state.snapshots.contains_key("network"));
+            drop(client); server.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn security_operator_empty_table_upload_has_zero_length_block_fixture() {
+        verified_roundtrip("network", "ip.txt", NETWORK_BEFORE, b"", None).await;
+    }
+
     fn request(action: &str) -> OperatorRequest {
         OperatorRequest { session_id: "fixture".into(), action: action.into(), kind: "network".into(), revision: None, rows: None }
     }

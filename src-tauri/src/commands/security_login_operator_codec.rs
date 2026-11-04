@@ -134,7 +134,7 @@ fn check(kind: &str, rows: &[Row], writing: bool) -> Result<(), String> {
             if !optional && val.trim().is_empty() { return Err(format!("配置字段 {key} 不可为空")); }
         }
         if size > MAX_BYTES { return Err("配置内容超过 4 MiB".into()); }
-        let v = |key| value(row, key);
+        let v = |key: &str| value(row, key);
         let enum_value = |key: &str, allowed: &[&str]| -> Result<(), String> {
             if writing && !allowed.contains(&v(key)) { return Err(format!("字段 {key} 包含未知枚举，禁止上传")); }
             // 未知数字枚举可只读展示；任意文本不是有效的协议枚举。
@@ -202,7 +202,7 @@ pub(super) fn encode(kind: &str, rows: &[Row]) -> Result<Vec<u8>, String> {
     let keys = fields(kind)?;
     let mut output = String::new();
     for row in rows {
-        let v = |key| value(row, key);
+        let v = |key: &str| value(row, key);
         let line = match kind {
             "network" => format!("{},{},{},{},{},{}", v("description"), mapped_code(v("interface"), false)?, mapped_code(v("interface_type"), true)?, v("ip"), v("netmask"), v("vlan")),
             "routes" => {

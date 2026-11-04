@@ -147,6 +147,7 @@ test('local capability methods are delegated to the real api', () => {
     'logoutVerticalSecurity',
     'isVerticalSecurityLoginActive',
     'changeVerticalSecurityPassword',
+    'runVerticalSecurityOperator',
     'saveFullConfigExport',
     'loadFullConfigExport',
   ];

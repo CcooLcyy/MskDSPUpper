@@ -261,6 +261,7 @@ export const DELEGATED_API_METHODS = [
   'isVerticalSecurityLoginActive',
   'changeVerticalSecurityPassword',
   'runVerticalSecurityAdmin',
+  'runVerticalSecurityOperator',
   'chooseVerticalSecurityCertificateFile',
   'saveVerticalSecurityFile',
   'getVerticalSecuritySimIp',
