@@ -567,6 +567,12 @@ const AdvancedConfigPage: React.FC = () => {
   const hasCheckedPackage = matchesLowerUpdateSelection(activeManifest, platform, channel);
   const hasVerifiableManifest = hasCheckedPackage && Boolean(activeManifest?.image_id?.trim());
   const hasDownloadedPackage = effectiveDownloadResult !== null;
+  const hasDownloadFailed = !isLocalPackageSelected
+    && hasCheckedPackage
+    && !hasDownloadedPackage
+    && !isDownloadTaskActive
+    && lowerUpdateAutoChannelStatus.kind === 'download-error'
+    && lowerUpdateAutoChannelStatus.manifest?.asset.sha256.toLowerCase() === activeManifest?.asset.sha256.toLowerCase();
   const {
     task: deploymentTask,
     isRunning: isDeployingLowerUpdate,
@@ -1029,6 +1035,7 @@ const AdvancedConfigPage: React.FC = () => {
       return;
     }
     const downloadingManifest = activeManifest;
+    console.info('手动重试下位机更新包下载', { platform, channel, version: downloadingManifest.version });
 
     setIsDownloadModalOpen(true);
     setIsDownloadingLowerUpdate(true);
@@ -1585,20 +1592,20 @@ const AdvancedConfigPage: React.FC = () => {
                 >
                   检查线上最新版本
                 </Button>
-                <Button
-                  icon={<DownloadOutlined />}
-                  onClick={() => void handleDownload()}
-                  disabled={
-                    !hasCheckedPackage
-                    || isLocalPackageSelected
-                    || isSelectingLowerUpdate
-                    || isDownloadTaskActive
-                    || isDeployingLowerUpdate
-                  }
-                  loading={isDownloadTaskActive}
-                >
-                  下载到上位机
-                </Button>
+                {!isDownloadTaskActive ? (
+                  <Tag color={hasDownloadedPackage ? 'success' : hasDownloadFailed || lowerUpdateAutoChannelStatus.kind === 'error' ? 'error' : 'default'}>
+                    {hasDownloadedPackage ? '已缓存' : hasDownloadFailed ? '下载失败' : lowerUpdateAutoChannelStatus.kind === 'error' ? '检查失败，等待自动重试' : lowerUpdateAutoChannelStatus.kind === 'checking' ? '正在检查更新' : '等待自动下载'}
+                  </Tag>
+                ) : null}
+                {hasDownloadFailed ? (
+                  <Button
+                    icon={<DownloadOutlined />}
+                    onClick={() => void handleDownload()}
+                    disabled={isSelectingLowerUpdate || isDeployingLowerUpdate}
+                  >
+                    重试下载
+                  </Button>
+                ) : null}
                 <Button
                   type="primary"
                   icon={<UploadOutlined />}

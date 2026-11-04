@@ -14,6 +14,7 @@ export type LowerUpdateAutoStatusKind =
   | 'available'
   | 'downloading'
   | 'cached'
+  | 'download-error'
   | 'error';
 
 export interface LowerUpdateAutoChannelStatus {

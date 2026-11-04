@@ -181,7 +181,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
         return result;
       } catch (error) {
         updateChannelStatus(platform, channel, {
-          kind: 'error',
+          kind: 'download-error',
           message: `下位机 ${channel} 通道下载失败: ${String(error)}`,
           manifest,
           progress: null,
@@ -220,6 +220,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
     // 保留检查标识，防止旧检查结束时删除后续任务。
     const promiseRef: { promise?: Promise<void> } = {};
     const promise = (async () => {
+      let downloadStarted = false;
       const checkedAt = Date.now();
       updateChannelStatus(platform, channel, {
         kind: 'checking',
@@ -248,6 +249,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
 
         const newlyActiveDownload = activeChannelDownloadRef.current[channelKey];
         if (newlyActiveDownload) {
+          downloadStarted = true;
           await newlyActiveDownload;
           return;
         }
@@ -261,10 +263,11 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
           progress: null,
           lastCheckedAt: checkedAt,
         });
+        downloadStarted = true;
         await ensureDownloaded(manifest);
       } catch (error) {
         updateChannelStatus(platform, channel, {
-          kind: 'error',
+          kind: downloadStarted ? 'download-error' : 'error',
           message: `下位机 ${channel} 通道自动更新失败: ${String(error)}`,
           progress: null,
           lastCheckedAt: checkedAt,
