@@ -16,8 +16,9 @@ interface ConnectionStatus { remote: boolean; device_id: string | null; active: 
 type SshEvent = { type: 'host_key'; fingerprint: string; device_id: string }
   | { type: 'connected' } | { type: 'data'; bytes: number[] } | { type: 'closed'; message: string };
 
-export default function RemoteAccessPanel({ directAddress, onModeChange, onConnected, directControls, actions }: {
+export default function RemoteAccessPanel({ directAddress, onModeChange, onConnected, onConnectionIntent, directControls, actions }: {
   directAddress: string; onModeChange: (remote: boolean) => void; onConnected: () => Promise<void>;
+  onConnectionIntent?: () => void;
   directControls?: ReactNode; actions?: ReactNode;
 }) {
   const [connectionView, setConnectionView] = useState<'direct' | 'remote' | null>(null);
@@ -135,20 +136,25 @@ export default function RemoteAccessPanel({ directAddress, onModeChange, onConne
 
   async function connectDevice() {
     if (!selected) return;
+    onConnectionIntent?.();
     setBusy(true); closeSsh();
     try {
       await invoke('remote_select_device', { deviceId: selected });
       await load();
-      if (device?.allow_grpc) await onConnected();
+      if (!mounted.current) return;
       messages.success(`已选择远程设备：${device?.display_name ?? selected}`);
-    } catch (error) { messages.error(`远程连接失败：${error}`); }
+    } catch (error) { if (mounted.current) messages.error(`远程连接失败：${error}`); return; }
     finally { setBusy(false); }
+    // 连接选择完成后即可切换面板，不让列表读取继续锁住连接方式。
+    if (mounted.current && device?.allow_grpc) await onConnected();
   }
   async function returnToDirect() {
+    onConnectionIntent?.();
     setBusy(true); closeSsh();
-    try { await invoke('remote_use_direct', { address: directAddress }); await load(); await onConnected(); }
-    catch (error) { messages.error(`切换直连失败：${error}`); }
+    try { await invoke('remote_use_direct', { address: directAddress }); await load(); }
+    catch (error) { if (mounted.current) messages.error(`切换直连失败：${error}`); return; }
     finally { setBusy(false); }
+    if (mounted.current) await onConnected();
   }
   async function openSsh() {
     if (opening.current) return;
@@ -222,6 +228,7 @@ export default function RemoteAccessPanel({ directAddress, onModeChange, onConne
         options={[{ label: '现场直连', value: 'direct' }, { label: '平台远程', value: 'remote' }]}
         onChange={value => {
           console.info('[模块运维] 切换连接方式面板', { mode: value });
+          onConnectionIntent?.();
           setConnectionView(value as 'direct' | 'remote');
         }} />
       <div className="module-ops-connection-controls">
@@ -230,7 +237,7 @@ export default function RemoteAccessPanel({ directAddress, onModeChange, onConne
         {directControls}
       </> : !desktop ? <Typography.Text type="secondary">平台远程设备与 SSH 终端需要桌面版上位机</Typography.Text> : <>
         <Select className="module-ops-device-select" aria-label="平台远程设备" placeholder="选择授权设备" value={selected} disabled={busy}
-          onChange={value => { closeSsh(); setSelected(value); }}
+          onChange={value => { onConnectionIntent?.(); closeSsh(); setSelected(value); }}
           options={devices.map(d => ({
             value: d.device_id,
             title: `${d.display_name || d.device_id} · ${d.online ? '在线' : '离线'}`,

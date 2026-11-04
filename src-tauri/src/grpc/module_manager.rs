@@ -1,10 +1,17 @@
 use anyhow::{anyhow, Result};
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future, time::Duration};
 
 use crate::grpc::connection::ConnectionManager;
 use crate::proto::module_manager_proto::{
     module_manage_client::ModuleManageClient, Empty, ModuleInfo,
 };
+
+#[cfg(test)]
+#[path = "module_manager_tests.rs"]
+mod tests;
+
+/// 现场直连读取的建连和 RPC 共用同一个五秒预算。
+const DIRECT_MODULE_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 封装 ModuleManager gRPC 调用
 pub struct ModuleManagerClient<'a> {
@@ -16,16 +23,46 @@ impl<'a> ModuleManagerClient<'a> {
         Self { conn }
     }
 
+    async fn read_module_list<T>(
+        &self,
+        operation: &'static str,
+        request: impl Future<Output = Result<T>>,
+    ) -> Result<T> {
+        // 平台远程沿用通道自身的超时策略；仅限制现场直连的列表读取。
+        if self.conn.is_remote() {
+            return request.await;
+        }
+        tokio::time::timeout(DIRECT_MODULE_LIST_TIMEOUT, request)
+            .await
+            .map_err(|_| {
+                tracing::warn!(operation, timeout_seconds = 5, "现场直连读取模块列表超时");
+                anyhow!(
+                    "现场直连{}超时（5 秒），请检查网络或切换平台远程",
+                    operation
+                )
+            })?
+    }
+
     /// 获取可用模块列表（扫描 ./module 目录）
     pub async fn get_module_info(&self) -> Result<Vec<ModuleInfo>> {
-        let channel = self.conn.manager_channel().await?;
-        let mut client = ModuleManageClient::new(channel);
-        let resp = client.get_module_info(Empty {}).await?;
-        Ok(resp.into_inner().module_info)
+        self.read_module_list("读取可用模块列表", async {
+            let channel = self.conn.manager_channel().await?;
+            let mut client = ModuleManageClient::new(channel);
+            let resp = client.get_module_info(Empty {}).await?;
+            Ok(resp.into_inner().module_info)
+        })
+        .await
     }
 
     /// 获取运行中模块的信息，同时刷新模块地址缓存
     pub async fn get_running_module_info(
+        &self,
+    ) -> Result<Vec<crate::proto::module_manager_proto::ModuleRunningInfo>> {
+        self.read_module_list("读取运行模块列表", self.get_running_module_info_inner())
+            .await
+    }
+
+    async fn get_running_module_info_inner(
         &self,
     ) -> Result<Vec<crate::proto::module_manager_proto::ModuleRunningInfo>> {
         let request_generation = self.conn.runtime_generation();
