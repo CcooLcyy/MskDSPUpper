@@ -1528,6 +1528,11 @@ const AdvancedConfigPage: React.FC = () => {
                     {cachedPackages.length > 0 ? (
                       <Tag color={cacheFreshnessTag.color}>{cacheFreshnessTag.label}</Tag>
                     ) : null}
+                    {!isDownloadTaskActive && !hasDownloadedPackage ? (
+                      <Tag color={hasDownloadFailed || lowerUpdateAutoChannelStatus.kind === 'error' ? 'error' : 'default'}>
+                        {hasDownloadFailed ? '下载失败' : lowerUpdateAutoChannelStatus.kind === 'error' ? '检查失败，等待自动重试' : lowerUpdateAutoChannelStatus.kind === 'checking' ? '正在检查更新' : '等待自动下载'}
+                      </Tag>
+                    ) : null}
                   </Space>
                   {cachedPackages.map((cachedPackage) => {
                     const cachedFreshness = !cachedPackage.manifest.local_import && onlineLowerUpdateManifest
@@ -1592,11 +1597,6 @@ const AdvancedConfigPage: React.FC = () => {
                 >
                   检查线上最新版本
                 </Button>
-                {!isDownloadTaskActive ? (
-                  <Tag color={hasDownloadedPackage ? 'success' : hasDownloadFailed || lowerUpdateAutoChannelStatus.kind === 'error' ? 'error' : 'default'}>
-                    {hasDownloadedPackage ? '已缓存' : hasDownloadFailed ? '下载失败' : lowerUpdateAutoChannelStatus.kind === 'error' ? '检查失败，等待自动重试' : lowerUpdateAutoChannelStatus.kind === 'checking' ? '正在检查更新' : '等待自动下载'}
-                  </Tag>
-                ) : null}
                 {hasDownloadFailed ? (
                   <Button
                     icon={<DownloadOutlined />}
