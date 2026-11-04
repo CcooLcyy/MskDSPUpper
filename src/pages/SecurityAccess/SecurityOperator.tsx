@@ -45,12 +45,15 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [readErrors, setReadErrors] = useState<Partial<Record<Kind, string>>>({});
   const [editor, setEditor] = useState<{ index: number | null; row: Row } | null>(null);
   const [confirm, setConfirm] = useState<'read' | 'save' | null>(null);
   const mounted = useRef(false);
   const generation = useRef(0);
   const active = useRef(false);
   const currentSession = useRef(sessionId);
+  const attempted = useRef(new Set<Kind>());
+  const disabledRef = useRef(disabled);
   const notifyBusy = useEffectEvent((value: boolean) => onBusyChange?.(value));
   useEffect(() => {
     mounted.current = true;
@@ -60,9 +63,11 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
     currentSession.current = sessionId;
     generation.current += 1; active.current = false;
     setDrafts(emptyPages()); setKind('network'); setEditor(null); setConfirm(null);
+    attempted.current = new Set(); setReadErrors({});
     setBusy(false); setError(null); setNotice(null); notifyBusy(false);
     return () => { generation.current += 1; notifyBusy(false); };
   }, [sessionId]);
+  useEffect(() => { disabledRef.current = disabled; }, [disabled]);
   const page = pages.find(item => item.key === kind)!;
   const draft = drafts[kind];
   const blocked = busy || disabled;
@@ -72,16 +77,60 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
     setDrafts(previous => ({ ...previous, [kind]: { ...previous[kind], rows, dirty: true } }));
     setNotice(null); setError(null);
   };
+  const validateResult = (result: Result, target: Kind) => {
+    if (result.kind !== target || !result.revision || !Array.isArray(result.rows)) throw new Error('装置配置结果不完整，请重新读取。');
+  };
+  const clearReadError = (target: Kind) => setReadErrors(previous => {
+    const next = { ...previous }; delete next[target]; return next;
+  });
+  const loadInitial = useEffectEvent(async () => {
+    if (!mounted.current || active.current || disabled || !sessionId || currentSession.current !== sessionId
+      || pages.every(item => attempted.current.has(item.key))) return;
+    const token = generation.current;
+    const current = () => mounted.current && token === generation.current && currentSession.current === sessionId;
+    active.current = true; setBusy(true); onBusyChange?.(true);
+    try {
+      for (const item of pages) {
+        if (!current() || disabledRef.current) break;
+        if (attempted.current.has(item.key)) continue;
+        attempted.current.add(item.key);
+        try {
+          const result = await api.runVerticalSecurityOperator({ session_id: sessionId, action: 'read', kind: item.key });
+          if (!current()) return;
+          validateResult(result, item.key);
+          setDrafts(previous => previous[item.key].dirty ? previous : {
+            ...previous, [item.key]: { result, rows: cloneRows(result.rows), dirty: false, stale: false },
+          });
+          clearReadError(item.key);
+        } catch (reason) {
+          if (!current()) return;
+          const message = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : '读取失败，请核实装置状态。';
+          setReadErrors(previous => ({ ...previous, [item.key]: message }));
+          setDrafts(previous => ({ ...previous, [item.key]: { ...previous[item.key], stale: true } }));
+        }
+      }
+    } finally {
+      if (current()) { active.current = false; setBusy(false); onBusyChange?.(false); }
+    }
+  });
+  useEffect(() => {
+    if (disabled || !sessionId || busy) return;
+    let cancelled = false;
+    // StrictMode 的首轮清理在发包前撤销微任务；每个会话每类只自动尝试一次。
+    queueMicrotask(() => { if (!cancelled) void loadInitial(); });
+    return () => { cancelled = true; };
+  }, [sessionId, disabled, busy]);
   const perform = async (action: 'read' | 'save') => {
     if (!mounted.current || active.current || disabled || !sessionId || currentSession.current !== sessionId) return;
     if (action === 'save' && (!draft.result || draft.stale || !draft.dirty)) return;
     const token = generation.current;
     const current = () => mounted.current && token === generation.current && currentSession.current === sessionId;
+    if (action === 'read') attempted.current.add(kind);
     active.current = true; setBusy(true); onBusyChange?.(true); setConfirm(null); setError(null); setNotice(null);
     try {
       const result = await api.runVerticalSecurityOperator({ session_id: sessionId, action, kind, ...(action === 'save' ? { revision: draft.result!.revision, rows: cloneRows(draft.rows) } : {}) });
       if (!current()) return;
-      if (result.kind !== kind || !result.revision || !Array.isArray(result.rows)) throw new Error('装置配置结果不完整，请重新读取。');
+      validateResult(result, kind);
       if (action === 'save' && !result.verified) throw new Error(result.message || '上传结果未完成回读核对，请重新读取后核实。');
       setDrafts(previous => {
         const next = { ...previous, [kind]: { result, rows: cloneRows(result.rows), dirty: false, stale: false } };
@@ -90,6 +139,7 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
         if (action === 'save' && kind === 'tunnels') next.policies = { ...next.policies, stale: true };
         return next;
       });
+      clearReadError(kind);
       setNotice(action === 'save' ? '配置已上传并回读核对一致；业务生效情况请结合实际通信确认。' : '已读取装置配置。');
     } catch (reason) {
       if (current()) {
@@ -139,13 +189,13 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
   return <section className="security-operator" aria-label="纵密安全操作员工作台" aria-busy={busy}>
     <Tabs activeKey={kind} onChange={value => { if (!disabled && !active.current) { setKind(value as Kind); setEditor(null); setConfirm(null); setError(null); setNotice(null); } }} items={pages.map(item => ({ key: item.key, label: item.label, disabled: blocked }))} />
     <Card className="security-operator-panel">
-      <div className="security-operator-toolbar"><div><h3>{page.label}</h3><p>{!draft.result ? '先读取装置配置，再进行编辑。' : draft.stale ? '当前结果需重新读取核实；草稿已保留。' : draft.dirty ? '草稿尚未上传，其他页面的草稿会保留。' : '显示最近一次读取的装置配置。'}</p></div><Space wrap>
+      <div className="security-operator-toolbar"><div><h3>{page.label}</h3><p>{!draft.result ? busy ? '正在自动读取装置配置…' : readErrors[kind] ? '自动读取失败，请点击读取配置重试。' : '正在准备自动读取装置配置。' : draft.stale ? '当前结果需重新读取核实；草稿已保留。' : draft.dirty ? '草稿尚未上传，其他页面的草稿会保留。' : '显示最近一次读取的装置配置。'}</p></div><Space wrap>
         <Button disabled={blocked} onClick={read}>读取配置</Button>
         <Button disabled={unavailable} onClick={() => startEdit(null)}>新增</Button>
         <Button type="primary" disabled={unavailable || !draft.dirty} onClick={() => setConfirm('save')}>上传配置</Button>
       </Space></div>
       {draft.dirty && <Tag color="warning">未上传的草稿</Tag>}
-      <Table<{ row: Row; index: number }> size="small" rowKey="index" dataSource={draft.rows.map((row, index) => ({ row, index }))} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: Math.max(900, page.fields.length * 140) }} locale={{ emptyText: draft.result ? '暂无配置' : '请先读取配置' }} columns={[
+      <Table<{ row: Row; index: number }> size="small" rowKey="index" dataSource={draft.rows.map((row, index) => ({ row, index }))} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: Math.max(900, page.fields.length * 140) }} locale={{ emptyText: draft.result ? '暂无配置' : busy ? '正在读取配置…' : readErrors[kind] ? '读取失败，请手动刷新' : '等待自动读取' }} columns={[
         ...page.fields.map(field => ({ title: field.label, dataIndex: ['row', field.key], width: 140, ellipsis: true, render: (value: string) => field.options?.find(([code]) => code === value)?.[1] ?? (value || '—') })),
         { title: '操作', key: 'actions', width: kind === 'policies' ? 250 : 140, fixed: 'right' as const, render: (_: unknown, entry: { row: Row; index: number }) => <Space size="small"><Button size="small" disabled={unavailable} onClick={() => startEdit(entry.index)}>编辑</Button><Popconfirm title="从草稿删除此配置？" description="上传后才会改变装置配置。" disabled={unavailable} onConfirm={() => updateRows(draft.rows.filter((_, index) => index !== entry.index))}><Button size="small" danger disabled={unavailable}>删除</Button></Popconfirm>{kind === 'policies' && <><Button size="small" disabled={unavailable || entry.index === 0} onClick={() => move(entry.index, -1)}>上移</Button><Button size="small" disabled={unavailable || entry.index === draft.rows.length - 1} onClick={() => move(entry.index, 1)}>下移</Button></>}</Space> },
       ]} />
@@ -160,6 +210,7 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
       {confirm === 'save' && <Alert type="warning" showIcon title={kind === 'network' || kind === 'routes' ? '网络或路由变化可能中断当前管理连接及业务通信。' : '配置变化可能影响现有业务通信。'} description="上传失败或断开时保留草稿，不自动重试；请重新读取并核实装置状态。" />}
     </Modal>}
     {busy && <p role="status">正在处理配置，请等待装置应答…</p>}
+    {readErrors[kind] && <Alert type="error" showIcon title={`${page.label}自动读取失败`} description={readErrors[kind]} />}
     {error && !editor && <Alert type="error" showIcon title={error} />}
     {notice && <Alert type="info" showIcon title={notice} />}
   </section>;

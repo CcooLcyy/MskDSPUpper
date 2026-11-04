@@ -10,6 +10,8 @@ const filename = fileURLToPath(new URL('../../src/pages/SecurityAccess/SecurityO
 const network = { description: 'management', interface: 'eth0', interface_type: 'CONFIG', ip: '192.0.2.1', netmask: '255.255.255.0', vlan: '0' };
 const policy = id => ({ id, tunnel_id: '1', mode: '0', source_start: '192.0.2.1', source_end: '192.0.2.1', destination_start: '198.51.100.1', destination_end: '198.51.100.1', protocol: '2', direction: '1', source_port_start: '0', source_port_end: '65535', destination_port_start: '2404', destination_port_end: '2404', description: '' });
 const response = (kind, rows = kind === 'network' ? [network] : []) => ({ kind, revision: 'revision-1', rows, interfaces: ['eth0'], certificates: ['peer.pem'], tunnel_ids: ['1'], bidirectional_allowed: true, message: '已读取', verified: true });
+const kinds = ['network', 'routes', 'tunnels', 'policies'];
+const initialReads = (sessionId = 'session-a') => kinds.map(kind => ({ session_id: sessionId, action: 'read', kind }));
 
 // 执行真实组件事件，只替换 React 渲染器及设备 IPC 边界；不连接设备。
 function fixture(implementation = async request => response(request.kind, request.rows), initialProps = {}) {
@@ -19,7 +21,7 @@ function fixture(implementation = async request => response(request.kind, reques
     useState(initial) { const id = cursor++; if (!(id in slots)) slots[id] = typeof initial === 'function' ? initial() : initial; return [slots[id], value => { slots[id] = typeof value === 'function' ? value(slots[id]) : value; }]; },
     useRef(initial) { const id = cursor++; return slots[id] ??= { current: initial }; },
     useEffectEvent(callback) { const id = cursor++; if (!slots[id]) slots[id] = { callback, event: (...args) => slots[id].callback(...args) }; slots[id].callback = callback; return slots[id].event; },
-    useEffect(effect, deps) { const id = cursor++; if (!slots[id] || deps.some((value, index) => value !== slots[id].deps[index])) { slots[id]?.cleanup?.(); slots[id] = { deps, cleanup: effect() }; effects.add(id); } },
+    useEffect(effect, deps) { const id = cursor++; if (!slots[id] || deps.some((value, index) => value !== slots[id].deps[index])) { slots[id]?.cleanup?.(); slots[id] = { deps, effect, cleanup: effect() }; effects.add(id); } },
   };
   const element = (type, p) => ({ type, props: p ?? {} });
   const widgets = Object.fromEntries(['Alert', 'Button', 'Card', 'Input', 'Modal', 'Popconfirm', 'Select', 'Space', 'Table', 'Tabs', 'Tag'].map(name => [name, name]));
@@ -37,23 +39,109 @@ function fixture(implementation = async request => response(request.kind, reques
   const change = (label, value) => { const node = nodes().find(node => node.props['aria-label'] === label); node.props.onChange(node.type === 'Select' ? value : { target: { value } }); render(); };
   const read = async () => { await button('读取配置').props.onClick(); render(); };
   const edit = index => { rowActions(index).find(node => node.type === 'Button' && node.props.children === '编辑').props.onClick(); render(); };
+  const settle = async (turns = 6) => { for (let i = 0; i < turns; i += 1) { await new Promise(setImmediate); render(); } };
   render(); render();
-  return { calls, busyChanges, render, nodes, button, table, modal, switchPage, rowActions, change, read, edit, unmount: () => effects.forEach(id => slots[id]?.cleanup?.()) };
+  return { calls, busyChanges, render, nodes, button, table, modal, switchPage, rowActions, change, read, edit, settle, setImplementation: value => { implementation = value; }, strictReplay: () => { effects.forEach(id => slots[id]?.cleanup?.()); effects.forEach(id => { slots[id].cleanup = slots[id].effect(); }); render(); }, unmount: () => effects.forEach(id => slots[id]?.cleanup?.()) };
 }
 
-test('四页不自动发请求，未读取及禁用时不允许上传或新增', async () => {
+// 每个原有手动操作用例先验证四项初读，再建立独立业务调用基线。
+async function settledFixture(implementation) {
+  const f = fixture();
+  await f.settle();
+  assert.deepEqual(f.calls, initialReads());
+  assert.equal(f.button('读取配置').props.disabled, false);
+  f.calls.length = 0;
+  if (implementation) f.setImplementation(implementation);
+  return f;
+}
+
+test('进入会话依序自动读取四页各一次，切页和重渲染不重复或上传', async () => {
   const f = fixture();
   const tabs = f.nodes().find(node => node.type === 'Tabs');
   assert.deepEqual(tabs.props.items.map(item => item.label), ['网络配置', '路由配置', '隧道配置', '策略配置']);
-  for (const kind of ['network', 'routes', 'tunnels', 'policies']) { f.switchPage(kind); assert.equal(f.button('新增').props.disabled, true); assert.equal(f.button('上传配置').props.disabled, true); }
-  assert.equal(f.calls.length, 0);
-  f.render({ disabled: true }); await f.read(); assert.equal(f.calls.length, 0);
+  await f.settle(); assert.deepEqual(f.calls, initialReads());
+  for (const kind of kinds) { f.switchPage(kind); assert.equal(f.button('新增').props.disabled, false); assert.equal(f.button('上传配置').props.disabled, true); }
+  f.render(); await f.settle(); assert.deepEqual(f.calls, initialReads());
+});
+
+test('初读全过程串行且保持忙状态，阻止编辑、重复读取并通知父级禁止退出', async () => {
+  const pending = [];
+  const f = fixture(request => new Promise(resolve => pending.push({ request, resolve })));
+  await f.settle();
+  for (let index = 0; index < kinds.length; index += 1) {
+    assert.deepEqual(f.calls, initialReads().slice(0, index + 1));
+    assert.equal(f.button('读取配置').props.disabled, true);
+    assert.equal(f.button('新增').props.disabled, true);
+    assert.equal(f.button('上传配置').props.disabled, true);
+    assert.equal(f.busyChanges.at(-1), true);
+    await f.button('读取配置').props.onClick(); assert.equal(f.calls.length, index + 1);
+    pending[index].resolve(response(kinds[index])); await f.settle();
+  }
+  assert.deepEqual(f.calls, initialReads());
+  assert.equal(f.button('读取配置').props.disabled, false);
+  assert.equal(f.busyChanges.at(-1), false);
+  assert.ok(f.busyChanges.slice(f.busyChanges.indexOf(true), -1).every(value => value === true));
+});
+
+test('StrictMode效果重放在发送前取消旧微任务，四项初读不重复', async () => {
+  const f = fixture(); f.strictReplay(); await f.settle();
+  assert.deepEqual(f.calls, initialReads());
+  f.render(); await f.settle(); assert.deepEqual(f.calls, initialReads());
+});
+
+test('初始禁用等待解禁后初读，之后禁用切换不重复读取', async () => {
+  const f = fixture(undefined, { disabled: true });
+  await f.settle(); assert.deepEqual(f.calls, []);
+  assert.equal(f.button('新增').props.disabled, true); await f.read(); assert.deepEqual(f.calls, []);
+  f.render({ disabled: false }); await f.settle(); assert.deepEqual(f.calls, initialReads());
+  f.render({ disabled: true }); await f.settle(); f.render({ disabled: false }); await f.settle();
+  assert.deepEqual(f.calls, initialReads());
+});
+
+test('单页初读失败保留该页错误并继续其它页，不自动重试，手动读取成功清除', async () => {
+  let failed = true;
+  const f = fixture(async request => { if (request.kind === 'routes' && failed) throw new Error('路由初读失败'); return response(request.kind); });
+  await f.settle(); assert.deepEqual(f.calls, initialReads());
+  f.switchPage('routes'); assert.ok(f.nodes().some(node => node.type === 'Alert' && node.props.title === '路由配置自动读取失败' && node.props.description === '路由初读失败'));
+  assert.equal(f.button('新增').props.disabled, true);
+  f.switchPage('tunnels'); assert.equal(f.button('新增').props.disabled, false);
+  f.switchPage('routes'); await f.settle(); assert.deepEqual(f.calls, initialReads());
+  failed = false; await f.read();
+  assert.deepEqual(f.calls, [...initialReads(), { session_id: 'session-a', action: 'read', kind: 'routes' }]);
+  assert.equal(f.button('新增').props.disabled, false);
+  assert.ok(!f.nodes().some(node => node.type === 'Alert' && node.props.title === '路由配置自动读取失败'));
+});
+
+test('初读中途禁用暂停后续请求，恢复仅读取未尝试页', async () => {
+  let resolveNetwork;
+  const f = fixture(request => request.kind === 'network' ? new Promise(resolve => { resolveNetwork = resolve; }) : Promise.resolve(response(request.kind)));
+  await f.settle(); assert.deepEqual(f.calls, initialReads().slice(0, 1));
+  f.render({ disabled: true }); resolveNetwork(response('network')); await f.settle();
+  assert.deepEqual(f.calls, initialReads().slice(0, 1));
+  f.render({ disabled: false }); await f.settle(); assert.deepEqual(f.calls, initialReads());
+  assert.equal(f.button('新增').props.disabled, false);
+});
+
+test('换会话启动新初读，旧会话和卸载后的迟到结果不能覆盖或继续发请求', async () => {
+  const pending = [];
+  const f = fixture(request => new Promise(resolve => pending.push({ request, resolve })));
+  await f.settle(); assert.deepEqual(f.calls, initialReads().slice(0, 1));
+  f.render({ sessionId: 'session-b' }); await f.settle();
+  assert.deepEqual(f.calls, [...initialReads().slice(0, 1), ...initialReads('session-b').slice(0, 1)]);
+  pending[0].resolve(response('network', [{ ...network, ip: '192.0.2.99' }])); await f.settle();
+  assert.equal(f.table().props.dataSource.length, 0); assert.equal(f.calls.length, 2);
+  pending[1].resolve(response('network', [{ ...network, ip: '192.0.2.2' }])); await f.settle();
+  assert.equal(f.table().props.dataSource[0].row.ip, '192.0.2.2');
+  assert.deepEqual(f.calls, [...initialReads().slice(0, 1), ...initialReads('session-b').slice(0, 2)]);
+  f.unmount(); pending[2].resolve(response('routes')); await f.settle();
+  assert.equal(f.calls.length, 3); assert.equal(f.table().props.dataSource[0].row.ip, '192.0.2.2');
 });
 
 test('草稿切页保留，编辑不写装置，上传明确确认并携带原revision', async () => {
-  const f = fixture(); await f.read(); f.edit(0); f.change('IP 地址', '192.0.2.2');
+  const f = await settledFixture(); await f.read(); f.edit(0); f.change('IP 地址', '192.0.2.2');
   f.modal().props.onOk(); f.render();
-  assert.equal(f.calls.length, 1); f.switchPage('routes'); f.switchPage('network');
+  assert.equal(f.calls.length, 1); f.switchPage('routes'); f.switchPage('network'); await f.settle();
+  assert.equal(f.calls.length, 1);
   assert.equal(f.table().props.dataSource[0].row.ip, '192.0.2.2');
   f.button('上传配置').props.onClick(); f.render(); assert.equal(f.calls.length, 1);
   assert.ok(f.nodes().some(node => node.type === 'Alert' && String(node.props.title).includes('中断')));
@@ -64,7 +152,7 @@ test('草稿切页保留，编辑不写装置，上传明确确认并携带原re
 });
 
 test('读取有修改的页面必须确认丢弃，取消保留草稿', async () => {
-  const f = fixture(); await f.read(); f.edit(0); f.change('IP 地址', '192.0.2.2'); f.modal().props.onOk(); f.render();
+  const f = await settledFixture(); await f.read(); f.edit(0); f.change('IP 地址', '192.0.2.2'); f.modal().props.onOk(); f.render();
   await f.read(); assert.equal(f.calls.length, 1); assert.match(f.modal().props.title, /放弃/);
   f.modal().props.onCancel(); f.render(); assert.equal(f.table().props.dataSource[0].row.ip, '192.0.2.2');
   await f.read(); await f.modal().props.onOk(); f.render(); assert.equal(f.calls.length, 2); assert.equal(f.table().props.dataSource[0].row.ip, '192.0.2.1');
@@ -72,7 +160,7 @@ test('读取有修改的页面必须确认丢弃，取消保留草稿', async ()
 
 test('上传异常或回读不一致保留草稿，禁止自动及重复上传', async () => {
   for (const reject of [true, false]) {
-    const f = fixture(async request => { if (request.action === 'save') { if (reject) throw new Error('写入结果未确认'); return { ...response(request.kind), verified: false, message: '回读不一致' }; } return response(request.kind); });
+    const f = await settledFixture(async request => { if (request.action === 'save') { if (reject) throw new Error('写入结果未确认'); return { ...response(request.kind), verified: false, message: '回读不一致' }; } return response(request.kind); });
     await f.read(); f.edit(0); f.change('IP 地址', '192.0.2.2'); f.modal().props.onOk(); f.render();
     f.button('上传配置').props.onClick(); f.render(); await f.modal().props.onOk(); f.render();
     assert.equal(f.table().props.dataSource[0].row.ip, '192.0.2.2');
@@ -82,7 +170,7 @@ test('上传异常或回读不一致保留草稿，禁止自动及重复上传',
 });
 
 test('策略上移下移保留ID，隧道ID仅引用已读取选项，rule-fix不提供双向', async () => {
-  const f = fixture(async request => ({ ...response(request.kind, [policy('9'), policy('3')]), bidirectional_allowed: false }));
+  const f = await settledFixture(async request => ({ ...response(request.kind, [policy('9'), policy('3')]), bidirectional_allowed: false }));
   f.switchPage('policies'); await f.read();
   f.rowActions(1).find(node => node.type === 'Button' && node.props.children === '上移').props.onClick(); f.render();
   assert.deepEqual(f.table().props.dataSource.map(entry => entry.row.id), ['3', '9']);
@@ -92,7 +180,7 @@ test('策略上移下移保留ID，隧道ID仅引用已读取选项，rule-fix�
 });
 
 test('未识别枚举保留原值展示并拒绝静默改写，输入逗号不能加入草稿', async () => {
-  const f = fixture(async request => response(request.kind, [{ ...network, interface_type: 'UNKNOWN' }]));
+  const f = await settledFixture(async request => response(request.kind, [{ ...network, interface_type: 'UNKNOWN' }]));
   await f.read(); f.edit(0);
   assert.ok(f.nodes().find(node => node.props['aria-label'] === '接口类型').props.options.some(option => option.value === 'UNKNOWN'));
   f.modal().props.onOk(); f.render(); assert.ok(f.modal()); assert.equal(f.calls.length, 1);
@@ -101,7 +189,7 @@ test('未识别枚举保留原值展示并拒绝静默改写，输入逗号不�
 });
 
 test('隧道草稿使用类别5证书并允许未启用备用端的原厂占位', async () => {
-  const f = fixture(); f.switchPage('tunnels'); await f.read(); f.button('新增').props.onClick(); f.render();
+  const f = await settledFixture(); f.switchPage('tunnels'); await f.read(); f.button('新增').props.onClick(); f.render();
   assert.deepEqual(f.nodes().find(node => node.props['aria-label'] === '主装置证书').props.options, [{ value: 'peer.pem', label: 'peer.pem' }]);
   assert.equal(f.nodes().find(node => node.props['aria-label'] === '对端备地址').props.value, '0.0.0.0');
   f.change('名称', 't1'); f.change('隧道 ID', '1'); f.change('本端地址', '192.0.2.1'); f.change('对端主地址', '198.51.100.1');
@@ -109,14 +197,13 @@ test('隧道草稿使用类别5证书并允许未启用备用端的原厂占位'
   assert.equal(f.table().props.dataSource[0].row.backup_certificate, 'cert2.pem'); assert.equal(f.calls.length, 1);
 });
 
-test('忙时只发送一次并通知父级，换会话或卸载丢弃迟到结果', async () => {
+test('初读完成后手动读取同样禁止并发并通知父级，卸载后丢弃迟到结果', async () => {
   let resolve;
-  const f = fixture(() => new Promise(done => { resolve = done; }));
+  const f = await settledFixture(() => new Promise(done => { resolve = done; }));
   const pending = f.button('读取配置').props.onClick();
   await f.button('读取配置').props.onClick(); f.render();
   assert.equal(f.calls.length, 1); assert.equal(f.button('读取配置').props.disabled, true); assert.equal(f.busyChanges.at(-1), true);
-  f.render({ sessionId: 'session-b' }); f.render(); resolve(response('network')); await pending; f.render();
-  assert.equal(f.table().props.dataSource.length, 0); assert.equal(f.busyChanges.at(-1), false);
-  const late = f.button('读取配置').props.onClick(); f.unmount(); resolve(response('network')); await late;
-  assert.equal(f.calls.length, 2);
+  f.unmount(); resolve(response('network', [{ ...network, ip: '192.0.2.99' }])); await pending; f.render();
+  assert.equal(f.table().props.dataSource[0].row.ip, '192.0.2.1'); assert.equal(f.busyChanges.at(-1), false);
+  assert.equal(f.calls.length, 1);
 });
