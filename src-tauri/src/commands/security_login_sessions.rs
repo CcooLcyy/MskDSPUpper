@@ -336,6 +336,10 @@ impl SecurityLoginManager {
 
     pub(super) fn close_session(&self, id: &str) -> Result<(), String> {
         let mut inner = self.inner.lock();
+        // 配置上传与显式退出互斥；到期、断线及取消仍可强制撤销连接。
+        if inner.connections.get(id).is_some_and(|entry| entry.context.role == 2 && entry.admin_busy) {
+            return Err("当前配置操作尚未结束，请等待装置应答后退出".into());
+        }
         if !inner
             .connections
             .get(id)
