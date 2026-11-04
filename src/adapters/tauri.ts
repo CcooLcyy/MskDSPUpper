@@ -1,3 +1,4 @@
+import type { LowerUpdateRemoteTarget } from './types';
 import type { ModbusPointTableSaveOptions, ModbusTemplateContext, ModbusTemplateApplyResult } from './types';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
@@ -108,7 +109,7 @@ import type {
   ControlOrchestratorExecuteRequest,
   ControlOrchestratorExecuteResponse,
 } from './types';
-import type { LowerUpdateConnectionSettings, LowerUpdateCredentials } from '../utils/lower-update-connection';
+import type { LowerUpdateConnectionSettings, LowerUpdateCredentials, RemoteLowerUpdateCredentials } from '../utils/lower-update-connection';
 import type { LowerUpdateSshAuth } from './types';
 
 const APP_UPDATE_DOWNLOAD_PROGRESS_EVENT = 'app-update-download-progress';
@@ -241,6 +242,12 @@ export const api = {
     invoke<string | null>('get_lower_update_password', { uploadAccount }),
   clearLowerUpdatePassword: (uploadAccount: string) =>
     invoke<void>('clear_lower_update_password', { uploadAccount }),
+  getRemoteLowerUpdateCredentials: (remote: LowerUpdateRemoteTarget, sshUser: string) =>
+    invoke<RemoteLowerUpdateCredentials | null>('get_remote_lower_update_credentials', { remote, sshUser }),
+  saveRemoteLowerUpdateCredentials: (remote: LowerUpdateRemoteTarget, sshUser: string, sshPassword: string, sudoPassword: string, reuseSshPasswordForSudo: boolean) =>
+    invoke<void>('save_remote_lower_update_credentials', { remote, sshUser, sshPassword, sudoPassword, reuseSshPasswordForSudo }),
+  clearRemoteLowerUpdateCredentials: (remote: LowerUpdateRemoteTarget, sshUser: string) =>
+    invoke<void>('clear_remote_lower_update_credentials', { remote, sshUser }),
   getLowerUpdateCredentials: (uploadAccount: string) =>
     invoke<LowerUpdateCredentials>('get_lower_update_credentials', { uploadAccount }),
   saveLowerUpdateConnection: (settings: LowerUpdateConnectionSettings, auth: LowerUpdateSshAuth, sudoPassword: string) =>

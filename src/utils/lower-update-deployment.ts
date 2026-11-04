@@ -21,7 +21,7 @@ import type {
 } from '../adapters/types';
 import { compareLowerUpdateImages } from './lower-update-deploy.ts';
 import { assertLowerUpdateManifest } from './lower-update-platform.ts';
-import { snapshotLowerUpdateConnection } from './lower-update-connection.ts';
+import { lowerUpdateConnectionCredentialKey, snapshotLowerUpdateConnection } from './lower-update-connection.ts';
 
 import { readLowerUpdatePendingTask } from './lower-update-pending.ts';
 import type { LowerUpdatePendingTask } from './lower-update-pending';
@@ -175,7 +175,6 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
     expected_image_id: privateInput!.manifest.image_id!.trim(),
   });
   const persistConnection = async (): Promise<void> => {
-    if (privateInput?.connection.remote_target) return;
     try {
       await operations.saveConnection(snapshotLowerUpdateConnection(connection(), privateInput!.reuseSshPasswordForSudo, privateInput!.rememberPassword), credentialRevision);
       update({ connectionWarning: null });
@@ -536,7 +535,7 @@ export function createLowerUpdateDeploymentController(operations: LowerUpdateDep
       privateInput = structuredClone(input);
       privateInput.connection.upload_account = privateInput.connection.upload_account.trim();
       privateInput.connection.install_dir = privateInput.connection.install_dir.trim().replace(/\/+$/, '') || '/';
-      credentialRevision = operations.credentialRevision(privateInput.connection.upload_account);
+      credentialRevision = operations.credentialRevision(lowerUpdateConnectionCredentialKey(privateInput.connection));
       runtimeTarget = { upload_account: privateInput.connection.upload_account,
         ...(privateInput.connection.remote_target ? { remote_target: { ...privateInput.connection.remote_target } } : {}),
       };

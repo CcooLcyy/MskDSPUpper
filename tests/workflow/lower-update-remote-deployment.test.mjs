@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createLowerUpdateDeploymentController } from '../../src/utils/lower-update-deployment.ts';
+import { createLowerUpdateCredentialCoordinator, remoteLowerUpdateCredentialKey } from '../../src/utils/lower-update-connection.ts';
 import { readLowerUpdatePendingTask } from '../../src/utils/lower-update-pending.ts';
 
 const image = `sha256:${'a'.repeat(64)}`;
@@ -967,4 +968,57 @@ test('直连确认成功但本地清除失败时继续保留阻拦记录', async
   assert.equal(f.controller.getSnapshot().task.stage, 'remote_unknown');
   assert.match(f.controller.getSnapshot().task.error, /本地存储写入失败/);
   assert.equal(f.calls.some(([name]) => name === 'reconnect'), false);
+});
+
+
+test('remote successful upload saves fixed credentials using device scoped revision', async () => {
+  const value = input(); value.rememberPassword = true;
+  let saved;
+  let revisionKey;
+  const f = fixture({
+    credentialRevision: key => { revisionKey = key; return 9; },
+    saveConnection: async (snapshot, revision) => { saved = { snapshot, revision }; },
+  });
+  await f.controller.start(value);
+  assert.equal(revisionKey, remoteLowerUpdateCredentialKey(value.connection.remote_target, 'user'));
+  assert.equal(saved.revision, 9);
+  assert.deepEqual(saved.snapshot.remoteTarget, value.connection.remote_target);
+  assert.equal(saved.snapshot.auth.password, 'ssh-secret');
+  assert.equal(saved.snapshot.sudoPassword, 'sudo-secret');
+  assert.equal(saved.snapshot.settings.remember_password, true);
+});
+
+for (const stage of ['queryArchitecture', 'preflightTask', 'upload']) {
+  test(`remote ${stage} authentication failure never saves credentials`, async () => {
+    let saves = 0;
+    const f = fixture({ [stage]: async () => { throw Error('authentication rejected'); },
+      saveConnection: async () => { saves += 1; } });
+    await f.controller.start({ ...input(), rememberPassword: true });
+    assert.equal(saves, 0);
+  });
+}
+
+test('remote save failure preserves deployment success and reports a sanitized warning', async () => {
+  const f = fixture({ saveConnection: async () => { throw Error('private storage secret'); } });
+  await f.controller.start({ ...input(), rememberPassword: true });
+  assert.equal(f.controller.getSnapshot().task.stage, 'succeeded');
+  assert.match(f.controller.getSnapshot().task.connectionWarning, /密码保存失败/);
+  assert.equal(JSON.stringify(f.controller.getSnapshot()).includes('private storage secret'), false);
+});
+
+test('clearing one remote device revokes late saves without revoking another', async () => {
+  const coordinator = createLowerUpdateCredentialCoordinator();
+  const value = input(); value.rememberPassword = true;
+  const key = remoteLowerUpdateCredentialKey(value.connection.remote_target, 'user');
+  const other = remoteLowerUpdateCredentialKey({ ...value.connection.remote_target, device_id: 'other' }, 'user');
+  let saved = false;
+  const f = fixture({ credentialRevision: key => coordinator.revision(key),
+    upload: async () => { coordinator.revoke(key); return { package_name: 'pkg', remote_path: '/home/user/pkg', uploaded_bytes: 10 }; },
+    saveConnection: async (_snapshot, revision) => coordinator.run(key, async () => {
+      if (revision === coordinator.revision(key)) saved = true;
+    }),
+  });
+  await f.controller.start(value);
+  assert.equal(saved, false);
+  assert.equal(coordinator.revision(other), 0);
 });

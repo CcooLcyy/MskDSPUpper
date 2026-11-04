@@ -1,4 +1,4 @@
-import type { LowerUpdateSshAuth } from '../adapters/types';
+import type { LowerUpdateRemoteTarget, LowerUpdateSshAuth } from '../adapters/types';
 
 export interface LowerUpdateConnectionSettings {
   upload_account: string;
@@ -11,6 +11,25 @@ export interface LowerUpdateConnectionSettings {
 export interface LowerUpdateCredentials {
   ssh_password: string | null;
   sudo_password: string | null;
+}
+
+export interface RemoteLowerUpdateCredentials {
+  ssh_password: string;
+  sudo_password: string;
+  reuse_ssh_password_for_sudo: boolean;
+}
+
+/** 远程身份保留设备与用户大小写；编码后可安全通过不区分大小写的协调器。 */
+export function remoteLowerUpdateCredentialKey(remote: LowerUpdateRemoteTarget, sshUser: string): string {
+  const endpoint = new URL(remote.endpoint.trim()).toString().replace(/\/+$/, '');
+  const identity = JSON.stringify([endpoint, remote.device_id.trim(), sshUser.trim()]);
+  return `remote:${Array.from(new TextEncoder().encode(identity), byte => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
+export function lowerUpdateConnectionCredentialKey(connection: Pick<ConnectionRequest, 'upload_account' | 'remote_target'>): string {
+  return connection.remote_target
+    ? remoteLowerUpdateCredentialKey(connection.remote_target, connection.upload_account.trim().split('@')[0])
+    : connection.upload_account.trim();
 }
 
 export function normalizeLowerUpdateUploadAccount(account: string): string {
@@ -76,6 +95,7 @@ export function clearLowerUpdateConnectionHistoryRememberPassword(history: unkno
 }
 
 interface ConnectionRequest {
+  remote_target?: LowerUpdateRemoteTarget;
   upload_account: string;
   install_dir: string;
   auth: LowerUpdateSshAuth;
@@ -84,6 +104,7 @@ interface ConnectionRequest {
 
 export function snapshotLowerUpdateConnection(request: ConnectionRequest, reuseSsh: boolean, remember: boolean) {
   return {
+    ...(request.remote_target ? { remoteTarget: { ...request.remote_target } } : {}),
     settings: {
       upload_account: normalizeLowerUpdateUploadAccount(request.upload_account),
       install_dir: request.install_dir.trim().replace(/\/+$/, '') || '/',

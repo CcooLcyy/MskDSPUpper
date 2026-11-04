@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  remoteLowerUpdateCredentialKey,
+  lowerUpdateConnectionCredentialKey,
   readLowerUpdateConnectionSettings,
   snapshotLowerUpdateConnection,
   createLowerUpdateCredentialReadGuard,
@@ -185,4 +187,33 @@ test('queued save rechecks revocation and a failed operation does not block subs
   assert.equal(await pendingSave, false);
   await assert.rejects(coordinator.run(account, async () => { throw new Error('failed save'); }));
   assert.equal(await coordinator.run(account, async () => 'cleared'), 'cleared');
+});
+
+
+test('remote credential identity isolates device, username and platform while normalizing endpoints', () => {
+  const target = { endpoint: ' HTTPS://EXAMPLE.COM:443/ ', device_id: 'Device-A' };
+  const key = remoteLowerUpdateCredentialKey(target, 'User');
+  assert.equal(key, remoteLowerUpdateCredentialKey({ ...target, endpoint: 'https://example.com' }, ' User '));
+  for (const [remote, user] of [
+    [{ ...target, device_id: 'Device-B' }, 'User'],
+    [{ ...target, device_id: 'device-a' }, 'User'],
+    [{ ...target, endpoint: 'https://other.example.com' }, 'User'],
+    [target, 'user'], [target, 'Other'],
+  ]) assert.notEqual(key, remoteLowerUpdateCredentialKey(remote, user));
+  const coordinator = createLowerUpdateCredentialCoordinator();
+  coordinator.revoke(key);
+  assert.equal(coordinator.revision(key), 1);
+  assert.equal(coordinator.revision(remoteLowerUpdateCredentialKey(target, 'user')), 0);
+  assert.equal(lowerUpdateConnectionCredentialKey({ remote_target: target, upload_account: 'User@remote:22' }), key);
+});
+
+test('remote snapshot preserves fixed target outside ordinary connection history', () => {
+  const request = { ...settings, remote_target: { endpoint: 'https://platform', device_id: 'a' },
+    auth: { method: 'password', password: 'fixture-secret' }, sudo_password: 'fixture-sudo' };
+  const snapshot = snapshotLowerUpdateConnection(request, false, true);
+  request.remote_target.device_id = 'b';
+  assert.equal(snapshot.remoteTarget.device_id, 'a');
+  assert.equal(snapshot.settings.reuse_ssh_password_for_sudo, false);
+  assert.equal(JSON.stringify(snapshot.settings).includes('fixture-secret'), false);
+  assert.equal(JSON.stringify(snapshot.settings).includes('platform'), false);
 });

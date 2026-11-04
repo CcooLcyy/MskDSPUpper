@@ -59,6 +59,7 @@ import {
   createLowerUpdateCredentialReadGuard,
   lowerUpdateCredentialCoordinator,
   lowerUpdateCredentialAccountKey,
+  remoteLowerUpdateCredentialKey,
   readLowerUpdateConnectionHistory,
   readLowerUpdateConnectionSettings,
 } from '../../utils/lower-update-connection';
@@ -410,7 +411,8 @@ const AdvancedConfigPage: React.FC = () => {
           if (!status.device_id || !endpoint) { setRemoteSelectionReady(false); return; }
           const devices = await invoke<Array<{ device_id: string; display_name: string }>>('remote_list_devices');
           if (!active) return;
-          setRemoteSelection({ endpoint, device_id: status.device_id, displayName: devices.find(item => item.device_id === status.device_id)?.display_name || status.device_id });
+          const selection = { endpoint, device_id: status.device_id, displayName: devices.find(item => item.device_id === status.device_id)?.display_name || status.device_id };
+          setRemoteSelection(previous => previous?.endpoint === selection.endpoint && previous.device_id === selection.device_id && previous.displayName === selection.displayName ? previous : selection);
         } else setRemoteSelection(null);
         setRemoteSelectionReady(true);
       } catch { if (active) setRemoteSelectionReady(false); }
@@ -450,6 +452,8 @@ const AdvancedConfigPage: React.FC = () => {
   const [reuseSshPasswordForSudo, setReuseSshPasswordForSudo] = useState(savedConnection?.reuse_ssh_password_for_sudo ?? true);
   const [rememberPassword, setRememberPassword] = useState(savedConnection?.remember_password ?? true);
   const [isClearingSavedCredentials, setIsClearingSavedCredentials] = useState(false);
+  const [hasSavedRemoteCredentials, setHasSavedRemoteCredentials] = useState(false);
+  const [isLoadingSavedSshPassword, setIsLoadingSavedSshPassword] = useState(false);
   const credentialReadGuardRef = React.useRef(createLowerUpdateCredentialReadGuard());
   const [targetSudoPassword, setTargetSudoPassword] = useState('');
   const [lowerUpdateAuthMethod, setLowerUpdateAuthMethod] = useState<LowerUpdateAuthMethod>(
@@ -489,7 +493,6 @@ const AdvancedConfigPage: React.FC = () => {
   const effectiveDownloadResult = resolveLowerUpdateDownloadResult(
     activeManifest, downloadResult, lowerUpdateAutoChannelStatus.manifest, lowerUpdateAutoChannelStatus.downloadResult,
   );
-  const [isLoadingSavedSshPassword, setIsLoadingSavedSshPassword] = useState(false);
   const {
     appVersion,
     availableUpdate,
@@ -511,13 +514,44 @@ const AdvancedConfigPage: React.FC = () => {
   const effectiveUploadAccount = remoteSelection ? `${remoteSshUser.trim()}@remote:22` : targetUploadAccount.trim();
   const remoteTarget = remoteSelection ? { endpoint: remoteSelection.endpoint, device_id: remoteSelection.device_id } : undefined;
   const targetUploadAccountValidation = validateUploadAccount(effectiveUploadAccount);
-  const remoteIdentity = remoteTarget ? `${remoteTarget.endpoint}/${remoteTarget.device_id}/${remoteSshUser}` : '';
+  const remoteEndpoint = remoteSelection?.endpoint ?? '';
+  const remoteDeviceId = remoteSelection?.device_id ?? '';
+  const remoteIdentity = remoteTarget ? remoteLowerUpdateCredentialKey(remoteTarget, remoteSshUser.trim()) : '';
+  const credentialAccount = remoteIdentity || targetUploadAccount.trim();
+  const credentialAccountRef = React.useRef(credentialAccount);
+  credentialAccountRef.current = credentialAccount;
   React.useEffect(() => {
-    credentialReadGuardRef.current.invalidate();
+    const guard = credentialReadGuardRef.current;
+    guard.invalidate();
     setTargetSshPassword('');
     setTargetSudoPassword('');
-    if (remoteIdentity) { setLowerUpdateAuthMethod('password'); setRememberPassword(false); }
-  }, [remoteIdentity]);
+    setHasSavedRemoteCredentials(false);
+    setIsLoadingSavedSshPassword(false);
+    if (!remoteIdentity) return;
+    setLowerUpdateAuthMethod('password');
+    setRememberPassword(false);
+    setReuseSshPasswordForSudo(true);
+    if (!remoteSelectionReady || !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(remoteSshUser.trim())) return;
+    let cancelled = false;
+    const token = guard.begin();
+    setIsLoadingSavedSshPassword(true);
+    void api.getRemoteLowerUpdateCredentials({ endpoint: remoteEndpoint, device_id: remoteDeviceId }, remoteSshUser.trim())
+      .then(credentials => {
+        if (cancelled || !credentials) return;
+        if (guard.canApply(token, 'ssh')) {
+          setTargetSshPassword(current => current || credentials.ssh_password);
+          setRememberPassword(true);
+          setHasSavedRemoteCredentials(true);
+        }
+        if (guard.canApply(token, 'sudo')) {
+          setReuseSshPasswordForSudo(credentials.reuse_ssh_password_for_sudo);
+          setTargetSudoPassword(current => current || (credentials.reuse_ssh_password_for_sudo ? '' : credentials.sudo_password));
+        }
+      })
+      .catch(() => { if (!cancelled) messageApi.warning('读取已保存密码失败，请手动输入'); })
+      .finally(() => { if (!cancelled) setIsLoadingSavedSshPassword(false); });
+    return () => { cancelled = true; };
+  }, [remoteIdentity, remoteEndpoint, remoteDeviceId, remoteSshUser, remoteSelectionReady, messageApi]);
   const targetInstallDirValidation = validateInstallDir(targetInstallDir);
   const hasSshPasswordValidationError = lowerUpdateAuthMethod === 'password' && targetSshPassword.length === 0;
   const resolvedSudoPassword = resolveLowerUpdateSudoPassword({
@@ -528,7 +562,7 @@ const AdvancedConfigPage: React.FC = () => {
   });
   const hasSudoPasswordValidationError = resolvedSudoPassword.length === 0;
   const hasRuntimeQueryValidationError =
-    !remoteSelectionReady || (Boolean(remoteSelection) && lowerUpdateAuthMethod !== 'password') || !targetUploadAccountValidation.ok || hasSshPasswordValidationError || hasSudoPasswordValidationError;
+    !remoteSelectionReady || isLoadingSavedSshPassword || isClearingSavedCredentials || (Boolean(remoteSelection) && lowerUpdateAuthMethod !== 'password') || !targetUploadAccountValidation.ok || hasSshPasswordValidationError || hasSudoPasswordValidationError;
   const hasDeployTargetValidationError = hasRuntimeQueryValidationError || !targetInstallDirValidation.ok;
   const hasCheckedPackage = matchesLowerUpdateSelection(activeManifest, platform, channel);
   const hasVerifiableManifest = hasCheckedPackage && Boolean(activeManifest?.image_id?.trim());
@@ -640,8 +674,8 @@ const AdvancedConfigPage: React.FC = () => {
   }, [lowerUpdateAutoChannelStatus.downloadResult, refreshCachedLowerUpdates]);
 
   React.useEffect(() => {
-    if (remoteSelection || !rememberPassword || !targetUploadAccountValidation.ok) {
-      setIsLoadingSavedSshPassword(false);
+    if (!remoteSelectionReady || remoteSelection || !rememberPassword || !targetUploadAccountValidation.ok) {
+      if (!remoteSelection) setIsLoadingSavedSshPassword(false);
       return;
     }
     let cancelled = false;
@@ -670,20 +704,27 @@ const AdvancedConfigPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [remoteSelection, credentialReadRevision, lowerUpdateAuthMethod, targetUploadAccount, rememberPassword, reuseSshPasswordForSudo, targetUploadAccountValidation.ok, messageApi]);
+  }, [remoteSelectionReady, remoteSelection, credentialReadRevision, lowerUpdateAuthMethod, targetUploadAccount, rememberPassword, reuseSshPasswordForSudo, targetUploadAccountValidation.ok, messageApi]);
 
-  const handleClearSavedCredentials = async (): Promise<void> => {
-    if (isDeployingLowerUpdate || isCheckingLowerUpdate || isClearingSavedCredentials) return;
-    const account = targetUploadAccount.trim();
+  const handleClearSavedCredentials = async (clearInputs = true): Promise<void> => {
+    if (!remoteSelectionReady || isDeployingLowerUpdate || isCheckingLowerUpdate || isClearingSavedCredentials) return;
+    const account = credentialAccount;
     credentialReadGuardRef.current.invalidate();
     lowerUpdateCredentialCoordinator.revoke(account);
     setRememberPassword(false);
-    setTargetSshPassword('');
-    setTargetSudoPassword('');
+    setHasSavedRemoteCredentials(false);
+    if (clearInputs) {
+      setTargetSshPassword('');
+      setTargetSudoPassword('');
+    }
     invalidateRuntimeCheck();
     setIsClearingSavedCredentials(true);
     try {
       await lowerUpdateCredentialCoordinator.run(account, async () => {
+        if (remoteTarget) {
+          await api.clearRemoteLowerUpdateCredentials(remoteTarget, remoteSshUser.trim());
+          return;
+        }
         await api.clearLowerUpdateCredentials(account);
         const history = clearLowerUpdateConnectionHistoryRememberPassword(readLowerUpdateConnectionHistory(
           getAppSetting(LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY),
@@ -1087,6 +1128,13 @@ const AdvancedConfigPage: React.FC = () => {
         reuseSshPasswordForSudo,
         rememberPassword,
       });
+      if (remoteTarget && rememberPassword) {
+        // 保存状态只更新原目标的标识，不覆盖密码框中之后的编辑。
+        const saved = await api.getRemoteLowerUpdateCredentials(remoteTarget, remoteSshUser.trim()).catch(() => null);
+        if (deploymentPageMountedRef.current && credentialAccountRef.current === credentialAccount) {
+          setHasSavedRemoteCredentials(Boolean(saved));
+        }
+      }
       if (deploymentPageMountedRef.current) {
         setConnectionHistory(readLowerUpdateConnectionHistory(
           getAppSetting(LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY),
@@ -1214,7 +1262,7 @@ const AdvancedConfigPage: React.FC = () => {
               </Paragraph> : null}
               <Form layout="vertical" size="small">
                 {remoteSelection ? <Form.Item label="远程设备 SSH 用户" validateStatus={targetUploadAccountValidation.ok ? undefined : 'error'} help={targetUploadAccountValidation.ok ? '目标由平台设备固定，无需填写现场 IP 或隧道端口' : targetUploadAccountValidation.error}>
-                  <Input value={remoteSshUser} disabled={isDeployingLowerUpdate} onChange={event => { setRemoteSshUser(event.target.value); invalidateRuntimeCheck(); }} />
+                  <Input aria-label="远程设备 SSH 用户" value={remoteSshUser} disabled={isDeployingLowerUpdate || isClearingSavedCredentials} onChange={event => { credentialReadGuardRef.current.invalidate(); setTargetSshPassword(''); setTargetSudoPassword(''); setRemoteSshUser(event.target.value); invalidateRuntimeCheck(); }} />
                 </Form.Item> : <Form.Item
                   label="上传账号"
                   validateStatus={targetUploadAccountValidation.ok ? undefined : 'error'}
@@ -1276,6 +1324,7 @@ const AdvancedConfigPage: React.FC = () => {
                     help={hasSshPasswordValidationError ? '请输入 SSH 登录密码' : undefined}
                   >
                     <Input.Password
+                      aria-label="SSH 密码"
                       value={targetSshPassword}
                       disabled={isSelectingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
                       autoComplete="off"
@@ -1300,7 +1349,7 @@ const AdvancedConfigPage: React.FC = () => {
                       }
                       onChange={(checked) => {
                         credentialReadGuardRef.current.markEdited('sudo');
-                        lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
+                        lowerUpdateCredentialCoordinator.revoke(credentialAccount);
                         setTargetSudoPassword('');
                         setReuseSshPasswordForSudo(checked);
                         invalidateRuntimeCheck();
@@ -1317,6 +1366,7 @@ const AdvancedConfigPage: React.FC = () => {
                     help={hasSudoPasswordValidationError ? '请输入 sudo 密码' : undefined}
                   >
                     <Input.Password
+                      aria-label="独立 sudo 密码"
                       value={targetSudoPassword}
                       disabled={isSelectingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
                       autoComplete="off"
@@ -1329,30 +1379,45 @@ const AdvancedConfigPage: React.FC = () => {
                     />
                   </Form.Item>
                 ) : null}
-                {remoteSelection ? <Text type="secondary">远程认证信息仅在当前任务内存中使用，恢复查询时需重新输入。</Text> : <Form.Item label="记住密码" extra="成功下发后保存连接信息。密码由 Windows 凭据管理器加密保存，仅供当前 Windows 用户使用。">
+                <Form.Item label="记住密码" extra={remoteSelection ? '成功下发后，按平台、设备 ID 和 SSH 用户保存密码。密码由本机 Windows 凭据管理器加密保存。' : '成功下发后保存连接信息。密码由 Windows 凭据管理器加密保存，仅供当前 Windows 用户使用。'}>
                   <Space wrap>
                     <Switch
+                      aria-label="在本机记住密码"
                       checked={rememberPassword}
-                      disabled={isSelectingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
+                      disabled={!remoteSelectionReady || isSelectingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials}
                       onChange={(checked) => {
                         credentialReadGuardRef.current.invalidate();
-                        lowerUpdateCredentialCoordinator.revoke(targetUploadAccount);
+                        lowerUpdateCredentialCoordinator.revoke(credentialAccount);
+                        if (remoteSelection) {
+                          if (!checked) void handleClearSavedCredentials(false);
+                          else setRememberPassword(true);
+                          return;
+                        }
                         setRememberPassword(checked);
                         setTargetSshPassword('');
                         setTargetSudoPassword('');
                         invalidateRuntimeCheck();
                       }}
                     />
-                    <Text>记住 SSH 和独立 sudo 密码</Text>
+                    <Text>在本机记住 SSH 和独立 sudo 密码</Text>
+                    {remoteSelection && hasSavedRemoteCredentials ? <Tag color="green">已记住密码</Tag> : null}
+                    {remoteSelection && hasSavedRemoteCredentials ? <Button size="small" disabled={isSelectingLowerUpdate || isDeployingLowerUpdate || isClearingSavedCredentials} onClick={() => {
+                      credentialReadGuardRef.current.invalidate();
+                      lowerUpdateCredentialCoordinator.revoke(credentialAccount);
+                      setTargetSshPassword('');
+                      setTargetSudoPassword('');
+                      setHasSavedRemoteCredentials(false);
+                      invalidateRuntimeCheck();
+                    }}>更换密码</Button> : null}
                     <Button
                       size="small"
                       loading={isClearingSavedCredentials}
-                      disabled={!targetUploadAccountValidation.ok || isSelectingLowerUpdate || isDeployingLowerUpdate}
+                      disabled={!remoteSelectionReady || !targetUploadAccountValidation.ok || isSelectingLowerUpdate || isDeployingLowerUpdate}
                       onClick={() => void handleClearSavedCredentials()}
                     >清除已保存密码</Button>
                     {isLoadingSavedSshPassword ? <Text type="secondary">正在读取已保存密码…</Text> : null}
                   </Space>
-                </Form.Item>}
+                </Form.Item>
                 <Form.Item
                   label="安装目录"
                   validateStatus={targetInstallDirValidation.ok ? undefined : 'error'}

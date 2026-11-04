@@ -6,6 +6,7 @@ import { notifyManagerRuntimeRefreshed } from '../../utils/manager-runtime-event
 import type { LowerUpdateDeploymentController } from '../../utils/lower-update-deployment';
 import {
   lowerUpdateCredentialCoordinator,
+  remoteLowerUpdateCredentialKey,
   persistSuccessfulLowerUpdateConnection,
   readLowerUpdateConnectionHistory,
   upsertLowerUpdateConnectionHistory,
@@ -56,6 +57,20 @@ function createApplicationController(): LowerUpdateDeploymentController {
     sleep: (duration) => new Promise((resolve) => globalThis.setTimeout(resolve, duration)),
     log: (text) => console.info(text),
     saveConnection: async (connection, revision) => {
+      if (connection.remoteTarget) {
+        const remote = connection.remoteTarget;
+        const sshUser = connection.settings.upload_account.split('@')[0];
+        const key = remoteLowerUpdateCredentialKey(remote, sshUser);
+        await lowerUpdateCredentialCoordinator.run(key, async () => {
+          if (revision !== lowerUpdateCredentialCoordinator.revision(key)) return;
+          if (connection.settings.remember_password) {
+            if (connection.auth.method !== 'password') throw new Error('远程更新仅支持密码认证');
+            await api.saveRemoteLowerUpdateCredentials(remote, sshUser, connection.auth.password,
+              connection.sudoPassword, connection.settings.reuse_ssh_password_for_sudo);
+          } else await api.clearRemoteLowerUpdateCredentials(remote, sshUser);
+        });
+        return;
+      }
       await lowerUpdateCredentialCoordinator.run(connection.settings.upload_account, async () => {
         let warning: string | null = null;
         await persistSuccessfulLowerUpdateConnection(connection, {

@@ -107,7 +107,7 @@ import type {
   ModuleRunningInfo,
   RuntimePaths,
 } from './types';
-import { clearLowerUpdateConnectionHistoryRememberPassword, lowerUpdateCredentialAccountKey, readLowerUpdateConnectionHistory, readLowerUpdateConnectionSettings, upsertLowerUpdateConnectionHistory, type LowerUpdateConnectionSettings, type LowerUpdateCredentials } from '../utils/lower-update-connection';
+import { clearLowerUpdateConnectionHistoryRememberPassword, lowerUpdateCredentialAccountKey, readLowerUpdateConnectionHistory, readLowerUpdateConnectionSettings, upsertLowerUpdateConnectionHistory, type LowerUpdateConnectionSettings, type LowerUpdateCredentials, type RemoteLowerUpdateCredentials } from '../utils/lower-update-connection';
 import { LOWER_UPDATE_CONNECTION_HISTORY_SETTING_KEY, LOWER_UPDATE_CONNECTION_SETTING_KEY } from '../utils/app-settings-core';
 import { getLowerUpdateChannels } from '../utils/lower-update-platform';
 import {
@@ -1329,6 +1329,10 @@ export const browserApi: typeof tauriApi = {
   },
   getLowerUpdatePassword: async (): Promise<string | null> => null,
   clearLowerUpdatePassword: async (): Promise<void> => {},
+  // 开发浏览器不提供系统凭据库，禁止退回明文持久化。
+  getRemoteLowerUpdateCredentials: async (): Promise<RemoteLowerUpdateCredentials | null> => null,
+  saveRemoteLowerUpdateCredentials: async (): Promise<void> => { throw new Error('请在桌面上位机中保存远程设备密码'); },
+  clearRemoteLowerUpdateCredentials: async (): Promise<void> => {},
   getLowerUpdateCredentials: async (): Promise<LowerUpdateCredentials> => ({ ssh_password: null, sudo_password: null }),
   saveLowerUpdateConnection: async (connection: LowerUpdateConnectionSettings): Promise<void> => {
     const safe = readLowerUpdateConnectionSettings(connection);

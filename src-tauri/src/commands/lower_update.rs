@@ -1509,6 +1509,7 @@ fn ssh_credential_entry(target_name: &str) -> Result<keyring::Entry, String> {
 enum CredentialKind {
     Ssh,
     Sudo,
+    Remote,
 }
 
 impl CredentialKind {
@@ -1516,6 +1517,7 @@ impl CredentialKind {
         match self {
             Self::Ssh => "SSH",
             Self::Sudo => "sudo",
+            Self::Remote => "远程设备",
         }
     }
 }
@@ -1539,6 +1541,8 @@ fn lower_update_credential_entry(
         CredentialKind::Ssh => ssh_credential_entry(target),
         CredentialKind::Sudo => keyring::Entry::new("mskdsp-lower-update:sudo", target)
             .map_err(|error| format!("创建 sudo 凭据项失败: {error}")),
+        CredentialKind::Remote => keyring::Entry::new("mskdsp-lower-update:remote", target)
+            .map_err(|_| "创建远程设备凭据项失败".to_string()),
     }
 }
 
@@ -1721,6 +1725,134 @@ fn save_lower_update_connection_with_store(
             ),
         ]))
     })
+}
+
+/// 整条记录仅进入系统凭据库，不写普通设置、历史或工作区。
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteLowerUpdateCredentialsDto {
+    pub ssh_password: String,
+    pub sudo_password: String,
+    pub reuse_ssh_password_for_sudo: bool,
+}
+
+fn remote_lower_update_credential_target(
+    remote: &LowerUpdateRemoteTargetDto,
+    ssh_user: &str,
+) -> Result<String, String> {
+    let endpoint = crate::platform_software::validate_endpoint(remote.endpoint.trim())?;
+    let device_id = remote.device_id.trim();
+    let ssh_user = ssh_user.trim();
+    if device_id.is_empty() || device_id.len() > 256 || device_id.chars().any(char::is_control) {
+        return Err("远程更新设备身份无效".into());
+    }
+    if !is_safe_ssh_user(ssh_user) {
+        return Err("远程更新 SSH 用户名不合法".into());
+    }
+    // 长度有界且不受 Windows 凭据目标名大小写折叠影响；元组编码避免分隔符碰撞。
+    let identity = serde_json::to_vec(&(endpoint, device_id, ssh_user))
+        .map_err(|_| "构造远程设备凭据索引失败".to_string())?;
+    Ok(format!("{:x}", Sha256::digest(identity)))
+}
+
+fn get_remote_lower_update_credentials_with_store(
+    store: &mut impl LowerUpdateCredentialStore,
+    remote: &LowerUpdateRemoteTargetDto,
+    ssh_user: &str,
+) -> Result<Option<RemoteLowerUpdateCredentialsDto>, String> {
+    let target = remote_lower_update_credential_target(remote, ssh_user)?;
+    store
+        .load(CredentialKind::Remote, &target)
+        .map_err(|_| "读取远程设备已保存密码失败".to_string())?
+        .map(|value| {
+            serde_json::from_str(&value)
+                .map_err(|_| "远程设备已保存凭据格式不合法，请清除后重新输入".to_string())
+        })
+        .transpose()
+}
+
+fn save_remote_lower_update_credentials_with_store(
+    store: &mut impl LowerUpdateCredentialStore,
+    remote: &LowerUpdateRemoteTargetDto,
+    ssh_user: &str,
+    mut credentials: RemoteLowerUpdateCredentialsDto,
+) -> Result<(), String> {
+    let target = remote_lower_update_credential_target(remote, ssh_user)?;
+    if credentials.ssh_password.is_empty() {
+        return Err("SSH 密码不能为空".into());
+    }
+    if credentials.reuse_ssh_password_for_sudo {
+        credentials.sudo_password.clear();
+    }
+    let value =
+        serde_json::to_string(&credentials).map_err(|_| "序列化远程设备凭据失败".to_string())?;
+    store
+        .save(CredentialKind::Remote, &target, &value)
+        .map_err(|_| "保存远程设备密码失败".to_string())
+}
+
+fn clear_remote_lower_update_credentials_with_store(
+    store: &mut impl LowerUpdateCredentialStore,
+    remote: &LowerUpdateRemoteTargetDto,
+    ssh_user: &str,
+) -> Result<(), String> {
+    let target = remote_lower_update_credential_target(remote, ssh_user)?;
+    store
+        .delete(CredentialKind::Remote, &target)
+        .map_err(|_| "清除远程设备已保存密码失败".to_string())
+}
+
+#[tauri::command]
+pub fn get_remote_lower_update_credentials(
+    remote: LowerUpdateRemoteTargetDto,
+    ssh_user: String,
+) -> Result<Option<RemoteLowerUpdateCredentialsDto>, String> {
+    let _guard = LOWER_UPDATE_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "下位机更新凭据锁已损坏".to_string())?;
+    get_remote_lower_update_credentials_with_store(
+        &mut WindowsLowerUpdateCredentialStore,
+        &remote,
+        &ssh_user,
+    )
+}
+
+#[tauri::command]
+pub fn save_remote_lower_update_credentials(
+    remote: LowerUpdateRemoteTargetDto,
+    ssh_user: String,
+    ssh_password: String,
+    sudo_password: String,
+    reuse_ssh_password_for_sudo: bool,
+) -> Result<(), String> {
+    let _guard = LOWER_UPDATE_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "下位机更新凭据锁已损坏".to_string())?;
+    save_remote_lower_update_credentials_with_store(
+        &mut WindowsLowerUpdateCredentialStore,
+        &remote,
+        &ssh_user,
+        RemoteLowerUpdateCredentialsDto {
+            ssh_password,
+            sudo_password,
+            reuse_ssh_password_for_sudo,
+        },
+    )
+}
+
+#[tauri::command]
+pub fn clear_remote_lower_update_credentials(
+    remote: LowerUpdateRemoteTargetDto,
+    ssh_user: String,
+) -> Result<(), String> {
+    let _guard = LOWER_UPDATE_CREDENTIAL_LOCK
+        .lock()
+        .map_err(|_| "下位机更新凭据锁已损坏".to_string())?;
+    clear_remote_lower_update_credentials_with_store(
+        &mut WindowsLowerUpdateCredentialStore,
+        &remote,
+        &ssh_user,
+    )
 }
 
 #[tauri::command]
@@ -4470,6 +4602,239 @@ mod tests {
             self.legacy.remove(&target.to_ascii_lowercase());
             Ok(())
         }
+    }
+
+    fn remote_credential_target(
+        endpoint: &str,
+        device_id: &str,
+    ) -> super::LowerUpdateRemoteTargetDto {
+        super::LowerUpdateRemoteTargetDto {
+            endpoint: endpoint.into(),
+            device_id: device_id.into(),
+        }
+    }
+
+    #[test]
+    fn remote_credentials_isolate_platform_device_and_case_sensitive_user() {
+        let mut store = FakeCredentials::default();
+        let remote = remote_credential_target("https://platform.example:50000", "Device-A");
+        let credentials = super::RemoteLowerUpdateCredentialsDto {
+            ssh_password: "fixture-ssh".into(),
+            sudo_password: "fixture-sudo".into(),
+            reuse_ssh_password_for_sudo: false,
+        };
+        super::save_remote_lower_update_credentials_with_store(
+            &mut store,
+            &remote,
+            "User",
+            credentials,
+        )
+        .unwrap();
+        for (endpoint, device, user) in [
+            ("https://other.example:50000", "Device-A", "User"),
+            ("https://platform.example:50000", "Device-B", "User"),
+            ("https://platform.example:50000", "device-a", "User"),
+            ("https://platform.example:50000", "Device-A", "user"),
+        ] {
+            assert!(super::get_remote_lower_update_credentials_with_store(
+                &mut store,
+                &remote_credential_target(endpoint, device),
+                user,
+            )
+            .unwrap()
+            .is_none());
+        }
+        let restored =
+            super::get_remote_lower_update_credentials_with_store(&mut store, &remote, "User")
+                .unwrap()
+                .unwrap();
+        assert_eq!(restored.ssh_password, "fixture-ssh");
+        assert_eq!(restored.sudo_password, "fixture-sudo");
+        assert!(!restored.reuse_ssh_password_for_sudo);
+        // 与直连 remote 占位账号使用不同服务，不能读到远程设备凭据。
+        assert!(
+            super::get_lower_update_credentials_with_store(&mut store, "User@remote:22")
+                .unwrap()
+                .ssh_password
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn remote_credentials_normalize_endpoint_but_keep_identity_tuple_unambiguous() {
+        let target = remote_credential_target(" https://PLATFORM.example:443/ ", " Device-A ");
+        let normalized = remote_credential_target("https://platform.example", "Device-A");
+        assert_eq!(
+            super::remote_lower_update_credential_target(&target, " User ").unwrap(),
+            super::remote_lower_update_credential_target(&normalized, "User").unwrap(),
+        );
+        let key = super::remote_lower_update_credential_target(&normalized, "User").unwrap();
+        assert_eq!(key.len(), 64);
+        assert!(key.bytes().all(|ch| ch.is_ascii_hexdigit()));
+        for invalid in [
+            remote_credential_target("https://user:secret@platform.example", "Device-A"),
+            remote_credential_target("https://platform.example", " "),
+            remote_credential_target("https://platform.example", "Device\nA"),
+        ] {
+            assert!(super::remote_lower_update_credential_target(&invalid, "User").is_err());
+        }
+        assert!(super::remote_lower_update_credential_target(&normalized, "bad user").is_err());
+    }
+
+    #[test]
+    fn remote_credentials_reuse_update_and_clear_affect_only_selected_device() {
+        let mut store = FakeCredentials::default();
+        let first = remote_credential_target("http://platform.example:50000", "first");
+        let second = remote_credential_target("http://platform.example:50000", "second");
+        for remote in [&first, &second] {
+            super::save_remote_lower_update_credentials_with_store(
+                &mut store,
+                remote,
+                "User",
+                super::RemoteLowerUpdateCredentialsDto {
+                    ssh_password: "old-ssh".into(),
+                    sudo_password: "old-sudo".into(),
+                    reuse_ssh_password_for_sudo: false,
+                },
+            )
+            .unwrap();
+        }
+        super::save_remote_lower_update_credentials_with_store(
+            &mut store,
+            &first,
+            "User",
+            super::RemoteLowerUpdateCredentialsDto {
+                ssh_password: "new-ssh".into(),
+                sudo_password: "discard-this".into(),
+                reuse_ssh_password_for_sudo: true,
+            },
+        )
+        .unwrap();
+        let updated =
+            super::get_remote_lower_update_credentials_with_store(&mut store, &first, "User")
+                .unwrap()
+                .unwrap();
+        assert_eq!(updated.ssh_password, "new-ssh");
+        assert!(updated.sudo_password.is_empty());
+        assert!(updated.reuse_ssh_password_for_sudo);
+        super::clear_remote_lower_update_credentials_with_store(&mut store, &first, "User")
+            .unwrap();
+        super::clear_remote_lower_update_credentials_with_store(&mut store, &first, "User")
+            .unwrap();
+        assert!(
+            super::get_remote_lower_update_credentials_with_store(&mut store, &first, "User")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            super::get_remote_lower_update_credentials_with_store(&mut store, &second, "User")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn remote_credentials_storage_errors_never_echo_secret_values() {
+        let mut store = FakeCredentials::default();
+        let remote = remote_credential_target("https://platform.example", "Device-A");
+        let target = super::remote_lower_update_credential_target(&remote, "User").unwrap();
+        store
+            .save(
+                super::CredentialKind::Remote,
+                &target,
+                "fixture-invalid-secret-json",
+            )
+            .unwrap();
+        let error =
+            super::get_remote_lower_update_credentials_with_store(&mut store, &remote, "User")
+                .err()
+                .unwrap();
+        assert!(!error.contains("fixture-invalid-secret-json"));
+        store.fail_save = true;
+        let error = super::save_remote_lower_update_credentials_with_store(
+            &mut store,
+            &remote,
+            "User",
+            super::RemoteLowerUpdateCredentialsDto {
+                ssh_password: "fixture-ssh-secret".into(),
+                sudo_password: "fixture-sudo-secret".into(),
+                reuse_ssh_password_for_sudo: false,
+            },
+        )
+        .unwrap_err();
+        assert!(!error.contains("fixture-ssh-secret"));
+        assert!(!error.contains("fixture-sudo-secret"));
+    }
+
+    // 显式运行的 Windows 原生凭据冒烟测试，只操作唯一的人工设备并自动清理。
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires Windows Credential Manager; uses only an ephemeral fixture"]
+    fn remote_credentials_windows_native_roundtrip() {
+        let remote = remote_credential_target(
+            "https://credential-smoke.invalid",
+            &format!(
+                "fixture-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+            ),
+        );
+        struct Cleanup(super::LowerUpdateRemoteTargetDto);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = super::clear_remote_lower_update_credentials_with_store(
+                    &mut super::WindowsLowerUpdateCredentialStore,
+                    &self.0,
+                    "fixture_user",
+                );
+            }
+        }
+        let _cleanup = Cleanup(remote.clone());
+        let mut store = super::WindowsLowerUpdateCredentialStore;
+        assert!(super::get_remote_lower_update_credentials_with_store(
+            &mut store,
+            &remote,
+            "fixture_user"
+        )
+        .unwrap()
+        .is_none());
+        super::save_remote_lower_update_credentials_with_store(
+            &mut store,
+            &remote,
+            "fixture_user",
+            super::RemoteLowerUpdateCredentialsDto {
+                ssh_password: "artificial-smoke-ssh".into(),
+                sudo_password: "artificial-smoke-sudo".into(),
+                reuse_ssh_password_for_sudo: false,
+            },
+        )
+        .unwrap();
+        let restored = super::get_remote_lower_update_credentials_with_store(
+            &mut store,
+            &remote,
+            "fixture_user",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(restored.ssh_password, "artificial-smoke-ssh");
+        assert_eq!(restored.sudo_password, "artificial-smoke-sudo");
+        assert!(!restored.reuse_ssh_password_for_sudo);
+        super::clear_remote_lower_update_credentials_with_store(
+            &mut store,
+            &remote,
+            "fixture_user",
+        )
+        .unwrap();
+        assert!(super::get_remote_lower_update_credentials_with_store(
+            &mut store,
+            &remote,
+            "fixture_user"
+        )
+        .unwrap()
+        .is_none());
     }
 
     fn connection_settings() -> super::LowerUpdateConnectionSettingsDto {
