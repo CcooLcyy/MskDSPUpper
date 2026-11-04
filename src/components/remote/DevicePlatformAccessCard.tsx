@@ -1,9 +1,9 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Form, Input, InputNumber, Select, Space, Switch, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Form, Input, InputNumber, Space, Switch, Tag, Typography } from 'antd';
 import { SettingOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { useCapability } from '../../offline/use-capability';
-import { createPlatformAccessController, FACTORY_PLATFORM_TARGET, type PlatformAccessRequest, type PlatformAccessStatus } from '../../utils/lower-platform-access';
+import { createPlatformAccessController, FACTORY_PLATFORM_TARGET, isOrdinaryNetworkPresetApplied, ordinaryNetworkPreset, type PlatformAccessRequest, type PlatformAccessStatus } from '../../utils/lower-platform-access';
 import './DevicePlatformAccessCard.css';
 
 const api = {
@@ -23,8 +23,8 @@ export default function DevicePlatformAccessCard({ connectionKey, ready }: { con
   const connectionStatus = !status ? '未读取' : !status.enabled ? '未启用' : status.online ? '在线' : status.last_error ? '连接异常' : '正在连接';
   const connectionColor = status?.online ? 'green' : status?.enabled ? 'orange' : 'default';
   const networkSupported = Boolean(status?.network_config);
-  const network = form.network_config ?? { interface_name: '', gateway: '', dns_servers: [] };
-  const updateNetwork = (patch: Partial<typeof network>) => controller.update({ network_config: { ...network, ...patch } });
+  const fixedNetwork = ordinaryNetworkPreset();
+  const networkApplied = isOrdinaryNetworkPresetApplied(status);
 
   useEffect(() => {
     controller.reset();
@@ -111,31 +111,14 @@ export default function DevicePlatformAccessCard({ connectionKey, ready }: { con
           </Typography.Paragraph>
           {status && !networkSupported && <Alert className="device-platform-access-network-notice" type="info" showIcon
             title="当前下位机不支持普通外网出口配置，请升级下位机。已有平台设置仍可保存。" />}
-          <Form.Item label="普通外网出口">
-            <Select value={form.network_mode ?? 'system'} disabled={disabled || !networkSupported}
-              aria-label="普通外网出口模式" options={[{ value: 'system', label: '使用系统现有网络' }, { value: 'gateway', label: '指定网口和网关' }]}
-              onChange={network_mode => controller.update({ network_mode })} />
-          </Form.Item>
-          {form.network_mode === 'gateway' && <>
-            <Form.Item label="出口网口">
-              <Select value={network.interface_name || undefined} disabled={disabled || !networkSupported} placeholder="请选择网口" aria-label="普通外网出口网口"
-                options={Array.from({ length: 8 }, (_, index) => ({ value: `eth0.${101 + index}`, label: `${101 + index} 口（eth0.${101 + index}）` }))}
-                onChange={interface_name => updateNetwork({ interface_name })} />
-            </Form.Item>
-            <Form.Item label="IPv4 网关" extra="须与所选网口的设备 IPv4 地址处于同一网段。">
-              <Input value={network.gateway} disabled={disabled || !networkSupported} placeholder="例如 192.168.2.1" aria-label="普通外网出口网关"
-                onChange={event => updateNetwork({ gateway: event.target.value.trim() })} />
-            </Form.Item>
-            <Form.Item label="DNS（IPv4，可选）" extra="多个地址用逗号或空格分隔；只设置所选网口的 DNS。">
-              <Input value={network.dns_servers.join(', ')} disabled={disabled || !networkSupported} placeholder="例如 192.168.2.1" aria-label="普通外网出口 DNS"
-                onChange={event => updateNetwork({ dns_servers: event.target.value.split(/[,，\s]+/) })} />
-            </Form.Item>
-          </>}
-          {networkSupported && <Descriptions size="small" column={1} className="device-platform-access-network-status">
-            <Descriptions.Item label="出口配置状态">{status?.network_applied ? '配置已应用' : '配置未应用'}</Descriptions.Item>
-            <Descriptions.Item label="当前出口源地址">{status?.network_source_address || '--'}</Descriptions.Item>
-          </Descriptions>}
-          <Typography.Paragraph type="secondary">配置已应用表示路由和 DNS 设置完成，外网是否可达仍需联调验证。</Typography.Paragraph>
+          <Descriptions size="small" column={1} className="device-platform-access-network-status">
+            <Descriptions.Item label="固定出口网口">102 口（{fixedNetwork.interface_name}）</Descriptions.Item>
+            <Descriptions.Item label="固定 IPv4 网关">{fixedNetwork.gateway}</Descriptions.Item>
+            <Descriptions.Item label="DNS">沿用设备已有 DNS</Descriptions.Item>
+            <Descriptions.Item label="固定出口状态">{!status ? '未读取' : !networkSupported ? '当前下位机不支持' : networkApplied ? '已应用' : '待应用'}</Descriptions.Item>
+            <Descriptions.Item label="设备当前源地址">{status?.network_source_address || '--'}</Descriptions.Item>
+          </Descriptions>
+          <Typography.Paragraph type="secondary">点击下方“保存并应用”时自动应用固定出口。已应用表示出口配置完成，外网是否可达仍需联调验证。</Typography.Paragraph>
           <Typography.Title level={5} className="device-platform-access-section-title">远程 SSH</Typography.Title>
           <Form.Item label="允许远程 SSH">
             <Switch checked={form.ssh_enabled} disabled={disabled} onChange={ssh_enabled => controller.update({ ssh_enabled })} aria-label="允许远程 SSH" />

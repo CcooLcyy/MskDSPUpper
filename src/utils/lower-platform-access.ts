@@ -6,6 +6,19 @@ export interface OrdinaryNetworkConfig {
   dns_servers: string[];
 }
 
+/** 每次返回独立数组，避免请求被修改后污染后续固定配置。 */
+export function ordinaryNetworkPreset(): OrdinaryNetworkConfig {
+  return { interface_name: 'eth0.102', gateway: '192.168.2.1', dns_servers: [] };
+}
+
+export function isOrdinaryNetworkPresetApplied(status: PlatformAccessStatus | null): boolean {
+  const network = status?.network_config;
+  const preset = ordinaryNetworkPreset();
+  return Boolean(network && status?.network_applied && !status.network_error
+    && network.interface_name === preset.interface_name && network.gateway === preset.gateway
+    && network.dns_servers.length === 0);
+}
+
 export interface PlatformAccessStatus {
   enabled: boolean;
   platform_target: string;
@@ -30,10 +43,9 @@ export interface PlatformAccessForm {
   clear_device_token: boolean;
   ssh_enabled: boolean;
   ssh_port: number;
-  network_mode?: 'system' | 'gateway';
-  network_config?: OrdinaryNetworkConfig;
 }
-export interface PlatformAccessRequest extends Omit<PlatformAccessForm, 'network_mode'> {
+export interface PlatformAccessRequest extends PlatformAccessForm {
+  network_config?: OrdinaryNetworkConfig;
   expected_revision: string;
   connection_generation: string;
   manager_address: string;
@@ -59,33 +71,15 @@ export function platformAccessRequest(status: PlatformAccessStatus, form: Platfo
   }
   const sshPort = form.ssh_port === 0 ? 22 : form.ssh_port;
   if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) throw new Error('SSH 端口应为 1～65535');
-  const { network_mode: networkMode, network_config: networkConfig, ...platform } = form;
-  let network: OrdinaryNetworkConfig | undefined;
-  if (status.network_config) {
-    network = { interface_name: '', gateway: '', dns_servers: [] };
-    if (networkMode === 'gateway') {
-      if (!networkConfig || !/^eth0\.10[1-8]$/.test(networkConfig.interface_name)) throw new Error('请选择 101～108 网口');
-      if (!validIpv4(networkConfig.gateway)) throw new Error('请输入合法 IPv4 网关');
-      const dnsServers = networkConfig.dns_servers.map(value => value.trim()).filter(Boolean);
-      if (dnsServers.length > 8 || dnsServers.some(value => !validIpv4(value))) throw new Error('DNS 应为最多 8 个合法 IPv4 地址');
-      network = { ...networkConfig, dns_servers: [...new Set(dnsServers)] };
-    }
-  }
-  return { ...platform, ...(network ? { network_config: network } : {}), device_id: deviceId, ssh_port: sshPort, expected_revision: status.revision,
+  return { enabled: form.enabled, device_token: form.device_token, clear_device_token: form.clear_device_token,
+    ssh_enabled: form.ssh_enabled, ...(status.network_config ? { network_config: ordinaryNetworkPreset() } : {}),
+    device_id: deviceId, ssh_port: sshPort, expected_revision: status.revision,
     connection_generation: status.connection_generation, manager_address: status.manager_address };
-}
-
-function validIpv4(value: string): boolean {
-  const parts = value.split('.');
-  return parts.length === 4 && parts.every(part => /^(0|[1-9]\d{0,2})$/.test(part) && Number(part) <= 255)
-    && value !== '0.0.0.0' && value !== '255.255.255.255' && Number(parts[0]) !== 127 && Number(parts[0]) < 224;
 }
 
 const emptyForm = (): PlatformAccessForm => ({ enabled: false, device_id: '', device_token: '', clear_device_token: false, ssh_enabled: false, ssh_port: 22 });
 const formFrom = (status: PlatformAccessStatus): PlatformAccessForm => ({ enabled: status.enabled, device_id: status.device_id,
-  device_token: '', clear_device_token: false, ssh_enabled: status.ssh_enabled, ssh_port: status.ssh_port || 22,
-  network_mode: status.network_config?.interface_name ? 'gateway' : 'system',
-  ...(status.network_config ? { network_config: { ...status.network_config, dns_servers: [...status.network_config.dns_servers] } } : {}) });
+  device_token: '', clear_device_token: false, ssh_enabled: status.ssh_enabled, ssh_port: status.ssh_port || 22 });
 interface Snapshot {
   status: PlatformAccessStatus | null;
   form: PlatformAccessForm;
@@ -137,8 +131,8 @@ export function createPlatformAccessController(api: PlatformAccessApi) {
       try {
         const status = await api.save(request);
         if (current === epoch && requestId === operation) {
-          if (status.network_config && (!status.network_applied || status.network_error)) {
-            update({ status, saved: false, needsReload: true, error: '普通外网出口网络应用失败，请重新读取设备状态后再保存' });
+          if (request.network_config && !isOrdinaryNetworkPresetApplied(status)) {
+            update({ status, saved: false, needsReload: true, error: '设备未确认固定普通外网出口已应用，请重新读取设备状态后再保存' });
           } else apply(status, true);
         }
       }
@@ -157,10 +151,10 @@ export function createPlatformAccessController(api: PlatformAccessApi) {
         const status = await api.read();
         if (current !== epoch || requestId !== operation || !snapshot.status) return;
         if (status.connection_generation !== snapshot.status.connection_generation || status.manager_address !== snapshot.status.manager_address) {
-          update({ needsReload: true, error: '现场连接已切换，请重新读取当前下位机配置' });
+          update({ saved: false, needsReload: true, error: '现场连接已切换，请重新读取当前下位机配置' });
         } else if (status.revision !== snapshot.status.revision) {
-          update({ needsReload: true, error: '下位机配置已变化，请重新读取后再保存' });
-        } else update({ status, ...(status.network_config && (!status.network_applied || status.network_error) ? { saved: false } : {}) });
+          update({ status, saved: false, needsReload: true, error: '下位机配置已变化，请重新读取后再保存' });
+        } else update({ status, ...(snapshot.status.network_config && !isOrdinaryNetworkPresetApplied(status) ? { saved: false } : {}) });
       } catch (error) {
         if (current === epoch && requestId === operation) {
           const problem = failure(error);
