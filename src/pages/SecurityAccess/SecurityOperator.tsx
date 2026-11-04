@@ -1,43 +1,58 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
-import { Alert, Button, Card, Input, Modal, Popconfirm, Select, Space, Table, Tabs, Tag } from 'antd';
+import { Alert, Button, Card, Checkbox, Input, Modal, Popconfirm, Select, Space, Table, Tabs, Tag } from 'antd';
 import { api } from '../../adapters';
 import type { VerticalSecurityOperatorKind as Kind, VerticalSecurityOperatorRow as Row, VerticalSecurityOperatorResult as Result } from '../../adapters';
 import './SecurityOperator.css';
 
-type Field = { key: string; label: string; optional?: boolean; options?: [string, string][]; reference?: 'interfaces' | 'certificates' | 'tunnel_ids' };
+type Field = { key: string; label: string; optional?: boolean; options?: [string, string][]; reference?: 'interfaces' | 'certificates' | 'tunnel_ids'; numeric?: [number, number]; address?: 'ip' | 'mask' };
+const networkInterfaces: [string, string][] = ['eth1', 'eth2', 'eth3', 'eth4', 'eth5', 'BRIDGE'].map(value => [value, value === 'BRIDGE' ? 'BRIDGE（桥接）' : value]);
+const routeAdvancedKeys = ['table_id', 'source', 'source_mask'];
 const tunnelModes: [string, string][] = [['0', '加密'], ['1', '选择性加密'], ['2', '明通']];
 const policyModes: [string, string][] = [['0', '加密'], ['1', '明文'], ['2', '选择性加密']];
 const pages: { key: Kind; label: string; fields: Field[] }[] = [
   { key: 'network', label: '网络配置', fields: [
-    { key: 'description', label: '描述' }, { key: 'interface', label: '接口' },
+    { key: 'description', label: '描述' }, { key: 'interface', label: '接口', options: networkInterfaces },
     { key: 'interface_type', label: '接口类型', options: [['PRIVATE', '内网'], ['PUBLIC', '外网'], ['BACKUP', '备用'], ['CONFIG', '管理'], ['BRIDGE', '桥接']] },
-    { key: 'ip', label: 'IP 地址' }, { key: 'netmask', label: '子网掩码' }, { key: 'vlan', label: 'VLAN' },
+    { key: 'ip', label: 'IP 地址', address: 'ip' }, { key: 'netmask', label: '子网掩码', address: 'mask' }, { key: 'vlan', label: 'VLAN', numeric: [0, 4094] },
   ] },
   { key: 'routes', label: '路由配置', fields: [
-    { key: 'name', label: '名称' }, { key: 'interface', label: '出口接口', reference: 'interfaces' }, { key: 'vlan', label: 'VLAN' },
-    { key: 'destination', label: '目的地址' }, { key: 'netmask', label: '目的掩码' }, { key: 'gateway', label: '网关' },
-    { key: 'table_id', label: '路由表 ID（策略路由）', optional: true }, { key: 'source', label: '源地址（策略路由）', optional: true }, { key: 'source_mask', label: '源掩码（策略路由）', optional: true },
+    { key: 'name', label: '名称' }, { key: 'interface', label: '出口接口', reference: 'interfaces' }, { key: 'vlan', label: 'VLAN', numeric: [0, 4094] },
+    { key: 'destination', label: '目的地址', address: 'ip' }, { key: 'netmask', label: '目的掩码', address: 'mask' }, { key: 'gateway', label: '网关', address: 'ip' },
+    { key: 'table_id', label: '路由表 ID（策略路由）', optional: true, numeric: [0, 4294967295] }, { key: 'source', label: '源地址（策略路由）', optional: true, address: 'ip' }, { key: 'source_mask', label: '源掩码（策略路由）', optional: true, address: 'mask' },
   ] },
   { key: 'tunnels', label: '隧道配置', fields: [
-    { key: 'name', label: '名称' }, { key: 'id', label: '隧道 ID' }, { key: 'mode', label: '模式', options: tunnelModes },
-    { key: 'local_ip', label: '本端地址' }, { key: 'primary_ip', label: '对端主地址' }, { key: 'primary_certificate', label: '主装置证书', reference: 'certificates' },
-    { key: 'backup_ip', label: '对端备地址' }, { key: 'backup_certificate', label: '备装置证书', reference: 'certificates' },
-    { key: 'lifetime', label: '周期（小时）' }, { key: 'capacity', label: '容量' },
+    { key: 'name', label: '名称' }, { key: 'id', label: '隧道 ID', numeric: [1, 102400] }, { key: 'mode', label: '模式', options: tunnelModes },
+    { key: 'local_ip', label: '本端地址', address: 'ip' }, { key: 'primary_ip', label: '对端主地址', address: 'ip' }, { key: 'primary_certificate', label: '主装置证书', reference: 'certificates' },
+    { key: 'backup_ip', label: '对端备地址', address: 'ip' }, { key: 'backup_certificate', label: '备装置证书', reference: 'certificates' },
+    { key: 'lifetime', label: '周期（小时）', numeric: [1, 10000] }, { key: 'capacity', label: '容量', numeric: [10240, 2147493647] },
   ] },
   { key: 'policies', label: '策略配置', fields: [
-    { key: 'id', label: '策略 ID' }, { key: 'tunnel_id', label: '隧道 ID', reference: 'tunnel_ids' }, { key: 'mode', label: '模式', options: policyModes },
-    { key: 'source_start', label: '内网起始地址' }, { key: 'source_end', label: '内网终止地址' },
-    { key: 'destination_start', label: '外网起始地址' }, { key: 'destination_end', label: '外网终止地址' },
+    { key: 'id', label: '策略 ID', numeric: [1, 102400] }, { key: 'tunnel_id', label: '隧道 ID', reference: 'tunnel_ids' }, { key: 'mode', label: '模式', options: policyModes },
+    { key: 'source_start', label: '内网起始地址', address: 'ip' }, { key: 'source_end', label: '内网终止地址', address: 'ip' },
+    { key: 'destination_start', label: '外网起始地址', address: 'ip' }, { key: 'destination_end', label: '外网终止地址', address: 'ip' },
     { key: 'protocol', label: '协议', options: [['0', '全部'], ['1', 'ICMP'], ['2', 'TCP'], ['3', 'UDP']] },
     { key: 'direction', label: '方向', options: [['1', '安全域到非安全域'], ['2', '非安全域到安全域'], ['0', '双向']] },
-    { key: 'source_port_start', label: '内网起始端口' }, { key: 'source_port_end', label: '内网终止端口' },
-    { key: 'destination_port_start', label: '外网起始端口' }, { key: 'destination_port_end', label: '外网终止端口' }, { key: 'description', label: '描述', optional: true },
+    { key: 'source_port_start', label: '内网起始端口', numeric: [0, 65535] }, { key: 'source_port_end', label: '内网终止端口', numeric: [0, 65535] },
+    { key: 'destination_port_start', label: '外网起始端口', numeric: [0, 65535] }, { key: 'destination_port_end', label: '外网终止端口', numeric: [0, 65535] }, { key: 'description', label: '描述', optional: true },
   ] },
 ];
 type Draft = { result: Result | null; rows: Row[]; dirty: boolean; stale: boolean };
 const emptyDraft = (): Draft => ({ result: null, rows: [], dirty: false, stale: false });
 const emptyPages = (): Record<Kind, Draft> => ({ network: emptyDraft(), routes: emptyDraft(), tunnels: emptyDraft(), policies: emptyDraft() });
 const cloneRows = (rows: Row[]): Row[] => rows.map(row => ({ ...row }));
+const ipv4 = (value: string): number | null => {
+  if (!/^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){3}$/.test(value)) return null;
+  const parts = value.split('.').map(Number);
+  return parts.some(part => part > 255) ? null : parts.reduce((total, part) => total * 256 + part, 0);
+};
+const nextId = (rows: Row[]) => {
+  const used = new Set(rows.map(row => Number(row.id)));
+  let id = 1;
+  while (used.has(id) && id <= 102400) id += 1;
+  return id <= 102400 ? String(id) : '';
+};
+const unusedCertificate = (kind: Kind, field: Field, row: Row) => kind === 'tunnels' && field.reference === 'certificates'
+  && (row.mode === '2' || (field.key === 'backup_certificate' && row.backup_ip === '0.0.0.0'));
 
 export default function SecurityOperator({ sessionId, disabled = false, onBusyChange }: { sessionId: string; disabled?: boolean; onBusyChange?: (busy: boolean) => void }) {
   const [kind, setKind] = useState<Kind>('network');
@@ -46,7 +61,7 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [readErrors, setReadErrors] = useState<Partial<Record<Kind, string>>>({});
-  const [editor, setEditor] = useState<{ index: number | null; row: Row } | null>(null);
+  const [editor, setEditor] = useState<{ index: number | null; row: Row; advanced: boolean } | null>(null);
   const [confirm, setConfirm] = useState<'read' | 'save' | null>(null);
   const mounted = useRef(false);
   const generation = useRef(0);
@@ -156,26 +171,70 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
     setError(null);
     const row = index === null ? Object.fromEntries(page.fields.map(field => [field.key, field.options?.[0]?.[0] ?? ''])) : { ...draft.rows[index] };
     if (index === null && kind === 'network') Object.assign(row, { description: 'network', vlan: '0' });
-    if (index === null && kind === 'routes') Object.assign(row, { vlan: '0' });
-    if (index === null && kind === 'tunnels') Object.assign(row, { backup_ip: '0.0.0.0', primary_certificate: draft.result?.certificates[0] ?? 'cert1.pem', backup_certificate: 'cert2.pem', lifetime: '10000', capacity: '5000000' });
-    setEditor({ index, row });
+    if (index === null && kind === 'routes') Object.assign(row, { interface: draft.result?.interfaces[0] ?? '', vlan: '0' });
+    if (index === null && kind === 'tunnels') Object.assign(row, { name: 'test', id: nextId(draft.rows), backup_ip: '0.0.0.0', primary_certificate: draft.result?.certificates[0] ?? '', backup_certificate: 'cert2.pem', lifetime: '10000', capacity: '5000000' });
+    if (index === null && kind === 'policies') Object.assign(row, { id: nextId(draft.rows), tunnel_id: draft.result?.tunnel_ids[0] ?? '', source_port_start: '0', source_port_end: '65535', destination_port_start: '0', destination_port_end: '65535' });
+    setEditor({ index, row, advanced: kind === 'routes' && routeAdvancedKeys.some(key => !!row[key]) });
   };
   const choices = (field: Field) => {
     const options = field.reference ? (draft.result?.[field.reference] ?? []).map(value => ({ value, label: value })) : (field.options ?? []).filter(([value]) => !(kind === 'policies' && field.key === 'direction' && value === '0' && !draft.result?.bidirectional_allowed)).map(([value, label]) => ({ value, label }));
+    // 原版新增列表不含管理口；已读取的 eth0/eth6 必须继续可编辑，不能静默换口。
+    if (kind === 'network' && field.key === 'interface') {
+      for (const row of draft.rows) {
+        if (['eth0', 'eth6'].includes(row.interface) && !options.some(option => option.value === row.interface)) options.push({ value: row.interface, label: `${row.interface}（已有接口）` });
+      }
+    }
     const existing = editor?.row[field.key];
     // 未知值显式保留展示，不能静默替换成默认枚举或另一张证书。
-    if (existing && !options.some(option => option.value === existing)) options.push({ value: existing, label: `${existing}（原值，需核实）` });
+    if (existing && !options.some(option => option.value === existing)) options.push({ value: existing, label: `${existing}${editor && unusedCertificate(kind, field, editor.row) ? '（未使用）' : '（原值，需核实）'}` });
     return options;
   };
+  const changeField = (field: Field, value: string) => {
+    if (unavailable || active.current) return;
+    setError(null);
+    setEditor(previous => {
+      if (!previous) return previous;
+      const row = { ...previous.row, [field.key]: value };
+      // 明通仍按协议保留证书列；加密模式恢复到装置真实证书或等待选择。
+      if (kind === 'tunnels' && field.key === 'mode') {
+        if (value === '2' && !row.primary_certificate) row.primary_certificate = 'cert1.pem';
+        if (value !== '2' && (!row.primary_certificate || (previous.row.mode === '2' && row.primary_certificate === 'cert1.pem' && !(draft.result?.certificates ?? []).includes(row.primary_certificate)))) row.primary_certificate = draft.result?.certificates[0] ?? '';
+      }
+      return { ...previous, row };
+    });
+  };
+  const certificateMissing = kind === 'tunnels' && editor?.row.mode !== '2' && !draft.result?.certificates.length;
+  const tunnelMissing = kind === 'policies' && !draft.result?.tunnel_ids.length;
   const applyEdit = () => {
     if (!editor || unavailable) return;
+    if (certificateMissing) { setError('没有可用的加密网关证书，请由系统管理员先导入证书，再重新读取隧道配置。'); return; }
+    if (tunnelMissing) { setError('没有可用隧道，请先上传隧道配置，再重新读取策略配置。'); return; }
     for (const field of page.fields) {
       const value = editor.row[field.key] ?? '';
-      if ((!field.optional && !value.trim()) || Array.from(value).some(char => char === ',' || char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) { setError(`请检查“${field.label}”，必填内容不能为空，也不能包含逗号或控制字符。`); return; }
+      const optional = field.optional && !(kind === 'routes' && editor.advanced && routeAdvancedKeys.includes(field.key));
+      if ((!optional && !value.trim()) || Array.from(value).some(char => char === ',' || char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) { setError(`请检查“${field.label}”，必填内容不能为空，也不能包含逗号或控制字符。`); return; }
+      if (optional && !value) continue;
       if (kind === 'network' && field.key === 'description' && (value.length > 10 || Array.from(value).some(char => char.charCodeAt(0) > 126))) { setError('网络描述请使用最多 10 个英文字符、数字或符号。'); return; }
-      const unusedCertificate = kind === 'tunnels' && field.reference === 'certificates' && (editor.row.mode === '2' || (field.key === 'backup_certificate' && editor.row.backup_ip === '0.0.0.0'));
-      if (!unusedCertificate && (field.options || field.reference) && !choices(field).some(option => option.value === value && !option.label.endsWith('（原值，需核实）'))) { setError(`“${field.label}”原值不在当前装置可选范围，请核实后选择。`); return; }
+      if (kind === 'routes' && field.key === 'name' && (value.length > 32 || /[\u4e00-\u9fa5\uff0c]/u.test(value))) { setError('路由名称最多 32 个字符，不能包含中文或逗号。'); return; }
+      if (field.numeric && (!/^\d+$/.test(value) || Number(value) < field.numeric[0] || Number(value) > field.numeric[1])) { setError(`“${field.label}”必须是 ${field.numeric[0]}～${field.numeric[1]} 之间的整数。`); return; }
+      if (field.key === 'vlan' && value.length > 1 && value.startsWith('0')) { setError('VLAN 不能包含多余的前导零，请输入 0 或 1～4094。'); return; }
+      if (field.address) {
+        const address = ipv4(value);
+        const inverse = address === null ? 0 : ~address >>> 0;
+        if (address === null || (field.address === 'mask' && (inverse & (inverse + 1)) !== 0)) { setError(`请填写有效的“${field.label}”${field.address === 'mask' ? '，掩码必须连续' : '，格式为 IPv4'}。`); return; }
+      }
+      if (!unusedCertificate(kind, field, editor.row) && (field.options || field.reference) && !choices(field).some(option => option.value === value && !option.label.endsWith('（原值，需核实）'))) { setError(`“${field.label}”原值不在当前装置可选范围，请核实后选择。`); return; }
     }
+    if ((kind === 'tunnels' || kind === 'policies') && draft.rows.some((row, index) => index !== editor.index && Number(row.id) === Number(editor.row.id))) { setError(`${kind === 'tunnels' ? '隧道' : '策略'} ID 已存在，请使用未占用的 ID。`); return; }
+    if (kind === 'policies') {
+      for (const [start, end, label] of [['source_start', 'source_end', '内网地址'], ['destination_start', 'destination_end', '外网地址'], ['source_port_start', 'source_port_end', '内网端口'], ['destination_port_start', 'destination_port_end', '外网端口']]) {
+        const begin = start.includes('port') ? Number(editor.row[start]) : ipv4(editor.row[start])!;
+        const finish = end.includes('port') ? Number(editor.row[end]) : ipv4(editor.row[end])!;
+        if (begin > finish) { setError(`${label}起始值不能大于结束值。`); return; }
+      }
+    }
+    const duplicateKeys = page.fields.map(field => field.key).filter(key => !(kind === 'routes' && key === 'name') && !(kind === 'policies' && ['id', 'description'].includes(key)));
+    if (kind !== 'tunnels' && draft.rows.some((row, index) => index !== editor.index && duplicateKeys.every(key => row[key] === editor.row[key]))) { setError('存在相同的配置条件，请检查后再确认。'); return; }
     const rows = cloneRows(draft.rows);
     if (editor.index === null) rows.push({ ...editor.row }); else rows[editor.index] = { ...editor.row };
     updateRows(rows); setEditor(null);
@@ -200,9 +259,19 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
         { title: '操作', key: 'actions', width: kind === 'policies' ? 250 : 140, fixed: 'right' as const, render: (_: unknown, entry: { row: Row; index: number }) => <Space size="small"><Button size="small" disabled={unavailable} onClick={() => startEdit(entry.index)}>编辑</Button><Popconfirm title="从草稿删除此配置？" description="上传后才会改变装置配置。" disabled={unavailable} onConfirm={() => updateRows(draft.rows.filter((_, index) => index !== entry.index))}><Button size="small" danger disabled={unavailable}>删除</Button></Popconfirm>{kind === 'policies' && <><Button size="small" disabled={unavailable || entry.index === 0} onClick={() => move(entry.index, -1)}>上移</Button><Button size="small" disabled={unavailable || entry.index === draft.rows.length - 1} onClick={() => move(entry.index, 1)}>下移</Button></>}</Space> },
       ]} />
     </Card>
-    {editor && <Modal title={`${editor.index === null ? '新增' : '编辑'}${page.label}`} open width={760} onCancel={() => setEditor(null)} okText="确认草稿" cancelText="取消" onOk={applyEdit} okButtonProps={{ disabled: unavailable }}>
+    {editor && <Modal title={`${editor.index === null ? '新增' : '编辑'}${page.label}`} open width={760} onCancel={() => setEditor(null)} okText="确认草稿" cancelText="取消" onOk={applyEdit} okButtonProps={{ disabled: unavailable || certificateMissing || tunnelMissing }}>
       {kind === 'network' && <p>网络描述请使用最多 10 个英文字符、数字或符号。</p>}
-      <div className="security-operator-fields">{page.fields.map(field => <label key={field.key}><span>{field.label}{field.optional ? '（选填）' : ''}</span>{field.options || field.reference ? <Select aria-label={field.label} value={editor.row[field.key] || undefined} options={choices(field)} disabled={unavailable} onChange={value => setEditor(previous => previous ? { ...previous, row: { ...previous.row, [field.key]: value } } : null)} /> : <Input aria-label={field.label} value={editor.row[field.key] ?? ''} maxLength={256} disabled={unavailable} onChange={event => setEditor(previous => previous ? { ...previous, row: { ...previous.row, [field.key]: event.target.value } } : null)} />}</label>)}</div>
+      {kind === 'network' && editor.row.interface === 'BRIDGE' && <Alert type="info" showIcon title="桥接配置的描述同时作为桥名称，路由出口将引用此名称。" />}
+      {kind === 'routes' && <Checkbox aria-label="启用策略路由" checked={editor.advanced} disabled={unavailable} onChange={event => {
+        if (unavailable || active.current) return;
+        const advanced = event.target.checked;
+        setError(null);
+        setEditor(previous => previous ? { ...previous, advanced, row: advanced ? previous.row : { ...previous.row, table_id: '', source: '', source_mask: '' } } : null);
+      }}>启用策略路由</Checkbox>}
+      {certificateMissing && <Alert type="warning" showIcon title="没有可用的加密网关证书，请由系统管理员先导入证书，再重新读取隧道配置。" />}
+      {tunnelMissing && <Alert type="warning" showIcon title="没有可用隧道，请先上传隧道配置，再重新读取策略配置。" />}
+      {kind === 'tunnels' && <p>{editor.row.mode === '2' ? '明通模式无需选择主备证书。' : editor.row.backup_ip === '0.0.0.0' ? '备地址为 0.0.0.0 表示不启用备用端，无需选择备证书。' : '主备证书均需选择装置中已有的加密网关证书。'}</p>}
+      <div className="security-operator-fields">{page.fields.filter(field => kind !== 'routes' || editor.advanced || !routeAdvancedKeys.includes(field.key)).map(field => <label key={field.key}><span>{field.label}{field.optional && !(kind === 'routes' && editor.advanced) ? '（选填）' : ''}</span>{field.options || field.reference ? <Select aria-label={field.label} value={editor.row[field.key] || undefined} options={choices(field)} placeholder={unusedCertificate(kind, field, editor.row) ? '当前配置不使用' : '请选择'} disabled={unavailable || unusedCertificate(kind, field, editor.row)} onChange={value => changeField(field, value)} /> : <Input aria-label={field.label} value={editor.row[field.key] ?? ''} type={field.numeric ? 'number' : 'text'} inputMode={field.numeric ? 'numeric' : undefined} min={field.numeric?.[0]} max={field.numeric?.[1]} step={field.numeric ? 1 : undefined} placeholder={field.address === 'ip' ? '请填写实际 IPv4 地址' : field.address === 'mask' ? '例如 255.255.255.0' : field.numeric ? `${field.numeric[0]}～${field.numeric[1]}` : undefined} maxLength={kind === 'network' && field.key === 'description' ? 10 : kind === 'routes' && field.key === 'name' ? 32 : 256} disabled={unavailable} onChange={event => changeField(field, event.target.value)} />}</label>)}</div>
       {error && <Alert type="error" showIcon title={error} />}
     </Modal>}
     {confirm && <Modal title={confirm === 'read' ? '重新读取并放弃本页草稿？' : `上传${page.label}？`} open okText={confirm === 'read' ? '放弃并读取' : '确认上传'} cancelText="取消" onCancel={() => setConfirm(null)} onOk={() => perform(confirm)} okButtonProps={{ disabled: blocked }}>

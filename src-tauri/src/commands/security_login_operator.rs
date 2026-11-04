@@ -80,6 +80,10 @@ async fn references<S: AsyncRead + AsyncWrite + Unpin>(
     let mut interfaces = Vec::new();
     let mut certificates = Vec::new();
     let mut tunnel_ids = Vec::new();
+    // 原版路由始终允许五个固定网口，另合并配置中的兼容网口和桥名称。
+    if kind == "routes" {
+        interfaces.extend(["eth1", "eth2", "eth3", "eth4", "eth5"].map(str::to_string));
+    }
     if matches!(kind, "network" | "routes") {
         let networks = if kind == "network" {
             current.to_vec()
@@ -263,7 +267,8 @@ mod tests {
         let read = execute(&mut client, &kind_request("read", kind), &mut state, Some("fixture")).await.unwrap();
         assert!(!read.verified);
         match kind {
-            "network" | "routes" => assert_eq!(read.interfaces, ["eth6"]),
+            "network" => assert_eq!(read.interfaces, ["eth6"]),
+            "routes" => assert_eq!(read.interfaces, ["eth1", "eth2", "eth3", "eth4", "eth5", "eth6"]),
             "tunnels" => assert_eq!(read.certificates, ["primary.pem", "backup.pem"]),
             "policies" => assert_eq!(read.tunnel_ids, ["7"]),
             _ => unreachable!(),
@@ -287,6 +292,27 @@ mod tests {
     #[tokio::test]
     async fn security_operator_routes_upload_checks_network_dependency_fixture() {
         verified_roundtrip("routes", "route.txt", ROUTE_BEFORE, ROUTE_AFTER, Some(("ip.txt", NETWORK_BEFORE))).await;
+    }
+    // 路由恢复原版固定网口，并合并已配置兼容网口与桥名；无配置也保留固定候选。
+    #[tokio::test]
+    async fn security_operator_route_interfaces_merge_fixed_configured_and_bridges() {
+        for network in [b"".as_slice(), b"config,0,3,10.0.0.1,255.255.255.0,0,\nprivate,1,0,10.1.0.1,255.255.255.0,0,\nbackup,6,2,10.2.0.1,255.255.255.0,0,\nbrtest,7,4,10.3.0.1,255.255.255.0,0,\n".as_slice()] {
+            let (mut client, mut peer) = tokio::io::duplex(4096);
+            let server = tokio::spawn(async move {
+                serve_file(&mut peer, "ip.txt", network).await;
+                assert_no_more_commands(&mut peer).await;
+            });
+            let (interfaces, _, _) = references(&mut client, "routes", &[]).await.unwrap();
+            let mut expected = vec!["eth1", "eth2", "eth3", "eth4", "eth5"];
+            if !network.is_empty() { expected.extend(["eth0", "eth6", "brtest"]); }
+            assert_eq!(interfaces, expected);
+            for name in ["eth1", "brtest", "arbitrary"] {
+                let row = Row::from([("interface".into(), name.into())]);
+                assert_eq!(validate_references("routes", &[row], &interfaces, &[], &[], true).is_ok(), expected.contains(&name));
+            }
+            drop(client);
+            server.await.unwrap();
+        }
     }
     #[tokio::test]
     async fn security_operator_tunnels_upload_checks_category_five_certificates_fixture() {

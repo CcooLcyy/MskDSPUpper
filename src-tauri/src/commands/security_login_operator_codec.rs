@@ -135,6 +135,10 @@ fn check(kind: &str, rows: &[Row], writing: bool) -> Result<(), String> {
         }
         if size > MAX_BYTES { return Err("配置内容超过 4 MiB".into()); }
         let v = |key: &str| value(row, key);
+        // 读取保留旧写法以便修正；写入禁止让“00”被拼成带 VLAN 的接口。
+        if writing && matches!(kind, "network" | "routes") && v("vlan").len() > 1 && v("vlan").starts_with('0') {
+            return Err("VLAN 不允许包含前导零，请填写 0～4094 的十进制整数".into());
+        }
         let enum_value = |key: &str, allowed: &[&str]| -> Result<(), String> {
             if writing && !allowed.contains(&v(key)) { return Err(format!("字段 {key} 包含未知枚举，禁止上传")); }
             // 未知数字枚举可只读展示；任意文本不是有效的协议枚举。
@@ -151,6 +155,10 @@ fn check(kind: &str, rows: &[Row], writing: bool) -> Result<(), String> {
                 if !duplicates.insert(row.clone()) { return Err("网络配置包含重复条目".into()); }
             }
             "routes" => {
+                // 对齐原版 Java 的 32 位长度及中文、中文逗号限制，保留合法非中文名称。
+                if writing && (v("name").encode_utf16().count() > 32 || v("name").chars().any(|c| ('\u{4e00}'..='\u{9fa5}').contains(&c) || c == '，')) {
+                    return Err("路由名称最多 32 位，不能包含中文或逗号".into());
+                }
                 ip(v("destination"))?; prefix(v("netmask"))?; ip(v("gateway"))?; number(v("vlan"), 0, 4094)?;
                 // 路由接口也可为网络配置中定义的桥名称，不限于eth接口。
                 if v("interface").contains('.') || v("interface").contains('/') {
@@ -226,6 +234,43 @@ mod tests {
     const ROUTE: &str = "default,0.0.0.0/0,0.0.0.0,10.0.0.2,bridge,\npolicy,10.2.0.0/16,255.255.0.0,10.0.0.3,eth6.12,table,100,10.3.0.0/16,255.255.0.0,\n";
     const TUN: &str = "test,102400,1,10.0.0.1,10.0.0.2,cert1.pem,0.0.0.0,cert2.pem,10000,2147493647,\n";
     const RULE: &str = "102400,102400,2,0.0.0.0,255.255.255.255,10.0.0.1,10.0.0.2,2,1,0,65535,104,104,,\n";
+    // 原版名称边界只约束写入；旧配置仍能读取并修改，合法非中文名称不能误拒绝。
+    #[test]
+    fn security_operator_route_name_write_boundaries_preserve_legacy_reads() {
+        for name in ["a".repeat(33), "测试路由".into(), "route，name".into()] {
+            let text = ROUTE.replacen("default", &name, 1);
+            let mut rows = parse("routes", text.as_bytes()).unwrap();
+            assert_eq!(rows[0]["name"], name);
+            assert!(encode("routes", &rows).unwrap_err().contains("路由名称"));
+            rows[0].insert("name".into(), "corrected".into());
+            assert!(encode("routes", &rows).is_ok());
+        }
+        for name in ["a".repeat(32), "café-route".into(), "😀".repeat(16)] {
+            let text = ROUTE.replacen("default", &name, 1);
+            let rows = parse("routes", text.as_bytes()).unwrap();
+            assert_eq!(encode("routes", &rows).unwrap(), text.as_bytes());
+        }
+        let text = ROUTE.replacen("default", &"😀".repeat(17), 1);
+        assert!(encode("routes", &parse("routes", text.as_bytes()).unwrap()).is_err());
+    }
+    // VLAN 前导零保持只读兼容，禁止把数值零作为带标签接口上传。
+    #[test]
+    fn security_operator_vlan_write_rejects_leading_zero_but_reads_legacy() {
+        for (kind, original, field) in [("network", NET, ",0,\n"), ("routes", ROUTE, "eth6.12")] {
+            for vlan in ["00", "01", "000"] {
+                let text = if kind == "network" {
+                    original.replacen(field, &format!(",{vlan},\n"), 1)
+                } else { original.replacen(field, &format!("eth6.{vlan}"), 1) };
+                let mut rows = parse(kind, text.as_bytes()).unwrap();
+                assert!(encode(kind, &rows).unwrap_err().contains("VLAN"));
+                let index = if kind == "network" { 0 } else { 1 };
+                rows[index].insert("vlan".into(), "0".into());
+                let encoded = encode(kind, &rows).unwrap();
+                assert_eq!(parse(kind, &encoded).unwrap()[index]["vlan"], "0");
+                if kind == "routes" { assert!(!String::from_utf8(encoded).unwrap().contains("eth6.")); }
+            }
+        }
+    }
     #[test]
     fn security_operator_codec_exact_plaintext_roundtrip_all_kinds() {
         for (kind, text) in [("network", NET), ("routes", ROUTE), ("tunnels", TUN), ("policies", RULE)] {
