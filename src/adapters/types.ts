@@ -347,6 +347,13 @@ export interface VerticalSecurityLoginRequest {
   role: VerticalSecurityRole;
 }
 
+export interface VerticalSecurityLoginLock {
+  mode: VerticalSecurityAccessMode;
+  device_id: string | null;
+  username: string;
+  lock_seconds: number;
+}
+
 export interface VerticalSecurityLoginStep {
   id: string;
   name: string;

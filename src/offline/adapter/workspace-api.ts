@@ -255,6 +255,7 @@ export const DELEGATED_API_METHODS = [
   'configureVerticalSecurityCertificateProfile',
   'selectVerticalSecurityCertificate',
   'loginVerticalSecurity',
+  'getVerticalSecurityLoginLocks',
   'cancelVerticalSecurityLogin',
   'logoutVerticalSecurity',
   'isVerticalSecurityLoginActive',

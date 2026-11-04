@@ -13,6 +13,7 @@ import type {
 import { canAttemptLogin, getBuiltinCertificateMode, getCertificateMatchPresentation, isAuthenticatedLogin, isPasswordChangeRequired, LOGIN_STAGES, loginContextMatches, validateNewPassword, type LoginIdentity } from './login-state';
 import { reportLoginConnectionFailure } from './access-state';
 import { checkRetainedLogin, clearRetainedLogin, getRetainedLogin, retainLogin, subscribeRetainedLoginInvalidation } from './login-session';
+import { formatLockCountdown, getLockSeconds, getLoginLockSeconds, restoreLoginLocks, updateLoginLock, type LoginLock } from './login-lockout';
 import SecurityAdmin from './SecurityAdmin';
 
 const ROLE_OPTIONS = [{ value: 1, label: '系统管理员' }, { value: 2, label: '安全操作员' }, { value: 3, label: '日志审计员' }];
@@ -55,6 +56,8 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const [session, setSession] = useState<VerticalSecurityLoginResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [loginLocks, setLoginLocks] = useState<LoginLock[]>([]);
+  const [lockClock, setLockClock] = useState(() => performance.now());
   const mountedRef = useRef(false);
   const generationRef = useRef(0);
   const activeRef = useRef<ActiveRequest | null>(null);
@@ -66,12 +69,26 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const mustChangePassword = Boolean(challenge);
   const locked = busy || certificateBusy || logoutBusy || changeBusy || Boolean(session) || mustChangePassword || Boolean(getRetainedLogin());
   const allowed = !initializing && canAttemptLogin(mode, deviceId, capabilities, profile);
+  const accountLockSeconds = getLoginLockSeconds(loginLocks, { mode, device_id: deviceId, username }, lockClock);
+  const targetLocks = loginLocks.filter(lock => lock.mode === mode && lock.device_id === (mode === 'remote' ? deviceId : null));
   const certificateMatch = getCertificateMatchPresentation(result);
   const appliedBuiltinMode = getBuiltinCertificateMode(profile);
   const builtinSummary = appliedBuiltinMode === 'auto' ? '内置配套证书 · 自动匹配' : appliedBuiltinMode === 'old' ? '内置配套证书 · 仅旧版' : '内置配套证书 · 仅新版';
 
   useEffect(() => { onLockChange(locked); }, [locked, onLockChange]);
   useEffect(() => { onAuthenticatedChange?.(Boolean(session)); }, [session, onAuthenticatedChange]);
+
+  useEffect(() => {
+    if (!loginLocks.some(lock => getLockSeconds(lock, performance.now()) > 0)) return;
+    const tick = () => {
+      const now = performance.now();
+      setLockClock(now);
+      if (!loginLocks.some(lock => getLockSeconds(lock, now) > 0)) window.clearInterval(timer);
+    };
+    const timer = window.setInterval(tick, 250);
+    document.addEventListener('visibilitychange', tick);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
+  }, [loginLocks]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -83,8 +100,12 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
       setSession(null); setResult(null);
       if (invalidated) setError('纵密连接已失效或状态无法确认，请重新登录。');
     });
-    void Promise.all([api.getVerticalSecurityLoginCapabilities(), api.getVerticalSecurityCertificateProfile(), checkRetainedLogin()]).then(([available, configured, restored]) => {
+    const lockSnapshot = api.getVerticalSecurityLoginLocks().then(locks => ({ locks, sampledAt: performance.now() }));
+    void Promise.all([api.getVerticalSecurityLoginCapabilities(), api.getVerticalSecurityCertificateProfile(), checkRetainedLogin(), lockSnapshot]).then(([available, configured, restored, snapshot]) => {
       if (!current) return;
+      const now = performance.now();
+      setLoginLocks(restoreLoginLocks(snapshot.locks, snapshot.sampledAt)); setLockClock(now);
+      if (snapshot.locks.length) console.info('[纵密登录] 已恢复装置返回的账号锁定等待');
       setCapabilities(available); setProfile(configured);
       setClientPath(configured.client_certificate_path ?? '');
       setTrustPath(configured.trust_certificate_path ?? '');
@@ -97,7 +118,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
         console.info('[纵密会话] 返回登录页，原连接检查通过');
       }
       restoringRef.current = null;
-    }).catch(() => { if (current) setError('读取纵密登录能力或证书配置失败，请离开此页后重试。'); })
+    }).catch(() => { if (current) setError('读取纵密登录能力、证书配置或锁定状态失败，请离开此页后重试。'); })
       .finally(() => { if (current) setInitializing(false); });
     return () => {
       current = false;
@@ -153,6 +174,10 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
 
   const login = async () => {
     if (!allowed || locked || accessBusy || activeRef.current) return;
+    if (getLoginLockSeconds(loginLocks, { mode, device_id: deviceId, username }, performance.now()) > 0) {
+      console.info('[纵密登录] 账号仍在装置返回的锁定等待期间，未提交认证请求');
+      return;
+    }
     if (!username.trim() || !password || username.length > 32 || password.length > 32) {
       setError('请输入纵密用户名和密码，长度均不能超过 32 个字符。'); return;
     }
@@ -171,6 +196,11 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
         await cleanupReturnedConnection(value, identity.request_id);
         if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) setError('登录结果与当前请求或目标设备不匹配，已拒绝建立纵密身份。');
         return;
+      }
+      if (value.state === 'failed' && value.code === 'account_locked') {
+        const now = performance.now();
+        setLoginLocks(locks => updateLoginLock(locks, identity, value.lock_seconds, now)); setLockClock(now);
+        console.info('[纵密登录] 收到装置账号锁定应答，按有效剩余时间等待');
       }
       reportLoginConnectionFailure(value);
       if (value.state === 'authenticated') {
@@ -347,7 +377,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
             <label htmlFor="vertical-security-username">用户名<Input id="vertical-security-username" aria-label="纵密用户名" value={username} maxLength={32} autoComplete="off" disabled={locked || accessBusy} placeholder="输入纵密账号" onChange={event => setUsername(event.target.value)} /></label>
             <label htmlFor="vertical-security-password">密码<Input.Password id="vertical-security-password" aria-label="纵密密码" value={password} maxLength={32} autoComplete="off" disabled={locked || accessBusy} placeholder="输入纵密密码" onChange={event => setPassword(event.target.value)} onPressEnter={() => void login()} ref={node => { secretInputs.current[0] = node?.input ?? null; }} /></label>
           </div>
-          <div className="security-login-actions"><Button type="primary" block icon={<LoginOutlined />} loading={busy} disabled={!allowed || locked || accessBusy || !username.trim() || !password} onClick={() => void login()}>登录纵密</Button>{busy && <Button block loading={cancelling} onClick={() => void cancelLogin()}>取消登录</Button>}</div>
+          <div className="security-login-actions"><Button type="primary" block icon={<LoginOutlined />} loading={busy} disabled={!allowed || locked || accessBusy || accountLockSeconds > 0 || !username.trim() || !password} onClick={() => void login()}>登录纵密{accountLockSeconds > 0 && `（${formatLockCountdown(accountLockSeconds)} 后可重试）`}</Button>{busy && <Button block loading={cancelling} onClick={() => void cancelLogin()}>取消登录</Button>}</div>
           <details className="security-login-certificate"><summary>连接证书 <span>{profile?.configured ? profile.source === 'builtin' ? builtinSummary : '已配置 · 当前进程有效' : initializing ? '读取中' : '尚未配置'}</span></summary>
             {profile?.source === 'builtin' && profile.configured && <p>{profile.label || '内置配套证书'}已由上位机加载，无需手动选择证书。实际组别须等待本次 TLS 匹配完成。</p>}
             <details className="security-login-builtin-mode"><summary>内置证书模式（高级）</summary><p>自动模式仅在 TLS 握手期间匹配候选证书；发送账号后不切换证书、不自动重试认证。旧版兼容仅适用于固定目标与精确匹配的配套证书，自定义和新版证书保持严格校验。</p><p>已生效模式：{profile?.source === 'builtin' && profile.configured ? BUILTIN_MODE_OPTIONS.find(item => item.value === appliedBuiltinMode)?.label : '当前使用自定义证书或尚未配置'}。下方选择须点击应用才会生效。</p><Space wrap><Select aria-label="内置证书模式" value={builtinMode} options={BUILTIN_MODE_OPTIONS} disabled={locked || accessBusy || initializing} onChange={setBuiltinMode} style={{ minWidth: 210 }} /><Button disabled={locked || accessBusy || initializing} loading={certificateBusy} onClick={() => void applyBuiltinCertificate(builtinMode)}>应用内置证书模式</Button></Space></details>
@@ -369,7 +399,13 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
         </>}
         {error && <Alert className="security-access-notice" type="error" showIcon title={error} />}
         {notice && <Alert className="security-access-notice" type="info" showIcon title={notice} />}
-        {result && !session && !mustChangePassword && <Alert className="security-access-notice" type={result.state === 'failed' ? 'error' : 'warning'} showIcon title={result.state === 'unverified_response' ? '装置应答尚未验证，未建立登录会话' : '纵密尚未登录'} description={<>{result.message}{result.lock_seconds !== null && <p>装置返回锁定时间：{result.lock_seconds} 秒</p>}</>} />}
+        {!session && !mustChangePassword && targetLocks.map(lock => {
+          const seconds = getLockSeconds(lock, lockClock);
+          return <Alert key={lock.username} className="security-access-notice" type={seconds > 0 ? 'warning' : 'info'} showIcon
+            title={seconds > 0 ? `纵密账号 ${lock.username} 已锁定，剩余 ${formatLockCountdown(seconds)}` : `纵密账号 ${lock.username} 的锁定等待时间已结束`}
+            description={seconds > 0 ? '等待时间由纵密装置返回，期间不能再次提交该账号的登录请求。' : '可手动重新尝试登录，是否解锁以纵密装置应答为准。'} />;
+        })}
+        {result && !session && !mustChangePassword && !(result.code === 'account_locked' && result.lock_seconds !== null && result.lock_seconds > 0) && <Alert className="security-access-notice" type={result.state === 'failed' ? 'error' : 'warning'} showIcon title={result.state === 'unverified_response' ? '装置应答尚未验证，未建立登录会话' : '纵密尚未登录'} description={<>{result.message}{result.code === 'account_locked' && result.lock_seconds === null && <p>装置未提供有效剩余时间，无法显示倒计时。</p>}{result.code === 'account_locked' && result.lock_seconds === 0 && <p>装置返回剩余 0 秒，可手动重新尝试登录。</p>}</>} />}
       </Card>
       <aside className="security-login-progress" aria-labelledby="security-login-progress-title"><h2 id="security-login-progress-title">登录进度</h2><div aria-live="polite">{LOGIN_STAGES.map(stage => {
         const step = result?.steps.find(item => item.id === stage.id);

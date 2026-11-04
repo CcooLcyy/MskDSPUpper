@@ -38,6 +38,7 @@ export type {
   VerticalSecurityRole,
   VerticalSecurityBuiltinCertificateMode,
   VerticalSecurityLoginCapabilities,
+  VerticalSecurityLoginLock,
   VerticalSecurityCertificateProfile,
   VerticalSecurityCertificateRequest,
   VerticalSecurityAccessPathRequest,

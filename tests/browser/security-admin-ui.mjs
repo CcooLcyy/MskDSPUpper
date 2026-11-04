@@ -62,6 +62,7 @@ try {
       mock.calls.push({ command, args });
       if (command === 'remote_list_devices') return [];
       if (command === 'get_vertical_security_login_capabilities') return { direct_available: true, remote_available: false, password_change_available: false, reason: '测试能力' };
+      if (command === 'get_vertical_security_login_locks') return [];
       if (command === 'get_vertical_security_certificate_profile') return { configured: true, source: 'builtin', server_name: '11.22.33.44' };
       if (command === 'is_vertical_security_login_active') return mock.active;
       if (command === 'logout_vertical_security' && mock.failLogout) throw new Error('测试：退出失败');

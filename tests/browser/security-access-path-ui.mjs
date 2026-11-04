@@ -64,6 +64,7 @@ async function openFixture(options = {}) {
           return mock.devices;
         }
         if (command === 'get_vertical_security_login_capabilities') return { direct_available: true, remote_available: false, password_change_available: false, reason: '虚构 TLS 能力，仅用于 UI 测试' };
+        if (command === 'get_vertical_security_login_locks') return [];
         if (command === 'get_vertical_security_certificate_profile') { if (mock.profileFailure) throw new Error('fixture profile failure'); return profile(); }
         if (command === 'configure_vertical_security_access_path') return new Promise((resolve, reject) => { mock.pathResolve = resolve; mock.pathReject = reject; });
         if (command === 'check_vertical_security_access') return new Promise(resolve => { mock.checkResolve = resolve; });
@@ -356,7 +357,7 @@ try {
   });
   await check('证书读取失败不能伪造内置ready', async () => {
     await openFixture({ view: 'login', profileFailure: true });
-    await page.getByText('读取纵密登录能力或证书配置失败，请离开此页后重试。', { exact: true }).waitFor();
+    await page.getByText('读取纵密登录能力、证书配置或锁定状态失败，请离开此页后重试。', { exact: true }).waitFor();
     await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-user'); await page.getByLabel('纵密密码', { exact: true }).fill('fixture-secret');
     assert.equal(await page.getByRole('button', { name: /登录纵密/ }).isDisabled(), true);
     assert.equal(await page.getByText('内置配套证书 · 自动匹配', { exact: true }).count(), 0);

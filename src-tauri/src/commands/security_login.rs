@@ -35,6 +35,11 @@ mod protocol;
 use protocol::{read_login_reply, Reply};
 use sessions::{ConnectionContext, ConnectionKind, StoredConnection};
 
+#[path = "security_login_lockout.rs"]
+mod lockout;
+pub use lockout::LoginLockStatus;
+use lockout::{AccountKey, AuthenticationBlocked};
+
 const TARGET_IP: &str = "11.22.33.44";
 const TARGET_PORT: u16 = 8888;
 const MAX_CERT_BYTES: u64 = 4 * 1024 * 1024;
@@ -55,7 +60,7 @@ pub struct BuiltinCertificateRequest {
     mode: BuiltinMode,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum LoginMode {
     Direct,
@@ -224,6 +229,7 @@ struct LoginInner {
 pub struct SecurityLoginManager {
     inner: Mutex<LoginInner>,
     management_probe: tokio::sync::Mutex<()>,
+    lockout: Mutex<lockout::LockoutState>,
 }
 struct RequestGuard<'a> {
     manager: &'a SecurityLoginManager,
@@ -754,6 +760,13 @@ async fn complete_login<S>(
 where
     S: AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    if let Reply::Locked(seconds) = &reply {
+        // 在结果可能被取消分支覆盖前保存装置状态，不受连接清理影响。
+        manager.record_account_lock(
+            AccountKey::from_result(&result, &credentials.username),
+            *seconds,
+        );
+    }
     let Reply::Accepted(info) = reply else {
         return apply_reply(result, reply);
     };
@@ -1018,6 +1031,10 @@ async fn connect_and_authenticate(
     packet: Zeroizing<Vec<u8>>,
     credentials: AuthenticationContext,
 ) -> LoginResult {
+    let account = AccountKey::from_result(&result, &credentials.username);
+    if let Some(seconds) = manager.account_lock_seconds(&account) {
+        return lockout::locked_result(result, seconds);
+    }
     let connection = match connect_management(profile).await {
         Ok(connection) => connection,
         Err(error) => {
@@ -1045,6 +1062,10 @@ async fn connect_and_authenticate(
         phase = "authenticate",
         "纵密证书验证通过，开始单次身份认证"
     );
+    // TLS 建连可能耗时，发送凭据前再次核对单调时钟锁定记录。
+    if let Some(seconds) = manager.account_lock_seconds(&account) {
+        return lockout::locked_result(result, seconds);
+    }
     let exchange = exchange_credentials_once(&mut stream, &packet);
     let reply = tokio::time::timeout(Duration::from_secs(8), exchange).await;
     // 只有合法应答可转交临时改密或已认证连接，其余分支关闭流。
@@ -1073,6 +1094,13 @@ async fn exchange_credentials_once<S: AsyncRead + tokio::io::AsyncWrite + Unpin>
         .map_err(|_| "无法发送登录请求")?;
     stream.flush().await.map_err(|_| "无法发送登录请求")?;
     read_login_reply(stream).await
+}
+
+#[tauri::command]
+pub fn get_vertical_security_login_locks(
+    state: tauri::State<'_, AppState>,
+) -> Vec<LoginLockStatus> {
+    state.security_login.login_locks()
 }
 
 #[tauri::command]
@@ -1173,6 +1201,20 @@ pub async fn login_vertical_security(
     if request.device_id.is_some() {
         return Ok(result.failure(0, "invalid_target", "直连登录不应携带远程设备标识"));
     }
+    let account = AccountKey::from_result(&result, &request.username);
+    let _account_guard = match manager.begin_account_authentication(account) {
+        Ok(guard) => guard,
+        Err(AuthenticationBlocked::Locked(seconds)) => {
+            return Ok(lockout::locked_result(result, seconds));
+        }
+        Err(AuthenticationBlocked::Pending) => {
+            return Ok(result.failure(
+                2,
+                "authentication_pending",
+                "同一纵密账号已有登录请求，请等待该请求结束",
+            ));
+        }
+    };
     let profile = match initialize_builtin_profile(manager, false, BuiltinMode::Auto).await {
         Ok(profile) => profile,
         Err(_) => {

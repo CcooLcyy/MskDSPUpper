@@ -133,6 +133,7 @@ try {
         if (command === 'remote_list_devices') return [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true }];
         if (command === 'get_vertical_security_access_capabilities') return { remote_ip_available: false, remote_ip_reason: '虚构远程网络能力未接入' };
         if (command === 'get_vertical_security_login_capabilities') return { direct_available: true, remote_available: false, password_change_available: false, reason: '虚构登录能力' };
+        if (command === 'get_vertical_security_login_locks') return [];
         if (command === 'get_vertical_security_certificate_profile') return { configured: false, client_certificate_path: null, trust_certificate_path: null, server_name: null };
         if (command === 'cancel_vertical_security_login' || command === 'logout_vertical_security' || command === 'close_vertical_security_access') return null;
         mock.unexpected.push(command);

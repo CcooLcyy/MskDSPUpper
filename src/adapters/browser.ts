@@ -79,6 +79,7 @@ import type {
   VerticalSecurityAccessRequest,
   VerticalSecurityAccessResult,
   VerticalSecurityLoginCapabilities,
+  VerticalSecurityLoginLock,
   VerticalSecurityCertificateProfile,
   VerticalSecurityBuiltinCertificateMode,
   VerticalSecurityCertificateRequest,
@@ -2131,6 +2132,7 @@ export const browserApi: typeof tauriApi = {
     void kind;
     throw new Error('浏览器模式不支持选择桌面端纵密证书。');
   },
+  getVerticalSecurityLoginLocks: async (): Promise<VerticalSecurityLoginLock[]> => [],
   loginVerticalSecurity: async (request: VerticalSecurityLoginRequest): Promise<VerticalSecurityLoginResult> => ({
     request_id: request.request_id,
     state: 'unsupported',

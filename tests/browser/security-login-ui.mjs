@@ -54,6 +54,7 @@ async function openFixture(options = {}) {
     const mock = window.__securityLoginMock = {
       calls: [], login: [], checks: [], changes: [], activeChecks: [],
       connectionActive: true, deferActiveCheck: false, deferLogout: false, logouts: [],
+      locks: (JSON.parse(sessionStorage.getItem('fixture-login-locks') || 'null') || initial.locks || []).map(lock => ({ ...lock, deadline: lock.deadline ?? Date.now() + lock.lock_seconds * 1000 })),
       configured: initial.configured !== false,
       configureError: null,
       capabilities: { direct_available: true, remote_available: initial.remoteAvailable === true, password_change_available: initial.passwordChangeAvailable === true, reason: '虚构登录能力（fixture）' },
@@ -72,6 +73,7 @@ async function openFixture(options = {}) {
         if (command === 'get_vertical_security_access_capabilities') return { remote_ip_available: initial.remoteAvailable === true, remote_ip_reason: '远程网络通道待接入（fixture）' };
         if (command === 'remote_list_devices') return [{ device_id: 'fixture-dsp', display_name: '测试 DSP', online: true }];
         if (command === 'get_vertical_security_login_capabilities') return mock.capabilities;
+        if (command === 'get_vertical_security_login_locks') return mock.locks.map(({ deadline, ...lock }) => ({ ...lock, lock_seconds: Math.max(0, Math.ceil((deadline - Date.now()) / 1000)) })).filter(lock => lock.lock_seconds > 0);
         if (command === 'get_vertical_security_certificate_profile') return profile();
         if (command === 'plugin:dialog|open') return args.options.title.includes('PKCS12') ? 'C:\\fixture\\client.p12' : 'C:\\fixture\\trust.pem';
         if (command === 'configure_vertical_security_certificate_profile') {
@@ -116,6 +118,12 @@ async function resolveLogin(patch = {}) {
   await page.evaluate(change => {
     const pending = window.__securityLoginMock.login.shift();
     const request = pending.request;
+    if (change.code === 'account_locked' && change.lock_seconds > 0) {
+      const mock = window.__securityLoginMock;
+      mock.locks = mock.locks.filter(lock => lock.username !== request.username || lock.mode !== request.mode || lock.device_id !== (request.device_id ?? null));
+      mock.locks.push({ mode: request.mode, device_id: request.device_id ?? null, username: request.username, deadline: Date.now() + change.lock_seconds * 1000 });
+      sessionStorage.setItem('fixture-login-locks', JSON.stringify(mock.locks));
+    }
     pending.resolve({
       request_id: request.request_id, state: 'authenticated', code: 'authenticated', message: 'fixture 登录成功',
       target_ip: '11.22.33.44', mode: request.mode, device_id: request.device_id ?? null,
@@ -339,12 +347,68 @@ try {
     await openFixture();
     await submitLogin();
     await resolveLogin({ state, code, message: text, session_id: null, device_version: null, ...extra });
-    await page.locator('.security-login-workbench .ant-alert-description').filter({ hasText: text }).waitFor();
-    if (code === 'account_locked') await page.getByText('装置返回锁定时间：120 秒', { exact: true }).waitFor();
+    if (code === 'account_locked') await page.getByText(/纵密账号 fixture-user 已锁定，剩余 \d{2}:\d{2}/).waitFor();
+    else await page.locator('.security-login-workbench .ant-alert-description').filter({ hasText: text }).waitFor();
     assert.equal(await password().inputValue(), '');
     assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
   }
   results.push('错误凭据、未知应答、证书失败、锁定及不支持均显示真实失败信息');
+
+  // 锁定期间按钮和回车均不提交，跨页和角色切换不能清掉同账号的等待。
+  await openFixture();
+  await submitLogin();
+  await resolveLogin({ state: 'failed', code: 'account_locked', message: 'fixture 账号已锁定', session_id: null, lock_seconds: 120 });
+  await page.getByText(/纵密账号 fixture-user 已锁定，剩余/).waitFor();
+  const initialCountdown = await page.getByText(/纵密账号 fixture-user 已锁定，剩余/).innerText();
+  await page.getByText(initialCountdown, { exact: true }).waitFor({ state: 'detached' });
+  await password().fill('fixture-secret');
+  assert.equal(await loginButton().isDisabled(), true);
+  await password().press('Enter');
+  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1);
+  await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
+  await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
+  await page.getByText(/纵密账号 fixture-user 已锁定，剩余/).waitFor();
+  await fillLogin();
+  assert.equal(await loginButton().isDisabled(), true);
+  await page.getByRole('combobox', { name: '纵密登录角色' }).click();
+  await page.getByText('安全操作员', { exact: true }).click();
+  await fillLogin();
+  assert.equal(await loginButton().isDisabled(), true);
+  await password().press('Enter');
+  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1);
+  await username().fill('fixture-other-user');
+  assert.equal(await loginButton().isEnabled(), true, '不能将账号锁定扩大到其他账号');
+  await page.reload();
+  await page.getByText(/纵密账号 fixture-user 已锁定，剩余/).waitFor();
+  await fillLogin();
+  assert.equal(await loginButton().isDisabled(), true, '刷新页面后从后端恢复锁定');
+  await assertNoPersistedSecret();
+  await page.screenshot({ path: path.join(output, 'account-lock-countdown.png'), fullPage: true });
+  results.push('账号锁定禁用按钮和回车，跨页、刷新和切换角色后仍生效，其他账号不受影响');
+
+  // 倒计时结束仅恢复手动提交；下一次装置锁定应答重新更新等待时间。
+  await openFixture({ locks: [{ mode: 'direct', device_id: null, username: 'fixture-user', lock_seconds: 3 }] });
+  await fillLogin();
+  await page.getByText('纵密账号 fixture-user 的锁定等待时间已结束', { exact: true }).waitFor();
+  assert.equal(await loginButton().isEnabled(), true);
+  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 0, '到期不能自动认证');
+  await loginButton().click();
+  await page.waitForFunction(() => window.__securityLoginMock.login.length === 1);
+  await resolveLogin({ state: 'failed', code: 'account_locked', message: 'fixture 仍然锁定', session_id: null, lock_seconds: 60 });
+  await page.getByText(/纵密账号 fixture-user 已锁定，剩余/).waitFor();
+  await password().fill('fixture-secret');
+  assert.equal(await loginButton().isDisabled(), true);
+  results.push('倒计时到期恢复手动登录但不自动认证，最新锁定应答重新限制提交');
+
+  for (const lockSeconds of [null, 0]) {
+    await openFixture();
+    await submitLogin();
+    await resolveLogin({ state: 'failed', code: 'account_locked', message: 'fixture 锁定应答', session_id: null, lock_seconds: lockSeconds });
+    await page.getByText(lockSeconds === null ? '装置未提供有效剩余时间，无法显示倒计时。' : '装置返回剩余 0 秒，可手动重新尝试登录。', { exact: true }).waitFor();
+    await password().fill('fixture-secret');
+    assert.equal(await loginButton().isEnabled(), true, '不能虚构锁定时长');
+  }
+  results.push('缺失或零秒锁定应答保留提示，不虚构倒计时');
 
   await openFixture();
   await submitLogin();
