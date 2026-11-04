@@ -15,6 +15,7 @@ import { reportLoginConnectionFailure } from './access-state';
 import { checkRetainedLogin, clearRetainedLogin, getRetainedLogin, retainLogin, subscribeRetainedLoginInvalidation } from './login-session';
 import { formatLockCountdown, getLockSeconds, getLoginLockSeconds, restoreLoginLocks, updateLoginLock, type LoginLock } from './login-lockout';
 import SecurityAdmin from './SecurityAdmin';
+import SecurityOperator from './SecurityOperator';
 
 const ROLE_OPTIONS = [{ value: 1, label: '系统管理员' }, { value: 2, label: '安全操作员' }, { value: 3, label: '日志审计员' }];
 const ROLE_HINTS = { 1: '管理装置账号与系统设置。', 2: '配置网络、隧道与策略。', 3: '查看运行日志与审计信息。' };
@@ -364,7 +365,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
       </header>
       {error && <Alert className="security-access-notice" type="error" showIcon title={error} />}
       {notice && <Alert className="security-access-notice" type="info" showIcon title={notice} />}
-      {session.role !== 1 && <Alert className="security-access-notice" type="info" showIcon title={`${ROLE_OPTIONS.find(item => item.value === session.role)?.label || '当前角色'}业务功能待接入`} />}
+      {session.role === 3 && <Alert className="security-access-notice" type="info" showIcon title={`${ROLE_OPTIONS.find(item => item.value === session.role)?.label || '当前角色'}业务功能待接入`} />}
     </> : <div className="security-access-columns security-login-columns">
       <Card className="security-login-auth" title="装置身份认证" extra={<Tag color={session ? 'success' : busy ? 'processing' : 'default'}>{session ? '已登录' : busy ? '认证中' : '未登录'}</Tag>}>
         {mustChangePassword ? <>
@@ -412,6 +413,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
         return <div className="security-access-step" key={stage.id}><Badge status={step?.state === 'success' ? 'success' : step?.state === 'failed' ? 'error' : step?.state === 'unsupported' ? 'warning' : 'default'} /><div><strong>{stage.name}</strong><p>{step?.message || (busy ? '等待装置返回本次检查结果' : '尚未执行')}</p></div><span>{step?.state === 'success' ? '通过' : step?.state === 'failed' ? '失败' : step?.state === 'unsupported' ? '不支持' : '待确认'}</span></div>;
       })}</div>{certificateMatch ? <Alert className="security-access-notice" type={certificateMatch.legacy ? 'warning' : 'info'} showIcon title={certificateMatch.label} description={<>{certificateMatch.compatibility}{certificateMatch.legacy && <p>仅此固定纵密目标、精确配套旧证书允许受限日期与名称兼容；不代表账号已经通过认证。</p>}</>} /> : profile?.source === 'builtin' && <p className="security-login-hint">证书组别待 TLS 匹配确认。</p>}<p className="security-access-boundary">使用纵密装置账号与连接证书。网络检查与身份认证分别显示；ICMP 无响应不阻止尝试登录。</p></aside>
     </div>}
+    {session?.state === 'authenticated' && session.role === 2 && session.session_id && <SecurityOperator key={session.session_id} sessionId={session.session_id} disabled={logoutBusy || accessBusy} onBusyChange={setAdminBusy} />}
     {session?.state === 'authenticated' && session.role === 1 && session.session_id && <SecurityAdmin key={session.session_id} sessionId={session.session_id} disabled={logoutBusy || accessBusy} onBusyChange={setAdminBusy} />}
   </section>;
 }

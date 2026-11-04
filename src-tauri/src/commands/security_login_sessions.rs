@@ -22,6 +22,7 @@ pub(super) struct ConnectionContext {
     pub request_id: String,
     pub username: String,
     pub role: u8,
+    pub device_version: Option<String>,
     pub generation: u64,
     pub kind: ConnectionKind,
     pub expires_at: Instant,
@@ -39,6 +40,10 @@ enum ConnectionCommand {
     Admin {
         request: AdminRequest,
         result: oneshot::Sender<Result<AdminResult, String>>,
+    },
+    Operator {
+        request: super::operator::OperatorRequest,
+        result: oneshot::Sender<Result<super::operator::OperatorResult, String>>,
     },
 }
 
@@ -86,6 +91,7 @@ impl SecurityLoginManager {
         let (commands, mut receiver) = mpsc::channel::<ConnectionCommand>(1);
         let username = context.username.clone();
         let kind = context.kind;
+        let device_version = context.device_version.clone();
         let deadline = context.expires_at;
         {
             let mut inner = self.inner.lock();
@@ -117,6 +123,7 @@ impl SecurityLoginManager {
             let mut stream = stream;
             let mut unexpected = [0_u8; 1];
             let mut catalog = Vec::new();
+            let mut operator_state = super::operator::OperatorState::default();
             loop {
                 let command = tokio::select! { biased;
                   _ = async { if !*cancelled.borrow() { let _ = cancelled.changed().await; } } => break,
@@ -149,6 +156,34 @@ impl SecurityLoginManager {
                         };
                         let _ = command.result.send(outcome);
                         break;
+                    }
+                    ConnectionCommand::Operator { request, mut result } => {
+                        let permitted = kind == ConnectionKind::Authenticated
+                            && weak.upgrade().is_some_and(|m| {
+                                let mut inner = m.inner.lock();
+                                SecurityLoginManager::prune(&mut inner);
+                                inner.connections.get(&actor_id).is_some_and(|c| {
+                                    c.context.kind == ConnectionKind::Authenticated && c.context.role == 2
+                                })
+                            });
+                        if result.is_closed() || !permitted {
+                            let _ = result.send(Err("安全操作员会话已失效或权限不足".into()));
+                            break;
+                        }
+                        let outcome = tokio::select! { biased;
+                          _ = async {if !*cancelled.borrow(){let _=cancelled.changed().await;}} => Err(admin::AdminError{message:"配置操作已取消；若上传已发送，请重新读取装置核对".into(),fatal:true}),
+                          _ = tokio::time::sleep_until(deadline.into()) => Err(admin::AdminError{message:"配置会话已到期，结果未确认，请重新登录后读取核对".into(),fatal:true}),
+                          _ = result.closed() => Err(admin::AdminError{message:"配置调用方已取消，关闭会话".into(),fatal:true}),
+                          outcome=tokio::time::timeout(Duration::from_secs(60),super::operator::execute(&mut stream,&request,&mut operator_state,device_version.as_deref()))=>outcome.unwrap_or(Err(admin::AdminError{message:"配置操作超时，结果未确认；请重新登录读取核对，不自动重试上传".into(),fatal:true})),
+                        };
+                        let fatal = outcome.as_ref().is_err_and(|e| e.fatal);
+                        if fatal {
+                            if let Some(m) = weak.upgrade() {
+                                if let Some(entry) = m.inner.lock().connections.remove(&actor_id) { entry.close(); }
+                            }
+                        }
+                        let delivered = result.send(outcome.map_err(|e| e.message)).is_ok();
+                        if fatal || !delivered { break; }
                     }
                     ConnectionCommand::Admin {
                         request,
@@ -262,6 +297,37 @@ impl SecurityLoginManager {
         outcome
     }
 
+    pub(super) async fn run_operator(&self, request: super::operator::OperatorRequest) -> Result<super::operator::OperatorResult, String> {
+        request.validate()?;
+        let id = request.session_id.clone();
+        let commands = {
+            let mut inner = self.inner.lock();
+            Self::prune(&mut inner);
+            let entry = inner.connections.get_mut(&id).ok_or("纵密会话已失效，请重新登录")?;
+            if entry.context.kind != ConnectionKind::Authenticated || entry.context.role != 2 {
+                return Err("此操作只允许已认证的安全操作员".into());
+            }
+            if entry.admin_busy { return Err("当前配置操作尚未结束，请勿重复提交".into()); }
+            entry.admin_busy = true;
+            entry.commands.clone()
+        };
+        struct Guard<'a> { manager: &'a SecurityLoginManager, id: String, completed: bool }
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                let mut inner = self.manager.inner.lock();
+                if self.completed {
+                    if let Some(entry) = inner.connections.get_mut(&self.id) { entry.admin_busy = false; }
+                } else if let Some(entry) = inner.connections.remove(&self.id) { entry.close(); }
+            }
+        }
+        let mut guard = Guard { manager: self, id, completed: false };
+        let (result, reply) = oneshot::channel();
+        commands.try_send(ConnectionCommand::Operator { request, result }).map_err(|_| "安全操作员会话不可用，请重新登录")?;
+        let outcome = reply.await.map_err(|_| "配置操作结果未确认，请重新登录并读取核对".to_string())?;
+        guard.completed = true;
+        outcome
+    }
+
     pub(super) fn connection_active(&self, id: &str) -> bool {
         let mut inner = self.inner.lock();
         Self::prune(&mut inner);
@@ -351,10 +417,49 @@ mod tests {
             request_id: "fixture-owner".into(),
             username: "fixture".into(),
             role: 1,
+            device_version: Some("fixture".into()),
             generation: 0,
             kind,
             expires_at: Instant::now() + Duration::from_secs(60),
         }
+    }
+
+    fn operator_request(id: &str) -> super::super::operator::OperatorRequest {
+        super::super::operator::OperatorRequest {
+            session_id: id.into(), action: "read".into(), kind: "network".into(), revision: None, rows: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn security_operator_session_rejects_wrong_roles_and_challenges_without_io() {
+        for (role, kind) in [(1, ConnectionKind::Authenticated), (3, ConnectionKind::Authenticated), (2, ConnectionKind::Challenge)] {
+            let manager = Arc::new(SecurityLoginManager::default());
+            let (_cancellation, _guard) = manager.begin("fixture-owner").unwrap();
+            let (client, mut peer) = tokio::io::duplex(1024);
+            let mut ctx = context(kind); ctx.role = role;
+            let old = (kind == ConnectionKind::Challenge).then(|| Zeroizing::new("fixture".into()));
+            let id = manager.retain_connection(ctx, client, old).unwrap();
+            assert!(manager.run_operator(operator_request(&id)).await.is_err());
+            manager.cancel("fixture-owner").unwrap();
+            let mut bytes = Vec::new(); peer.read_to_end(&mut bytes).await.unwrap(); assert!(bytes.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn security_operator_session_serializes_and_cancellation_closes_connection() {
+        let manager = Arc::new(SecurityLoginManager::default());
+        let (_cancellation, _guard) = manager.begin("fixture-owner").unwrap();
+        let (client, mut peer) = tokio::io::duplex(1024);
+        let mut ctx = context(ConnectionKind::Authenticated); ctx.role = 2;
+        let id = manager.retain_connection(ctx, client, None).unwrap();
+        let owner = manager.clone(); let req = operator_request(&id);
+        let task = tokio::spawn(async move { owner.run_operator(req).await });
+        assert_eq!(peer.read_i32().await.unwrap(), 4);
+        assert!(manager.run_operator(operator_request(&id)).await.is_err());
+        assert!(manager.close_session(&id).is_err());
+        manager.cancel("fixture-owner").unwrap();
+        assert!(task.await.unwrap().is_err());
+        assert!(!manager.connection_active(&id));
     }
 
     // 已建立的会话必须持有真实连接，取消原请求会关闭该连接且不发送业务命令。

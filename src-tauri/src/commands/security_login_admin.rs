@@ -24,7 +24,7 @@ pub struct AdminResult {
     pub data: Option<Vec<u8>>,
     pub tunnels: Vec<TunnelStatus>,
 }
-fn parse_certificates(data: &[u8]) -> Result<Vec<AdminCertificate>, &'static str> {
+pub(super) fn parse_certificates(data: &[u8]) -> Result<Vec<AdminCertificate>, &'static str> {
     let text = std::str::from_utf8(data).map_err(|_| "证书列表编码无效")?;
     let mut result = Vec::new();
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
@@ -175,7 +175,7 @@ async fn answer<S: AsyncRead + Unpin>(stream: &mut S, expected: i32) -> Result<i
     }
     Ok(value)
 }
-async fn download<S: AsyncRead + AsyncWrite + Unpin>(
+pub(super) async fn download<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     name: &str,
     empty: bool,
@@ -229,7 +229,7 @@ async fn download<S: AsyncRead + AsyncWrite + Unpin>(
         }
     }
 }
-async fn upload<S: AsyncRead + AsyncWrite + Unpin>(
+pub(super) async fn upload<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     name: &str,
     data: &[u8],

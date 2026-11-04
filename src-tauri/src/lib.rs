@@ -241,6 +241,7 @@ pub fn run() {
                 commands::security_login::is_vertical_security_login_active,
                 commands::security_login::change_vertical_security_password,
                 commands::security_login::run_vertical_security_admin,
+                commands::security_login::run_vertical_security_operator,
                 commands::security_admin_files::read_vertical_security_certificate_file,
                 commands::security_admin_files::save_vertical_security_file,
                 commands::security_admin_files::get_vertical_security_sim_ip,

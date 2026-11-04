@@ -84,6 +84,8 @@ import type {
   VerticalSecurityPasswordChangeResult,
   VerticalSecurityAdminRequest,
   VerticalSecurityAdminResult,
+  VerticalSecurityOperatorRequest,
+  VerticalSecurityOperatorResult,
   VerticalSecurityCertificateFile,
   VerticalSecurityDeployRequest,
   VerticalSecurityDeployResult,
@@ -292,6 +294,8 @@ export const api = {
     invoke<boolean>('is_vertical_security_login_active', { connectionId }),
   changeVerticalSecurityPassword: (request: VerticalSecurityPasswordChangeRequest) =>
     invoke<VerticalSecurityPasswordChangeResult>('change_vertical_security_password', { request }),
+  runVerticalSecurityOperator: (request: VerticalSecurityOperatorRequest) =>
+    invoke<VerticalSecurityOperatorResult>('run_vertical_security_operator', { request }),
   runVerticalSecurityAdmin: (request: VerticalSecurityAdminRequest) =>
     invoke<VerticalSecurityAdminResult>('run_vertical_security_admin', { request }),
   chooseVerticalSecurityCertificateFile: async (): Promise<VerticalSecurityCertificateFile | null> => {

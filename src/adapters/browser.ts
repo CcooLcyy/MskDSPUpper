@@ -2156,6 +2156,9 @@ export const browserApi: typeof tauriApi = {
     void sessionId;
     throw new Error('浏览器模式没有可退出的纵密会话。');
   },
+  runVerticalSecurityOperator: async (): Promise<import('./types').VerticalSecurityOperatorResult> => {
+    throw new Error('浏览器模式不支持纵密配置，请使用桌面版上位机。');
+  },
   runVerticalSecurityAdmin: async (request: VerticalSecurityAdminRequest): Promise<VerticalSecurityAdminResult> => {
     void request;
     throw new Error('浏览器模式不支持纵密管理员业务，请使用桌面版上位机。');

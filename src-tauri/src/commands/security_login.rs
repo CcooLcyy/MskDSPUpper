@@ -24,6 +24,12 @@ mod tunnels;
 mod admin;
 pub use admin::{AdminRequest, AdminResult};
 
+#[path = "security_login_operator.rs"]
+mod operator;
+#[path = "security_login_operator_codec.rs"]
+mod operator_codec;
+pub use operator::{OperatorRequest, OperatorResult};
+
 #[path = "security_login_builtin.rs"]
 mod builtin;
 
@@ -781,6 +787,7 @@ where
             role: credentials.role,
             generation: credentials.generation,
             kind: ConnectionKind::Challenge,
+            device_version: None,
             expires_at: Instant::now() + Duration::from_secs(300),
         };
         match manager.retain_connection(context, stream, Some(credentials.old_digest)) {
@@ -833,6 +840,7 @@ where
             role: credentials.role,
             generation: credentials.generation,
             kind: ConnectionKind::Authenticated,
+            device_version: Some(info.version.clone()),
             expires_at: Instant::now() + Duration::from_secs(900),
         };
         match manager.retain_connection(context, stream, None) {
@@ -1259,6 +1267,13 @@ pub async fn run_vertical_security_admin(
     request: AdminRequest,
 ) -> Result<AdminResult, String> {
     state.security_login.run_admin(request).await
+}
+#[tauri::command]
+pub async fn run_vertical_security_operator(
+    state: tauri::State<'_, AppState>,
+    request: OperatorRequest,
+) -> Result<OperatorResult, String> {
+    state.security_login.run_operator(request).await
 }
 #[tauri::command]
 pub fn cancel_vertical_security_login(

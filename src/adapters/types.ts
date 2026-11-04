@@ -429,6 +429,27 @@ export interface VerticalSecurityAdminResult {
   data: number[] | null;
 }
 
+export type VerticalSecurityOperatorKind = 'network' | 'routes' | 'tunnels' | 'policies';
+export type VerticalSecurityOperatorRow = Record<string, string>;
+export interface VerticalSecurityOperatorRequest {
+  session_id: string;
+  action: 'read' | 'save';
+  kind: VerticalSecurityOperatorKind;
+  revision?: string;
+  rows?: VerticalSecurityOperatorRow[];
+}
+export interface VerticalSecurityOperatorResult {
+  kind: VerticalSecurityOperatorKind;
+  revision: string;
+  rows: VerticalSecurityOperatorRow[];
+  interfaces: string[];
+  certificates: string[];
+  tunnel_ids: string[];
+  bidirectional_allowed: boolean;
+  message: string;
+  verified: boolean;
+}
+
 export interface VerticalSecurityCertificateFile {
   name: string;
   data: number[];
