@@ -95,7 +95,7 @@ export function platformAccessRequest(status: PlatformAccessStatus, form: Platfo
   if (status.token_configured && deviceId !== status.device_id && !form.device_token && !form.clear_device_token) {
     throw new Error('更换设备 ID 时请提供新令牌，或关闭接入并显式清除旧令牌');
   }
-  const sshPort = form.ssh_port === 0 ? 22 : form.ssh_port;
+  const sshPort = form.ssh_port === 0 ? 10022 : form.ssh_port;
   if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) throw new Error('SSH 端口应为 1～65535');
   const network = networkForDevice(status);
   return { enabled: form.enabled, device_token: form.device_token, clear_device_token: form.clear_device_token,
@@ -104,9 +104,9 @@ export function platformAccessRequest(status: PlatformAccessStatus, form: Platfo
     connection_generation: status.connection_generation, manager_address: status.manager_address };
 }
 
-const emptyForm = (): PlatformAccessForm => ({ enabled: false, device_id: '', device_token: '', clear_device_token: false, ssh_enabled: false, ssh_port: 22 });
+const emptyForm = (): PlatformAccessForm => ({ enabled: false, device_id: '', device_token: '', clear_device_token: false, ssh_enabled: true, ssh_port: 10022 });
 const formFrom = (status: PlatformAccessStatus): PlatformAccessForm => ({ enabled: status.enabled, device_id: status.device_id,
-  device_token: '', clear_device_token: false, ssh_enabled: status.ssh_enabled, ssh_port: status.ssh_port || 22 });
+  device_token: '', clear_device_token: false, ssh_enabled: status.ssh_enabled, ssh_port: status.ssh_port || 10022 });
 interface Snapshot {
   status: PlatformAccessStatus | null;
   form: PlatformAccessForm;

@@ -17,7 +17,7 @@ test('factory settings preserve existing token and exact revision without an edi
   assert.equal(request.connection_generation, '4');
   assert.equal(request.manager_address, '192.0.2.1:17000');
   assert.equal('platform_target' in request, false);
-  assert.equal(platformAccessRequest(status(), form({ ssh_port: 0 })).ssh_port, 22);
+  assert.equal(platformAccessRequest(status(), form({ ssh_port: 0 })).ssh_port, 10022);
 });
 test('identity change and token clearing obey lower device rules', () => {
   assert.throws(() => platformAccessRequest(status(), form({ device_id: 'other' })), /新令牌|清除/);
@@ -234,4 +234,26 @@ test('x64 runtime drift clears success while architecture aliases remain equival
   current = { ...current, network_config: preset() };
   await controller.refreshRuntime();
   assert.equal(controller.getSnapshot().saved, false);
+});
+
+test('SSH 默认开启且端口为 10022，重置后恢复默认值', () => {
+  const controller = createPlatformAccessController({ read: async () => status(), save: async () => status() });
+  assert.equal(controller.getSnapshot().form.ssh_enabled, true);
+  assert.equal(controller.getSnapshot().form.ssh_port, 10022);
+  controller.update({ ssh_enabled: false, ssh_port: 2222 });
+  controller.reset();
+  assert.equal(controller.getSnapshot().form.ssh_enabled, true);
+  assert.equal(controller.getSnapshot().form.ssh_port, 10022);
+});
+
+test('SSH 读取保留显式配置，缺省端口回退到 10022', async () => {
+  for (const port of [22, 2222, 0]) {
+    const controller = createPlatformAccessController({ read: async () => status({ ssh_enabled: false, ssh_port: port }), save: async () => status() });
+    await controller.read();
+    const draft = controller.getSnapshot().form;
+    assert.equal(draft.ssh_enabled, false);
+    assert.equal(draft.ssh_port, port || 10022);
+    assert.equal(platformAccessRequest(status(), draft).ssh_enabled, false);
+    assert.equal(platformAccessRequest(status(), draft).ssh_port, port || 10022);
+  }
 });

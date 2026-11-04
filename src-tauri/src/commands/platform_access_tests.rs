@@ -172,7 +172,7 @@ async fn real_manager_rpc_preserves_empty_token_and_exact_revision_without_secre
     assert_eq!(updated.revision, "9007199254740994");
     assert!(!updated.online);
     assert!(manager.requests.lock()[0].device_token.is_empty());
-    assert_eq!(manager.requests.lock()[0].ssh_port, 22);
+    assert_eq!(manager.requests.lock()[0].ssh_port, 10022);
     let mut changed = request(&updated);
     changed.device_token = "new-device-secret".into();
     let updated = write(&conn, changed).await.unwrap();

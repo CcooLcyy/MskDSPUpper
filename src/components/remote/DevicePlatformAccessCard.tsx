@@ -135,7 +135,7 @@ export default function DevicePlatformAccessCard({ connectionKey, ready }: { con
             <Switch checked={form.ssh_enabled} disabled={disabled} onChange={ssh_enabled => controller.update({ ssh_enabled })} aria-label="允许远程 SSH" />
           </Form.Item>
           <Form.Item label="本机 SSH 端口" htmlFor="platform-access-ssh-port">
-            <InputNumber id="platform-access-ssh-port" value={form.ssh_port || null} min={1} max={65535} precision={0} disabled={disabled || !form.ssh_enabled} placeholder="默认 22"
+            <InputNumber id="platform-access-ssh-port" value={form.ssh_port || null} min={1} max={65535} precision={0} disabled={disabled || !form.ssh_enabled} placeholder="默认 10022"
               aria-label="下位机本机 SSH 端口" onChange={port => controller.update({ ssh_port: port ?? 0 })} />
           </Form.Item>
         </Form>

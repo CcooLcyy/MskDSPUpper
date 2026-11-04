@@ -241,7 +241,7 @@ impl PlatformAccessWriteDto {
             device_token: self.device_token,
             ssh_enabled: self.ssh_enabled,
             ssh_port: if self.ssh_port == 0 {
-                22
+                10022
             } else {
                 self.ssh_port
             },
