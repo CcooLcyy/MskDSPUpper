@@ -44,6 +44,23 @@ export interface PlatformAuthLifecycle {
   resetWorkspace?: () => Promise<void>;
 }
 
+/** 仅转换桌面认证层的固定安全文案，不透传未知异常或凭据。 */
+function loginFailureMessage(error: unknown, usingSavedPassword: boolean): string {
+  const reason = typeof error === 'string' ? error : error instanceof Error ? error.message : null;
+  switch (reason) {
+    case '账号或密码错误，或账号已停用':
+      return usingSavedPassword ? '账号或密码错误，请重新输入密码。' : '账号或密码错误，请重新输入。';
+    case '无法连接平台，请检查网络、平台地址和证书':
+      return '无法连接平台，请检查网络、平台地址和证书。';
+    case '平台登录协议响应无效，请检查平台版本':
+      return reason;
+    default:
+      return usingSavedPassword
+        ? '无法使用已保存密码登录，请重新输入密码，并检查账号启用状态及平台连接地址。'
+        : '登录失败，请检查账号、密码、账号启用状态及平台连接地址。';
+  }
+}
+
 /** 只保留不含秘密的界面状态，密码直接交给桌面认证接口。 */
 export function createPlatformAuthController(
   api: PlatformAuthApi,
@@ -148,8 +165,12 @@ export function createPlatformAuthController(
       if (epoch !== generation) return;
       if (valid(status) && snapshot.settings) update({ settings: { ...snapshot.settings, username: status.username!, auto_login: autoLogin, remember_password: remember } });
       await initialize(status, epoch);
-    } catch {
-      if (epoch === generation) lock(password ? '登录失败，请检查账号、密码、账号启用状态及平台连接地址。' : '无法使用已保存密码登录，请重新输入密码，并检查账号启用状态及平台连接地址。');
+    } catch (error) {
+      if (epoch === generation) {
+        const message = loginFailureMessage(error, !password);
+        console.warn('平台登录未完成', { 提示: message });
+        lock(message);
+      }
     }
   }
 

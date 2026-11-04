@@ -92,6 +92,58 @@ test('failed login never opens business configuration', async () => {
   assert.equal(controller.getSnapshot().phase, 'signed_out');
   assert.equal(controller.getSnapshot().workspaceReady, false);
 });
+// 仅识别本地认证层的固定安全文案，字符串与 Error 保持一致的错误分类。
+for (const wrap of [value => value, value => Error(value)]) {
+  for (const [name, reason, password, expected] of [
+    ['manual credentials', '账号或密码错误，或账号已停用', 'wrong', '账号或密码错误，请重新输入。'],
+    ['remembered credentials', '账号或密码错误，或账号已停用', '', '账号或密码错误，请重新输入密码。'],
+    ['network', '无法连接平台，请检查网络、平台地址和证书', 'secret', '无法连接平台，请检查网络、平台地址和证书。'],
+    ['protocol', '平台登录协议响应无效，请检查平台版本', 'secret', '平台登录协议响应无效，请检查平台版本'],
+  ]) {
+    test(`login failure classifies ${name} from ${typeof wrap(reason)}`, async () => {
+      let attempts = 0;
+      const { controller, calls } = fixture({ login: async () => {
+        attempts += 1;
+        if (attempts === 1) throw wrap(reason);
+        return loggedIn();
+      } });
+      await controller.start();
+      await controller.login('alice', password, false, !password);
+      assert.equal(controller.getSnapshot().error, expected);
+      assert.equal(controller.getSnapshot().phase, 'signed_out');
+      assert.equal(controller.getSnapshot().workspaceReady, false);
+      assert.equal(calls.filter(call => call[0] === 'initialize').length, 0);
+      await controller.login('alice', 'secret', false);
+      assert.equal(attempts, 2);
+      assert.equal(controller.getSnapshot().phase, 'authenticated');
+      assert.equal(controller.getSnapshot().error, null);
+      assert.equal(calls.filter(call => call[0] === 'initialize').length, 1);
+    });
+  }
+}
+
+// 未知异常即使包含可信文案的子串，也不能把原始信息或凭据带入界面。
+test('unknown login failures keep safe fallback without leaking private details', async () => {
+  for (const reason of [
+    '账号或密码错误，或账号已停用 private-secret',
+    Error('无法连接平台，请检查网络、平台地址和证书 private-secret'),
+    { message: '账号或密码错误，或账号已停用', password: 'private-secret' },
+  ]) {
+    for (const password of ['private-secret', '']) {
+      const { controller, calls } = fixture({ login: async () => { throw reason; } });
+      await controller.start();
+      await controller.login('alice', password, false, !password);
+      assert.equal(controller.getSnapshot().error, password
+        ? '登录失败，请检查账号、密码、账号启用状态及平台连接地址。'
+        : '无法使用已保存密码登录，请重新输入密码，并检查账号启用状态及平台连接地址。');
+      assert.equal(controller.getSnapshot().phase, 'signed_out');
+      assert.equal(controller.getSnapshot().workspaceReady, false);
+      assert.equal(calls.filter(call => call[0] === 'initialize').length, 0);
+      assert.ok(!JSON.stringify(controller.getSnapshot()).includes('private-secret'));
+    }
+  }
+});
+
 test('temporary status failure keeps valid lease; expiry locks while retaining drafts', async () => {
   const { controller, setNow } = fixture({ getStatus: async () => { throw Error('network'); } });
   await controller.start();
