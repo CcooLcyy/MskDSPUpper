@@ -143,6 +143,7 @@ test('local capability methods are delegated to the real api', () => {
     'configureVerticalSecurityCertificateProfile',
     'selectVerticalSecurityCertificate',
     'loginVerticalSecurity',
+    'loginVerticalSecurityOneClick',
     'cancelVerticalSecurityLogin',
     'logoutVerticalSecurity',
     'isVerticalSecurityLoginActive',

@@ -79,6 +79,7 @@ import type {
   VerticalSecurityAccessPathRequest,
   VerticalSecurityAccessPathResult,
   VerticalSecurityLoginRequest,
+  VerticalSecurityOneClickLoginRequest,
   VerticalSecurityLoginResult,
   VerticalSecurityPasswordChangeRequest,
   VerticalSecurityPasswordChangeResult,
@@ -286,6 +287,8 @@ export const api = {
   },
   loginVerticalSecurity: (request: VerticalSecurityLoginRequest) =>
     invoke<VerticalSecurityLoginResult>('login_vertical_security', { request }),
+  loginVerticalSecurityOneClick: (request: VerticalSecurityOneClickLoginRequest) =>
+    invoke<VerticalSecurityLoginResult>('login_vertical_security_one_click', { request }),
   cancelVerticalSecurityLogin: (requestId: string) =>
     invoke<void>('cancel_vertical_security_login', { requestId }),
   logoutVerticalSecurity: (sessionId: string) =>

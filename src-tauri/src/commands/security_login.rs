@@ -83,6 +83,25 @@ pub struct LoginRequest {
     password: String,
     role: u8,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OneClickLoginRequest {
+    request_id: String,
+    mode: LoginMode,
+    device_id: Option<String>,
+    role: u8,
+}
+
+fn automatic_account(role: u8) -> Option<(&'static str, &'static str)> {
+    match role {
+        1 => Some(("admin", "Nari.6712")),
+        2 => Some(("secure", "Nari6702")),
+        _ => None,
+    }
+}
+
+const MANAGED_PASSWORD: &str = "Meg@Admin123";
 impl Drop for LoginRequest {
     fn drop(&mut self) {
         self.password.zeroize();
@@ -234,6 +253,8 @@ struct LoginInner {
 #[derive(Default)]
 pub struct SecurityLoginManager {
     inner: Mutex<LoginInner>,
+    // 固定直连目标的完整认证流程独占，包括换密码、重连和手动认证入口。
+    authentication: tokio::sync::Mutex<()>,
     management_probe: tokio::sync::Mutex<()>,
     lockout: Mutex<lockout::LockoutState>,
 }
@@ -1043,6 +1064,14 @@ async fn connect_and_authenticate(
     if let Some(seconds) = manager.account_lock_seconds(&account) {
         return lockout::locked_result(result, seconds);
     }
+    {
+        let inner = manager.inner.lock();
+        if inner.config_generation != credentials.generation
+            || inner.pending.get(&result.request_id).is_none_or(|sender| *sender.borrow())
+        {
+            return result.failure(2, "cancelled", "登录请求已取消或证书配置已改变，未发送认证请求");
+        }
+    }
     let connection = match connect_management(profile).await {
         Ok(connection) => connection,
         Err(error) => {
@@ -1073,6 +1102,14 @@ async fn connect_and_authenticate(
     // TLS 建连可能耗时，发送凭据前再次核对单调时钟锁定记录。
     if let Some(seconds) = manager.account_lock_seconds(&account) {
         return lockout::locked_result(result, seconds);
+    }
+    {
+        let inner = manager.inner.lock();
+        if inner.config_generation != credentials.generation
+            || inner.pending.get(&result.request_id).is_none_or(|sender| *sender.borrow())
+        {
+            return result.failure(2, "cancelled", "登录请求已取消或证书配置已改变，未发送认证请求");
+        }
     }
     let exchange = exchange_credentials_once(&mut stream, &packet);
     let reply = tokio::time::timeout(Duration::from_secs(8), exchange).await;
@@ -1117,7 +1154,7 @@ pub fn get_vertical_security_login_capabilities() -> LoginCapabilities {
         direct_available: cfg!(windows),
         remote_available: false,
         password_change_available: cfg!(windows),
-        reason: "支持直连登录、默认或过期密码修改及只读初始化；修改后请使用新密码重新登录，远程通道与其他业务待接入",
+        reason: "支持直连一键登录、默认密码自动修改及重新认证；远程通道待接入",
     }
 }
 #[tauri::command]
@@ -1176,10 +1213,64 @@ pub async fn configure_vertical_security_certificate_profile(
 #[tauri::command]
 pub async fn login_vertical_security(
     state: tauri::State<'_, AppState>,
+    request: LoginRequest,
+) -> Result<LoginResult, String> {
+    run_login(&state.security_login, request, false).await
+}
+
+#[tauri::command]
+pub async fn login_vertical_security_one_click(
+    state: tauri::State<'_, AppState>,
+    request: OneClickLoginRequest,
+) -> Result<LoginResult, String> {
+    let (username, password) = automatic_account(request.role)
+        .ok_or_else(|| "一键登录仅支持系统管理员和安全操作员".to_string())?;
+    run_login(
+        &state.security_login,
+        LoginRequest {
+            request_id: request.request_id,
+            mode: request.mode,
+            device_id: request.device_id,
+            username: username.into(),
+            password: password.into(),
+            role: request.role,
+        },
+        true,
+    )
+    .await
+}
+
+// 调用取消或调用者释放未来时，及时关闭流程中保留的改密或认证连接。
+struct LoginConnectionCleanup<'a> {
+    manager: &'a SecurityLoginManager,
+    request_id: &'a str,
+    armed: bool,
+}
+impl Drop for LoginConnectionCleanup<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.manager.cancel(self.request_id);
+        }
+    }
+}
+
+async fn run_login(
+    manager: &Arc<SecurityLoginManager>,
     mut request: LoginRequest,
+    automatic: bool,
 ) -> Result<LoginResult, String> {
     tracing::info!("开始独立纵密登录请求");
     let mut result = LoginResult::new(&request);
+    let _authentication_guard = match manager.authentication.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return Ok(result.failure(
+                2,
+                "authentication_pending",
+                "纵密已有登录流程正在执行，请等待结束后再操作",
+            ));
+        }
+    };
     let packet = match encode_login(&request.username, &request.password, request.role) {
         Ok(packet) => packet,
         Err(message) => return Ok(result.failure(2, "invalid_credentials", message)),
@@ -1187,7 +1278,6 @@ pub async fn login_vertical_security(
     let default_password = protocol::default_password(&request.username, &request.password);
     let old_digest = protocol::password_digest(&request.username, &request.password);
     request.password.zeroize();
-    let manager = &state.security_login;
     let (mut cancellation, _guard) = match manager.begin(&request.request_id) {
         Ok(started) => started,
         Err(message) => return Ok(result.failure(0, "request_rejected", message)),
@@ -1253,13 +1343,107 @@ pub async fn login_vertical_security(
     };
     let cancelled =
         LoginResult::new(&request).failure(0, "cancelled", "纵密登录已取消，连接已关闭");
+    let mut cleanup = LoginConnectionCleanup {
+        manager,
+        request_id: &request.request_id,
+        armed: true,
+    };
     tokio::select! { biased;
         _ = async { if !*cancellation.borrow() { let _ = cancellation.changed().await; } } => Ok(cancelled),
-        response = connect_and_authenticate(manager, result, profile, packet, credentials) => {
+        response = async {
+            if automatic {
+                let (_, default) = automatic_account(request.role).expect("一键角色已校验");
+                run_automatic_login(manager, default, |password| {
+                    let profile = profile.clone();
+                    let attempt_result = LoginResult::new(&request);
+                    let username = request.username.clone();
+                    let role = request.role;
+                    async move {
+                        let packet = match encode_login(&username, password, role) {
+                            Ok(packet) => packet,
+                            Err(message) => return attempt_result.failure(2, "invalid_credentials", message),
+                        };
+                        let credentials = AuthenticationContext {
+                            default_password: protocol::default_password(&username, password),
+                            old_digest: protocol::password_digest(&username, password),
+                            username,
+                            role,
+                            generation,
+                        };
+                        connect_and_authenticate(manager, attempt_result, profile, packet, credentials).await
+                    }
+                }).await
+            } else {
+                connect_and_authenticate(manager, result, profile, packet, credentials).await
+            }
+        } => {
             tracing::info!(code = response.code, state = response.state, "纵密登录尝试结束");
-            if *cancellation.borrow() { Ok(cancelled) } else { Ok(response) }
+            if *cancellation.borrow() {
+                Ok(cancelled)
+            } else {
+                cleanup.armed = false;
+                Ok(response)
+            }
         }
     }
+}
+
+async fn run_automatic_login<F, Fut>(
+    manager: &SecurityLoginManager,
+    default: &'static str,
+    mut attempt: F,
+) -> LoginResult
+where
+    F: FnMut(&'static str) -> Fut,
+    Fut: std::future::Future<Output = LoginResult>,
+{
+    tracing::info!("纵密一键登录开始，先执行默认凭据认证，不记录密码");
+    let mut result = attempt(default).await;
+    if result.state == "failed" && result.code == "credentials_rejected" {
+        tracing::info!("装置明确拒绝默认凭据，仅切换统一凭据认证一次");
+        result = attempt(MANAGED_PASSWORD).await;
+        // 统一密码已过期时，不能把相同密码当作新密码提交。
+        if result.state == "password_change_required" {
+            return automatic_change_failure(manager, result, "managed_password_expired", "统一密码已过期或装置要求重新设密，已停止自动登录，请人工处理密码策略");
+        }
+        return result;
+    }
+    if result.state != "password_change_required" {
+        return result;
+    }
+    let Some(challenge) = result.challenge_id.take() else {
+        return result.failure(2, "challenge_unavailable", "自动改密连接缺失，已停止登录");
+    };
+    tracing::info!("默认凭据认证成功，提交一次统一密码修改请求");
+    let changed = manager
+        .change_password(&challenge, Zeroizing::new(MANAGED_PASSWORD.into()))
+        .await;
+    if !changed.changed {
+        // 请求可能已经到达装置；结果不确定时不继续认证或重复改密。
+        return result.failure(2, "automatic_password_change_failed", changed.message);
+    }
+    tracing::info!("装置明确确认改密成功，使用统一凭据重新认证一次");
+    let result = attempt(MANAGED_PASSWORD).await;
+    if result.state == "password_change_required" {
+        automatic_change_failure(manager, result, "password_change_still_required", "改密后装置仍要求修改密码，已停止自动登录，请核实装置状态")
+    } else {
+        result
+    }
+}
+
+fn automatic_change_failure(
+    manager: &SecurityLoginManager,
+    mut result: LoginResult,
+    code: &'static str,
+    message: &str,
+) -> LoginResult {
+    if let Some(challenge) = result.challenge_id.take() {
+        let mut inner = manager.inner.lock();
+        if let Some(entry) = inner.connections.remove(&challenge) {
+            entry.close();
+        }
+    }
+    result.failure(2, code, message)
 }
 #[tauri::command]
 pub async fn run_vertical_security_admin(

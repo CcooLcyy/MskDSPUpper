@@ -8,6 +8,18 @@ const profile = { configured: true, client_certificate_path: 'fixture.p12', trus
 const result = () => ({ ...request, state: 'authenticated', code: 'fixture', message: '', target_ip: '11.22.33.44', device_id: null, session_id: 'fixture-session', challenge_id: null, lock_seconds: null, last_login_at: null, device_version: null, steps: ['connect', 'tls', 'authenticate', 'initialize'].map(id => ({ id, name: id, state: 'success', message: '' })) });
 const challengeResult = () => ({ ...result(), state: 'password_change_required', code: 'default_password', session_id: null, challenge_id: 'fixture-challenge', steps: result().steps.map(step => step.id === 'initialize' ? { ...step, state: 'pending' } : step) });
 
+test('一键登录角色绑定固定账号，仍严格核对最终会话身份', () => {
+  for (const [role, username] of [[1, 'admin'], [2, 'secure']]) {
+    assert.equal(loginState.getOneClickLoginUsername(role), username);
+    const identity = { ...request, role, username };
+    const response = { ...result(), role, username };
+    assert.equal(isAuthenticatedLogin(identity, response), true);
+    assert.equal(isAuthenticatedLogin(identity, { ...response, username: role === 1 ? 'secure' : 'admin' }), false);
+    assert.equal(isAuthenticatedLogin(identity, { ...response, role: 3 }), false);
+    assert.equal(isAuthenticatedLogin(identity, { ...response, state: 'password_change_required', session_id: null }), false);
+  }
+});
+
 test('仅接受匹配请求与身份且四阶段成功的认证会话', () => {
   assert.equal(isAuthenticatedLogin(request, result()), true);
   for (const [key, value] of Object.entries({ request_id: 'other', target_ip: '127.0.0.1', mode: 'remote', device_id: 'other', username: 'fixture-user', role: 1, session_id: null, state: 'unverified_response' })) {

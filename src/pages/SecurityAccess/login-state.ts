@@ -5,9 +5,14 @@ import type {
   VerticalSecurityLoginCapabilities,
   VerticalSecurityLoginRequest,
   VerticalSecurityLoginResult,
+  VerticalSecurityOneClickLoginRequest,
 } from '../../adapters/types.ts';
 
 export type LoginIdentity = Omit<VerticalSecurityLoginRequest, 'password'>;
+
+export function getOneClickLoginUsername(role: VerticalSecurityOneClickLoginRequest['role']): string {
+  return role === 1 ? 'admin' : 'secure';
+}
 export const LOGIN_STAGES = [
   { id: 'connect', name: '连接装置' },
   { id: 'tls', name: 'TLS 安全连接' },

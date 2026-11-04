@@ -71,7 +71,7 @@ try {
   await page.getByRole('button', { name: /检查直连/ }).waitFor({ timeout: 45000 });
   assert.equal(await page.getByLabel('纵密用户名', { exact: true }).count(), 0, '访问通路页不得挂载纵密登录表单');
   assert.equal(await page.locator('.security-login-workbench').count(), 0);
-  assert.equal((await page.evaluate(() => window.__securityMock.calls)).some(call => /^(get_vertical_security_login_capabilities|get_vertical_security_certificate_profile|login_vertical_security)$/.test(call.command)), false, '访问通路页不得加载登录能力或证书');
+  assert.equal((await page.evaluate(() => window.__securityMock.calls)).some(call => /^(get_vertical_security_login_capabilities|get_vertical_security_certificate_profile|login_vertical_security_one_click)$/.test(call.command)), false, '访问通路页不得加载登录能力或证书');
   await page.getByRole('heading', { name: '纵密访问通路', level: 1, exact: true }).waitFor();
   results.push('访问通路页独立显示标题和网络检查，不挂载认证界面或加载登录能力及证书');
   const ready = { mode: 'direct', target_ip: '11.22.33.44', device_id: null, state: 'ready', session_id: null, checked_at_ms: Date.UTC(2026, 9, 28, 9, 20, 0), steps: [

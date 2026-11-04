@@ -173,7 +173,7 @@ try {
   await page.waitForFunction(() => window.__securityNavigationMock.calls.some(call => call.command === 'get_vertical_security_access_capabilities'));
   assert.equal(await page.getByLabel('纵密用户名', { exact: true }).count(), 0);
   assert.equal(await page.locator('.security-login-workbench').count(), 0);
-  assert.equal((await calls()).some(call => /^(get_vertical_security_login_capabilities|get_vertical_security_certificate_profile|login_vertical_security)$/.test(call.command)), false);
+  assert.equal((await calls()).some(call => /^(get_vertical_security_login_capabilities|get_vertical_security_certificate_profile|login_vertical_security_one_click)$/.test(call.command)), false);
   await capture('access');
   results.push('访问通路子页真实网络检查、选中状态及标题正确，不挂载认证或加载登录能力及证书');
 
@@ -315,7 +315,7 @@ try {
   results.push('登录和访问通路远程模式的设备选择与不可用提示保持正常布局');
 
   assert.deepEqual(await page.evaluate(() => window.__securityNavigationMock.unexpected), []);
-  assert.equal((await calls()).some(call => /^(login_vertical_security|check_vertical_security_access|configure_vertical_security_access_path|deploy_vertical_security_script)$/.test(call.command)), false);
+  assert.equal((await calls()).some(call => /^(login_vertical_security_one_click|check_vertical_security_access|configure_vertical_security_access_path|deploy_vertical_security_script)$/.test(call.command)), false);
   assert.deepEqual(failures, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ baseline, results, failures }, null, 2));
   console.log(JSON.stringify({ output, baseline, results }, null, 2));

@@ -53,7 +53,7 @@ export default function SecurityLoginPage() {
       {mode === 'remote' && !desktop && <Alert type="info" title="平台设备列表需要桌面版上位机" />}
       {mode === 'remote' && deviceError && <Alert type="warning" showIcon title={deviceError} />}
     </>} />
-    {!authenticated && mode === 'direct' && <p className="security-login-hint">首次使用可在访问通路页配置维护通路，随后手动登录纵密装置。</p>}
+    {!authenticated && mode === 'direct' && <p className="security-login-hint">首次使用可在访问通路页配置维护通路，随后一键登录纵密装置。</p>}
     </div>
   </div>;
 }

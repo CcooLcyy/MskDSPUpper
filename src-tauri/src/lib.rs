@@ -236,6 +236,7 @@ pub fn run() {
                 commands::security_login::use_builtin_vertical_security_certificates,
                 commands::security_login::configure_vertical_security_certificate_profile,
                 commands::security_login::login_vertical_security,
+                commands::security_login::login_vertical_security_one_click,
                 commands::security_login::cancel_vertical_security_login,
                 commands::security_login::logout_vertical_security,
                 commands::security_login::is_vertical_security_login_active,

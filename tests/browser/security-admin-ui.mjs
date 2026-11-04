@@ -23,7 +23,7 @@ import { retainLogin } from ${JSON.stringify('/@fs/' + root + '/src/pages/Securi
 import ${JSON.stringify('/@fs/' + root + '/src/pages/SecurityAccess/index.css')};
 import ${JSON.stringify('/@fs/' + root + '/src/pages/SecurityLogin/index.css')};
 const loginRole = new URLSearchParams(location.search).get('loginRole');
-if (loginRole && loginRole !== '0') retainLogin({ request_id: 'fixture-request', state: 'authenticated', code: 'success', message: '测试认证', target_ip: '11.22.33.44', mode: 'direct', device_id: null, session_id: 'fixture-login', challenge_id: null, username: 'fixture-user', role: Number(loginRole), lock_seconds: null, last_login_at: null, device_version: 'fixture', steps: [] });
+if (loginRole && loginRole !== '0') retainLogin({ request_id: 'fixture-request', state: 'authenticated', code: 'success', message: '测试认证', target_ip: '11.22.33.44', mode: 'direct', device_id: null, session_id: 'fixture-login', challenge_id: null, username: loginRole === '1' ? 'admin' : loginRole === '2' ? 'secure' : 'audit', role: Number(loginRole), lock_seconds: null, last_login_at: null, device_version: 'fixture', steps: [] });
 function Fixture() {
   const [sessionId, setSessionId] = useState('fixture-a');
   const [visible, setVisible] = useState(true);
@@ -179,10 +179,14 @@ try {
   for (const role of [0, 2, 3]) {
     await page.goto(url + '?loginRole=' + role, { waitUntil: 'commit' });
     await page.getByLabel('纵密登录工作台', { exact: true }).waitFor();
-    if (role === 0) await page.getByText('登录纵密', { exact: true }).waitFor();
+    if (role === 0 || role === 3) await page.getByText('登录纵密', { exact: true }).waitFor();
     else await page.getByText('退出纵密登录', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('纵密系统管理员工作台', { exact: true }).count(), 0);
     assert.equal((await calls()).length, 0);
+    if (role === 3) {
+      assert.equal(await page.getByText('退出纵密登录', { exact: true }).count(), 0, '旧审计员会话不得恢复');
+      assert.equal(await page.evaluate(() => window.__admin.calls.some(call => call.command === 'logout_vertical_security' && call.args.sessionId === 'fixture-login')), true);
+    }
   }
   await page.goto(url + '?loginRole=1', { waitUntil: 'commit' });
   await page.getByLabel('纵密系统管理员工作台', { exact: true }).waitFor();

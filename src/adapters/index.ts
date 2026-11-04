@@ -45,6 +45,7 @@ export type {
   VerticalSecurityAccessPathStep,
   VerticalSecurityAccessPathResult,
   VerticalSecurityLoginRequest,
+  VerticalSecurityOneClickLoginRequest,
   VerticalSecurityLoginStep,
   VerticalSecurityLoginResult,
   VerticalSecurityPasswordChangeRequest,

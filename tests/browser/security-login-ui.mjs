@@ -81,7 +81,7 @@ async function openFixture(options = {}) {
           mock.configured = true;
           return profile();
         }
-        if (command === 'login_vertical_security') return new Promise((resolve, reject) => mock.login.push({ resolve, reject, request: args.request }));
+        if (command === 'login_vertical_security_one_click') return new Promise((resolve, reject) => mock.login.push({ resolve, reject, request: args.request }));
         if (command === 'check_vertical_security_access') return new Promise((resolve, reject) => mock.checks.push({ resolve, reject }));
         if (command === 'logout_vertical_security') return mock.deferLogout ? new Promise((resolve, reject) => mock.logouts.push({ resolve, reject })) : null;
         if (command === 'cancel_vertical_security_login' || command === 'close_vertical_security_access') return null;
@@ -102,17 +102,19 @@ async function openFixture(options = {}) {
 }
 
 const loginButton = () => page.getByRole('button', { name: /登录纵密/ });
-const username = () => page.getByLabel('纵密用户名', { exact: true });
-const password = () => page.getByLabel('纵密密码', { exact: true });
-async function fillLogin() {
-  await username().fill('fixture-user');
-  await password().fill('fixture-secret');
+async function assertNoCredentialInputs() {
+  for (const label of ['纵密用户名', '纵密密码', '纵密新密码', '确认纵密新密码']) {
+    assert.equal(await page.getByLabel(label, { exact: true }).count(), 0, '一键登录不要求输入凭据');
+  }
 }
 async function submitLogin() {
-  await fillLogin();
+  await assertNoCredentialInputs();
   await loginButton().click();
   await page.waitForFunction(() => window.__securityLoginMock.login.length > 0);
-  return page.evaluate(() => window.__securityLoginMock.login.at(-1).request);
+  const request = await page.evaluate(() => window.__securityLoginMock.login.at(-1).request);
+  assert.equal('username' in request, false, '前端不发送用户名');
+  assert.equal('password' in request, false, '前端不发送密码');
+  return request;
 }
 async function resolveLogin(patch = {}) {
   await page.evaluate(change => {
@@ -120,14 +122,14 @@ async function resolveLogin(patch = {}) {
     const request = pending.request;
     if (change.code === 'account_locked' && change.lock_seconds > 0) {
       const mock = window.__securityLoginMock;
-      mock.locks = mock.locks.filter(lock => lock.username !== request.username || lock.mode !== request.mode || lock.device_id !== (request.device_id ?? null));
-      mock.locks.push({ mode: request.mode, device_id: request.device_id ?? null, username: request.username, deadline: Date.now() + change.lock_seconds * 1000 });
+      mock.locks = mock.locks.filter(lock => lock.username !== (request.role === 1 ? 'admin' : 'secure') || lock.mode !== request.mode || lock.device_id !== (request.device_id ?? null));
+      mock.locks.push({ mode: request.mode, device_id: request.device_id ?? null, username: request.role === 1 ? 'admin' : 'secure', deadline: Date.now() + change.lock_seconds * 1000 });
       sessionStorage.setItem('fixture-login-locks', JSON.stringify(mock.locks));
     }
     pending.resolve({
       request_id: request.request_id, state: 'authenticated', code: 'authenticated', message: 'fixture 登录成功',
       target_ip: '11.22.33.44', mode: request.mode, device_id: request.device_id ?? null,
-      session_id: 'fixture-session', challenge_id: null, username: request.username, role: request.role,
+      session_id: 'fixture-session', challenge_id: null, username: request.role === 1 ? 'admin' : 'secure', role: request.role,
       lock_seconds: null, last_login_at: '2026-01-01 01:02:03', device_version: 'fixture-version',
       steps: ['connect', 'tls', 'authenticate', 'initialize'].map(id => ({ id, name: id, state: 'success', message: 'fixture 阶段完成' })), ...change,
     });
@@ -136,15 +138,6 @@ async function resolveLogin(patch = {}) {
 async function requirePasswordChange(patch = {}) {
   await resolveLogin({ state: 'password_change_required', code: 'default_password', message: 'fixture 默认密码必须修改', session_id: null, challenge_id: 'fixture-challenge', device_version: null,
     steps: ['connect', 'tls', 'authenticate', 'initialize'].map(id => ({ id, name: id, state: id === 'initialize' ? 'pending' : 'success', message: id === 'initialize' ? '修改密码后重新登录，再读取装置信息' : 'fixture 阶段完成' })), ...patch });
-}
-async function fillNewPassword(value = 'FixtureNew12!') {
-  await page.getByLabel('纵密新密码', { exact: true }).fill(value);
-  await page.getByLabel('确认纵密新密码', { exact: true }).fill(value);
-}
-async function submitPasswordChange() {
-  await fillNewPassword();
-  await page.getByRole('button', { name: '修改密码并返回登录', exact: true }).click();
-  await page.waitForFunction(() => window.__securityLoginMock.changes.length === 1);
 }
 const calls = () => page.evaluate(() => window.__securityLoginMock.calls);
 async function assertNoPersistedSecret() {
@@ -167,7 +160,7 @@ try {
   assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0, '活性查询完成前不能展示缓存身份');
   await page.evaluate(() => { for (const check of window.__securityLoginMock.activeChecks.splice(0)) check.resolve(true); window.__securityLoginMock.deferActiveCheck = false; });
   await page.getByText('fixture-version', { exact: true }).waitFor();
-  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1, '返回页面不自动重新认证或续期');
+  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security_one_click').length, 1, '返回页面不自动重新认证或续期');
   assert.equal((await calls()).filter(call => call.command === 'is_vertical_security_login_active').every(call => call.args.connectionId === 'fixture-session'), true);
   await assertNoPersistedSecret();
   await page.screenshot({ path: path.join(output, 'session-restored.png'), fullPage: true });
@@ -201,7 +194,7 @@ try {
     }, failure);
     await loginButton().waitFor();
     assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
-    assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1);
+    assert.equal((await calls()).filter(call => call.command === 'login_vertical_security_one_click').length, 1);
   }
   results.push('返回页面即时查询失败或连接已失效时，不展示缓存身份且不自动认证');
 
@@ -226,7 +219,7 @@ try {
     await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
     await loginButton().waitFor();
     assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
-    assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1);
+    assert.equal((await calls()).filter(call => call.command === 'login_vertical_security_one_click').length, 1);
   }
   results.push('离页后仍检测断线和查询失败，失效会话无法恢复');
 
@@ -245,35 +238,29 @@ try {
   assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
   results.push('退出请求期间切页，迟到成功仍撤销共享身份');
 
-  // 未完成认证或改密挑战不属于可跨页保留的已登录会话。
-  for (const pending of ['login', 'challenge']) {
-    await openFixture({ passwordChangeAvailable: true });
-    const identity = await submitLogin();
-    if (pending === 'challenge') { await requirePasswordChange(); await page.getByLabel('纵密新密码', { exact: true }).waitFor(); }
-    await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
-    await page.waitForFunction(requestId => window.__securityLoginMock.calls.some(call => call.command === 'cancel_vertical_security_login' && call.args.requestId === requestId), pending === 'challenge' ? 'fixture-challenge' : identity.request_id);
-    if (pending === 'login') {
-      await resolveLogin({ session_id: 'fixture-late-navigation-session' });
-      await page.waitForFunction(() => window.__securityLoginMock.calls.some(call => call.command === 'logout_vertical_security' && call.args.sessionId === 'fixture-late-navigation-session'));
-    }
-    await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
-    await loginButton().waitFor();
-    assert.equal(await password().inputValue(), '');
-    assert.equal(await page.getByLabel('纵密新密码', { exact: true }).count(), 0);
-  }
-  results.push('切页继续清理未完成认证、迟到认证结果与改密挑战');
+  // 自动改密与重新认证也属于未完成的一键请求，离页后必须取消。
+  await openFixture();
+  const pendingIdentity = await submitLogin();
+  await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
+  await page.waitForFunction(requestId => window.__securityLoginMock.calls.some(call => call.command === 'cancel_vertical_security_login' && call.args.requestId === requestId), pendingIdentity.request_id);
+  await resolveLogin({ session_id: 'fixture-late-navigation-session' });
+  await page.waitForFunction(() => window.__securityLoginMock.calls.some(call => call.command === 'logout_vertical_security' && call.args.sessionId === 'fixture-late-navigation-session'));
+  await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
+  await loginButton().waitFor();
+  await assertNoCredentialInputs();
+  results.push('切页取消未完成的一键请求并清理迟到会话');
 
   if (!process.argv.includes('--session-only')) {
   await openFixture({ configured: false });
-  // 默认选择系统管理员，仍需手动输入账号与密码才能提交认证。
+  // 默认选择系统管理员，只有显式点击登录按钮才发起认证。
   assert.equal(await page.locator('.ant-select').filter({ has: page.getByRole('combobox', { name: '纵密登录角色', exact: true }) }).innerText(), '系统管理员');
-  assert.equal((await calls()).some(call => call.command === 'login_vertical_security'), false, '默认角色不触发自动登录');
-  assert.equal(await username().inputValue(), '');
-  assert.equal(await password().inputValue(), '');
-  await fillLogin();
+  assert.equal((await calls()).some(call => call.command === 'login_vertical_security_one_click'), false, '默认角色不触发自动登录');
+  await assertNoCredentialInputs();
+  await assertNoCredentialInputs();
+  await assertNoCredentialInputs();
   assert.equal(await loginButton().isDisabled(), true, '未配置证书时不允许登录');
   await assertNoPersistedSecret();
-  results.push('初始无预置账号秘密，证书未配置时禁止登录');
+  results.push('初始无凭据输入框，证书未配置时禁止登录');
 
   // 证书控件实际经过原生文件选择器 IPC，返回的路径全部是虚构值。
   await page.locator('.security-login-certificate > summary').click();
@@ -301,12 +288,11 @@ try {
   const request = await submitLogin();
   assert.equal(request.mode, 'direct');
   assert.equal(request.device_id, undefined);
-  assert.equal(request.username, 'fixture-user');
-  assert.equal(request.password, 'fixture-secret');
+  assert.deepEqual(Object.keys(request).sort(), ['mode', 'request_id', 'role']);
   assert.equal(request.role, 1, '未切换角色时使用系统管理员进行认证');
   assert.equal(typeof request.request_id, 'string');
   assert.equal(request.request_id.length > 0, true);
-  assert.equal(await password().inputValue(), '', '提交后清空密码');
+  await assertNoCredentialInputs();
   await resolveLogin();
   await page.getByText('fixture-version', { exact: true }).waitFor();
   assert.equal((await calls()).some(call => call.command === 'remote_select_device'), false);
@@ -321,6 +307,10 @@ try {
     ['wrong-mode', { mode: 'remote' }],
     ['wrong-request', { request_id: 'fixture-unrelated-request' }],
     ['wrong-user', { username: 'fixture-other-user' }],
+    ['missing-user', { username: null }],
+    ['missing-role', { role: null }],
+    ['invalid-old-certificate', { certificate_group: 'old', legacy_compatibility: false }],
+    ['invalid-new-certificate', { certificate_group: 'new', legacy_compatibility: true }],
     ['wrong-role', { role: 3 }],
     ['wrong-device', { device_id: 'fixture-other-dsp' }],
     ['missing-stages', { steps: [] }],
@@ -341,62 +331,64 @@ try {
     ['failed', 'invalid_credentials', 'fixture 用户名或密码错误', {}],
     ['unverified_response', 'unknown_response', 'fixture 未知设备应答，未确认登录', {}],
     ['failed', 'certificate_error', 'fixture 证书验证失败', {}],
+    ['failed', 'password_change_unconfirmed', 'fixture 改密结果未确认，请核实装置状态', {}],
     ['failed', 'account_locked', 'fixture 账户锁定，请等待', { lock_seconds: 120 }],
     ['unsupported', 'unavailable', 'fixture 登录能力暂不可用', {}],
   ]) {
     await openFixture();
     await submitLogin();
     await resolveLogin({ state, code, message: text, session_id: null, device_version: null, ...extra });
-    if (code === 'account_locked') await page.getByText(/纵密账号 fixture-user 已锁定，剩余 \d{2}:\d{2}/).waitFor();
+    if (code === 'account_locked') await page.getByText(/纵密账号 admin 已锁定，剩余 \d{2}:\d{2}/).waitFor();
     else await page.locator('.security-login-workbench .ant-alert-description').filter({ hasText: text }).waitFor();
-    assert.equal(await password().inputValue(), '');
+    await assertNoCredentialInputs();
     assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
+    assert.equal((await calls()).filter(call => call.command === 'login_vertical_security_one_click').length, 1, '前端不能自行重试');
+    assert.equal((await calls()).some(call => call.command === 'change_vertical_security_password'), false);
   }
   results.push('错误凭据、未知应答、证书失败、锁定及不支持均显示真实失败信息');
 
-  // 锁定期间按钮和回车均不提交，跨页和角色切换不能清掉同账号的等待。
+  await openFixture();
+  await submitLogin();
+  await page.evaluate(() => window.__securityLoginMock.login.shift().reject(new Error('fixture IPC 中断')));
+  await page.getByText('纵密登录失败，请检查连接与装置状态后手动重试。', { exact: true }).waitFor();
+  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security_one_click').length, 1);
+  assert.equal(await page.getByText('已登录纵密装置', { exact: true }).count(), 0);
+  results.push('一键请求异常停止，前端不自行追加认证');
+
+  // 锁定限制按后台固定用户名计算，切页或切回角色不能清掉等待。
   await openFixture();
   await submitLogin();
   await resolveLogin({ state: 'failed', code: 'account_locked', message: 'fixture 账号已锁定', session_id: null, lock_seconds: 120 });
-  await page.getByText(/纵密账号 fixture-user 已锁定，剩余/).waitFor();
-  const initialCountdown = await page.getByText(/纵密账号 fixture-user 已锁定，剩余/).innerText();
-  await page.getByText(initialCountdown, { exact: true }).waitFor({ state: 'detached' });
-  await password().fill('fixture-secret');
+  await page.getByText(/纵密账号 admin 已锁定，剩余/).waitFor();
   assert.equal(await loginButton().isDisabled(), true);
-  await password().press('Enter');
-  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1);
   await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
   await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
-  await page.getByText(/纵密账号 fixture-user 已锁定，剩余/).waitFor();
-  await fillLogin();
+  await page.getByText(/纵密账号 admin 已锁定，剩余/).waitFor();
   assert.equal(await loginButton().isDisabled(), true);
   await page.getByRole('combobox', { name: '纵密登录角色' }).click();
   await page.getByText('安全操作员', { exact: true }).click();
-  await fillLogin();
-  assert.equal(await loginButton().isDisabled(), true);
-  await password().press('Enter');
-  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1);
-  await username().fill('fixture-other-user');
-  assert.equal(await loginButton().isEnabled(), true, '不能将账号锁定扩大到其他账号');
+  assert.equal(await loginButton().isEnabled(), true, '管理员锁定不能扩大到安全操作员');
+  await page.getByRole('combobox', { name: '纵密登录角色' }).click();
+  await page.getByText('系统管理员', { exact: true }).click();
+  assert.equal(await loginButton().isDisabled(), true, '切回原账号仍受锁定限制');
+  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security_one_click').length, 1);
   await page.reload();
-  await page.getByText(/纵密账号 fixture-user 已锁定，剩余/).waitFor();
-  await fillLogin();
+  await page.getByText(/纵密账号 admin 已锁定，剩余/).waitFor();
   assert.equal(await loginButton().isDisabled(), true, '刷新页面后从后端恢复锁定');
   await assertNoPersistedSecret();
   await page.screenshot({ path: path.join(output, 'account-lock-countdown.png'), fullPage: true });
-  results.push('账号锁定禁用按钮和回车，跨页、刷新和切换角色后仍生效，其他账号不受影响');
+  results.push('固定账号锁定跨页、刷新和切换角色仍生效，其他账号不受影响');
 
   // 倒计时结束仅恢复手动提交；下一次装置锁定应答重新更新等待时间。
-  await openFixture({ locks: [{ mode: 'direct', device_id: null, username: 'fixture-user', lock_seconds: 3 }] });
-  await fillLogin();
-  await page.getByText('纵密账号 fixture-user 的锁定等待时间已结束', { exact: true }).waitFor();
+  await openFixture({ locks: [{ mode: 'direct', device_id: null, username: 'admin', lock_seconds: 3 }] });
+  await assertNoCredentialInputs();
+  await page.getByText('纵密账号 admin 的锁定等待时间已结束', { exact: true }).waitFor();
   assert.equal(await loginButton().isEnabled(), true);
-  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 0, '到期不能自动认证');
+  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security_one_click').length, 0, '到期不能自动认证');
   await loginButton().click();
   await page.waitForFunction(() => window.__securityLoginMock.login.length === 1);
   await resolveLogin({ state: 'failed', code: 'account_locked', message: 'fixture 仍然锁定', session_id: null, lock_seconds: 60 });
-  await page.getByText(/纵密账号 fixture-user 已锁定，剩余/).waitFor();
-  await password().fill('fixture-secret');
+  await page.getByText(/纵密账号 admin 已锁定，剩余/).waitFor();
   assert.equal(await loginButton().isDisabled(), true);
   results.push('倒计时到期恢复手动登录但不自动认证，最新锁定应答重新限制提交');
 
@@ -405,8 +397,7 @@ try {
     await submitLogin();
     await resolveLogin({ state: 'failed', code: 'account_locked', message: 'fixture 锁定应答', session_id: null, lock_seconds: lockSeconds });
     await page.getByText(lockSeconds === null ? '装置未提供有效剩余时间，无法显示倒计时。' : '装置返回剩余 0 秒，可手动重新尝试登录。', { exact: true }).waitFor();
-    await password().fill('fixture-secret');
-    assert.equal(await loginButton().isEnabled(), true, '不能虚构锁定时长');
+      assert.equal(await loginButton().isEnabled(), true, '不能虚构锁定时长');
   }
   results.push('缺失或零秒锁定应答保留提示，不虚构倒计时');
 
@@ -429,146 +420,76 @@ try {
   assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
   results.push('页面卸载后关闭迟到会话，新页面不继承旧认证结果');
 
+  // 一键流程对前端只返回最终结果；漏出的改密挑战必须拒绝并关闭。
+  for (const patch of [{}, { username: null, role: null, challenge_id: null }, { code: 'unknown' }]) {
+    await openFixture();
+    const identity = await submitLogin();
+    await requirePasswordChange(patch);
+    await page.getByText('一键登录未完成密码处理，当前账号尚未登录。', { exact: true }).waitFor();
+    await assertNoCredentialInputs();
+    assert.equal(await page.getByText('已登录纵密装置', { exact: true }).count(), 0);
+    const id = patch.challenge_id === null ? identity.request_id : 'fixture-challenge';
+    assert.equal((await calls()).some(call => call.command === 'cancel_vertical_security_login' && call.args.requestId === id), true);
+    assert.equal((await calls()).some(call => call.command === 'change_vertical_security_password'), false);
+  }
+  results.push('后台未完成改密的应答拒绝建立身份并清理，不暴露手动改密表单');
+
   await openFixture();
-  await fillLogin();
   await page.getByRole('combobox', { name: '纵密登录角色', exact: true }).click();
-  await page.getByText('日志审计员', { exact: true }).click();
-  assert.equal(await password().inputValue(), '', '切换角色清空密码');
-  const auditRequest = await submitLogin();
-  assert.equal(auditRequest.role, 3);
-  await requirePasswordChange({ message: 'fixture 需要更改默认密码' });
-  await page.getByText('fixture 需要更改默认密码', { exact: true }).waitFor();
-  assert.equal((await calls()).some(call => call.command === 'change_vertical_security_password'), false);
-  assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 0);
-  results.push('角色切换清秘密并继承新角色，未接入改密能力不伪装完成');
+  assert.equal(await page.getByRole('option', { name: '日志审计员', exact: true }).count(), 0);
+  assert.equal(await page.locator('.ant-select-item-option').count(), 2);
+  await page.getByText('安全操作员', { exact: true }).click();
+  const operatorRequest = await submitLogin();
+  assert.equal(operatorRequest.role, 2);
+  await resolveLogin();
+  await page.getByText('已登录纵密装置', { exact: true }).waitFor();
+  assert.equal(await page.locator('.security-admin-session').getByText('secure', { exact: true }).count(), 1);
+  results.push('仅保留两种身份，安全操作员使用固定账号建立会话');
 
+  // 同步连续点击也不能生成并发 IPC；自动改密和重登都在同一请求中完成。
   await openFixture();
-  const expiredRequest = await submitLogin();
-  await requirePasswordChange({ code: 'password_expired', username: null, role: null, challenge_id: null });
-  await page.getByText('密码变更身份或挑战不完整，已拒绝使用此结果，请重新登录。', { exact: true }).waitFor();
-  assert.equal(await page.getByText('已登录纵密装置', { exact: true }).count(), 0);
+  await loginButton().evaluate(button => { button.click(); button.click(); });
+  await page.waitForFunction(() => window.__securityLoginMock.login.length === 1);
+  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security_one_click').length, 1);
+  assert.equal(await loginButton().isDisabled(), true);
+  assert.equal(await page.getByRole('combobox', { name: '纵密登录角色' }).isDisabled(), true);
+  await resolveLogin({ message: 'fixture 自动改密并重新认证完成' });
+  await page.getByText('fixture-version', { exact: true }).waitFor();
+  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security_one_click').length, 1);
   assert.equal((await calls()).some(call => call.command === 'change_vertical_security_password'), false);
-  await loginButton().waitFor();
-  assert.equal((await calls()).some(call => call.command === 'cancel_vertical_security_login' && call.args.requestId === expiredRequest.request_id), true);
-  results.push('缺少身份或 challenge 时立即拒绝并按原请求清理');
-
-  for (const patch of [{ username: null }, { role: null }, { username: 'fixture-other' }, { challenge_id: ' ' }, { code: 'unknown' }]) {
-    await openFixture({ passwordChangeAvailable: true });
-    await submitLogin();
-    await requirePasswordChange(patch);
-    await page.getByText('密码变更身份或挑战不完整，已拒绝使用此结果，请重新登录。', { exact: true }).waitFor();
-    assert.equal(await page.getByLabel('纵密新密码', { exact: true }).count(), 0);
-    assert.equal((await calls()).some(call => call.command === 'cancel_vertical_security_login'), true);
-  }
-  results.push('改密身份缺失、不匹配及未知原因不产生可操作表单');
-
-  for (const patch of [
-    { steps: ['connect', 'tls', 'authenticate', 'initialize'].map(id => ({ id, name: id, state: 'success', message: 'fixture 伪造已完成初始化' })) },
-    { steps: ['connect', 'tls', 'authenticate', 'initialize'].map(id => ({ id, name: id, state: id === 'connect' || id === 'tls' ? 'success' : 'pending', message: 'fixture 认证尚未完成' })) },
-    { certificate_group: 'old', legacy_compatibility: false },
-    { certificate_group: 'new', legacy_compatibility: true },
-  ]) {
-    await openFixture({ passwordChangeAvailable: true });
-    await submitLogin();
-    await requirePasswordChange(patch);
-    await page.getByText('密码变更身份或挑战不完整，已拒绝使用此结果，请重新登录。', { exact: true }).waitFor();
-    assert.equal(await page.getByLabel('纵密新密码', { exact: true }).count(), 0);
-    assert.equal((await calls()).some(call => call.command === 'cancel_vertical_security_login' && call.args.requestId === 'fixture-challenge'), true);
-  }
-  results.push('未完成认证、伪造已初始化及证书兼容元数据冲突的 challenge 均被拒绝并清理');
-
-  await openFixture({ passwordChangeAvailable: true });
-  const changeIdentity = await submitLogin();
-  await requirePasswordChange();
-  await page.getByText('设置新密码', { exact: true }).waitFor();
-  const initializationStage = page.locator('.security-login-progress .security-access-step').filter({ hasText: '读取装置信息' });
-  await initializationStage.getByText('修改密码后重新登录，再读取装置信息', { exact: true }).waitFor();
-  assert.equal(await initializationStage.getByText('待确认', { exact: true }).count(), 1);
-  assert.equal(await initializationStage.getByText('通过', { exact: true }).count(), 0);
-  await page.screenshot({ path: path.join(output, 'password-change-required.png'), fullPage: true });
-  assert.equal(await page.getByText('当前密码为默认密码，必须修改后重新登录。', { exact: true }).count(), 1);
-  assert.equal(await page.getByLabel('纵密密码', { exact: true }).count(), 0, '改密不再次索取原密码');
-  assert.equal(await page.locator('.ant-segmented-item-disabled').count() > 0, true, '改密期间锁定目标');
-  await fillNewPassword('weak1234');
-  await page.getByRole('button', { name: '修改密码并返回登录', exact: true }).click();
-  await page.getByText(/新密码至少包含大写字母、小写字母、数字和特殊字符中的三类/).waitFor();
-  assert.equal((await calls()).some(call => call.command === 'change_vertical_security_password'), false);
-  await submitPasswordChange();
-  assert.equal(await page.getByLabel('纵密新密码', { exact: true }).inputValue(), '');
-  assert.equal(await page.getByLabel('确认纵密新密码', { exact: true }).inputValue(), '');
-  assert.deepEqual((await calls()).find(call => call.command === 'change_vertical_security_password').args.request, { challenge_id: 'fixture-challenge', new_password: 'FixtureNew12!' });
-  await page.evaluate(() => window.__securityLoginMock.changes.shift().resolve({ changed: true, message: 'fixture 改密成功' }));
-  await page.getByText('密码已修改，请使用新密码重新登录纵密装置。', { exact: true }).waitFor();
-  assert.equal(await username().inputValue(), changeIdentity.username);
-  assert.equal(await password().inputValue(), '');
-  assert.equal((await calls()).filter(call => call.command === 'login_vertical_security').length, 1, '改密成功不得自动登录');
-  await page.screenshot({ path: path.join(output, 'password-changed.png'), fullPage: true });
-  results.push('默认密码改密遵循规则、锁目标、提交清密并返回原账号手动重新登录');
-
-  for (const outcome of ['rejected', 'timeout']) {
-    await openFixture({ passwordChangeAvailable: true });
-    await submitLogin();
-    await requirePasswordChange({ code: 'password_expired' });
-    await page.getByText('密码已过期，必须修改后重新登录。', { exact: true }).waitFor();
-    await submitPasswordChange();
-    await page.evaluate(kind => {
-      const pending = window.__securityLoginMock.changes.shift();
-      if (kind === 'rejected') pending.resolve({ changed: false, message: 'fixture 装置拒绝修改密码，请重新登录。' });
-      else pending.reject(new Error('fixture timeout'));
-    }, outcome);
-    await loginButton().waitFor();
-    await page.getByText(outcome === 'rejected' ? 'fixture 装置拒绝修改密码，请重新登录。' : '密码修改结果未确认，请先手动核实装置状态后重新登录。', { exact: true }).waitFor();
-    assert.equal(await password().inputValue(), '');
-    assert.equal(await page.getByLabel('纵密新密码', { exact: true }).count(), 0);
-    assert.equal((await calls()).filter(call => call.command === 'change_vertical_security_password').length, 1);
-  }
-  results.push('拒绝和异常均消费 challenge，保留接口原因且异常提示结果未确认');
-
-  await openFixture({ passwordChangeAvailable: true });
-  await submitLogin();
-  await requirePasswordChange();
-  await page.getByRole('button', { name: '取消并返回登录', exact: true }).click();
-  await loginButton().waitFor();
-  assert.equal((await calls()).some(call => call.command === 'cancel_vertical_security_login' && call.args.requestId === 'fixture-challenge'), true);
-  results.push('取消改密使用 challenge_id 清理临时连接');
+  results.push('同步双击只产生一个 IPC，请求完成后直接进入业务会话');
 
   for (const leave of ['cancel', 'unmount']) {
-    await openFixture({ passwordChangeAvailable: true });
+    await openFixture();
     await submitLogin();
     await page.getByRole('button', { name: leave === 'cancel' ? /取消登录/ : '测试：离开页面' }).click();
     await requirePasswordChange({ challenge_id: 'fixture-late-challenge' });
     await page.waitForFunction(() => window.__securityLoginMock.calls.some(call => call.command === 'cancel_vertical_security_login' && call.args.requestId === 'fixture-late-challenge'));
-    assert.equal(await page.getByLabel('纵密新密码', { exact: true }).count(), 0);
+    await assertNoCredentialInputs();
   }
-  results.push('取消或卸载后迟到的 challenge 按 challenge_id 清理');
+  results.push('取消或卸载后迟到的异常改密挑战仍按标识清理');
 
-  await openFixture({ passwordChangeAvailable: true });
-  await submitLogin();
-  await requirePasswordChange();
-  await submitPasswordChange();
-  await page.getByRole('button', { name: '测试：离开页面', exact: true }).click();
-  await page.getByRole('button', { name: '测试：登录页', exact: true }).click();
-  await submitLogin();
-  await resolveLogin();
-  await page.getByText('fixture-version', { exact: true }).waitFor();
-  await page.evaluate(() => window.__securityLoginMock.changes.shift().resolve({ changed: true, message: 'fixture 迟到成功' }));
-  assert.equal(await page.getByText('fixture-version', { exact: true }).count(), 1);
-  assert.equal(await page.getByText('密码已修改，请使用新密码重新登录纵密装置。', { exact: true }).count(), 0);
-  results.push('卸载后迟到改密结果不能污染新页面登录');
-
-  for (const connection of ['session', 'challenge']) {
-    await openFixture({ passwordChangeAvailable: true });
+  for (const outcome of ['disconnected', 'query-error']) {
+    await openFixture();
     await submitLogin();
-    if (connection === 'session') { await resolveLogin(); await page.getByText('fixture-version', { exact: true }).waitFor(); }
-    else { await requirePasswordChange(); await page.getByLabel('纵密新密码', { exact: true }).waitFor(); }
-    await page.evaluate(() => { window.__securityLoginMock.connectionActive = false; });
+    await resolveLogin();
+    await page.getByText('fixture-version', { exact: true }).waitFor();
+    await page.evaluate(() => { window.__securityLoginMock.deferActiveCheck = true; });
+    await page.waitForFunction(() => window.__securityLoginMock.activeChecks.length === 1);
+    await page.evaluate(kind => {
+      const check = window.__securityLoginMock.activeChecks.shift();
+      if (kind === 'query-error') check.reject(new Error('fixture 状态查询失败'));
+      else check.resolve(false);
+      window.__securityLoginMock.deferActiveCheck = false;
+    }, outcome);
     await page.getByText('纵密连接已失效或状态无法确认，请重新登录。', { exact: true }).waitFor();
     await loginButton().waitFor();
-    assert.equal(await password().inputValue(), '');
+    await assertNoCredentialInputs();
   }
-  results.push('已登录会话与改密连接失效后均退出身份并清除密码');
+  results.push('会话断线或状态查询异常时撤销已登录身份');
 
-  await openFixture({ passwordChangeAvailable: true });
+  // 旧会话查询的迟到响应不能清掉后来创建的新会话。
+  await openFixture();
   await submitLogin();
   await resolveLogin();
   await page.getByText('fixture-version', { exact: true }).waitFor();
@@ -576,36 +497,12 @@ try {
   await page.waitForFunction(() => window.__securityLoginMock.activeChecks.length === 1);
   await page.getByRole('button', { name: /退出纵密登录/ }).click();
   await submitLogin();
-  await requirePasswordChange({ challenge_id: 'fixture-new-challenge' });
-  await fillNewPassword();
-  await page.evaluate(() => window.__securityLoginMock.activeChecks.shift().resolve(false));
-  assert.equal(await page.getByLabel('纵密新密码', { exact: true }).inputValue(), 'FixtureNew12!');
+  await resolveLogin({ session_id: 'fixture-new-session', device_version: 'fixture-new-version' });
+  await page.getByText('fixture-new-version', { exact: true }).waitFor();
+  await page.evaluate(() => { window.__securityLoginMock.activeChecks.shift().resolve(false); window.__securityLoginMock.deferActiveCheck = false; });
+  assert.equal(await page.getByText('fixture-new-version', { exact: true }).count(), 1);
   assert.equal(await page.getByText('纵密连接已失效或状态无法确认，请重新登录。', { exact: true }).count(), 0);
-  results.push('旧会话的迟到状态查询不能清除新 challenge 或密码');
-
-  await openFixture({ passwordChangeAvailable: true });
-  await submitLogin();
-  await requirePasswordChange();
-  await page.getByLabel('纵密新密码', { exact: true }).waitFor();
-  await page.evaluate(() => { window.__securityLoginMock.deferActiveCheck = true; });
-  await page.waitForFunction(() => window.__securityLoginMock.activeChecks.length === 1);
-  await submitPasswordChange();
-  await page.evaluate(() => window.__securityLoginMock.activeChecks.shift().resolve(false));
-  assert.equal(await page.getByLabel('纵密新密码', { exact: true }).count(), 1, '改密期间忽略旧查询');
-  await page.evaluate(() => window.__securityLoginMock.changes.shift().resolve({ changed: true, message: 'fixture 成功' }));
-  await loginButton().waitFor();
-  results.push('改密提交期间忽略迟到状态查询，等待改密结果');
-
-  await openFixture({ passwordChangeAvailable: true });
-  await submitLogin();
-  await requirePasswordChange();
-  await page.getByLabel('纵密新密码', { exact: true }).waitFor();
-  await page.evaluate(() => { window.__securityLoginMock.deferActiveCheck = true; });
-  await page.waitForFunction(() => window.__securityLoginMock.activeChecks.length === 1);
-  await page.evaluate(() => window.__securityLoginMock.activeChecks.shift().reject(new Error('fixture 状态查询失败')));
-  await page.getByText('纵密连接已失效或状态无法确认，请重新登录。', { exact: true }).waitFor();
-  await loginButton().waitFor();
-  results.push('状态查询异常时清除身份并要求重新登录');
+  results.push('旧会话迟到活性响应不影响新一键登录会话');
 
   await openFixture({ remoteAvailable: true });
   await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
@@ -621,12 +518,12 @@ try {
 
   await openFixture();
   await page.locator('.ant-segmented-item').filter({ hasText: '平台远程' }).click();
-  await fillLogin();
+  await assertNoCredentialInputs();
   const device = page.getByRole('combobox', { name: '目标 DSP', exact: true });
   await device.click();
   await page.getByText('测试 DSP · 在线', { exact: true }).click();
   assert.equal(await loginButton().isDisabled(), true);
-  assert.equal((await calls()).some(call => call.command === 'login_vertical_security' || call.command === 'remote_select_device'), false);
+  assert.equal((await calls()).some(call => call.command === 'login_vertical_security_one_click' || call.command === 'remote_select_device'), false);
   await page.screenshot({ path: path.join(output, 'remote-unavailable.png'), fullPage: true });
   results.push('远程能力未接入时禁止登录，不发起认证或改动全局目标');
 

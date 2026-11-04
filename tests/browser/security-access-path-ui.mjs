@@ -76,7 +76,7 @@ async function openFixture(options = {}) {
         }
         if (command === 'configure_vertical_security_certificate_profile') { mock.source = 'custom'; return profile(); }
         if (command === 'plugin:dialog|open') return args.options.title.includes('PKCS12') ? 'C:\\fixture\\client.p12' : 'C:\\fixture\\trust.pem';
-        if (command === 'login_vertical_security') return { ...args.request, state: 'unverified_response', target_ip: '11.22.33.44', device_id: null, session_id: null, challenge_id: null, code: 'fixture', message: initial.tlsFailed ? 'fixture TLS 证书验证失败' : '虚构未验证应答', lock_seconds: null, last_login_at: null, device_version: null, certificate_group: initial.certificateGroup || null, legacy_compatibility: initial.legacyCompatibility === true, steps: initial.certificateGroup ? [{ id: 'connect', name: '连接装置', state: 'success', message: 'fixture 已连接' }, { id: 'tls', name: 'TLS 安全连接', state: initial.tlsFailed ? 'failed' : 'success', message: initial.tlsFailed ? 'fixture TLS 失败' : 'fixture TLS 已完成' }, { id: 'authenticate', name: '身份认证', state: 'failed', message: 'fixture 未验证应答' }, { id: 'initialize', name: '读取装置信息', state: 'unsupported', message: 'fixture 未执行' }] : [] };
+        if (command === 'login_vertical_security_one_click') return { ...args.request, username: args.request.role === 1 ? 'admin' : 'secure', state: 'unverified_response', target_ip: '11.22.33.44', device_id: null, session_id: null, challenge_id: null, code: 'fixture', message: initial.tlsFailed ? 'fixture TLS 证书验证失败' : '虚构未验证应答', lock_seconds: null, last_login_at: null, device_version: null, certificate_group: initial.certificateGroup || null, legacy_compatibility: initial.legacyCompatibility === true, steps: initial.certificateGroup ? [{ id: 'connect', name: '连接装置', state: 'success', message: 'fixture 已连接' }, { id: 'tls', name: 'TLS 安全连接', state: initial.tlsFailed ? 'failed' : 'success', message: initial.tlsFailed ? 'fixture TLS 失败' : 'fixture TLS 已完成' }, { id: 'authenticate', name: '身份认证', state: 'failed', message: 'fixture 未验证应答' }, { id: 'initialize', name: '读取装置信息', state: 'unsupported', message: 'fixture 未执行' }] : [] };
         if (command === 'cancel_vertical_security_login' || command === 'logout_vertical_security') return;
         throw new Error(`未配置的 fixture IPC：${command}`);
       },
@@ -94,7 +94,7 @@ async function openFixture(options = {}) {
   }
 }
 const calls = command => page.evaluate(name => window.__securityPathMock.calls.filter(call => call.command === name), command);
-const sensitiveCalls = () => page.evaluate(() => window.__securityPathMock.calls.filter(call => /^(configure_vertical_security_access_path|check_vertical_security_access|login_vertical_security)$/.test(call.command)));
+const sensitiveCalls = () => page.evaluate(() => window.__securityPathMock.calls.filter(call => /^(configure_vertical_security_access_path|check_vertical_security_access|login_vertical_security_one_click)$/.test(call.command)));
 const dialog = () => page.getByRole('dialog', { name: /配置纵密访问通路/ });
 async function openPath() { await page.getByRole('button', { name: /配置纵密访问通路/ }).click(); await dialog().waitFor(); }
 async function fillPath() { await dialog().getByLabel('访问通路 SSH 上传账号', { exact: true }).fill('fixture@fixture-host:10022'); await dialog().getByLabel('访问通路 SSH 密码', { exact: true }).fill('fixture-ssh-secret'); }
@@ -143,7 +143,7 @@ try {
       assert.equal(await page.getByRole('button', { name: /检查远程通路/ }).isDisabled(), true);
       assert.equal(await page.getByRole('button', { name: /配置纵密访问通路/ }).isDisabled(), true);
       assert.equal((await calls('check_vertical_security_access')).length, 1, '刷新不能自动检查');
-      assert.equal((await calls('login_vertical_security')).length, 0, '刷新不能触发认证');
+      assert.equal((await calls('login_vertical_security_one_click')).length, 0, '刷新不能触发认证');
       assert.equal((await calls('remote_select_device')).length, 0, '刷新不改变全局目标');
       await page.getByRole('combobox', { name: '目标 DSP', exact: true }).click();
       assert.equal(await page.getByText('测试 DSP · 在线', { exact: true }).count(), 0);
@@ -181,13 +181,11 @@ try {
     await openFixture({ view: 'login' });
     await page.getByText('内置配套证书 · 自动匹配', { exact: true }).waitFor();
     assert.equal((await sensitiveCalls()).length, 0);
-    await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-user');
-    await page.getByLabel('纵密密码', { exact: true }).fill('fixture-login-secret');
     await page.getByRole('button', { name: /登录纵密/ }).click();
     await page.getByText('装置应答尚未验证，未建立登录会话', { exact: true }).waitFor();
-    assert.equal((await calls('login_vertical_security')).length, 1);
+    assert.equal((await calls('login_vertical_security_one_click')).length, 1);
     assert.equal((await calls('configure_vertical_security_certificate_profile')).length, 0);
-    assert.equal(await page.getByLabel('纵密密码', { exact: true }).inputValue(), '');
+    assert.equal(await page.getByLabel('纵密密码', { exact: true }).count(), 0);
   });
   await check('默认连接信息大小写正确，打开窗口不应用；关闭清除手填密码并恢复默认值', async () => {
     await openFixture(); await openPath();
@@ -229,7 +227,7 @@ try {
     await page.keyboard.press('Escape'); assert.equal(await dialog().isVisible(), true);
     await resolvePath(); await dialog().getByText('访问通路已应用', { exact: true }).waitFor();
     assert.equal((await calls('check_vertical_security_access')).length, 0);
-    assert.equal((await calls('login_vertical_security')).length, 0);
+    assert.equal((await calls('login_vertical_security_one_click')).length, 0);
     assert.equal(await page.getByRole('radio', { name: /平台远程/ }).isDisabled(), false);
     await page.screenshot({ path: path.join(output, 'path-applied.png'), fullPage: true });
   });
@@ -267,7 +265,7 @@ try {
     assert.equal(await dialog().getByText('不支持', { exact: true }).count(), 0);
     assert.equal(await dialog().getByText('访问通路已应用', { exact: true }).count(), 0);
     assert.equal((await calls('check_vertical_security_access')).length, 0);
-    assert.equal((await calls('login_vertical_security')).length, 0);
+    assert.equal((await calls('login_vertical_security_one_click')).length, 0);
   });
   await check('完成标记与退出码或步骤冲突时拒绝宣称已应用', async () => {
     await openFixture(); await openPath(); await fillPath();
@@ -276,7 +274,7 @@ try {
     await dialog().getByText('配置结果的完成标记与执行状态不一致，不能确认已应用，请检查设备实际网络状态。', { exact: true }).waitFor();
     assert.equal(await dialog().getByText('访问通路已应用', { exact: true }).count(), 0);
     assert.equal((await calls('check_vertical_security_access')).length, 0);
-    assert.equal((await calls('login_vertical_security')).length, 0);
+    assert.equal((await calls('login_vertical_security_one_click')).length, 0);
   });
   await check('缺少持久化确认、重复或未知阶段不能误认完整成功', async () => {
     const expected = ['preflight', 'addresses', 'routes', 'forwarding', 'verification', 'persistence'];
@@ -289,7 +287,7 @@ try {
       assert.equal(await dialog().getByText('访问通路已应用', { exact: true }).count(), 0);
       await dialog().getByText('配置结果的完成标记与执行状态不一致，不能确认已应用，请检查设备实际网络状态。', { exact: true }).waitFor();
       assert.equal((await calls('check_vertical_security_access')).length, 0);
-      assert.equal((await calls('login_vertical_security')).length, 0);
+      assert.equal((await calls('login_vertical_security_one_click')).length, 0);
     }
   });
   await check('证书SSH认证只携带独立sudo密码；与纵密TLS证书分离', async () => {
@@ -334,7 +332,7 @@ try {
     await page.evaluate(() => window.__securityPathMock.checkResolve({ mode: 'remote', target_ip: '11.22.33.44', device_id: 'fixture-dsp', state: 'ready', session_id: null, checked_at_ms: Date.now(), steps: ['platform-device', 'remote-channel', 'management-tcp', 'management-tls'].map(id => ({ id, name: id, state: 'success', message: 'fixture 真实阶段的模拟结果' })) }));
     await page.getByText('远程管理通路检查通过', { exact: true }).waitFor();
     assert.equal(await page.getByText('纵密网络访问已建立', { exact: true }).count(), 0, '只读探测不能声称建立持久网络');
-    assert.equal((await calls('login_vertical_security')).length, 0, '通路检测不登录纵密');
+    assert.equal((await calls('login_vertical_security_one_click')).length, 0, '通路检测不登录纵密');
     await page.screenshot({ path: path.join(output, 'remote-access-result.png'), fullPage: true });
     await page.getByRole('combobox', { name: '目标 DSP', exact: true }).click();
     assert.equal(await page.getByText('无维护权限 DSP · 在线', { exact: true }).count(), 0, '新需求：无权限设备从候选列表隐藏');
@@ -358,14 +356,12 @@ try {
   await check('证书读取失败不能伪造内置ready', async () => {
     await openFixture({ view: 'login', profileFailure: true });
     await page.getByText('读取纵密登录能力、证书配置或锁定状态失败，请离开此页后重试。', { exact: true }).waitFor();
-    await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-user'); await page.getByLabel('纵密密码', { exact: true }).fill('fixture-secret');
     assert.equal(await page.getByRole('button', { name: /登录纵密/ }).isDisabled(), true);
     assert.equal(await page.getByText('内置配套证书 · 自动匹配', { exact: true }).count(), 0);
   });
-  await check('内置模式只显式应用，运行时锁定并清密码，不提前显示已匹配', async () => {
+  await check('内置模式只显式应用，运行时锁定且不索取登录密码，不提前显示已匹配', async () => {
     await openFixture({ view: 'login' });
     await page.getByText('内置配套证书 · 自动匹配', { exact: true }).waitFor();
-    await page.getByLabel('纵密密码', { exact: true }).fill('fixture-mode-secret');
     await page.locator('.security-login-certificate > summary').click();
     await page.locator('.security-login-builtin-mode > summary').click();
     await page.getByLabel('内置证书模式', { exact: true }).click();
@@ -376,7 +372,7 @@ try {
     await page.evaluate(() => { window.__securityPathMock.deferBuiltin = true; });
     await page.getByRole('button', { name: /应用内置证书模式/ }).click();
     await page.waitForFunction(() => Boolean(window.__securityPathMock.builtinResolve));
-    assert.equal(await page.getByLabel('纵密密码', { exact: true }).inputValue(), '');
+    assert.equal(await page.getByLabel('纵密密码', { exact: true }).count(), 0);
     assert.equal(await page.getByRole('radio', { name: /平台远程/ }).isDisabled(), true);
     assert.equal(await page.getByRole('button', { name: /检查直连/ }).count(), 0);
     assert.equal(await page.getByLabel('内置证书模式', { exact: true }).isDisabled(), true);
@@ -384,7 +380,7 @@ try {
     await page.evaluate(() => window.__securityPathMock.builtinResolve());
     await page.getByText('内置配套证书 · 仅旧版', { exact: true }).waitFor();
     assert.deepEqual((await calls('use_builtin_vertical_security_certificates'))[0].args, { request: { mode: 'old' } });
-    assert.equal((await calls('login_vertical_security')).length, 0);
+    assert.equal((await calls('login_vertical_security_one_click')).length, 0);
     assert.equal((await calls('check_vertical_security_access')).length, 0);
     assert.equal(await page.getByRole('radio', { name: /平台远程/ }).isDisabled(), false);
   });
@@ -401,37 +397,31 @@ try {
     await page.getByText('内置配套证书 · 仅新版', { exact: true }).waitFor();
     assert.equal(await page.getByText('内置配套证书 · 仅旧版', { exact: true }).count(), 0);
     assert.equal((await calls('use_builtin_vertical_security_certificates')).length, 1);
-    assert.equal((await calls('login_vertical_security')).length, 0);
+    assert.equal((await calls('login_vertical_security_one_click')).length, 0);
   });
-  await check('实际TLS匹配后显示旧版受限兼容或新版严格校验，账号只发一次', async () => {
+  await check('实际TLS匹配后显示旧版受限兼容或新版严格校验，一键请求只发一次', async () => {
     for (const group of ['old', 'new']) {
       await openFixture({ view: 'login', certificateGroup: group, legacyCompatibility: group === 'old' });
       assert.equal(await page.getByText(/已匹配[旧新]版证书/).count(), 0);
-      await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-match-user');
-      await page.getByLabel('纵密密码', { exact: true }).fill('fixture-match-secret');
       await page.getByRole('button', { name: /登录纵密/ }).click();
       await page.getByText(group === 'old' ? '已匹配旧版证书' : '已匹配新版证书', { exact: true }).waitFor();
       await page.getByText(group === 'old' ? /受限旧版兼容已启用/ : /严格证书校验/).waitFor();
-      assert.equal((await calls('login_vertical_security')).length, 1);
+      assert.equal((await calls('login_vertical_security_one_click')).length, 1);
       assert.equal(await page.getByText('已登录纵密装置', { exact: true }).count(), 0);
     }
   });
   await check('TLS失败或旧版兼容元数据缺失时不显示已匹配', async () => {
     for (const option of [{ certificateGroup: 'old', legacyCompatibility: true, tlsFailed: true }, { certificateGroup: 'old', legacyCompatibility: false }]) {
       await openFixture({ ...option, view: 'login' });
-      await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-match-user');
-      await page.getByLabel('纵密密码', { exact: true }).fill('fixture-match-secret');
       await page.getByRole('button', { name: /登录纵密/ }).click();
       await page.getByText('装置应答尚未验证，未建立登录会话', { exact: true }).waitFor();
       assert.equal(await page.getByText(/已匹配[旧新]版证书/).count(), 0);
-      assert.equal((await calls('login_vertical_security')).length, 1);
+      assert.equal((await calls('login_vertical_security_one_click')).length, 1);
     }
   });
   await check('模式应用、自定义替换及恢复自动成功后清除上轮匹配结果', async () => {
     for (const action of ['mode', 'custom', 'restore']) {
       await openFixture({ view: 'login', certificateGroup: 'old', legacyCompatibility: true });
-      await page.getByLabel('纵密用户名', { exact: true }).fill('fixture-match-user');
-      await page.getByLabel('纵密密码', { exact: true }).fill('fixture-match-secret');
       await page.getByRole('button', { name: /登录纵密/ }).click();
       await page.getByText('已匹配旧版证书', { exact: true }).waitFor();
       await page.locator('.security-login-certificate > summary').click();
@@ -454,7 +444,7 @@ try {
         }
       }
       assert.equal(await page.getByText(/已匹配[旧新]版证书/).count(), 0);
-      assert.equal((await calls('login_vertical_security')).length, 1);
+      assert.equal((await calls('login_vertical_security_one_click')).length, 1);
     }
   });
   await check('卸载不声称撤销运行中的配置，迟到结果不自动登录或检查', async () => {
@@ -466,7 +456,7 @@ try {
     assert.equal(await page.getByText('访问通路已应用', { exact: true }).count(), 0);
     assert.equal((await calls('cancel_vertical_security_login')).length, 0);
     assert.equal((await calls('check_vertical_security_access')).length, 0);
-    assert.equal((await calls('login_vertical_security')).length, 0);
+    assert.equal((await calls('login_vertical_security_one_click')).length, 0);
   });
   assert.deepEqual(failures, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ results, failures }, null, 2));

@@ -1,6 +1,132 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+// 一键入口只接收角色和目标，账号与凭据不允许由调用方覆盖。
+#[test]
+fn security_login_one_click_accounts_and_request_are_fixed() {
+    for (role, username, password) in [(1, "admin", "Nari.6712"), (2, "secure", "Nari6702")] {
+        assert_eq!(automatic_account(role), Some((username, password)));
+        assert!(protocol::default_password(username, password));
+        assert!(protocol::validate_new_password(MANAGED_PASSWORD, &protocol::password_digest(username, password), username).is_ok());
+    }
+    assert!(automatic_account(3).is_none());
+    let base = serde_json::json!({"request_id":"fixture", "mode":"direct", "role":1});
+    assert!(serde_json::from_value::<OneClickLoginRequest>(base.clone()).is_ok());
+    for field in ["username", "password", "target_ip"] {
+        let mut value = base.clone();
+        value[field] = serde_json::json!("override");
+        assert!(serde_json::from_value::<OneClickLoginRequest>(value).is_err());
+    }
+}
+
+// 只有明确凭据拒绝会触发第二次认证；锁定、未知、网络失败均仅执行一次。
+#[tokio::test]
+async fn security_login_one_click_fallback_is_bounded_and_rejections_are_distinct() {
+    for code in ["credentials_rejected", "account_locked", "invalid_response", "authentication_timeout", "connection_failed"] {
+        let manager = SecurityLoginManager::default();
+        let mut passwords = Vec::new();
+        let response = run_automatic_login(&manager, "Nari.6712", |password| {
+            passwords.push(password);
+            std::future::ready(result().failure(2, code, "测试认证失败"))
+        }).await;
+        assert_eq!(response.code, code);
+        assert!(response.session_id.is_none());
+        if code == "credentials_rejected" {
+            assert_eq!(passwords, ["Nari.6712", MANAGED_PASSWORD]);
+        } else {
+            assert_eq!(passwords, ["Nari.6712"]);
+        }
+    }
+}
+
+// 改密必须收到明确成功才重登；断开导致结果不确定时不继续发送任何认证。
+#[tokio::test]
+async fn security_login_one_click_changes_once_and_only_relogs_on_confirmation() {
+    for confirmed in [true, false] {
+        let manager = Arc::new(SecurityLoginManager::default());
+        let (_cancel, _guard) = manager.begin("fixture-flow").unwrap();
+        let (client, mut peer) = tokio::io::duplex(1024);
+        let challenge = complete_login(&manager, result(), credentials(true), client, accepted(false)).await;
+        let challenge_id = challenge.challenge_id.clone().unwrap();
+        let server = tokio::spawn(async move {
+            let expected = protocol::encode_password_change("fixture", &protocol::password_digest("fixture", "Before@2468X"), MANAGED_PASSWORD).unwrap();
+            let mut actual = vec![0; expected.len()];
+            peer.read_exact(&mut actual).await.unwrap();
+            assert_eq!(actual.as_slice(), expected.as_slice());
+            if confirmed {
+                peer.write_i32(14).await.unwrap();
+                peer.write_i32(1).await.unwrap();
+                let mut remainder = Vec::new();
+                peer.read_to_end(&mut remainder).await.unwrap();
+                assert!(remainder.is_empty());
+            }
+        });
+        let mut authenticated = result();
+        authenticated.state = "authenticated";
+        authenticated.code = "authenticated";
+        let mut responses = std::collections::VecDeque::from([challenge, authenticated]);
+        let mut passwords = Vec::new();
+        let response = run_automatic_login(&manager, "Nari.6712", |password| {
+            passwords.push(password);
+            std::future::ready(responses.pop_front().expect("认证次数超出预期"))
+        }).await;
+        server.await.unwrap();
+        assert!(!manager.connection_active(&challenge_id));
+        assert!(response.challenge_id.is_none());
+        if confirmed {
+            assert_eq!(response.state, "authenticated");
+            assert_eq!(passwords, ["Nari.6712", MANAGED_PASSWORD]);
+        } else {
+            assert_eq!(response.code, "automatic_password_change_failed");
+            assert_eq!(passwords, ["Nari.6712"]);
+        }
+    }
+}
+
+// 整个流程共用独占许可，释放调用者时同时撤销临时连接，防止下一次点击重叠认证。
+#[tokio::test]
+async fn security_login_one_click_cleanup_and_flow_permit_release() {
+    let manager = Arc::new(SecurityLoginManager::default());
+    let permit = manager.authentication.try_lock().unwrap();
+    assert!(manager.authentication.try_lock().is_err());
+    let (_cancel, _guard) = manager.begin("fixture-flow").unwrap();
+    let (client, mut peer) = tokio::io::duplex(1024);
+    let challenge = complete_login(&manager, result(), credentials(true), client, accepted(false)).await;
+    let id = challenge.challenge_id.unwrap();
+    let cleanup = LoginConnectionCleanup { manager: &manager, request_id: "fixture-flow", armed: true };
+    drop(cleanup);
+    drop(permit);
+    assert!(manager.authentication.try_lock().is_ok());
+    assert!(!manager.connection_active(&id));
+    assert_eq!(peer.read_u8().await.unwrap_err().kind(), std::io::ErrorKind::UnexpectedEof);
+}
+
+// 已使用统一密码但装置报告过期时，不重复提交相同密码，也不泄露可继续改密的挑战。
+#[tokio::test]
+async fn security_login_one_click_expired_managed_password_closes_challenge() {
+    let manager = Arc::new(SecurityLoginManager::default());
+    let (_cancel, _guard) = manager.begin("fixture-flow").unwrap();
+    let (client, mut peer) = tokio::io::duplex(1024);
+    let challenge = complete_login(&manager, result(), credentials(false), client, accepted(true)).await;
+    let challenge_id = challenge.challenge_id.clone().unwrap();
+    let mut responses = std::collections::VecDeque::from([
+        result().failure(2, "credentials_rejected", "测试默认凭据拒绝"),
+        challenge,
+    ]);
+    let mut passwords = Vec::new();
+    let response = run_automatic_login(&manager, "Nari.6712", |password| {
+        passwords.push(password);
+        std::future::ready(responses.pop_front().expect("认证次数超出预期"))
+    }).await;
+    assert_eq!(passwords, ["Nari.6712", MANAGED_PASSWORD]);
+    assert_eq!(response.code, "managed_password_expired");
+    assert!(response.challenge_id.is_none());
+    assert!(!manager.connection_active(&challenge_id));
+    let mut received = Vec::new();
+    peer.read_to_end(&mut received).await.unwrap();
+    assert!(received.is_empty());
+}
+
 fn request() -> LoginRequest {
     LoginRequest {
         request_id: "fixture-flow".into(),

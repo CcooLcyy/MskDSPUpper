@@ -347,6 +347,13 @@ export interface VerticalSecurityLoginRequest {
   role: VerticalSecurityRole;
 }
 
+export interface VerticalSecurityOneClickLoginRequest {
+  request_id: string;
+  mode: VerticalSecurityAccessMode;
+  device_id?: string;
+  role: 1 | 2;
+}
+
 export interface VerticalSecurityLoginLock {
   mode: VerticalSecurityAccessMode;
   device_id: string | null;
