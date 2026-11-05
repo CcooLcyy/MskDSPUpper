@@ -81,6 +81,7 @@ const platform = values.platform ?? 'windows-x64';
 const targetTriple = values['target-triple'] ?? 'x86_64-pc-windows-msvc';
 const artifactBaseName = createArtifactBaseName({
   projectSlug,
+  productName: tauriConfig.productName,
   effectiveVersion,
   channelLabel,
   timestamp,

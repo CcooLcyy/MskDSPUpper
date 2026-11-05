@@ -143,12 +143,18 @@ export function createReleaseTag({
 
 export function createArtifactBaseName({
   projectSlug,
+  productName,
   effectiveVersion,
   channelLabel,
   timestamp,
   shortSha,
   platform,
 }) {
+  if (channelLabel === 'stable') {
+    // 正式包对外只展示品牌和版本；来源及架构继续保存在元数据中。
+    const brand = (productName ?? projectSlug).replace(/\s+/g, '');
+    return `${sanitizeSegment(brand)}-${sanitizeSegment(effectiveVersion)}`;
+  }
   return [
     sanitizeSegment(projectSlug),
     sanitizeSegment(effectiveVersion),

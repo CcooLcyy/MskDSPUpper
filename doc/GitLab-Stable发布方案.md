@@ -6,6 +6,8 @@
 
 只补 GitLab 发布能力及对应回归，不修改业务代码、旧 GitHub/R2 流程或客户端安装行为。`main` 保持 CI，受保护 Beta 分支保持 Beta。复用既有 `environment: ci` 下的签名和发布凭据；Stable 使用独立资源锁。
 
+正式安装包名称使用去空格后的 Tauri 品牌和纯版本，例如 `MskDSPUpper-0.8.0.exe`；不再附加 stable、时间、SHA 或 windows-x64。CI/Beta 名称保留完整来源标识；正式包的提交、构建时间、目标架构等仍保留在元数据中。
+
 ## 来源与发布检查
 
 - 仅允许无前导零的 `vX.Y.Z` 正式标签，必须与源码 `package.json` 基础版本完全相同，且 GitLab 标记为受保护引用；拒绝 MR、普通分支冒充正式来源及 CI/Beta 预发布版本。
