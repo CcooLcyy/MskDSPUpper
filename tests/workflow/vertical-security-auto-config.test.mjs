@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { autoConfigOrder, buildAutoConfig, clearAppliedSecurityNetwork, getAppliedSecurityNetwork, rememberAppliedSecurityNetwork, uploadAutoConfig } from '../../src/utils/vertical-security-auto-config.ts';
+import { autoConfigOrder, buildAutoConfig, clearSecurityDspConnection, getSecurityDspTarget, rememberSecurityDspConnection, resolveSecurityDspConnection, uploadAutoConfig } from '../../src/utils/vertical-security-auto-config.ts';
 
 const addresses = { device: 'MskDSP', localRtuAddress: '30.19.80.177', localSecurityAddress: '30.19.80.189', localGatewayAddress: '30.19.80.190', remoteRtuAddress: '30.19.0.1', remoteSecurityAddress: '30.19.0.250', remoteGatewayAddress: '30.19.0.254' };
 const plan = () => buildAutoConfig(addresses, 'station.pem');
@@ -35,25 +35,67 @@ test('自动配置生成确认的四页：地址来源、记录数、策略端�
   ]);
 });
 
-test('前置记录只保存业务地址，损坏记录、缺项和新应用失效均不能继续', () => {
+function connectionStorage() {
   const values = new Map();
   const original = globalThis.localStorage;
   globalThis.localStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  clearSecurityDspConnection();
+  return { values, restore: () => { clearSecurityDspConnection(); if (original === undefined) delete globalThis.localStorage; else globalThis.localStorage = original; } };
+}
+const targetA = 'fixture@192.0.2.1:10022';
+const targetB = 'fixture@192.0.2.2:10022';
+test('连接只持久化目标和认证方式，密码仅在当前进程内存且优先于系统凭据', async () => {
+  const storage = connectionStorage();
   try {
-    assert.equal(getAppliedSecurityNetwork(), null);
-    rememberAppliedSecurityNetwork({ ...addresses, sshPassword: 'must-not-persist', sudoPassword: 'must-not-persist' });
-    assert.deepEqual(getAppliedSecurityNetwork(), addresses);
-    rememberAppliedSecurityNetwork({ ...addresses, localRtuAddress: ' 30.19.80.177 ' });
-    assert.deepEqual(getAppliedSecurityNetwork(), addresses);
-    assert.doesNotMatch([...values.values()].join(), /Password|must-not-persist/);
-    clearAppliedSecurityNetwork();
-    assert.equal(getAppliedSecurityNetwork(), null);
-    assert.throws(() => rememberAppliedSecurityNetwork({ ...addresses, localRtuAddress: '' }));
-    values.set('mskdsp.vertical-security.applied-network.v1', '{broken');
-    assert.equal(getAppliedSecurityNetwork(), null);
-  } finally { if (original === undefined) delete globalThis.localStorage; else globalThis.localStorage = original; }
-  assert.throws(() => buildAutoConfig({ ...addresses, localGatewayAddress: '999.0.0.1' }, 'station.pem'));
-  assert.throws(() => buildAutoConfig(addresses, ''));
+    rememberSecurityDspConnection({ upload_account: targetA, auth: { method: 'password', password: 'manual-secret' } });
+    assert.deepEqual(getSecurityDspTarget(), { upload_account: targetA, auth_method: 'password' });
+    assert.doesNotMatch([...storage.values.values()].join(), /manual-secret|localRtuAddress|ssh_password/);
+    const request = await resolveSecurityDspConnection(async () => { throw new Error('不应读取系统凭据'); });
+    assert.deepEqual(request, { upload_account: targetA, auth: { method: 'password', password: 'manual-secret' } });
+  } finally { storage.restore(); }
+});
+
+test('切换DSP或认证方式清除旧密码，仅取精确目标的系统凭据', async () => {
+  const storage = connectionStorage();
+  try {
+    rememberSecurityDspConnection({ upload_account: targetA, auth: { method: 'password', password: 'secret-A' } });
+    rememberSecurityDspConnection({ upload_account: targetB, auth: { method: 'password', password: '' } });
+    const queried = [];
+    const request = await resolveSecurityDspConnection(async account => { queried.push(account); return { ssh_password: 'saved-B', sudo_password: null }; });
+    assert.deepEqual(queried, [targetB]);
+    assert.equal(request.auth.password, 'saved-B');
+    rememberSecurityDspConnection({ upload_account: targetB, auth: { method: 'certificate' } });
+    assert.deepEqual(await resolveSecurityDspConnection(async () => { throw new Error('证书认证不读取密码'); }), { upload_account: targetB, auth: { method: 'certificate' } });
+    rememberSecurityDspConnection({ upload_account: targetB, auth: { method: 'password', password: '' } });
+    await assert.rejects(resolveSecurityDspConnection(async () => null), /补齐当前目标/);
+  } finally { storage.restore(); }
+});
+
+test('旧地址缓存、损坏目标、缺少密码均不允许恢复旧设备', async () => {
+  const storage = connectionStorage();
+  try {
+    storage.values.set('mskdsp.vertical-security.applied-network.v1', JSON.stringify({ version: 1, addresses }));
+    assert.equal(getSecurityDspTarget(), null);
+    await assert.rejects(resolveSecurityDspConnection(async () => ({ ssh_password: 'old', sudo_password: null })), /先在“DSP 网络配置”/);
+    rememberSecurityDspConnection({ upload_account: targetA, auth: { method: 'password', password: '' } });
+    await assert.rejects(resolveSecurityDspConnection(async () => null), /补齐当前目标/);
+    storage.values.set('mskdsp.vertical-security.dsp-target.v1', '{broken');
+    assert.equal(getSecurityDspTarget(), null);
+    assert.throws(() => buildAutoConfig({ ...addresses, localGatewayAddress: '999.0.0.1' }, 'station.pem'));
+    assert.throws(() => buildAutoConfig(addresses, ''));
+  } finally { storage.restore(); }
+});
+
+test('异步读取系统凭据期间切换DSP时拒绝迟到密码', async () => {
+  const storage = connectionStorage();
+  try {
+    rememberSecurityDspConnection({ upload_account: targetA, auth: { method: 'password', password: '' } });
+    let finish;
+    const resolving = resolveSecurityDspConnection(() => new Promise(resolve => { finish = resolve; }));
+    rememberSecurityDspConnection({ upload_account: targetB, auth: { method: 'password', password: '' } });
+    finish({ ssh_password: 'old-A', sudo_password: null });
+    await assert.rejects(resolving, /目标已变化/);
+  } finally { storage.restore(); }
 });
 
 test('上传严格逐页读取最新版本再上传，完成回读才推进下一页', async () => {
@@ -93,4 +135,16 @@ test('读取途中会话失效时不发送上传，也不报告完成', async ()
   }, () => active, kind => completed.push(kind)));
   assert.deepEqual(calls, ['read']);
   assert.deepEqual(completed, []);
+});
+
+
+test('SSH端口前导零规范为与后台相同的目标，不误判为其他DSP', async () => {
+  const storage = connectionStorage();
+  try {
+    rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.1:010022', auth: { method: 'password', password: 'manual-secret' } });
+    assert.deepEqual(getSecurityDspTarget(), { upload_account: targetA, auth_method: 'password' });
+    assert.deepEqual(await resolveSecurityDspConnection(async () => { throw new Error('规范后应保留当前目标手工认证'); }), { upload_account: targetA, auth: { method: 'password', password: 'manual-secret' } });
+    rememberSecurityDspConnection({ upload_account: targetA, auth: { method: 'certificate' } });
+    assert.deepEqual(await resolveSecurityDspConnection(async () => null), { upload_account: targetA, auth: { method: 'certificate' } });
+  } finally { storage.restore(); }
 });

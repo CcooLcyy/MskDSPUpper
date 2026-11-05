@@ -260,6 +260,7 @@ pub fn run() {
                 commands::lower_update::cleanup_lower_update_packages,
                 commands::lower_update::deploy_vertical_security_script,
                 commands::lower_update::get_vertical_security_status,
+                commands::lower_update::get_vertical_security_network,
                 commands::lower_update::get_lower_update_password,
                 commands::lower_update::clear_lower_update_password,
                 commands::lower_update::get_lower_update_credentials,

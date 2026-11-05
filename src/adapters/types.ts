@@ -495,6 +495,27 @@ export interface VerticalSecurityStatusRequest {
   sudo_password: string;
 }
 
+export interface VerticalSecurityNetworkAddresses {
+  device: string;
+  localRtuAddress: string;
+  localSecurityAddress: string;
+  localGatewayAddress: string;
+  remoteRtuAddress: string;
+  remoteSecurityAddress: string;
+  remoteGatewayAddress: string;
+}
+
+export interface VerticalSecurityNetworkRequest {
+  upload_account: string;
+  auth: LowerUpdateSshAuth;
+}
+
+export interface VerticalSecurityNetworkSnapshot {
+  upload_account: string;
+  fingerprint: string;
+  addresses: VerticalSecurityNetworkAddresses;
+}
+
 export interface VerticalSecurityStatusResult {
   service_name: string;
   active_state: string;

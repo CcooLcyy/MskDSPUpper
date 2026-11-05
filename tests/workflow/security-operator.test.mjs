@@ -16,7 +16,8 @@ const initialReads = (sessionId = 'session-a') => kinds.map(kind => ({ session_i
 
 // 执行真实组件事件，只替换 React 渲染器及设备 IPC 边界；不连接设备。
 function fixture(implementation = async request => response(request.kind, request.rows), initialProps = {}) {
-  const slots = [], effects = new Set(), calls = [], busyChanges = [];
+  const slots = [], effects = new Set(), calls = [], busyChanges = [], networkCalls = [];
+  let networkImplementation = async request => ({ upload_account: request.upload_account, fingerprint: 'dsp-current-config', addresses: automaticAddresses });
   let cursor = 0, tree, props = { sessionId: 'session-a', onBusyChange: value => busyChanges.push(value), ...initialProps };
   const react = {
     useState(initial) { const id = cursor++; if (!(id in slots)) slots[id] = typeof initial === 'function' ? initial() : initial; return [slots[id], value => { slots[id] = typeof value === 'function' ? value(slots[id]) : value; }]; },
@@ -27,7 +28,7 @@ function fixture(implementation = async request => response(request.kind, reques
   const element = (type, p) => ({ type, props: p ?? {} });
   const widgets = Object.fromEntries(['Alert', 'Button', 'Card', 'Checkbox', 'Input', 'Modal', 'Popconfirm', 'Select', 'Space', 'Table', 'Tabs', 'Tag'].map(name => [name, name]));
   const loaded = new Module(filename);
-  loaded.require = name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx: element, jsxs: element, Fragment: 'Fragment' } : name === 'antd' ? widgets : name === '../../adapters' ? { api: { runVerticalSecurityOperator: request => { calls.push(request); return implementation(request); } } } : name.endsWith('vertical-security-auto-config') ? autoConfig : name.endsWith('.css') ? {} : require(name);
+  loaded.require = name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx: element, jsxs: element, Fragment: 'Fragment' } : name === 'antd' ? widgets : name === '../../adapters' ? { api: { getLowerUpdateCredentials: async () => null, getVerticalSecurityNetwork: request => { networkCalls.push(request); return networkImplementation(request); }, runVerticalSecurityOperator: request => { calls.push(request); return implementation(request); } } } : name.endsWith('vertical-security-auto-config') ? autoConfig : name.endsWith('.css') ? {} : require(name);
   loaded._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const render = next => { props = { ...props, ...next }; cursor = 0; tree = loaded.exports.default(props); return tree; };
   const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === 'object' ? [node, ...walk(node.props?.children)] : [];
@@ -42,7 +43,7 @@ function fixture(implementation = async request => response(request.kind, reques
   const edit = index => { rowActions(index).find(node => node.type === 'Button' && node.props.children === '编辑').props.onClick(); render(); };
   const settle = async (turns = 6) => { for (let i = 0; i < turns; i += 1) { await new Promise(setImmediate); render(); } };
   render(); render();
-  return { calls, busyChanges, render, nodes, button, table, modal, switchPage, rowActions, change, read, edit, settle, setImplementation: value => { implementation = value; }, strictReplay: () => { effects.forEach(id => slots[id]?.cleanup?.()); effects.forEach(id => { slots[id].cleanup = slots[id].effect(); }); render(); }, unmount: () => effects.forEach(id => slots[id]?.cleanup?.()) };
+  return { calls, busyChanges, networkCalls, setNetworkImplementation: value => { networkImplementation = value; }, render, nodes, button, table, modal, switchPage, rowActions, change, read, edit, settle, setImplementation: value => { implementation = value; }, strictReplay: () => { effects.forEach(id => slots[id]?.cleanup?.()); effects.forEach(id => { slots[id].cleanup = slots[id].effect(); }); render(); }, unmount: () => effects.forEach(id => slots[id]?.cleanup?.()) };
 }
 
 // 每个原有手动操作用例先验证四项初读，再建立独立业务调用基线。
@@ -369,10 +370,11 @@ function automaticStorage() {
   const original = globalThis.localStorage;
   const values = new Map();
   globalThis.localStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
-  return () => { if (original === undefined) delete globalThis.localStorage; else globalThis.localStorage = original; };
+  autoConfig.clearSecurityDspConnection();
+  return () => { autoConfig.clearSecurityDspConnection(); if (original === undefined) delete globalThis.localStorage; else globalThis.localStorage = original; };
 }
 
-test('自动配置缺少成功应用的DSP网络配置时直接提示且不读取或上传', async () => {
+test('自动配置缺少目标关联时直接提示且不读取或上传', async () => {
   const restore = automaticStorage();
   const f = await settledFixture();
   try {
@@ -385,13 +387,14 @@ test('自动配置缺少成功应用的DSP网络配置时直接提示且不读�
 
 test('自动配置预览选择真实证书、顺序上传全部完成后仅回调一次', async () => {
   const restore = automaticStorage();
-  autoConfig.rememberAppliedSecurityNetwork(automaticAddresses);
+  autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.1:10022', auth: { method: 'certificate' } });
   let completed = 0;
   const f = fixture(async request => response(request.kind, request.rows), { onAutoConfigured: () => { completed += 1; } });
   try {
     await f.settle(); f.calls.length = 0;
     f.button('自动配置').props.onClick(); await f.settle();
     assert.deepEqual(f.calls, initialReads());
+    assert.equal(f.networkCalls.length, 1);
     assert.equal(f.modal().props.title, '自动配置纵密装置');
     assert.equal(f.modal().props.okText, '依次上传并重启纵密');
     assert.equal(f.modal().props.okButtonProps.disabled, false);
@@ -401,6 +404,7 @@ test('自动配置预览选择真实证书、顺序上传全部完成后仅回�
     f.modal().props.onOk(); await f.settle();
     assert.deepEqual(f.calls.map(request => `${request.kind}:${request.action}`), kinds.flatMap(kind => [`${kind}:read`, `${kind}:save`]));
     assert.equal(completed, 1);
+    assert.equal(f.networkCalls.length, 2);
     f.render(); await f.settle(); assert.equal(completed, 1);
     assert.deepEqual(f.calls.filter(request => request.action === 'save').map(request => request.rows.length), [2, 2, 1, 4]);
   } finally { f.unmount(); restore(); }
@@ -408,7 +412,7 @@ test('自动配置预览选择真实证书、顺序上传全部完成后仅回�
 
 test('自动配置任一页回读失败后保留草稿、不切换管理员、不继续上传', async () => {
   const restore = automaticStorage();
-  autoConfig.rememberAppliedSecurityNetwork(automaticAddresses);
+  autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.1:10022', auth: { method: 'certificate' } });
   let completed = 0;
   const f = fixture(async request => ({ ...response(request.kind, request.rows), verified: !(request.action === 'save' && request.kind === 'routes') }), { onAutoConfigured: () => { completed += 1; } });
   try {
@@ -418,5 +422,124 @@ test('自动配置任一页回读失败后保留草稿、不切换管理员、�
     assert.deepEqual(f.calls.map(request => `${request.kind}:${request.action}`), ['network:read', 'network:save', 'routes:read', 'routes:save']);
     assert.equal(completed, 0);
     assert.ok(f.nodes().some(node => node.type === 'Alert' && node.props.title?.includes('不会切换管理员或重启')));
+  } finally { f.unmount(); restore(); }
+});
+
+
+test('旧地址缓存不能放行，实时DSP读取失败时不读取或上传纵密配置', async () => {
+  const restore = automaticStorage();
+  const f = await settledFixture();
+  try {
+    localStorage.setItem('mskdsp.vertical-security.applied-network.v1', JSON.stringify({ version: 1, addresses: automaticAddresses }));
+    f.button('自动配置').props.onClick(); await f.settle();
+    assert.deepEqual(f.calls, []); assert.deepEqual(f.networkCalls, []);
+    autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.1:10022', auth: { method: 'certificate' } });
+    f.setNetworkImplementation(async () => { throw new Error('当前 DSP 尚未配置业务地址'); });
+    f.button('自动配置').props.onClick(); await f.settle();
+    assert.equal(f.networkCalls.length, 1); assert.deepEqual(f.calls, []);
+    assert.equal(f.modal(), undefined);
+  } finally { f.unmount(); restore(); }
+});
+
+test('当前DSP缺少SSH密码时不发起实时读取或任何上传', async () => {
+  const restore = automaticStorage();
+  autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.2:10022', auth: { method: 'password', password: '' } });
+  const f = await settledFixture();
+  try {
+    f.button('自动配置').props.onClick(); await f.settle();
+    assert.deepEqual(f.networkCalls, []); assert.deepEqual(f.calls, []);
+    assert.ok(f.nodes().some(node => node.type === 'Alert' && node.props.title?.includes('补齐当前目标')));
+  } finally { f.unmount(); restore(); }
+});
+
+test('使用当前DSP地址生成预览，不依赖旧本地地址或PPP运行状态', async () => {
+  const restore = automaticStorage();
+  autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.2:10022', auth: { method: 'certificate' } });
+  const f = await settledFixture();
+  try {
+    localStorage.setItem('mskdsp.vertical-security.applied-network.v1', JSON.stringify({ version: 1, addresses: { ...automaticAddresses, localSecurityAddress: '198.51.100.1' } }));
+    const current = { ...automaticAddresses, localSecurityAddress: '203.0.113.9' };
+    f.setNetworkImplementation(async request => ({ upload_account: request.upload_account, fingerprint: 'different-device-config', addresses: current }));
+    f.button('自动配置').props.onClick(); await f.settle();
+    assert.equal(f.networkCalls[0].upload_account, 'fixture@192.0.2.2:10022');
+    const preview = f.nodes(f.modal()).filter(node => node.type === 'Table');
+    assert.equal(preview[0].props.dataSource[1].ip, current.localSecurityAddress);
+    assert.equal(preview[2].props.dataSource[0].local_ip, current.localSecurityAddress);
+    assert.equal(f.calls.filter(request => request.action === 'save').length, 0);
+  } finally { f.unmount(); restore(); }
+});
+
+test('预览后目标或DSP配置指纹变化，确认时停止且零上传', async () => {
+  for (const change of ['target', 'fingerprint']) {
+    const restore = automaticStorage();
+    autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.1:10022', auth: { method: 'certificate' } });
+    let completed = 0;
+    const f = fixture(undefined, { onAutoConfigured: () => { completed += 1; } });
+    try {
+      await f.settle(); f.button('自动配置').props.onClick(); await f.settle();
+      f.calls.length = 0;
+      if (change === 'target') autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.2:10022', auth: { method: 'certificate' } });
+      else f.setNetworkImplementation(async request => ({ upload_account: request.upload_account, fingerprint: 'modified-after-preview', addresses: automaticAddresses }));
+      f.modal().props.onOk(); await f.settle();
+      assert.deepEqual(f.calls, []); assert.equal(completed, 0);
+      assert.equal(f.modal(), undefined);
+    } finally { f.unmount(); restore(); }
+  }
+});
+
+test('上传中切换DSP目标时立即停止后续上传，不切换管理员重启', async () => {
+  const restore = automaticStorage();
+  autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.1:10022', auth: { method: 'certificate' } });
+  let completed = 0;
+  const f = fixture(async request => {
+    if (request.action === 'save' && request.kind === 'network') autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.2:10022', auth: { method: 'certificate' } });
+    return response(request.kind, request.rows);
+  }, { onAutoConfigured: () => { completed += 1; } });
+  try {
+    await f.settle(); f.button('自动配置').props.onClick(); await f.settle(); f.calls.length = 0;
+    f.modal().props.onOk(); await f.settle();
+    assert.deepEqual(f.calls.map(request => `${request.kind}:${request.action}`), ['network:read', 'network:save']);
+    assert.equal(completed, 0);
+  } finally { f.unmount(); restore(); }
+});
+
+
+test('确认后实时复读DSP期间禁止关闭预览或更换证书，避免界面假取消', async () => {
+  const restore = automaticStorage();
+  autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.1:10022', auth: { method: 'certificate' } });
+  let completed = 0, finish;
+  const f = fixture(undefined, { onAutoConfigured: () => { completed += 1; } });
+  try {
+    await f.settle(); f.button('自动配置').props.onClick(); await f.settle();
+    f.setNetworkImplementation(request => new Promise(resolve => { finish = () => resolve({ upload_account: request.upload_account, fingerprint: 'dsp-current-config', addresses: automaticAddresses }); }));
+    f.modal().props.onOk(); await f.settle();
+    assert.equal(f.modal().props.closable, false);
+    assert.equal(f.modal().props.keyboard, false);
+    assert.equal(f.modal().props.mask.closable, false);
+    assert.equal(f.modal().props.cancelButtonProps.disabled, true);
+    const certificate = f.nodes(f.modal()).find(node => node.props['aria-label'] === '自动配置主站证书');
+    assert.equal(certificate.props.disabled, true);
+    certificate.props.onChange('unexpected.pem');
+    f.modal().props.onCancel(); f.render();
+    assert.ok(f.modal());
+    assert.equal(f.nodes(f.modal()).find(node => node.props['aria-label'] === '自动配置主站证书').props.value, 'peer.pem');
+    finish(); await f.settle();
+    assert.equal(completed, 1);
+  } finally { f.unmount(); restore(); }
+});
+
+
+test('带前导零SSH端口经规范后可匹配后台快照并完成预览和上传', async () => {
+  const restore = automaticStorage();
+  autoConfig.rememberSecurityDspConnection({ upload_account: 'fixture@192.0.2.1:010022', auth: { method: 'certificate' } });
+  let completed = 0;
+  const f = fixture(undefined, { onAutoConfigured: () => { completed += 1; } });
+  try {
+    await f.settle(); f.button('自动配置').props.onClick(); await f.settle();
+    assert.equal(f.networkCalls[0].upload_account, 'fixture@192.0.2.1:10022');
+    assert.equal(f.modal().props.title, '自动配置纵密装置');
+    f.modal().props.onOk(); await f.settle();
+    assert.equal(f.networkCalls[1].upload_account, 'fixture@192.0.2.1:10022');
+    assert.equal(completed, 1);
   } finally { f.unmount(); restore(); }
 });

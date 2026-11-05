@@ -2189,6 +2189,10 @@ export const browserApi: typeof tauriApi = {
     throw new Error('浏览器模式不支持导出纵密文件，请使用桌面版上位机。');
   },
   getVerticalSecuritySimIp: async (): Promise<string | null> => null,
+  getVerticalSecurityNetwork: async (_request: import('./types').VerticalSecurityNetworkRequest): Promise<import('./types').VerticalSecurityNetworkSnapshot> => {
+    void _request;
+    throw new Error('浏览器模式无法读取 DSP 已部署脚本，请使用桌面上位机。');
+  },
   changeVerticalSecurityPassword: async (request: VerticalSecurityPasswordChangeRequest): Promise<VerticalSecurityPasswordChangeResult> => {
     void request;
     return { changed: false, message: '浏览器模式不能修改纵密装置密码。' };

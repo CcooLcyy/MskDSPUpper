@@ -8,6 +8,9 @@ use std::{
 };
 
 use super::lower_update_runtime;
+#[path = "lower_update_vertical_security_network.rs"]
+mod vertical_security_network;
+pub use vertical_security_network::{VerticalSecurityNetworkRequestDto, VerticalSecurityNetworkResultDto};
 use super::lower_update_architecture::{self, LowerUpdateArchitectureDto};
 #[path = "lower_update_ssh_diagnostics.rs"]
 mod ssh_diagnostics;
@@ -4099,6 +4102,13 @@ pub async fn deploy_vertical_security_script(
     }
 
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn get_vertical_security_network(
+    request: VerticalSecurityNetworkRequestDto,
+) -> Result<VerticalSecurityNetworkResultDto, String> {
+    vertical_security_network::read(request).await
 }
 
 #[tauri::command]

@@ -36,7 +36,8 @@ import {
   deployVerticalSecurityScript,
   isValidIpv4Address,
 } from '../../utils/vertical-security-script';
-import { clearAppliedSecurityNetwork, getAppliedSecurityNetwork, rememberAppliedSecurityNetwork, type AutoConfigAddresses } from '../../utils/vertical-security-auto-config';
+import { clearSecurityDspConnection, getSecurityDspTarget, rememberSecurityDspConnection } from '../../utils/vertical-security-auto-config';
+import { getSecurityExecutionOutcome } from '../../utils/vertical-security-execution';
 import { lowerUpdateCredentialCoordinator } from '../../utils/lower-update-connection';
 
 type SecurityAuthMethod = 'password' | 'certificate';
@@ -149,30 +150,14 @@ function formatStepTimestamp(timestamp: number): string {
   return date.toLocaleString('zh-CN', { hour12: false });
 }
 
-function getExecutionOutcome(status: VerticalSecurityStatusResult | null) {
-  const failedStep = status?.steps.find((step) => step.state === 'failed') ?? null;
-  const serviceFailed = status !== null && (
-    status.active_state === 'failed'
-    || status.sub_state === 'failed'
-    || (status.exit_code !== null && status.exit_code !== 0)
-  );
-  const completed = status !== null && EXECUTION_STEPS.every((expectedStep) => (
-    status.steps.some((step) => step.step_id === expectedStep.id && step.state === 'success')
-  ));
-
-  return {
-    completed: completed && !failedStep && !serviceFailed,
-    failed: Boolean(failedStep || serviceFailed),
-    failedStep,
-  };
-}
-
 const SecurityConfig: React.FC = () => {
   const [form] = Form.useForm<SecurityConfigValues>();
   const [messageApi, contextHolder] = message.useMessage();
+  const [initialTarget] = useState(getSecurityDspTarget);
   const selectedDevice = Form.useWatch('device', form);
   const uploadAccount = Form.useWatch('uploadAccount', form) ?? '';
   const authMethod = Form.useWatch('authMethod', form) ?? 'password';
+  const sshPassword = Form.useWatch('sshPassword', form) ?? '';
   const reuseSshPasswordForSudo = Form.useWatch('reuseSshPasswordForSudo', form) ?? true;
   const [isGenerating, setIsGenerating] = useState(false);
   const [deployResult, setDeployResult] = useState<VerticalSecurityDeployResult | null>(null);
@@ -183,8 +168,21 @@ const SecurityConfig: React.FC = () => {
   const [scriptPreview, setScriptPreview] = useState<string | null>(null);
   const statusPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusPollGenerationRef = useRef(0);
+  const mountedRef = useRef(false);
+  const deploymentGenerationRef = useRef(0);
   const [credentialReadRevision, setCredentialReadRevision] = useState(0);
   const credentialStateRef = useRef({ revision: 0, sshEdited: false, sudoEdited: false });
+
+  useEffect(() => {
+    // Form 初次挂载尚未发布字段，不以这个瞬时空值清除已有目标。
+    if (!selectedDevice) return;
+    try {
+      rememberSecurityDspConnection({ upload_account: uploadAccount, auth: authMethod === 'certificate'
+        ? { method: 'certificate' } : { method: 'password', password: sshPassword } });
+    } catch {
+      messageApi.warning('无法关联 DSP 连接，请检查本地存储；自动配置前需要重新填写连接信息。');
+    }
+  }, [selectedDevice, uploadAccount, authMethod, sshPassword, messageApi]);
 
   useEffect(() => {
     const account = uploadAccount.trim();
@@ -227,6 +225,11 @@ const SecurityConfig: React.FC = () => {
 
   const handleValuesChange = (changed: Partial<SecurityConfigValues>) => {
     const state = credentialStateRef.current;
+    if ('uploadAccount' in changed || 'authMethod' in changed || 'device' in changed) {
+      deploymentGenerationRef.current += 1;
+      setIsGenerating(false);
+      stopStatusPolling(); setDeployResult(null); setExecutionStatus(null); setStatusQueryError(null);
+    }
     if ('uploadAccount' in changed || 'authMethod' in changed) {
       clearConnectionCredentials();
     } else if ('reuseSshPasswordForSudo' in changed) {
@@ -240,8 +243,8 @@ const SecurityConfig: React.FC = () => {
   };
 
   const executionOutcome = useMemo(
-    () => getExecutionOutcome(executionStatus),
-    [executionStatus],
+    () => getSecurityExecutionOutcome(executionStatus, EXECUTION_STEPS.map(step => step.id), Boolean(statusQueryError)),
+    [executionStatus, statusQueryError],
   );
   const executionSteps = useMemo(() => {
     const resultsById = new Map(
@@ -253,11 +256,14 @@ const SecurityConfig: React.FC = () => {
     }));
   }, [executionStatus]);
 
-  useEffect(() => () => {
-    statusPollGenerationRef.current += 1;
-    if (statusPollTimerRef.current !== null) {
-      clearTimeout(statusPollTimerRef.current);
-    }
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      deploymentGenerationRef.current += 1;
+      statusPollGenerationRef.current += 1;
+      if (statusPollTimerRef.current !== null) clearTimeout(statusPollTimerRef.current);
+    };
   }, []);
 
   const stopStatusPolling = () => {
@@ -269,7 +275,7 @@ const SecurityConfig: React.FC = () => {
     setIsPollingStatus(false);
   };
 
-  const startStatusPolling = (request: VerticalSecurityStatusRequest, addresses: AutoConfigAddresses) => {
+  const startStatusPolling = (request: VerticalSecurityStatusRequest) => {
     stopStatusPolling();
     const generation = statusPollGenerationRef.current;
     setExecutionStatus(null);
@@ -286,11 +292,10 @@ const SecurityConfig: React.FC = () => {
 
         setExecutionStatus(status);
         setStatusQueryError(null);
-        const outcome = getExecutionOutcome(status);
+        const outcome = getSecurityExecutionOutcome(status, EXECUTION_STEPS.map(step => step.id));
         if (outcome.completed) {
           keepPolling = false;
           setIsPollingStatus(false);
-          try { rememberAppliedSecurityNetwork(addresses); } catch { messageApi.warning('配置执行完成，但无法保存自动配置所需地址，请检查本地存储后重新应用。'); }
           messageApi.success('纵密配置全部步骤执行完成');
         } else if (outcome.failed) {
           keepPolling = false;
@@ -328,6 +333,7 @@ const SecurityConfig: React.FC = () => {
 
   const handleDeviceChange = (device?: string) => {
     clearConnectionCredentials();
+    if (!device) clearSecurityDspConnection();
     const defaults = device ? DEVICE_CONNECTION_DEFAULTS[device] : undefined;
     if (defaults) {
       form.setFieldsValue(defaults);
@@ -336,6 +342,8 @@ const SecurityConfig: React.FC = () => {
   };
 
   const handleApply = async (values: SecurityConfigValues) => {
+    const generation = ++deploymentGenerationRef.current;
+    const current = () => mountedRef.current && deploymentGenerationRef.current === generation;
     setIsGenerating(true);
     stopStatusPolling();
     setDeployResult(null);
@@ -343,8 +351,6 @@ const SecurityConfig: React.FC = () => {
     setStatusQueryError(null);
 
     try {
-      clearAppliedSecurityNetwork();
-      const addresses: AutoConfigAddresses = { device: values.device ?? '', localRtuAddress: values.localRtuAddress.trim(), localSecurityAddress: values.localSecurityAddress.trim(), localGatewayAddress: values.localGatewayAddress.trim(), remoteRtuAddress: values.remoteRtuAddress.trim(), remoteSecurityAddress: values.remoteSecurityAddress.trim(), remoteGatewayAddress: values.remoteGatewayAddress.trim() };
       const sshPassword = values.sshPassword ?? '';
       const connection: VerticalSecurityStatusRequest = {
         upload_account: values.uploadAccount,
@@ -355,6 +361,7 @@ const SecurityConfig: React.FC = () => {
           ? sshPassword
           : values.sudoPassword ?? '',
       };
+      rememberSecurityDspConnection({ upload_account: connection.upload_account, auth: connection.auth });
       const result = await deployVerticalSecurityScript({
         ...values,
         device: values.device ?? '',
@@ -364,20 +371,24 @@ const SecurityConfig: React.FC = () => {
         auth: connection.auth,
         sudoPassword: connection.sudo_password,
       });
+      if (!current()) return;
       if (!result.success) {
         throw new Error(result.stderr || `远端服务执行失败，退出码：${result.exit_code ?? '未知'}`);
       }
       setDeployResult(result);
-      messageApi.success(`纵密服务启动请求已提交: ${result.service_name}`);
-      startStatusPolling(connection, addresses);
+      console.info('[DSP 纵密网络配置] 脚本已部署，执行进度与装置自动配置独立');
+      messageApi.success(`纵密服务启动请求已提交: ${result.service_name}；脚本已部署，可继续纵密装置自动配置`);
+      startStatusPolling(connection);
     } catch (error) {
-      messageApi.error(`下发纵密配置失败: ${error}`);
+      if (current()) messageApi.error(`下发纵密配置失败: ${error}`);
     } finally {
-      setIsGenerating(false);
+      if (current()) setIsGenerating(false);
     }
   };
 
   const handleReset = () => {
+    deploymentGenerationRef.current += 1;
+    setIsGenerating(false);
     stopStatusPolling();
     clearConnectionCredentials();
     form.resetFields();
@@ -402,13 +413,19 @@ const SecurityConfig: React.FC = () => {
             type={executionOutcome.failed ? 'error' : executionOutcome.completed ? 'success' : 'info'}
             showIcon
             message={executionOutcome.failed
-              ? '纵密配置执行失败'
+              ? '脚本已部署，DSP 网络配置执行失败'
               : executionOutcome.completed
-                ? '纵密配置执行完成'
-                : `服务已提交启动：${deployResult.service_name}`}
+                ? 'DSP 网络配置全部执行完成'
+                : executionOutcome.phase === 'waiting_ppp'
+                  ? '脚本已部署，等待 PPP 地址'
+                  : executionOutcome.phase === 'unknown'
+                    ? '脚本已部署，当前执行状态未确认'
+                    : executionOutcome.phase === 'deployed'
+                      ? '脚本已部署，正在查询执行状态'
+                      : '脚本已部署，正在配置 DSP 业务网络'}
             description={executionOutcome.failedStep
               ? `${executionOutcome.failedStep.name}：${executionOutcome.failedStep.message}`
-              : `远端脚本：${deployResult.remote_path}`}
+              : `可继续纵密装置自动配置。DSP 会在后台等待 PPP 地址并补齐路由和 NAT。远端脚本：${deployResult.remote_path}`}
           />
           <section
             className="security-config-execution"
@@ -487,7 +504,7 @@ const SecurityConfig: React.FC = () => {
             reuseSshPasswordForSudo: true,
             installDir: '/home/megsky',
             device: 'MskDSP',
-            ...getAppliedSecurityNetwork(),
+            ...(initialTarget ? { uploadAccount: initialTarget.upload_account, authMethod: initialTarget.auth_method } : {}),
           }}
           disabled={isGenerating}
           onFinish={handleApply}

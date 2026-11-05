@@ -92,6 +92,8 @@ import type {
   VerticalSecurityDeployResult,
   VerticalSecurityStatusRequest,
   VerticalSecurityStatusResult,
+  VerticalSecurityNetworkRequest,
+  VerticalSecurityNetworkSnapshot,
   ModbusLinkConfig,
   ModbusLinkInfo,
   ModbusMqttConfig,
@@ -319,6 +321,8 @@ export const api = {
     invoke<VerticalSecurityDeployResult>('deploy_vertical_security_script', { request }),
   getVerticalSecurityStatus: (request: VerticalSecurityStatusRequest) =>
     invoke<VerticalSecurityStatusResult>('get_vertical_security_status', { request }),
+  getVerticalSecurityNetwork: (request: VerticalSecurityNetworkRequest) =>
+    invoke<VerticalSecurityNetworkSnapshot>('get_vertical_security_network', { request }),
 
   iec104UpsertLink: (config: Iec104LinkConfig, createOnly: boolean) =>
     invoke<Iec104LinkInfo>('iec104_upsert_link', { config, createOnly }),

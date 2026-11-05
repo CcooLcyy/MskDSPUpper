@@ -2,7 +2,8 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Input, Modal, Popconfirm, Select, Space, Table, Tabs, Tag } from 'antd';
 import { api } from '../../adapters';
 import type { VerticalSecurityOperatorKind as Kind, VerticalSecurityOperatorRow as Row, VerticalSecurityOperatorResult as Result } from '../../adapters';
-import { buildAutoConfig, getAppliedSecurityNetwork, uploadAutoConfig, type AutoConfigAddresses } from '../../utils/vertical-security-auto-config';
+import type { VerticalSecurityNetworkSnapshot } from '../../adapters/types';
+import { buildAutoConfig, getSecurityDspConnectionRevision, getSecurityDspTarget, resolveSecurityDspConnection, uploadAutoConfig } from '../../utils/vertical-security-auto-config';
 import './SecurityOperator.css';
 
 type Field = { key: string; label: string; optional?: boolean; options?: [string, string][]; reference?: 'interfaces' | 'certificates' | 'tunnel_ids'; numeric?: [number, number]; address?: 'ip' | 'mask' };
@@ -59,7 +60,7 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
   sessionId: string; disabled?: boolean; onBusyChange?: (busy: boolean) => void;
   onAutoConfigured?: () => void | Promise<void>; autoConfigurationAvailable?: boolean;
 }) {
-  const [autoPlan, setAutoPlan] = useState<{ addresses: AutoConfigAddresses; certificates: string[]; certificate: string; results: Record<Kind, Result> } | null>(null);
+  const [autoPlan, setAutoPlan] = useState<{ snapshot: VerticalSecurityNetworkSnapshot; connectionRevision: number; authMethod: 'password' | 'certificate'; sessionId: string; certificates: string[]; certificate: string; results: Record<Kind, Result> } | null>(null);
   const [kind, setKind] = useState<Kind>('network');
   const [drafts, setDrafts] = useState(emptyPages);
   const [busy, setBusy] = useState(false);
@@ -170,20 +171,34 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
       if (current()) { active.current = false; setBusy(false); onBusyChange?.(false); }
     }
   };
+  const readDspNetwork = async (current: () => boolean) => {
+    const connection = await resolveSecurityDspConnection(account => api.getLowerUpdateCredentials(account));
+    if (!current()) throw new Error('自动配置会话已变化，已停止。');
+    const connectionRevision = getSecurityDspConnectionRevision();
+    const snapshot = await api.getVerticalSecurityNetwork(connection);
+    if (!current() || connectionRevision !== getSecurityDspConnectionRevision() || getSecurityDspTarget()?.upload_account !== connection.upload_account) throw new Error('DSP 连接目标已变化，请重新点击自动配置。');
+    if (snapshot.upload_account !== connection.upload_account || !snapshot.fingerprint || typeof snapshot.fingerprint !== 'string') throw new Error('DSP 配置读取结果与当前目标不匹配，请重新读取。');
+    buildAutoConfig(snapshot.addresses, '配置预检');
+    return { snapshot, connectionRevision, authMethod: connection.auth.method };
+  };
   const prepareAutomatic = async () => {
     if (blocked || active.current || !mounted.current || currentSession.current !== sessionId) return;
     setError(null); setNotice(null);
     if (!autoConfigurationAvailable) { setError('当前连接无法核对 DSP 网络配置，请使用直连自动配置或手动配置。'); return; }
-    const addresses = getAppliedSecurityNetwork();
-    if (!addresses) { setError('请先在“DSP 网络配置”页面完成配置并成功应用，再进行自动配置。'); return; }
     const token = generation.current;
     const current = () => mounted.current && generation.current === token && currentSession.current === sessionId;
     active.current = true; setBusy(true); onBusyChange?.(true);
     try {
+      // 每次都读取当前 DSP 的实际配置，不以本地业务地址缓存放行。
+      const binding = await readDspNetwork(() => current() && !disabledRef.current);
+      const sameTarget = () => {
+        const target = getSecurityDspTarget();
+        return binding.connectionRevision === getSecurityDspConnectionRevision() && target?.upload_account === binding.snapshot.upload_account && target.auth_method === binding.authMethod;
+      };
       const results = {} as Record<Kind, Result>;
-      // 先读取全部配置和证书；前置读取失败时不上传任何一页。
       for (const item of pages) {
         if (!current() || disabledRef.current) return;
+        if (!sameTarget()) throw new Error('DSP 连接目标已变化，请重新点击自动配置。');
         const result = await api.runVerticalSecurityOperator({ session_id: sessionId, action: 'read', kind: item.key });
         if (!current()) return;
         validateResult(result, item.key);
@@ -194,8 +209,9 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
       if (!certificates.length) throw new Error('没有可用的主站加密网关证书，请先由管理员导入证书。');
       const certificate = certificates.length === 1 ? certificates[0] : '';
       if (!current()) return;
-      console.info('[纵密自动配置] 四页读取完成，等待确认主站证书和配置');
-      setAutoPlan({ addresses, certificates, certificate, results });
+      if (!sameTarget()) throw new Error('DSP 连接目标已变化，请重新点击自动配置。');
+      console.info('[纵密自动配置] 已读取当前 DSP 配置和纵密四页，等待确认', { target: binding.snapshot.upload_account });
+      setAutoPlan({ ...binding, sessionId, certificates, certificate, results });
     } catch (reason) {
       if (current()) setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -204,38 +220,47 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
   };
   const performAutomatic = async () => {
     if (!autoPlan || !autoPlan.certificate || blocked || active.current || !mounted.current || currentSession.current !== sessionId) return;
-    if (JSON.stringify(getAppliedSecurityNetwork()) !== JSON.stringify(autoPlan.addresses)) { setAutoPlan(null); setError('DSP 网络配置记录已变化，请重新点击自动配置生成预览。'); return; }
     const token = generation.current;
     const current = () => mounted.current && generation.current === token && currentSession.current === sessionId;
-    const rows = buildAutoConfig(autoPlan.addresses, autoPlan.certificate);
-    setDrafts(Object.fromEntries(pages.map(item => [item.key, { result: autoPlan.results[item.key], rows: cloneRows(rows[item.key]), dirty: true, stale: false }])) as Record<Kind, Draft>);
-    setAutoPlan(null); setError(null); setNotice(null);
+    const boundTarget = () => {
+      const target = getSecurityDspTarget();
+      return autoPlan.sessionId === sessionId && autoPlan.connectionRevision === getSecurityDspConnectionRevision() && target?.upload_account === autoPlan.snapshot.upload_account && target.auth_method === autoPlan.authMethod;
+    };
+    setError(null); setNotice(null);
     active.current = true; setBusy(true); onBusyChange?.(true);
     let completed = false;
-    let uploading: Kind = 'network';
+    let uploading: Kind | null = null;
     try {
+      if (!boundTarget()) throw new Error('DSP 连接目标已变化，请重新点击自动配置生成预览。');
+      const fresh = await readDspNetwork(() => current() && !disabledRef.current);
+      if (!boundTarget() || fresh.snapshot.upload_account !== autoPlan.snapshot.upload_account || fresh.snapshot.fingerprint !== autoPlan.snapshot.fingerprint) throw new Error('DSP 网络配置已变化，请重新点击自动配置生成预览。');
+      const rows = buildAutoConfig(fresh.snapshot.addresses, autoPlan.certificate);
+      setDrafts(Object.fromEntries(pages.map(item => [item.key, { result: autoPlan.results[item.key], rows: cloneRows(rows[item.key]), dirty: true, stale: false }])) as Record<Kind, Draft>);
+      setAutoPlan(null);
       console.info('[纵密自动配置] 开始依次上传网络、路由、隧道、策略');
       await uploadAutoConfig(sessionId, rows, request => {
         uploading = request.kind;
         setKind(request.kind);
         return api.runVerticalSecurityOperator(request);
-      }, () => current() && !disabledRef.current, (target, result) => {
+      }, () => current() && !disabledRef.current && boundTarget(), (target, result) => {
         setDrafts(previous => ({ ...previous, [target]: { result, rows: cloneRows(result.rows), dirty: false, stale: false } }));
         clearReadError(target);
         setNotice(`${pages.find(item => item.key === target)!.label}已上传并回读核对一致。`);
         console.info('[纵密自动配置] 已完成上传及回读核对', { kind: target });
       });
-      completed = current() && !disabledRef.current;
+      completed = current() && !disabledRef.current && boundTarget();
     } catch (reason) {
       if (current()) {
+        setAutoPlan(null);
         setError(`${reason instanceof Error ? reason.message : String(reason)} 已停止自动配置，不会切换管理员或重启；请核实已经上传的页面。`);
-        setDrafts(previous => ({ ...previous, [uploading]: { ...previous[uploading], stale: true } }));
+        const failedKind = uploading;
+        if (failedKind) setDrafts(previous => ({ ...previous, [failedKind]: { ...previous[failedKind], stale: true } }));
         console.warn('[纵密自动配置] 流程中止，保留草稿，不自动重试上传');
       }
     } finally {
       if (current()) { active.current = false; setBusy(false); onBusyChange?.(false); }
     }
-    if (completed && current() && !disabledRef.current) {
+    if (completed && current() && !disabledRef.current && boundTarget()) {
       setNotice('四页配置均已上传并核对，正在切换系统管理员重启纵密装置。');
       try { await onAutoConfigured?.(); } catch (reason) {
         if (mounted.current && generation.current === token && currentSession.current === sessionId) setError(`配置已上传，但切换管理员或重启未完成：${reason instanceof Error ? reason.message : String(reason)}`);
@@ -337,10 +362,11 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
         { title: '操作', key: 'actions', width: kind === 'policies' ? 250 : 140, fixed: 'right' as const, render: (_: unknown, entry: { row: Row; index: number }) => <Space size="small"><Button size="small" disabled={unavailable} onClick={() => startEdit(entry.index)}>编辑</Button><Popconfirm title="从草稿删除此配置？" description="上传后才会改变装置配置。" disabled={unavailable} onConfirm={() => updateRows(draft.rows.filter((_, index) => index !== entry.index))}><Button size="small" danger disabled={unavailable}>删除</Button></Popconfirm>{kind === 'policies' && <><Button size="small" disabled={unavailable || entry.index === 0} onClick={() => move(entry.index, -1)}>上移</Button><Button size="small" disabled={unavailable || entry.index === draft.rows.length - 1} onClick={() => move(entry.index, 1)}>下移</Button></>}</Space> },
       ]} />
     </Card>
-    {autoPlan && <Modal title="自动配置纵密装置" open width={1080} okText="依次上传并重启纵密" cancelText="取消" onCancel={() => setAutoPlan(null)} onOk={() => void performAutomatic()} okButtonProps={{ disabled: blocked || !autoPlan.certificate }}>
+    {autoPlan && <Modal title="自动配置纵密装置" open width={1080} okText="依次上传并重启纵密" cancelText="取消" closable={!blocked} keyboard={!blocked} mask={{ closable: !blocked }} cancelButtonProps={{ disabled: blocked }} confirmLoading={busy} onCancel={() => { if (!blocked && !active.current) setAutoPlan(null); }} onOk={() => void performAutomatic()} okButtonProps={{ disabled: blocked || !autoPlan.certificate }}>
       <Alert type="warning" showIcon title="将按网络、路由、隧道、策略顺序覆盖配置并逐页上传" description="每页仅保留下方指定记录。四页全部上传并回读一致后，自动切换系统管理员账号重启纵密装置；任何一步失败立即停止，不重启 DSP。现有未上传草稿将被替换。" />
-      <p>主站证书<Select aria-label="自动配置主站证书" style={{ minWidth: 300 }} value={autoPlan.certificate || undefined} placeholder="请选择管理员已导入的主站证书" options={autoPlan.certificates.map(value => ({ value, label: value }))} onChange={certificate => setAutoPlan(previous => previous ? { ...previous, certificate } : null)} /></p>
-      {autoPlan.certificate && pages.map(item => <section key={item.key}><h4>{item.label}</h4><Table<Row> size="small" pagination={false} rowKey={(_, index) => String(index)} scroll={{ x: item.fields.length * 130 }} dataSource={buildAutoConfig(autoPlan.addresses, autoPlan.certificate)[item.key]} columns={item.fields.map(field => ({ title: field.label, dataIndex: field.key, width: 130, render: (value: string) => item.key === 'tunnels' && field.key === 'backup_certificate' ? '不使用' : field.options?.find(([code]) => code === value)?.[1] ?? (value || '—') }))} /></section>)}
+      <p>当前 DSP：<strong>{autoPlan.snapshot.upload_account}</strong>。配置以本次从 DSP 读取的业务地址为准。</p>
+      <p>主站证书<Select aria-label="自动配置主站证书" disabled={blocked} style={{ minWidth: 300 }} value={autoPlan.certificate || undefined} placeholder="请选择管理员已导入的主站证书" options={autoPlan.certificates.map(value => ({ value, label: value }))} onChange={certificate => { if (!blocked && !active.current) setAutoPlan(previous => previous ? { ...previous, certificate } : null); }} /></p>
+      {autoPlan.certificate && pages.map(item => <section key={item.key}><h4>{item.label}</h4><Table<Row> size="small" pagination={false} rowKey={(_, index) => String(index)} scroll={{ x: item.fields.length * 130 }} dataSource={buildAutoConfig(autoPlan.snapshot.addresses, autoPlan.certificate)[item.key]} columns={item.fields.map(field => ({ title: field.label, dataIndex: field.key, width: 130, render: (value: string) => item.key === 'tunnels' && field.key === 'backup_certificate' ? '不使用' : field.options?.find(([code]) => code === value)?.[1] ?? (value || '—') }))} /></section>)}
     </Modal>}
     {editor && <Modal title={`${editor.index === null ? '新增' : '编辑'}${page.label}`} open width={760} onCancel={() => setEditor(null)} okText="确认草稿" cancelText="取消" onOk={applyEdit} okButtonProps={{ disabled: unavailable || certificateMissing || tunnelMissing }}>
       {kind === 'network' && <p>网络描述请使用最多 10 个英文字符、数字或符号。</p>}
