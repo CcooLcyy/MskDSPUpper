@@ -1,4 +1,4 @@
-"""从已有 staging 产物冻结上位机 CI/Beta 平台身份。"""
+"""从已有 staging 产物冻结上位机 CI/Beta/Stable 平台身份。"""
 import argparse
 import json
 import os
@@ -13,7 +13,7 @@ def freeze(metadata_path, target_dir):
     metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
     sha = os.environ.get("CI_COMMIT_SHA", "")
     actual = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-    branch = os.environ.get("CI_COMMIT_BRANCH", "")
+    branch = os.environ.get("CI_COMMIT_TAG") or os.environ.get("CI_COMMIT_BRANCH", "")
     context = dict(ref=branch, channel=resolve_source(branch, metadata["baseVersion"]))
     validate_pipeline(os.environ, context["channel"])
     validate_version(context["ref"], context["channel"], metadata["effectiveVersion"], sha)

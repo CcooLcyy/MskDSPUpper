@@ -72,7 +72,7 @@ if ($Stage -eq 'verify') {
 if ($Stage -eq 'package') {
     $releaseJson = Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/release_policy.py')
     $release = $releaseJson | ConvertFrom-Json
-    if ($release.channel -notin @('ci', 'beta') -or -not $release.metadata -or -not $release.config -or -not $release.ref) {
+    if ($release.channel -notin @('ci', 'beta', 'stable') -or -not $release.metadata -or -not $release.config -or -not $release.ref) {
         throw 'GitLab 发布渠道信息不完整，停止构建'
     }
     Write-Host "已确认发布来源：channel=$($release.channel)，branch=$($release.ref)"
@@ -80,7 +80,12 @@ if ($Stage -eq 'package') {
     if (-not $env:PLATFORM_PUBLIC_BASE_URL) { throw '缺少平台公开下载地址' }
     if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $PWD 'src-tauri/target' }
     New-Item -ItemType Directory -Path package/logs -Force | Out-Null
-    Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/emit-build-metadata.mjs', '--channel', $release.channel, '--ref', $release.ref, '--sha', $env:CI_COMMIT_SHA, '--output', $release.metadata)
+    $metadataArguments = @('scripts/workflow/emit-build-metadata.mjs', '--channel', $release.channel, '--ref', $release.ref, '--sha', $env:CI_COMMIT_SHA, '--output', $release.metadata)
+    if ($release.channel -eq 'stable') {
+        if (-not $release.tag) { throw '正式构建缺少来源标签，停止打包' }
+        $metadataArguments += @('--tag', $release.tag)
+    }
+    Invoke-Checked -Program 'node' -Arguments $metadataArguments
     Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/apply-channel-version.mjs', '--metadata-file', $release.metadata, '--backup-dir', 'package/.manifest-backup')
     try {
         $endpoint = $env:PLATFORM_PUBLIC_BASE_URL.TrimEnd('/') + '/mskdsp-upper/' + $release.channel + '/latest.json'

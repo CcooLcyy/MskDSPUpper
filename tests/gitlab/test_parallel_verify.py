@@ -104,10 +104,12 @@ if ($Stage -eq 'verify') { & $pipeline -Stage package }
                                  "-File", str(launcher), "-Workspace", str(workspace), "-Stage", stage],
                                 capture_output=True, timeout=45,
                                 env={**os.environ, "PYTHONUTF8": "1", "STUB_EVENTS": str(workspace / "events.jsonl"),
-                                     "FAIL_TOOL": fail_tool, "CI_PIPELINE_SOURCE": "push", "CI_COMMIT_TAG": "",
-                                     "CI_COMMIT_BRANCH": branch, "CI_COMMIT_REF_PROTECTED": "true",
+                                     "FAIL_TOOL": fail_tool, "CI_PIPELINE_SOURCE": "push",
+                                     "CI_COMMIT_TAG": branch if branch.startswith("v") else "",
+                                     "CI_COMMIT_BRANCH": "" if branch.startswith("v") else branch,
+                                     "CI_COMMIT_REF_PROTECTED": "true",
                                      "CI_COMMIT_SHA": "a" * 40,
-                                     "UPPER_RELEASE_CHANNEL": "ci" if branch == "main" else "beta"})
+                                     "UPPER_RELEASE_CHANNEL": "ci" if branch == "main" else "stable" if branch.startswith("v") else "beta"})
         events = sorted((json.loads(path.read_text(encoding="utf-8")) for path in (workspace / "events").glob("*.json")),
                         key=lambda event: event["started"])
         logs = workspace / "package/logs"

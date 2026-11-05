@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""将冻结的上位机 CI/Beta 安装包续传入库并发布对应通道，不执行设备安装。"""
+"""将冻结的上位机 CI/Beta/Stable 安装包续传入库并发布对应通道，不执行设备安装。"""
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -56,7 +56,7 @@ def load_metadata(metadata_path, environ=None):
               "source_repository", "source_ref", "source_sha", "channel", "pipeline_id")
     if not isinstance(data, dict) or any(name not in data for name in fields):
         raise ClientError("冻结元数据字段不完整")
-    if (data["product"] != "mskdsp-upper" or data["channel"] not in ("ci", "beta")
+    if (data["product"] != "mskdsp-upper" or data["channel"] not in ("ci", "beta", "stable")
             or data["platform"] != "windows-x86_64-nsis"
             or any(not safe_component(data[name]) for name in ("version", "file_name"))
             or not data["file_name"].endswith(".exe")
@@ -75,8 +75,7 @@ def load_metadata(metadata_path, environ=None):
     except (ValueError, TypeError):
         raise ClientError("冻结产物的分支、真实版本或受保护渠道不合法") from None
     if (environment.get("CI_PIPELINE_SOURCE") not in ("push", "web")
-            or environment.get("CI_COMMIT_TAG")
-            or data["source_ref"] != environment.get("CI_COMMIT_BRANCH")
+            or data["source_ref"] != (environment.get("CI_COMMIT_TAG") or environment.get("CI_COMMIT_BRANCH"))
             or data["source_sha"] != environment.get("CI_COMMIT_SHA")
             or str(data["pipeline_id"]) != environment.get("CI_PIPELINE_ID")
             or not re.fullmatch(r"[1-9][0-9]*", str(data["pipeline_id"]))
@@ -95,9 +94,30 @@ def check_current_head(metadata, environ=None):
     repository = metadata["source_repository"].rstrip("/")
     if not repository.endswith(".git"):
         repository += ".git"
-    result = subprocess.run(["git", "ls-remote", "--exit-code", repository,
-                             "refs/heads/" + metadata["source_ref"]], env=git_environment,
+    if metadata["channel"] == "stable":
+        # 同时读取标签对象、annotated peeled 提交和匹配版本的 Beta HEAD。
+        # 只读取远端引用，不获取或移动标签，不以本地缓存代替远端身份。
+        tag = "refs/tags/" + metadata["source_ref"]
+        beta = "refs/heads/beta/" + metadata["version"]
+        refs = [tag, tag + "^{}", beta]
+    else:
+        refs = ["refs/heads/" + metadata["source_ref"]]
+    result = subprocess.run(["git", "ls-remote", "--exit-code", repository, *refs], env=git_environment,
                             capture_output=True, text=True, timeout=60, check=False)
+    if metadata["channel"] == "stable":
+        remote = {}
+        for line in result.stdout.splitlines():
+            values = line.split("\t")
+            if (len(values) != 2 or values[1] not in refs or values[1] in remote
+                    or not re.fullmatch(r"[a-f0-9]{40}", values[0])):
+                raise ClientError("正式标签和 Beta 引用结果无效，拒绝发布")
+            remote[values[1]] = values[0]
+        if (result.returncode or tag not in remote
+                or remote.get(tag + "^{}", remote.get(tag)) != metadata["source_sha"]
+                or remote.get(beta) != metadata["source_sha"]):
+            raise ClientError("正式标签或同版本 Beta HEAD 已变化、缺失或不匹配，拒绝发布")
+        print("已核对正式标签与同版本 Beta HEAD 指向本次提交")
+        return
     expected = metadata["source_sha"] + "\trefs/heads/" + metadata["source_ref"]
     if result.returncode or result.stdout.strip() != expected:
         raise ClientError("远端来源分支已变化或无法确认，拒绝发布旧构建")
@@ -160,7 +180,7 @@ def confirm_manifest(base_url, metadata, *, timeout=30):
     """通过公开清单核对发布身份；HTTP 请求不携带上传令牌。"""
     if not repository_url(base_url):
         raise ClientError("平台公开地址必须为无凭据 HTTP(S) 地址")
-    if metadata["channel"] not in ("ci", "beta"):
+    if metadata["channel"] not in ("ci", "beta", "stable"):
         raise ClientError("不支持的上位机发布通道")
     request = Request(base_url.rstrip("/") + "/mskdsp-upper/" + metadata["channel"] + "/latest.json", headers={"Cache-Control": "no-cache"})
     with urlopen(request, timeout=timeout) as response:
@@ -193,7 +213,7 @@ def transfer(publisher, catalog, messages, archive, metadata, token, *, before_p
              attempts=4, retry_delay=1, timeout=60, chunk_size=1024 * 1024, after_publish=None):
     import grpc
     channel = metadata["channel"]
-    if channel not in ("ci", "beta"):
+    if channel not in ("ci", "beta", "stable"):
         raise ClientError("不支持的上位机发布通道")
     if (not 1 <= attempts <= 10 or not 0 < timeout <= 1800 or not 1 <= chunk_size <= 1024 * 1024
             or not token or not token.isascii() or any(ord(char) < 33 or ord(char) > 126 for char in token)):

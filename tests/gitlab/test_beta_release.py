@@ -142,7 +142,7 @@ class ReleaseSourceTests(unittest.TestCase):
         self.assertEqual(resolve_source("main", "0.8.0"), "ci")
         for branch in ("beta/0.8", "beta/0.8.0"):
             self.assertEqual(resolve_source(branch, "0.8.0"), "beta")
-        for branch in ("beta/0.7.0", "beta/0.8.1", "beta/00.8", "beta/0.8/extra", "feature/beta", "v0.8.0"):
+        for branch in ("beta/0.7.0", "beta/0.8.1", "beta/00.8", "beta/0.8/extra", "feature/beta", "v0.8"):
             with self.subTest(branch=branch), self.assertRaises(ValueError):
                 resolve_source(branch, "0.8.0")
 
