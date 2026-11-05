@@ -136,6 +136,7 @@ test('local capability methods are delegated to the real api', () => {
     'saveLowerUpdateConnection',
     'clearLowerUpdateCredentials',
     'getVerticalSecurityStatus',
+    'getVerticalSecurityNetwork',
     'configureVerticalSecurityAccessPath',
     'getVerticalSecurityLoginCapabilities',
     'getVerticalSecurityCertificateProfile',

@@ -268,6 +268,7 @@ export const DELEGATED_API_METHODS = [
   'getVerticalSecuritySimIp',
   'deployVerticalSecurityScript',
   'getVerticalSecurityStatus',
+  'getVerticalSecurityNetwork',
   'saveFullConfigExport',
   'saveVerticalSecurityScript',
   'loadFullConfigExport',
