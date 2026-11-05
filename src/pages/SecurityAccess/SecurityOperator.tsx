@@ -229,7 +229,7 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
     setError(null); setNotice(null);
     active.current = true; setBusy(true); onBusyChange?.(true);
     let completed = false;
-    let uploading: Kind | null = null;
+    const uploading: { kind: Kind | null } = { kind: null };
     try {
       if (!boundTarget()) throw new Error('DSP 连接目标已变化，请重新点击自动配置生成预览。');
       const fresh = await readDspNetwork(() => current() && !disabledRef.current);
@@ -239,7 +239,7 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
       setAutoPlan(null);
       console.info('[纵密自动配置] 开始依次上传网络、路由、隧道、策略');
       await uploadAutoConfig(sessionId, rows, request => {
-        uploading = request.kind;
+        uploading.kind = request.kind;
         setKind(request.kind);
         return api.runVerticalSecurityOperator(request);
       }, () => current() && !disabledRef.current && boundTarget(), (target, result) => {
@@ -253,7 +253,7 @@ export default function SecurityOperator({ sessionId, disabled = false, onBusyCh
       if (current()) {
         setAutoPlan(null);
         setError(`${reason instanceof Error ? reason.message : String(reason)} 已停止自动配置，不会切换管理员或重启；请核实已经上传的页面。`);
-        const failedKind = uploading;
+        const failedKind = uploading.kind;
         if (failedKind) setDrafts(previous => ({ ...previous, [failedKind]: { ...previous[failedKind], stale: true } }));
         console.warn('[纵密自动配置] 流程中止，保留草稿，不自动重试上传');
       }
