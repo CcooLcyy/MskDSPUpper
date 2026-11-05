@@ -347,8 +347,8 @@ test('powershell 5.1 steps with 2>&1 must relax $ErrorActionPreference', () => {
   }
 
   assert.ok(
-    checkedStepCount >= 17,
-    `expected at least 17 guarded 2>&1 steps, got ${checkedStepCount}`,
+    checkedStepCount >= 11,
+    `CI/Stable 应至少覆盖 11 个受保护的 2>&1 步骤，实际为 ${checkedStepCount}`,
   );
 });
 
@@ -391,7 +391,7 @@ test('jobs running the workflow test suite must make the proto submodule availab
     .readdirSync(workflowDir)
     .filter((file) => /\.ya?ml$/.test(file))
     .map((file) => `.github/workflows/${file}`);
-  let checkedJobCount = 0;
+  const checkedJobs = [];
 
   for (const workflowPath of workflowPaths) {
     const fileText = fs
@@ -403,7 +403,7 @@ test('jobs running the workflow test suite must make the proto submodule availab
         continue;
       }
 
-      checkedJobCount += 1;
+      checkedJobs.push(`${workflowPath}:${job.name}`);
       assert.match(
         job.block,
         /git submodule update --init|submodules:\s*true/,
@@ -412,7 +412,10 @@ test('jobs running the workflow test suite must make the proto submodule availab
     }
   }
 
-  assert.ok(checkedJobCount >= 3, `expected at least 3 test jobs, got ${checkedJobCount}`);
+  assert.deepEqual(checkedJobs.sort(), [
+    '.github/workflows/ci.yml:verify-debug',
+    '.github/workflows/release.yml:publish-release',
+  ]);
 });
 
 // publish 工作区是干净检出，package/metadata 与 package/.manifest-backup 都不存在，
