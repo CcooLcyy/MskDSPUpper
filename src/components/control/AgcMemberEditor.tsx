@@ -34,6 +34,8 @@ export default function AgcMemberEditor({
   const name = Form.useWatch('member_name', form) || '成员';
   const mode = Form.useWatch(['p_set', 'mode'], form) ?? 1;
   const deltaBase = Form.useWatch(['p_set', 'delta_base'], form) ?? 0;
+  const communicationTag = Form.useWatch(['communication_state', 'tag'], { form, preserve: true });
+  const communicationBound = Boolean(endpoints.communication_state?.length) || Boolean(communicationTag);
   const capacity = Form.useWatch('capacity_kw_decimal', form);
   const handleValuesChange = (changed: Partial<AgcMemberConfig>) => {
     if ('capacity_kw_decimal' in changed) {
@@ -50,8 +52,11 @@ export default function AgcMemberEditor({
   const pointPicker = (kind: AgcMemberPointKind, label: string) => {
     const selected = endpoints[kind] ?? [];
     const multiple = selected.length > 1;
-    return <Form.Item label={label} required>
-      <ConnectionPointSelect label={label} options={options} selected={selected}
+    const choices = kind === 'communication_state'
+      ? options.filter(option => option.endpoint.tag === '__communication_state' || selected.some(endpoint => controlEndpointKey(endpoint) === option.value))
+      : options.filter(option => option.endpoint.tag !== '__communication_state' || selected.some(endpoint => controlEndpointKey(endpoint) === option.value));
+    return <Form.Item label={label} required={kind !== 'communication_state'}>
+      <ConnectionPointSelect label={label} options={choices} selected={selected}
         loading={loading} disabled={loading || Boolean(error) || submitting}
         onChange={(values) => onSelect(kind, values)} />
       {multiple && <Typography.Text type="secondary" className="agc-member-editor__note">保留全部已有绑定；多来源可能覆盖同一输入值，请确认来源关系。</Typography.Text>}
@@ -59,7 +64,7 @@ export default function AgcMemberEditor({
   };
   const routeLine = (kind: AgcMemberPointKind, input: boolean) => (endpoints[kind] ?? []).map((endpoint) => (
     <div key={`${kind}-${controlEndpointKey(endpoint)}`}>
-      {input ? `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag} → ${name} ${kind === 'base_tag' ? '增量基准' : '测量输入'}`
+      {input ? `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag} → ${name} ${kind === 'base_tag' ? '增量基准' : kind === 'communication_state' ? '通信状态' : '测量输入'}`
         : `${name} 控制输出 → ${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag}`}
     </div>
   ));
@@ -84,6 +89,16 @@ export default function AgcMemberEditor({
       <Typography.Text strong className="agc-member-editor__section-title">绑定已有点位</Typography.Text>
       {pointPicker('p_meas', '有功测量点')}
       {controllable && pointPicker('p_set', '有功设定点')}
+      {pointPicker('communication_state', '通信状态点（可选）')}
+      {communicationBound && <Button type="link" size="small" onClick={() => onSelect('communication_state', [])}>清除通信状态关联</Button>}
+      {communicationBound && <Form.Item name="communication_timeout_ms" label="通信心跳超时（毫秒）"
+        getValueProps={(value: number | undefined) => ({ value: value || 30000 })}
+        rules={[{ validator: async (_rule, value) => {
+          if (!Number.isInteger(value) || value < 1000 || value > 3600000) throw new Error('通信心跳超时须为 1000～3600000 毫秒');
+        } }]}>
+        <InputNumber min={1000} max={3600000} step={1000} precision={0} style={{ width: '100%' }} />
+      </Form.Item>}
+      <Typography.Text type="secondary" className="agc-member-editor__note">关联后仅通信正常的可控成员参与调节；清空关联恢复原行为。默认超时 30000 毫秒。</Typography.Text>
       <Typography.Text type="secondary" className="agc-member-editor__note">工程量换算与点位读写在协议点表中配置，AGC 使用 kW 工程量。</Typography.Text>
       <Typography.Text strong className="agc-member-editor__section-title">控制参数</Typography.Text>
       <div className="agc-member-editor__limits">
@@ -122,6 +137,7 @@ export default function AgcMemberEditor({
       <div className="agc-member-editor__routes" aria-live="polite">
         <Typography.Text type="secondary">保存控制组时自动建立点位绑定</Typography.Text>
         {routeLine('p_meas', true)}
+        {routeLine('communication_state', true)}
         {controllable && routeLine('p_set', false)}
         {controllable && mode === 2 && deltaBase === 3 && routeLine('base_tag', true)}
       </div>

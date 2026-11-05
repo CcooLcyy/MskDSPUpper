@@ -62,3 +62,30 @@ export function runtimePointState(update: DcPointUpdate | undefined, nowMs: numb
   if (readRuntimeNumericText(update) === null) return '数值异常';
   return '新鲜 · 有效';
 }
+
+
+/** 按通信心跳显示参与条件；仅用于监视，实际控制资格由下位机独立判断。 */
+export function memberCommunicationState(
+  member: Pick<AgcMemberConfig, 'controllable' | 'communication_state' | 'communication_timeout_ms'>,
+  update: DcPointUpdate | undefined,
+  nowMs: number,
+  offline: boolean,
+): { label: string; eligible: boolean; reason: string } {
+  const result = (label: string, healthy = false) => ({
+    label, eligible: member.controllable && healthy,
+    reason: !member.controllable ? '仅参与测量' : healthy ? '满足通信参与条件' : label,
+  });
+  if (!member.communication_state?.tag) return { label: '未关联', eligible: member.controllable, reason: member.controllable ? '沿用原参与规则' : '仅参与测量' };
+  if (offline) return result('查询异常');
+  if (!update) return result('等待通信状态');
+  if (update.quality !== 1 || (update.quality_flags != null && update.quality_flags !== 0)) return result('质量异常');
+  const timeout = member.communication_timeout_ms || 30000;
+  if (!Number.isFinite(update.ts_ms) || update.ts_ms <= 0 || update.ts_ms > nowMs) return result('时间异常');
+  if (nowMs - update.ts_ms > timeout) return result('心跳超时');
+  const value = readRuntimeNumericText(update);
+  if (value === null) return result('状态值无效');
+  for (const [code, label] of [['0', '未知'], ['1', '通信正常'], ['2', '通信异常'], ['3', '已停止']]) {
+    if (compareAgcDecimalTexts(value, code) === 0) return result(label, code === '1');
+  }
+  return result('状态值无效');
+}

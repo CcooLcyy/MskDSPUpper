@@ -104,3 +104,18 @@ test('workspace file names get the mskwsp extension once', () => {
   assert.equal(ensureWorkspaceFileName('经开区二期.mskwsp'), '经开区二期.mskwsp');
   assert.equal(ensureWorkspaceFileName('  '), '未命名工作区.mskwsp');
 });
+
+
+// 验证成员通信状态、毫秒超时和绑定路由经离线文件保存载入后原样保留。
+test('AGC 通信关联通过离线工作区保存与解析往返', () => {
+  const workspace = createEmptyWorkspace('通信联动', '2026-11-05T00:00:00.000Z');
+  const member = { member_name: '逆变器1', controllable: true, p_meas: { tag: '有功' }, communication_state: { tag: '通信输入', unit: '', scale: 1, offset: 0 }, communication_timeout_ms: 45000 };
+  workspace.config.agc.groups = [{ upsert: { config: { group_name: '控制组1', members: [member] }, create_only: false } }];
+  workspace.config.data_bus.routes.items = [{
+    src: { module_name: 'ModbusRTU', conn_name: '逆变器1', tag: '__communication_state' },
+    dst: { module_name: 'AGC', conn_name: '控制组1', tag: '通信输入' },
+  }];
+  const restored = parseWorkspace(serializeWorkspace(workspace));
+  assert.deepEqual(restored.config.agc.groups[0].upsert.config.members[0], member);
+  assert.deepEqual(restored.config.data_bus.routes.items, workspace.config.data_bus.routes.items);
+});

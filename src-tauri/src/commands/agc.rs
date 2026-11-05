@@ -54,6 +54,10 @@ pub struct MemberConfigDto {
     pub max_kw_decimal: String,
     pub p_meas: Option<SignalSpecDto>,
     pub p_set: Option<ValueSpecDto>,
+    #[serde(default)]
+    pub communication_state: Option<SignalSpecDto>,
+    #[serde(default)]
+    pub communication_timeout_ms: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -230,6 +234,8 @@ impl From<MemberConfig> for MemberConfigDto {
             max_kw_decimal: member.max_kw_decimal,
             p_meas: member.p_meas.map(|signal| signal.into()),
             p_set: member.p_set.map(|value| value.into()),
+            communication_state: member.communication_state.map(Into::into),
+            communication_timeout_ms: member.communication_timeout_ms,
         }
     }
 }
@@ -459,6 +465,11 @@ impl MemberConfigDto {
             max_kw_decimal: self.max_kw_decimal.clone(),
             p_meas: self.p_meas.as_ref().map(|signal| signal.to_proto()),
             p_set: self.p_set.as_ref().map(|value| value.to_proto()),
+            communication_state: self
+                .communication_state
+                .as_ref()
+                .map(|signal| signal.to_proto()),
+            communication_timeout_ms: self.communication_timeout_ms,
         }
     }
 }
@@ -520,6 +531,12 @@ fn validate_group_tag_uniqueness(config: &GroupConfigDto) -> Result<(), String> 
     );
 
     for (index, member) in config.members.iter().enumerate() {
+        validate_member_communication(member)?;
+        collect_group_tag_owner(
+            &mut tag_owners,
+            member.communication_state.as_ref().map(|signal| signal.tag.as_str()),
+            format!("{}.communication_state", member.member_name),
+        );
         let member_label = if member.member_name.trim().is_empty() {
             format!("member #{}", index + 1)
         } else {
@@ -582,6 +599,20 @@ fn validate_group_tag_uniqueness(config: &GroupConfigDto) -> Result<(), String> 
             duplicate_tags.join("；")
         ))
     }
+}
+
+fn validate_member_communication(member: &MemberConfigDto) -> Result<(), String> {
+    if let Some(signal) = &member.communication_state {
+        if signal.tag.trim().is_empty() {
+            return Err(format!("{} 的通信状态标签不能为空", member.member_name));
+        }
+        if member.communication_timeout_ms != 0
+            && !(1000..=3600000).contains(&member.communication_timeout_ms)
+        {
+            return Err(format!("{} 的通信状态超时必须为 1000～3600000 毫秒，或 0 使用默认值", member.member_name));
+        }
+    }
+    Ok(())
 }
 
 fn validate_control_timing(config: &GroupConfigDto) -> Result<(), String> {
@@ -810,4 +841,48 @@ pub async fn agc_confirm_control_profile(
             tracing::error!(control = "AGC", group_name = %group_name, error = %error, "确认固定控制参数失败");
             error.to_string()
         })
+}
+
+#[cfg(test)]
+mod communication_tests {
+    use super::*;
+
+    fn member() -> MemberConfigDto {
+        serde_json::from_value(serde_json::json!({
+            "member_name": "逆变器", "controllable": true,
+            "capacity_kw": 100.0, "weight": 1.0, "min_kw": 0.0, "max_kw": 100.0
+        })).unwrap()
+    }
+
+    // 验证旧配置缺少新字段时不启用关联，新增字段经协议往返完整保留。
+    #[test]
+    fn communication_config_round_trip_and_legacy_default() {
+        let mut dto = member();
+        assert!(dto.communication_state.is_none());
+        assert_eq!(dto.communication_timeout_ms, 0);
+        dto.communication_state = Some(SignalSpec::default().into());
+        dto.communication_state.as_mut().unwrap().tag = "通信输入".into();
+        dto.communication_timeout_ms = 30000;
+        let decoded: MemberConfigDto = dto.to_proto().into();
+        assert_eq!(decoded.communication_state.unwrap().tag, "通信输入");
+        assert_eq!(decoded.communication_timeout_ms, 30000);
+    }
+
+    // 验证超时默认值与上下界，并拒绝已启用但标签为空的通信输入。
+    #[test]
+    fn communication_config_validates_timeout_and_tag() {
+        let mut dto = member();
+        assert!(validate_member_communication(&dto).is_ok());
+        dto.communication_state = Some(SignalSpec::default().into());
+        assert!(validate_member_communication(&dto).is_err());
+        dto.communication_state.as_mut().unwrap().tag = "通信输入".into();
+        for timeout in [0, 1000, 30000, 3600000] {
+            dto.communication_timeout_ms = timeout;
+            assert!(validate_member_communication(&dto).is_ok());
+        }
+        for timeout in [1, 999, 3600001] {
+            dto.communication_timeout_ms = timeout;
+            assert!(validate_member_communication(&dto).is_err());
+        }
+    }
 }

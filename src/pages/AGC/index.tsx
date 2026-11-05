@@ -194,6 +194,8 @@ const DEFAULT_MEMBER: AgcMemberConfig = {
   weight_decimal: '1',
   min_kw_decimal: '0',
   max_kw_decimal: '0',
+  communication_state: null,
+  communication_timeout_ms: 30000,
   p_meas: { ...DEFAULT_SIGNAL },
   p_set: {
     signal: { ...DEFAULT_SIGNAL },
@@ -251,6 +253,8 @@ const cloneMember = (member: AgcMemberConfig | null | undefined): AgcMemberConfi
     weight_decimal: member?.weight_decimal ?? '',
     min_kw_decimal: member?.min_kw_decimal ?? '',
     max_kw_decimal: member?.max_kw_decimal ?? '',
+    communication_state: member?.communication_state ? { ...member.communication_state } : null,
+    communication_timeout_ms: member?.communication_timeout_ms || 30000,
     p_meas: cloneSignal(member?.p_meas),
     p_set: cloneValueSpec(member?.p_set),
   })
@@ -328,6 +332,7 @@ const findDuplicateGroupEndpointTags = (config: AgcGroupConfig): string[] => {
   }
   config.members.forEach((member, index) => {
     const memberLabel = member.member_name.trim() || `member #${index + 1}`;
+    collectTag(member.communication_state?.tag, `${memberLabel}.communication_state`);
     collectTag(member.p_meas?.tag, `${memberLabel}.p_meas`);
     collectTag(member.p_set?.signal?.tag, `${memberLabel}.p_set`);
     if (member.p_set?.mode === 2 && member.p_set.delta_base === 3) {
@@ -361,6 +366,7 @@ const findReservedGroupEndpointTags = (config: AgcGroupConfig): string[] => {
   collectTag(config.outputs?.p_total_error?.tag, 'outputs.p_total_error');
   config.members.forEach((member, index) => {
     const memberLabel = member.member_name.trim() || `member #${index + 1}`;
+    collectTag(member.communication_state?.tag, `${memberLabel}.communication_state`);
     collectTag(member.p_meas?.tag, `${memberLabel}.p_meas`);
     collectTag(member.p_set?.signal?.tag, `${memberLabel}.p_set`);
     if (member.p_set?.mode === 2 && member.p_set.delta_base === 3) {
@@ -388,6 +394,7 @@ const collectObservedTags = (group: AgcGroupInfo | null): string[] => {
   collectTag(group.config.outputs?.p_total_target?.tag);
   collectTag(group.config.outputs?.p_total_error?.tag);
   group.config.members.forEach((member) => {
+    collectTag(member.communication_state?.tag);
     collectTag(member.p_meas?.tag);
     collectTag(member.p_set?.signal?.tag);
     if (member.p_set?.mode === 2 && member.p_set.delta_base === 3) {
@@ -433,6 +440,7 @@ const collectMappingFields = (config: Partial<AgcGroupConfig>): ControlMappingFi
   add('总有功目标输出', config.outputs?.p_total_target?.tag, 'output');
   add('总有功偏差输出', config.outputs?.p_total_error?.tag, 'output');
   config.members?.forEach((member) => {
+    add(`${member.member_name} 通信状态`, member.communication_state?.tag, 'input');
     add(`${member.member_name} 有功测量`, member.p_meas?.tag, 'input');
     if (!member.controllable) return;
     add(`${member.member_name} 有功设定`, member.p_set?.signal?.tag, 'output');
@@ -668,6 +676,10 @@ const AGC: React.FC = () => {
   const handleSelectMemberEndpoint = (kind: AgcMemberPointKind, endpoints: DcEndpoint[]) => {
     setMemberDirty(true);
     setMemberEndpoints((previous) => ({ ...previous, [kind]: endpoints }));
+    if (kind === 'communication_state') {
+      if (!endpoints.length) memberForm.setFieldValue('communication_state', null);
+      console.info('AGC 成员通信状态绑定草稿已更新', { 绑定数量: endpoints.length });
+    }
     const initial = (memberInitialEndpoints[kind] ?? []).map(controlEndpointKey).sort();
     const selected = endpoints.map(controlEndpointKey).sort();
     setMemberEndpointChanges((previous) => {
@@ -1056,7 +1068,8 @@ const AGC: React.FC = () => {
     const fields = collectAgcMemberMappingFields([member]);
     for (const field of fields) {
       const kind: AgcMemberPointKind = field.direction === 'output' ? 'p_set'
-        : field.tag === member.p_meas?.tag ? 'p_meas' : 'base_tag';
+        : field.tag === member.communication_state?.tag ? 'communication_state'
+          : field.tag === member.p_meas?.tag ? 'p_meas' : 'base_tag';
       endpoints[kind] = mappings.getEndpoints(field);
     }
     setMemberDirty(false);
@@ -1102,7 +1115,14 @@ const AGC: React.FC = () => {
         throw new Error('请选择已有的增量基准点');
       }
       const groupTags = collectMappingFields({ ...groupForm.getFieldsValue(true), members: [] }).map((field) => field.tag);
+      const communicationEnabled = memberEndpointChanges.communication_state !== undefined
+        ? Boolean(memberEndpoints.communication_state?.length) : Boolean(values.communication_state?.tag || memberEndpoints.communication_state?.length);
+      const communicationTimeout = communicationEnabled ? (values.communication_timeout_ms || 30000) : 0;
+      if (communicationEnabled && (!Number.isInteger(communicationTimeout) || communicationTimeout < 1000 || communicationTimeout > 3600000)) {
+        throw new Error('通信心跳超时须为 1000～3600000 毫秒');
+      }
       const signals = buildAgcMemberSignals({
+        communicationEnabled,
         memberName: name, existingMembers: others, groupTags,
         originalMember: originalMember ? { ...originalMember, p_set: {
           ...valueSpec, signal: originalMember.p_set?.signal ?? null,
@@ -1111,6 +1131,7 @@ const AGC: React.FC = () => {
           p_meas: !originalMember || memberEndpointChanges.p_meas !== undefined,
           p_set: !originalMember || memberEndpointChanges.p_set !== undefined,
           base_tag: memberEndpointChanges.base_tag !== undefined,
+          communication_state: memberEndpointChanges.communication_state !== undefined,
         },
       });
       const weight = allocationMode === 'equal' ? '1' : allocationMode === 'proportional'
@@ -1119,6 +1140,8 @@ const AGC: React.FC = () => {
       const nextMember = normalizeAgcMemberDecimalFields({
         ...values, member_name: name, controllable,
         ...createAgcDecimalFields(weight, 'weight', 'weight_decimal'),
+        communication_state: signals.communication_state,
+        communication_timeout_ms: communicationTimeout,
         p_meas: signals.p_meas,
         p_set: controllable ? normalizeValueSpec(signals.p_set) : null,
       });
@@ -1212,6 +1235,8 @@ const AGC: React.FC = () => {
             ...member,
             ...createAgcDecimalFields(weight, 'weight', 'weight_decimal'),
             member_name: member.member_name.trim(),
+            communication_state: member.communication_state?.tag ? { ...member.communication_state, tag: member.communication_state.tag.trim() } : null,
+            communication_timeout_ms: member.communication_state?.tag ? (member.communication_timeout_ms ?? 0) : 0,
             p_meas: normalizeSignal(member.p_meas),
             p_set: member.controllable ? normalizeValueSpec(member.p_set) : null,
           });
@@ -1884,6 +1909,7 @@ const AGC: React.FC = () => {
             </div>
             {membersDraft.length === 0 && <Text type="secondary">暂无成员，请添加</Text>}
             {membersDraft.map((member, index) => {
+              const communication = mappings.getEndpoints({ label: '', tag: member.communication_state?.tag ?? '', direction: 'input' });
               const measurement = mappings.getEndpoints({ label: '', tag: member.p_meas?.tag ?? '', direction: 'input' });
               const setpoint = mappings.getEndpoints({ label: '', tag: member.p_set?.signal?.tag ?? '', direction: 'output' });
               const share = allocationShares[index] ?? 0;
@@ -1917,6 +1943,7 @@ const AGC: React.FC = () => {
                   </label>}
                 </div>
                 {bindings('测量点', measurement)}
+                {member.communication_state?.tag && bindings('通信状态', communication)}
                 {member.controllable ? bindings('设定点', setpoint) : <div className="agc-group-member__point"><Text type="secondary">设定点</Text><Text type="secondary">仅测量</Text></div>}
               </article>;
             })}

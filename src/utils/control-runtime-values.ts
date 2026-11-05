@@ -105,6 +105,7 @@ const toDestinationUpdate = (update: DcSourcePointUpdate): DcPointUpdate => ({
   value: update.value,
   ts_ms: update.ts_ms,
   quality: update.quality,
+  quality_flags: update.quality_flags,
 });
 
 export const mergeControlRuntimeUpdates = (

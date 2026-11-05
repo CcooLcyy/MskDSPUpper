@@ -1108,6 +1108,7 @@ export type DcPointValue =
   | { type: 'Bytes'; value: number[] };
 
 export interface DcPointUpdate {
+  quality_flags?: number | null;
   src_conn_id: number;
   src_tag: string;
   dst_conn_id: number;
@@ -1118,6 +1119,7 @@ export interface DcPointUpdate {
 }
 
 export interface DcSourcePointUpdate {
+  quality_flags?: number | null;
   conn_id: number;
   tag: string;
   value: DcPointValue | null;
@@ -1220,6 +1222,8 @@ export interface AgcStrategyConfig {
 }
 
 export interface AgcMemberConfig {
+  communication_state?: AgcSignalSpec | null;
+  communication_timeout_ms?: number;
   member_name: string;
   controllable: boolean;
   capacity_kw: number;

@@ -53,6 +53,8 @@ pub struct PointUpdateDto {
     pub value: Option<PointValueDto>,
     pub ts_ms: i64,
     pub quality: i32,
+    #[serde(default)]
+    pub quality_flags: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -62,6 +64,8 @@ pub struct SourcePointUpdateDto {
     pub value: Option<PointValueDto>,
     pub ts_ms: i64,
     pub quality: i32,
+    #[serde(default)]
+    pub quality_flags: Option<u32>,
     pub sequence: u64,
 }
 
@@ -183,6 +187,7 @@ impl From<PointUpdate> for PointUpdateDto {
             value: point_value_from_proto(pu.value),
             ts_ms: pu.ts_ms,
             quality: pu.quality,
+            quality_flags: pu.quality_flags,
         }
     }
 }
@@ -195,6 +200,7 @@ impl From<SourcePointUpdate> for SourcePointUpdateDto {
             value: point_value_from_proto(update.value),
             ts_ms: update.ts_ms,
             quality: update.quality,
+            quality_flags: update.quality_flags,
             sequence: update.sequence,
         }
     }
@@ -446,4 +452,36 @@ pub async fn dc_get_throughput_snapshot(
         "获取 DataCenter 吞吐量快照完成"
     );
     Ok(snapshot.into())
+}
+
+#[cfg(test)]
+mod communication_quality_tests {
+    use super::*;
+
+    // 验证：路由输入和源端状态均保留品质位的缺席、显式零及未知位。
+    #[test]
+    fn preserves_communication_quality_flags() {
+        for flags in [None, Some(0), Some(128), Some(256)] {
+            let routed = PointUpdateDto::from(PointUpdate {
+                quality: 1,
+                quality_flags: flags,
+                ..Default::default()
+            });
+            let source = SourcePointUpdateDto::from(SourcePointUpdate {
+                quality: 1,
+                quality_flags: flags,
+                ..Default::default()
+            });
+            assert_eq!(routed.quality_flags, flags);
+            assert_eq!(source.quality_flags, flags);
+        }
+    }
+
+    // 验证：旧的界面点值 JSON 缺少新字段时仍可读取。
+    #[test]
+    fn accepts_legacy_point_without_quality_flags() {
+        let json = r#"{"src_conn_id":1,"src_tag":"state","dst_conn_id":2,"dst_tag":"online","value":null,"ts_ms":1,"quality":1}"#;
+        let update: PointUpdateDto = serde_json::from_str(json).unwrap();
+        assert_eq!(update.quality_flags, None);
+    }
 }

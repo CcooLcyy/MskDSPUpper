@@ -476,7 +476,7 @@ function tagsForConnection(connId: number): string[] {
 
   const modbus = [...modbusLinks.values()].find((item) => item.conn_id === connId);
   if (modbus?.config) {
-    return (modbusTables.get(modbus.config.conn_name)?.points ?? []).map((item) => item.tag);
+    return [...new Set([...(modbusTables.get(modbus.config.conn_name)?.points ?? []).map((item) => item.tag), '__communication_state'])];
   }
 
   const modbusTcp = [...modbusTcpLinks.values()].find((item) => item.conn_id === connId);
@@ -508,6 +508,7 @@ function tagsForConnection(connId: number): string[] {
     agc.default_points.forEach((point) => tags.add(point.tag));
     agc.config.members.forEach((member) => {
       collectSignalTag(member.p_meas, tags);
+      collectSignalTag(member.communication_state, tags);
       collectValueSpec(member.p_set, tags);
     });
     return [...tags];

@@ -122,6 +122,7 @@ export function deriveConnTags(input: DeriveTagsInput): string[] {
       return sortTags(tags);
     }
     case 'ModbusRTU':
+      return sortTags([...input.points.map((point) => point.tag), '__communication_state']);
     case 'ModbusTCP':
       return sortTags(input.points.map((point) => point.tag));
     case 'DLT645': {
@@ -172,6 +173,7 @@ function collectAgcTags(config: AgcGroupConfig | null | undefined): string[] {
 
   for (const member of config?.members ?? []) {
     pushSignalTag(tags, member?.p_meas);
+    pushSignalTag(tags, member?.communication_state);
     pushValueSpecTags(tags, member?.p_set);
   }
 

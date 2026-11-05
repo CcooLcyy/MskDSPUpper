@@ -151,6 +151,8 @@ export const normalizeAgcMemberDecimalFields = (member: AgcMemberConfig): AgcMem
     ...createAgcDecimalFields(upper, 'max_kw', 'max_kw_decimal'),
     p_meas: member.p_meas ? normalizeAgcSignalDecimalFields(member.p_meas) : null,
     p_set: normalizeValueSpec(member.p_set),
+    communication_state: member.communication_state ? { ...member.communication_state } : null,
+    communication_timeout_ms: member.communication_timeout_ms ?? 0,
   };
 };
 

@@ -30,11 +30,11 @@ test('iec104 honours a configured time sync tag', () => {
   assert.deepEqual(tags, ['A', 'sync/pulse']);
 });
 
-// Modbus 点表标签必须全量注册，采集点与写功能码点不区分。
+// Modbus 点表标签必须全量注册，RTU 同时注册独立通信心跳系统点。
 test('modbus tags include every point tag', () => {
   assert.deepEqual(
     deriveConnTags({ module: 'ModbusRTU', points: [{ tag: 'B' }, { tag: 'A' }, { tag: 'A' }] }),
-    ['A', 'B'],
+    ['A', 'B', '__communication_state'],
   );
   assert.deepEqual(deriveConnTags({ module: 'ModbusTCP', points: [{ tag: 'C' }] }), ['C']);
 });

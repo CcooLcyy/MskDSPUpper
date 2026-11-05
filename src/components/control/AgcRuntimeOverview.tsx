@@ -8,7 +8,7 @@ import ControlRuntimeStatus from './ControlRuntimeStatus';
 import { calculateControlAllocationShares } from '../../utils/control-allocation';
 import { inferAgcAllocationMode, resolveAgcDecimalText } from '../../utils/agc-decimal';
 import { formatDecimalDisplay } from '../../utils/realtime-value';
-import { getMemberRuntimeDifference, readRuntimeNumericText, runtimePointState, selectAgcOverviewUpdates } from '../../utils/agc-runtime-overview';
+import { getMemberRuntimeDifference, readRuntimeNumericText, runtimePointState, selectAgcOverviewUpdates, memberCommunicationState } from '../../utils/agc-runtime-overview';
 import './agc-runtime-overview.css';
 
 export interface AgcRuntimeOverviewProps {
@@ -92,6 +92,10 @@ export default function AgcRuntimeOverview(props: AgcRuntimeOverviewProps) {
       const difference = getMemberRuntimeDifference(member, member.p_meas?.tag ? updates[member.p_meas.tag] : undefined, member.p_set?.signal?.tag ? updates[member.p_set.signal.tag] : undefined);
       return difference === null ? <Tooltip title={member.p_set?.mode === 2 ? '增量设定，不计算绝对偏差' : '仅绝对值指令、默认换算、kW 单位且两个缓存均为合法数值时比较；请展开核对配置'}>—</Tooltip> : <Tooltip title={`缓存原始差值 ${difference} kW`}>{formatDecimalDisplay(difference)} kW</Tooltip>;
     } },
+    { title: <Tooltip title="依通信状态缓存及超时显示参与条件；实际参与和设点仍由下位机判断，不代表设备执行确认。">通信参与条件</Tooltip>, key: 'communication', width: 180, render: (_, member) => {
+      const state = memberCommunicationState(member, member.communication_state?.tag ? updates[member.communication_state.tag] : undefined, nowMs, offline);
+      return <div><Tag color={state.eligible ? 'success' : 'warning'}>{state.label}</Tag><div><Text type="secondary">{state.reason}</Text></div></div>;
+    } },
     { title: '测量状态', key: 'quality', width: 150, render: (_, member) => {
       const state = runtimePointState(member.p_meas?.tag ? updates[member.p_meas.tag] : undefined, nowMs, maxAgeMs, offline);
       return <Text type={state === '新鲜 · 有效' ? 'success' : 'warning'}>{state}</Text>;
@@ -126,7 +130,7 @@ export default function AgcRuntimeOverview(props: AgcRuntimeOverviewProps) {
     {group.last_error && <Alert type="error" showIcon title="最近错误" description={group.last_error} />}
     <div className="agc-runtime-section-heading"><Text strong>成员运行</Text><Text type="secondary">{config.members.length} 个成员 · 缓存值对照</Text></div>
     <Table<AgcMemberConfig> className="agc-runtime-members" rowKey={(member, index) => `${member.member_name}-${index}`} columns={columns} dataSource={config.members} pagination={false} size="small" scroll={{ x: 800 }} locale={{ emptyText: '暂无成员配置' }} expandable={{
-      expandedRowRender: member => <div className="agc-runtime-point-details">{pointDetails('测量点', member.p_meas)}{member.controllable && pointDetails('已发布设定点', member.p_set?.signal)}<Text type="secondary">调节范围 {formatDecimalDisplay(resolveAgcDecimalText(member, 'min_kw', 'min_kw_decimal'))}～{formatDecimalDisplay(resolveAgcDecimalText(member, 'max_kw', 'max_kw_decimal'))} kW</Text></div>,
+      expandedRowRender: member => <div className="agc-runtime-point-details">{pointDetails('测量点', member.p_meas)}{member.communication_state?.tag && pointDetails('通信状态点', member.communication_state)}{member.controllable && pointDetails('已发布设定点', member.p_set?.signal)}<Text type="secondary">调节范围 {formatDecimalDisplay(resolveAgcDecimalText(member, 'min_kw', 'min_kw_decimal'))}～{formatDecimalDisplay(resolveAgcDecimalText(member, 'max_kw', 'max_kw_decimal'))} kW</Text></div>,
       expandIcon: ({ expanded, onExpand, record }) => <Button type="link" size="small" aria-label={`${expanded ? '收起' : '展开'}成员 ${record.member_name}`} onClick={event => {
         console.info('AGC 成员运行详情切换', { 成员: record.member_name, 展开: !expanded }); onExpand(record, event);
       }}>{expanded ? '收起' : '展开'}</Button>,
