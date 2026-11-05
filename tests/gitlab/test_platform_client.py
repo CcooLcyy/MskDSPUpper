@@ -142,7 +142,7 @@ class UploadTransportTests(unittest.TestCase):
                                    PLATFORM_GRPC_ENDPOINT=endpoint, PLATFORM_PUBLIC_BASE_URL="https://platform.example.com",
                                    HTTPS_PROXY="http://proxy.example.com:8080")
                 with patch.dict("os.environ", environment, clear=True), patch.dict(sys.modules, {"grpc": grpc}), \
-                        patch.object(platform_client, "load_metadata", return_value=(Path("unused.exe"), {})), \
+                        patch.object(platform_client, "load_metadata", return_value=(Path("unused.exe"), {"channel": "ci", "source_ref": "main"})), \
                         patch.object(platform_client, "check_current_head"), patch.object(platform_client, "generate_bindings"), \
                         patch.object(platform_client, "load_bindings", return_value=bindings), \
                         patch.object(platform_client, "transfer", return_value="published"):
