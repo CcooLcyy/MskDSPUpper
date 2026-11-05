@@ -27,7 +27,8 @@ def _run_isolated_pipeline_cached(stage, fail_tool, powershell, branch):
         scripts.mkdir(parents=True)
         for name in ("pipeline.ps1", "verify.py", "release_policy.py"):
             shutil.copyfile(ROOT / "scripts/gitlab" / name, scripts / name)
-        shutil.copyfile(ROOT / "package.json", workspace / "package.json")
+        # 隔离夹具固定使用 0.8.0，版本线断言不随产品主干升级而漂移。
+        (workspace / "package.json").write_text(json.dumps({"version": "0.8.0"}), encoding="utf-8")
         driver = workspace / "stub.py"
         driver.write_text(r'''import json, os, subprocess, sys, time
 from pathlib import Path
