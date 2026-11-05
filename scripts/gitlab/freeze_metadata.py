@@ -1,4 +1,4 @@
-"""从已有 staging 产物冻结上位机 CI/Beta/Stable 平台身份。"""
+"""从已有 staging 产物冻结上位机 CI/候选分支/Stable 平台身份。"""
 import argparse
 import json
 import os
@@ -19,7 +19,7 @@ def freeze(metadata_path, target_dir):
     validate_version(context["ref"], context["channel"], metadata["effectiveVersion"], sha)
     if (metadata["channel"] != context["channel"] or metadata["shortSha"] != sha[:7] or actual != sha
             or metadata["effectiveVersion"] != json.loads(Path("package.json").read_text(encoding="utf-8"))["version"]
-            or metadata.get("betaLine") != (context["ref"][5:] if context["channel"] == "beta" else None)):
+            or metadata.get("betaLine") is not None):
         raise ClientError("构建与冻结源码身份不一致")
     stage = Path("package/staging") / metadata["channelLabel"] / metadata["platform"]
     manifest = json.loads((stage / "staging-manifest.json").read_text(encoding="utf-8"))

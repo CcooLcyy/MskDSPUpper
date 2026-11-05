@@ -5,9 +5,9 @@ workflow:
     - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE =~ /^(push|web)$/'
       variables:
         UPPER_RELEASE_CHANNEL: ci
-    - if: '$CI_COMMIT_BRANCH =~ /^beta\/(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))?$/ && $CI_PIPELINE_SOURCE =~ /^(push|web)$/ && $CI_COMMIT_REF_PROTECTED == "true"'
+    - if: '$CI_COMMIT_BRANCH =~ /^release\/(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/ && $CI_PIPELINE_SOURCE =~ /^(push|web)$/ && $CI_COMMIT_REF_PROTECTED == "true"'
       variables:
-        UPPER_RELEASE_CHANNEL: beta
+        UPPER_RELEASE_CHANNEL: ci
     - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/ && $CI_PIPELINE_SOURCE =~ /^(push|web)$/ && $CI_COMMIT_REF_PROTECTED == "true"'
       variables:
         UPPER_RELEASE_CHANNEL: stable
@@ -60,6 +60,10 @@ upper-ci:
 upper-publish:
   extends: .upper-windows
   stage: publish
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/'
+    - when: never
   interruptible: false
   environment:
     name: ci

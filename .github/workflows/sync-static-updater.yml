@@ -9,9 +9,8 @@ on:
         type: choice
         options:
           - stable
-          - beta
       release_tag:
-        description: 'GitHub release tag to copy; defaults to v<package version> for stable or beta-latest for beta'
+        description: 'GitHub release tag to copy; defaults to v<package version> for stable'
         required: false
         type: string
       platform:
@@ -57,14 +56,13 @@ jobs:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $channel = "${{ github.event.inputs.channel }}"
+          if ($channel -ne "stable") { throw "Only Stable backfill is supported" }
           $inputTag = "${{ github.event.inputs.release_tag }}"
           $releaseTag = $inputTag.Trim()
           if ([string]::IsNullOrWhiteSpace($releaseTag)) {
             if ($channel -eq "stable") {
               $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
               $releaseTag = "v$version"
-            } elseif ($channel -eq "beta") {
-              $releaseTag = "beta-latest"
             } else {
               throw "Unsupported channel: $channel"
             }

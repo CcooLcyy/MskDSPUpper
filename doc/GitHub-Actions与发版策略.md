@@ -1,3 +1,9 @@
+# 历史 GitHub Actions 发布设计（已归档）
+
+以下内容是退役前的历史设计，不作为当前操作指南。Beta workflow 与 Beta 静态回填入口已关闭；当前发布规则和验收以 [RELEASING.md](../RELEASING.md) 为准。GitHub 正式 Release 已改用远端标签及 main/release 历史校验。
+
+---
+
 # GitHub Actions 与发版策略
 
 ## 目标

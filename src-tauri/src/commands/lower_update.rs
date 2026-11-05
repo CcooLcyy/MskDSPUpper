@@ -2301,17 +2301,7 @@ fn parse_available_bytes(output: &str) -> Result<u64, String> {
         .ok_or_else(|| "预检返回的磁盘可用空间超出范围".to_string())
 }
 
-fn build_install_command(install_dir: &str, package_name: &str) -> String {
-    let package_path = format!("./{package_name}");
-    format!(
-        "set -e; cd {}; chmod +x {}; {} start",
-        shell_quote(install_dir),
-        shell_quote(&package_path),
-        shell_quote(&package_path)
-    )
-}
-
-// 在同一次远端执行中先验证内容，再运行安装脚本，避免同名非 Stable 包绕过。
+// 在同一次远端执行中先验证内容，再运行安装脚本，避免同名包绕过缓存身份。
 fn build_verified_install_command(install_dir: &str, package_name: &str, sha256: &str) -> String {
     let package_path = shell_quote(&format!("./{package_name}"));
     format!(
@@ -2601,9 +2591,32 @@ async fn load_cached_package(
     }))
 }
 
-/// Stable 下发必须使用后端重新校验的缓存身份，不能信任前端声明的通道或文件路径。
+/// 保留原 Stable 回归入口，实际安装共用全客户端缓存身份校验。
+#[cfg(test)]
 pub(super) async fn find_verified_stable_package(
     cache_root: &Path,
+    package_name: &str,
+    expected_image_id: Option<&str>,
+    package_path: Option<&Path>,
+    package_size: Option<u64>,
+    package_sha256: Option<&str>,
+) -> Result<LowerUpdateCachedPackageDto, String> {
+    find_verified_update_package(
+        cache_root,
+        "stable",
+        package_name,
+        expected_image_id,
+        package_path,
+        package_size,
+        package_sha256,
+    )
+    .await
+}
+
+/// 上传、安装和恢复重提绑定真实缓存身份；发布归属来自元数据而非版本号。
+pub(super) async fn find_verified_update_package(
+    cache_root: &Path,
+    client_version: &str,
     package_name: &str,
     expected_image_id: Option<&str>,
     package_path: Option<&Path>,
@@ -2619,50 +2632,51 @@ pub(super) async fn find_verified_stable_package(
         Some(path) => Some(
             fs::canonicalize(path)
                 .await
-                .map_err(|error| format!("读取 Stable 安装包真实路径失败: {error}"))?,
+                .map_err(|error| format!("读取安装包真实路径失败: {error}"))?,
         ),
         None => None,
     };
     for platform in [LOWER_UPDATE_PLATFORM, LOWER_UPDATE_X64_PLATFORM] {
-        if validate_platform_channel(platform, "stable").is_err() {
-            continue;
-        }
-        let Some(package) = load_cached_package(
-            &cache_root.join("stable").join(platform),
-            Some("stable"),
-            platform,
-        )
-        .await?
-        else {
-            continue;
-        };
-        if package.manifest.local_import || package.manifest.asset.name != package_name {
-            continue;
-        }
-        if expected_image_id.as_ref().is_some_and(|expected| {
-            package
-                .manifest
-                .image_id
-                .as_deref()
-                .and_then(normalize_image_id)
-                .as_ref()
-                != Some(expected)
-        }) || package_size.is_some_and(|size| package.package_size != size)
-            || package_sha256.is_some_and(|sha256| !package.sha256.eq_ignore_ascii_case(sha256))
+        if crate::update_policy::is_stable_client(client_version)
+            && validate_platform_channel(platform, "stable").is_err()
         {
             continue;
         }
-        if let Some(requested_path) = &requested_path {
-            let cached_path = fs::canonicalize(&package.package_path)
-                .await
-                .map_err(|error| format!("读取 Stable 缓存真实路径失败: {error}"))?;
-            if &cached_path != requested_path {
+        let packages =
+            list_cached_lower_updates_for_client(cache_root, None, platform, client_version).await?;
+        for package in packages {
+            if package.manifest.asset.name != package_name {
                 continue;
             }
+            if expected_image_id.as_ref().is_some_and(|expected| {
+                package
+                    .manifest
+                    .image_id
+                    .as_deref()
+                    .and_then(normalize_image_id)
+                    .as_ref()
+                    != Some(expected)
+            }) || package_size.is_some_and(|size| package.package_size != size)
+                || package_sha256.is_some_and(|sha256| !package.sha256.eq_ignore_ascii_case(sha256))
+            {
+                continue;
+            }
+            if let Some(requested_path) = &requested_path {
+                let cached_path = fs::canonicalize(&package.package_path)
+                    .await
+                    .map_err(|error| format!("读取缓存真实路径失败: {error}"))?;
+                if &cached_path != requested_path {
+                    continue;
+                }
+            }
+            return Ok(package);
         }
-        return Ok(package);
     }
-    Err("Stable 上位机只能下发已校验的 Stable 缓存安装包，请先下载 Stable 版本".into())
+    if crate::update_policy::is_stable_client(client_version) {
+        Err("Stable 上位机只能下发已校验的 Stable 缓存安装包，请先下载 Stable 版本".into())
+    } else {
+        Err("只能下发已校验的 CI/Stable 缓存或合法本地导入包；Beta 已退役，缺少来源证据不能继续安装或恢复".into())
+    }
 }
 
 fn is_partial_download(path: &Path) -> bool {
@@ -2931,7 +2945,12 @@ async fn list_cached_lower_updates_for_client(
     } else {
         requested_channel
     };
-    list_cached_lower_updates_in(cache_root, channel, platform).await
+    let mut packages = list_cached_lower_updates_in(cache_root, channel, platform).await?;
+    packages.retain(|package| {
+        crate::update_policy::validate_update_channel(client_version, &package.manifest.channel)
+            .is_ok()
+    });
+    Ok(packages)
 }
 
 async fn list_cached_lower_updates_in(
@@ -3587,10 +3606,11 @@ async fn upload_lower_update_package_inner(
         return Err("下位机更新包名称不能包含路径分隔符".into());
     }
 
-    if crate::update_policy::is_stable_client(env!("CARGO_PKG_VERSION")) {
+    {
         let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
-        find_verified_stable_package(
+        find_verified_update_package(
             &state.runtime_paths.lower_update_dir(),
+            env!("CARGO_PKG_VERSION"),
             &request.package_name,
             None,
             Some(Path::new(request.package_path.trim())),
@@ -3841,32 +3861,28 @@ async fn install_lower_update_package_inner(
         return Err("下位机更新包名称不能包含路径分隔符".into());
     }
 
-    let stable_package = if crate::update_policy::is_stable_client(env!("CARGO_PKG_VERSION")) {
+    let verified_package = {
         let _guard = LOWER_UPDATE_CACHE_LOCK.lock().await;
-        Some(
-            find_verified_stable_package(
-                &state.runtime_paths.lower_update_dir(),
-                &request.package_name,
-                Some(&request.expected_image_id),
-                None,
-                None,
-                None,
-            )
-            .await?,
+        find_verified_update_package(
+            &state.runtime_paths.lower_update_dir(),
+            env!("CARGO_PKG_VERSION"),
+            &request.package_name,
+            Some(&request.expected_image_id),
+            None,
+            None,
+            None,
         )
-    } else {
-        None
+        .await?
     };
 
     let target = resolve_update_target(&state, &request.upload_account, request.remote_target.as_ref(), &request.auth).await?;
     let install_dir = normalize_install_dir(&request.install_dir)?;
     let remote_path = remote_package_path(&install_dir, &request.package_name);
-    let install_command = match &stable_package {
-        Some(package) => {
-            build_verified_install_command(&install_dir, &request.package_name, &package.sha256)
-        }
-        None => build_install_command(&install_dir, &request.package_name),
-    };
+    let install_command = build_verified_install_command(
+        &install_dir,
+        &request.package_name,
+        &verified_package.sha256,
+    );
 
     let runtime =
         query_lower_update_runtime_info(&target, &request.auth, &request.sudo_password).await?;
@@ -4442,8 +4458,90 @@ mod tests {
                 .await
                 .unwrap()
                 .len(),
-                4
+                3
             );
+        }
+    }
+
+    // 使用真实缓存文件验证上传、直连安装、任务重提共用的身份预检。
+    #[tokio::test]
+    async fn deployment_preflight_rejects_legacy_beta_for_all_entry_identities() {
+        for client in ["0.8.0-ci.1", "0.8.0-beta.1", "0.8.0"] {
+            for channel in ["beta", "ci", "stable", "local"] {
+                let temp = TestDirectory::new();
+                let bytes = test_compressed_package(channel);
+                let sha256 = format!("{:x}", sha2::Sha256::digest(&bytes));
+                let directory = if channel == "local" {
+                    temp.path().join("local").join(&sha256)
+                } else {
+                    temp.path().join(channel).join("linux-arm64")
+                };
+                fs::create_dir_all(&directory).unwrap();
+                let path = directory.join("package");
+                fs::write(&path, &bytes).unwrap();
+                let mut manifest = test_manifest("package", bytes.len() as u64, sha256.clone());
+                manifest.channel = if channel == "local" { "ci" } else { channel }.into();
+                // 发布归属决定权限，Stable 可以晋升带预发布版本号的同一包。
+                manifest.version = "0.8.0-beta.123".into();
+                if channel == "local" {
+                    manifest.local_import = true;
+                    manifest.asset.url.clear();
+                    manifest.checksum.url.clear();
+                }
+                persist_cache_metadata(&directory, &manifest).await.unwrap();
+                let allowed = channel != "beta" && (client != "0.8.0" || channel == "stable");
+                // 真实上传入口按本地路径、大小及摘要校验。
+                let upload = super::find_verified_update_package(
+                    temp.path(),
+                    client,
+                    "package",
+                    None,
+                    Some(&path),
+                    Some(bytes.len() as u64),
+                    Some(&sha256),
+                )
+                .await;
+                assert_eq!(upload.is_ok(), allowed, "上传 {client}/{channel}");
+                // 直连安装以包名和镜像重新查缓存，不能信任前端通道。
+                let install = super::find_verified_update_package(
+                    temp.path(),
+                    client,
+                    "package",
+                    manifest.image_id.as_deref(),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+                assert_eq!(install.is_ok(), allowed, "安装 {client}/{channel}");
+                // 远端提交及恢复重提必须有镜像和摘要一致的本地证据。
+                let submit = super::find_verified_update_package(
+                    temp.path(),
+                    client,
+                    "package",
+                    manifest.image_id.as_deref(),
+                    None,
+                    None,
+                    Some(&sha256),
+                )
+                .await;
+                assert_eq!(submit.is_ok(), allowed, "任务 {client}/{channel}");
+                fs::remove_file(&path).unwrap();
+                assert!(
+                    super::find_verified_update_package(
+                        temp.path(),
+                        client,
+                        "package",
+                        manifest.image_id.as_deref(),
+                        None,
+                        None,
+                        Some(&sha256),
+                    )
+                    .await
+                    .is_err(),
+                    "恢复缺少本地证据必须拒绝"
+                );
+            }
         }
     }
 

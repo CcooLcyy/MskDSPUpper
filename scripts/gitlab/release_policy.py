@@ -1,4 +1,4 @@
-"""GitLab CI/Beta/Stable 的来源和真实安装包版本约束，不读取或输出凭据。"""
+"""GitLab CI/候选分支/Stable 的来源和真实安装包版本约束，不读取或输出凭据。"""
 from datetime import datetime
 import json
 import os
@@ -7,7 +7,7 @@ import re
 
 NUMBER = r"(?:0|[1-9][0-9]*)"
 VERSION = rf"{NUMBER}\.{NUMBER}\.{NUMBER}"
-BETA = rf"beta/({NUMBER}\.{NUMBER}(?:\.{NUMBER})?)"
+RELEASE = rf"release/({NUMBER}\.{NUMBER})"
 
 
 def resolve_source(branch, base_version=None):
@@ -20,11 +20,11 @@ def resolve_source(branch, base_version=None):
         if base_version is not None and tag[1] != base_version:
             raise ValueError("正式标签必须与基础版本完全一致")
         return "stable"
-    match = re.fullmatch(BETA, branch or "")
+    match = re.fullmatch(RELEASE, branch or "")
     if not match or (base_version is not None and match[1] not in
-                     (base_version, ".".join(base_version.split(".")[:2]))):
-        raise ValueError("仅允许 main、匹配的 Beta 分支或正式版本标签")
-    return "beta"
+                     (".".join(base_version.split(".")[:2]),)):
+        raise ValueError("仅允许 main、匹配的 release/X.Y 分支或正式版本标签")
+    return "ci"
 
 
 def validate_pipeline(environment, channel):
@@ -33,9 +33,9 @@ def validate_pipeline(environment, channel):
     if (environment.get("CI_PIPELINE_SOURCE") not in ("push", "web")
             or (channel == "stable" and (not tag or branch))
             or (channel != "stable" and (tag or not branch))
-            or channel in ("beta", "stable") and environment.get("CI_COMMIT_REF_PROTECTED") != "true"
+            or (channel == "stable" or branch.startswith("release/")) and environment.get("CI_COMMIT_REF_PROTECTED") != "true"
             or environment.get("UPPER_RELEASE_CHANNEL", channel) != channel):
-        raise ValueError("仅允许当前 push/web 流水线，Beta/Stable 必须使用受保护引用且渠道一致")
+        raise ValueError("仅允许当前 push/web 流水线，Release/Stable 必须使用受保护引用且渠道一致")
 
 
 def validate_version(branch, channel, version, sha):
@@ -45,12 +45,12 @@ def validate_version(branch, channel, version, sha):
         if not re.fullmatch(VERSION, version) or resolve_source(branch, version) != "stable":
             raise ValueError("正式安装包必须使用与标签一致的纯版本")
         return
-    match = re.fullmatch(rf"({VERSION})-(ci|beta(?:\.{NUMBER}){{2,3}})\.([0-9]{{8}}t[0-9]{{6}})\+sha\.([a-f0-9]{{7}})", version)
+    match = re.fullmatch(rf"({VERSION})-(ci)\.([0-9]{{8}}t[0-9]{{6}})\+sha\.([a-f0-9]{{7}})", version)
     if not match or match[4] != sha[:7] or resolve_source(branch, match[1]) != channel:
         raise ValueError("安装包版本与源码分支、渠道或提交不匹配")
-    expected = "ci" if channel == "ci" else "beta." + branch.removeprefix("beta/")
+    expected = "ci"
     if match[2] != expected:
-        raise ValueError("禁止将 CI 产物改通道冒充 Beta 安装包")
+        raise ValueError("禁止更改候选安装包的 CI 版本身份")
     try:
         datetime.strptime(match[3], "%Y%m%dt%H%M%S")
     except ValueError:

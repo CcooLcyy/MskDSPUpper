@@ -48,6 +48,15 @@ const cargoToml = fs.readFileSync(path.join(repoRoot, 'src-tauri', 'Cargo.toml')
 
 const channel = values.channel;
 const baseVersion = packageJson.version;
+if (channel === 'beta') {
+  throw new Error('Beta publishing has been retired');
+}
+if (channel === 'stable') {
+  const cargoVersion = extractCargoValue(cargoToml, /^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
+  if (tauriConfig.version !== baseVersion || cargoVersion !== baseVersion) {
+    throw new Error('Stable source versions must agree before packaging');
+  }
+}
 const ref = values.ref ? normalizeGitRef(values.ref) : null;
 const sha = values.sha ?? '0000000';
 const shortSha = shortenSha(sha);

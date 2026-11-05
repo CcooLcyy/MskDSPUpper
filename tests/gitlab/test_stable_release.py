@@ -1,4 +1,4 @@
-"""验证正式标签来源、纯版本及当前 Beta 提交的发布门禁。"""
+"""验证正式标签来源、纯版本及main/release 历史的发布门禁。"""
 from contextlib import redirect_stdout
 import io
 import json
@@ -7,7 +7,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-import test_beta_release
+import test_release_candidate
 from test_platform_client import UpperIdentityTests
 
 
@@ -43,33 +43,15 @@ class StableIdentityTests(UpperIdentityTests):
                 self.load()
             self.environment = original
 
-    # 轻量标签和 annotated 标签分别按提交及 peeled 提交核对同版本 Beta HEAD。
-    def test_current_lightweight_and_annotated_tag_match_beta_head(self):
+    def test_stable_uses_remote_history_gate(self):
         _, identity = self.load()
         environment = {**self.environment, "CI_SERVER_URL": "http://gitlab.test", "CI_JOB_TOKEN": "fixture"}
-        sha = "a" * 40
-        for tag_lines in (f"{sha}\trefs/tags/v0.7.1\n",
-                          f"{'b' * 40}\trefs/tags/v0.7.1\n{sha}\trefs/tags/v0.7.1^{{}}\n"):
-            output = tag_lines + f"{sha}\trefs/heads/beta/0.7.1\n"
-            with patch.object(self.client.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)) as run:
-                self.client.check_current_head(identity, environment)
-            arguments = run.call_args.args[0]
-            for ref in ("refs/tags/v0.7.1", "refs/tags/v0.7.1^{}", "refs/heads/beta/0.7.1"):
-                self.assertIn(ref, arguments)
-
-    # 缺失 Beta、Beta 不同提交、移动标签及缺失直接标签引用均不得发布。
-    def test_missing_beta_old_head_and_moved_tag_are_rejected(self):
-        _, identity = self.load()
-        environment = {**self.environment, "CI_SERVER_URL": "http://gitlab.test", "CI_JOB_TOKEN": "fixture"}
-        sha, other = "a" * 40, "b" * 40
-        for output in (f"{sha}\trefs/tags/v0.7.1\n",
-                       f"{sha}\trefs/tags/v0.7.1\n{other}\trefs/heads/beta/0.7.1\n",
-                       f"{other}\trefs/tags/v0.7.1\n{sha}\trefs/heads/beta/0.7.1\n",
-                       f"{other}\trefs/tags/v0.7.1\n{other}\trefs/tags/v0.7.1^{{}}\n{sha}\trefs/heads/beta/0.7.1\n",
-                       f"{sha}\trefs/tags/v0.7.1^{{}}\n{sha}\trefs/heads/beta/0.7.1\n"):
-            with patch.object(self.client.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)), \
-                    self.assertRaises(self.client.ClientError):
-                self.client.check_current_head(identity, environment)
+        with patch.object(self.client, "verify_stable_source") as verify:
+            self.client.check_current_head(identity, environment)
+        self.assertEqual(verify.call_args.args[:3],
+                         (identity["source_repository"] + ".git", "v0.7.1", "a" * 40))
+        with patch.object(self.client, "verify_stable_source", side_effect=ValueError("moved")), self.assertRaises(self.client.ClientError):
+            self.client.check_current_head(identity, environment)
 
     # 正式冻结保留纯版本及标签身份，不写入 Beta 的版本线。
     def test_stable_freeze_preserves_tag_and_pure_version(self):
@@ -95,7 +77,7 @@ class StableIdentityTests(UpperIdentityTests):
 
     # 正式发布与回执丢失沿用同一套匿名目录验证，不能转去 CI/Beta。
     def test_stable_transfer_confirms_only_stable(self):
-        test_beta_release.BetaIdentityTests.test_transfer_publishes_and_confirms_only_frozen_channel(self)
+        test_release_candidate.ReleaseCandidateIdentityTests.assert_transfer_publishes_and_confirms_only_frozen_channel(self)
 
 
 class StableSourceTests(unittest.TestCase):

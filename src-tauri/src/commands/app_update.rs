@@ -132,8 +132,6 @@ pub struct AppUpdateStore {
 fn channel(version: &str) -> &'static str {
     if version.contains("-ci.") {
         "ci"
-    } else if version.contains("-beta.") {
-        "beta"
     } else {
         "stable"
     }
@@ -589,6 +587,24 @@ mod tests {
             .unwrap();
         assert!(validate_candidate("0.7.1", &cached).is_err());
         assert!(validate_candidate("0.7.1-beta.1", &cached).is_ok());
+    }
+
+    // 历史 Beta 客户端版本转向正式目录，CI 仍查询自身目录。
+    #[test]
+    fn retired_beta_versions_use_stable_catalog() {
+        assert_eq!(super::channel("0.8.0-beta.1"), "stable");
+        assert_eq!(super::channel("0.9.0-ci.123+sha.abcdef0"), "ci");
+        assert_eq!(super::channel("0.8.1"), "stable");
+        let mut stable_package = package();
+        stable_package.channels = vec!["stable".into()];
+        let update = candidate(
+            stable_package,
+            "http://127.0.0.1:50000".into(),
+            "0.8.0-beta.1",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(update.channel, "stable");
     }
 
     #[test]

@@ -38,14 +38,14 @@ test('lower updater auto coordinator downloads every channel without deployment'
   const platformRules = source('src/utils/lower-update-platform.ts');
 
   assert.match(coordinator, /30_000/);
-  assert.match(platformRules, /stable[^\n]*beta[^\n]*ci/);
+  assert.match(platformRules, /channels = \['stable', 'ci'\]/);
   assert.doesNotMatch(platformRules, /nightly/);
   assert.match(coordinator, /getLowerUpdateChannels\(platform, clientVersion\)/);
   assert.match(coordinator, /api\.checkLowerUpdate\(channel, platform\)/);
   assert.match(coordinator, /api\.listCachedLowerUpdates\(channel, platform\)/);
   assert.match(coordinator, /api\.downloadLowerUpdate\(manifest/);
   assert.match(context, /channels: Record<LowerUpdateChannel, LowerUpdateAutoChannelStatus>/);
-  assert.match(design, /`stable`、`beta`、`ci` 三个通道/);
+  assert.match(design, /`stable`、`ci` 两个通道/);
   assert.match(coordinator, /downloadLowerUpdate/);
   assert.doesNotMatch(coordinator, /uploadLowerUpdatePackage/);
   assert.doesNotMatch(coordinator, /installLowerUpdatePackage/);

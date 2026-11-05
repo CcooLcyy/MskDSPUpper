@@ -44,11 +44,6 @@ jobs:
           submodules: false
           ref: ${{ github.event.inputs.release_tag || github.ref }}
 
-      - name: Fetch beta refs for lineage check
-        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          git fetch origin '+refs/heads/beta/*:refs/remotes/origin/beta/*' --prune
-
       - name: Resolve release target
         id: release_target
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -154,11 +149,13 @@ jobs:
           cargo test --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET 2>&1 | Tee-Object -FilePath package\logs\cargo-test.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify beta lineage
-        id: beta_lineage
+      - name: Verify stable source
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
-          node scripts/workflow/verify-beta-lineage.mjs --commit ${{ steps.release_target.outputs.release_sha }}
+          python scripts/gitlab/verify_stable_source.py --repository origin --tag ${{ steps.release_target.outputs.release_tag }} --sha ${{ steps.release_target.outputs.release_sha }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Emit build metadata
         id: metadata
@@ -238,6 +235,14 @@ jobs:
             choco install awscli -y --no-progress
           }
           aws --version
+
+      - name: Recheck stable source before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          python scripts/gitlab/verify_stable_source.py --repository origin --tag ${{ steps.release_target.outputs.release_tag }} --sha ${{ steps.release_target.outputs.release_sha }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish stable package to R2
         shell: pwsh

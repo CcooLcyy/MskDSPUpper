@@ -110,7 +110,7 @@ if ($Stage -eq 'verify') { & $pipeline -Stage package }
                                      "CI_COMMIT_BRANCH": "" if branch.startswith("v") else branch,
                                      "CI_COMMIT_REF_PROTECTED": "true",
                                      "CI_COMMIT_SHA": "a" * 40,
-                                     "UPPER_RELEASE_CHANNEL": "ci" if branch == "main" else "stable" if branch.startswith("v") else "beta"})
+                                     "UPPER_RELEASE_CHANNEL": "stable" if branch.startswith("v") else "ci"})
         events = sorted((json.loads(path.read_text(encoding="utf-8")) for path in (workspace / "events").glob("*.json")),
                         key=lambda event: event["started"])
         logs = workspace / "package/logs"

@@ -72,7 +72,7 @@ if ($Stage -eq 'verify') {
 if ($Stage -eq 'package') {
     $releaseJson = Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/release_policy.py')
     $release = $releaseJson | ConvertFrom-Json
-    if ($release.channel -notin @('ci', 'beta', 'stable') -or -not $release.metadata -or -not $release.config -or -not $release.ref) {
+    if ($release.channel -notin @('ci', 'stable') -or -not $release.metadata -or -not $release.config -or -not $release.ref) {
         throw 'GitLab 发布渠道信息不完整，停止构建'
     }
     Write-Host "已确认发布来源：channel=$($release.channel)，branch=$($release.ref)"
@@ -109,6 +109,9 @@ if ($Stage -eq 'package') {
     return
 }
 if ($Stage -eq 'publish') {
+    if ($env:CI_COMMIT_BRANCH -ne 'main' -and -not $env:CI_COMMIT_TAG) {
+        throw '候选分支只保留流水线产物，不发布通道'
+    }
     Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/init_platform_proto.py')
     Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/platform_client.py', '--metadata', 'package/platform/upload-metadata.json')
 }

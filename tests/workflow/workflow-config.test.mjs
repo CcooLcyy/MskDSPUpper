@@ -123,7 +123,6 @@ function escapeRegExp(value) {
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
 
 for (const [workflowPath, stepName] of [
-  ['.github/workflows/beta.yml', 'Render beta tauri config'],
   ['.github/workflows/release.yml', 'Render stable tauri config'],
   ['.github/workflows/ci.yml', 'Render release tauri config'],
 ]) {
@@ -224,7 +223,6 @@ test('ci package publishes updater artifacts to the ci static channel', () => {
 test('release workflows enable Rust target caching and report cache hits', () => {
   const workflowPaths = [
     '.github/workflows/ci.yml',
-    '.github/workflows/beta.yml',
     '.github/workflows/release.yml',
   ];
   let rustCacheStepCount = 0;
@@ -263,7 +261,7 @@ test('release workflows enable Rust target caching and report cache hits', () =>
     }
   }
 
-  assert.equal(rustCacheStepCount, 5, 'ci/beta/release should expose five Rust cache steps');
+  assert.equal(rustCacheStepCount, 3, 'ci/release should expose three Rust cache steps');
 });
 
 // 回归：rust-cache 恢复的 registry 索引无法支撑 offline 解析，缓存命中时开启 CARGO_NET_OFFLINE
@@ -285,7 +283,6 @@ test('ci workflow does not force cargo into offline mode', () => {
 test('powershell 5.1 steps keep their run blocks ASCII-only', () => {
   const workflowPaths = [
     '.github/workflows/ci.yml',
-    '.github/workflows/beta.yml',
     '.github/workflows/release.yml',
   ];
   let checkedStepCount = 0;
@@ -321,7 +318,6 @@ test('powershell 5.1 steps keep their run blocks ASCII-only', () => {
 test('powershell 5.1 steps with 2>&1 must relax $ErrorActionPreference', () => {
   const workflowPaths = [
     '.github/workflows/ci.yml',
-    '.github/workflows/beta.yml',
     '.github/workflows/release.yml',
   ];
   let checkedStepCount = 0;
@@ -361,7 +357,6 @@ test('powershell 5.1 steps with 2>&1 must relax $ErrorActionPreference', () => {
 test('powershell steps do not pass possibly-empty expressions as standalone arguments', () => {
   const workflowPaths = [
     '.github/workflows/ci.yml',
-    '.github/workflows/beta.yml',
     '.github/workflows/release.yml',
   ];
 
@@ -439,44 +434,20 @@ test('ci publish verifies the downloaded artifact against the current commit', (
   );
 });
 
-test('beta workflow only triggers one-segment beta branch names', () => {
-  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/beta.yml'), 'utf8');
-
-  assert.match(fileText, /^\s{6}- beta\/\*\s*$/m);
-  assert.doesNotMatch(fileText, /^\s{6}- beta\/\*\*\s*$/m);
-});
-
-test('beta workflow tolerates target branches without the sccache stats helper', () => {
-  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/beta.yml'), 'utf8');
-  const statsBlocks = fileText
-    .split(/(?=^[ \t]+- name: )/m)
-    .filter((block) => block.trimStart().startsWith('- name: Show sccache stats'));
-
-  assert.equal(statsBlocks.length, 2);
-  for (const block of statsBlocks) {
-    assert.match(block, /\$statsScript = '\.\\scripts\\workflow\\Show-SccacheStats\.ps1'/);
-    assert.match(block, /if \(Test-Path -LiteralPath \$statsScript\) \{/);
-    assert.match(block, /& \$statsScript/);
-    assert.match(block, /skipping stats/);
-  }
-});
-
-test('rolling release tags are created from the build commit', () => {
-  const betaText = fs.readFileSync(path.join(repoRoot, '.github/workflows/beta.yml'), 'utf8');
-  const betaPrereleaseBlock = extractStepBlock(betaText, 'Create GitHub prerelease');
-  const betaRollingBlock = extractStepBlock(betaText, 'Create or update rolling beta release');
-
-  assert.match(betaPrereleaseBlock, /\$args \+= @\('--target', "\$\{\{ steps\.beta_head\.outputs\.sha \}\}"\)/);
-  assert.match(betaRollingBlock, /gh release create \$tag \$files --target "\$\{\{ steps\.beta_head\.outputs\.sha \}\}"/);
-});
-
-test('release workflow verifies existing stable tags and fetches beta refs before lineage checks', () => {
+test('Beta publishing is retired and Stable verifies remote history', () => {
+  assert.equal(fs.existsSync(path.join(repoRoot, '.github/workflows/beta.yml')), false);
   const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8');
-  const fetchBlock = extractStepBlock(fileText, 'Fetch beta refs for lineage check');
+  const sourceBlock = extractStepBlock(fileText, 'Verify stable source');
+  assert.match(sourceBlock, /verify_stable_source.py/);
+  assert.doesNotMatch(fileText, /verify-beta-lineage|refs\/heads\/beta/);
+  const syncText = fs.readFileSync(path.join(repoRoot, '.github/workflows/sync-static-updater.yml'), 'utf8');
+  assert.doesNotMatch(syncText, /beta-latest|channel -eq "beta"|          - beta/);
+});
+
+test('release workflow verifies an existing tag before creating the release', () => {
+  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8');
   const resolveBlock = extractStepBlock(fileText, 'Resolve release target');
   const releaseBlock = extractStepBlock(fileText, 'Create or update GitHub Release');
-
-  assert.match(fetchBlock, /git fetch origin '\+refs\/heads\/beta\/\*:refs\/remotes\/origin\/beta\/\*' --prune/);
   assert.match(resolveBlock, /github\.event\.inputs\.release_tag \|\| github\.ref_name/);
   assert.match(resolveBlock, /refs\/tags\/\$tag/);
   assert.doesNotMatch(resolveBlock, /git describe/);

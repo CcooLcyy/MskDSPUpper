@@ -506,17 +506,16 @@ pub async fn submit_lower_update_task(
         return Err("更新包名称不合法".into());
     }
     let image = normalize_image_id(&request.expected_image_id).ok_or("期望镜像 ID 不合法")?;
-    if crate::update_policy::is_stable_client(env!("CARGO_PKG_VERSION")) {
-        super::lower_update::find_verified_stable_package(
-            &state.runtime_paths.lower_update_dir(),
-            &request.package_name,
-            Some(&image),
-            None,
-            None,
-            Some(&package_sha256),
-        )
-        .await?;
-    }
+    super::lower_update::find_verified_update_package(
+        &state.runtime_paths.lower_update_dir(),
+        env!("CARGO_PKG_VERSION"),
+        &request.package_name,
+        Some(&image),
+        None,
+        None,
+        Some(&package_sha256),
+    )
+    .await?;
     let directory = normalize_install_dir(&request.install_dir)?;
     let path = remote_package_path(&directory, &request.package_name);
     let status = invoke_helper(

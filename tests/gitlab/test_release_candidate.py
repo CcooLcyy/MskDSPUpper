@@ -1,4 +1,4 @@
-"""验证真实 Beta 身份、渠道隔离和分支变动时的发布保护。"""
+"""验证真实 ReleaseCandidate 身份、渠道隔离和分支变动时的发布保护。"""
 from contextlib import redirect_stdout
 import io
 import json
@@ -12,21 +12,22 @@ from unittest.mock import MagicMock, patch
 from test_platform_client import UpperIdentityTests
 
 
-class BetaIdentityTests(UpperIdentityTests):
+class ReleaseCandidateIdentityTests(UpperIdentityTests):
+    """release 产物可冻结供下载，但发布入口必须拒绝。"""
     def setUp(self):
         super().setUp()
-        self.environment.update(CI_COMMIT_BRANCH="beta/0.7.1", CI_COMMIT_REF_PROTECTED="true")
-        self.data.update(channel="beta", source_ref="beta/0.7.1",
-                         version="0.7.1-beta.0.7.1.20261019t000000+sha.aaaaaaa", notes="Beta")
+        self.environment.update(CI_COMMIT_BRANCH="release/0.7", CI_COMMIT_REF_PROTECTED="true")
+        self.data.update(channel="ci", source_ref="release/0.7",
+                         version="0.7.1-ci.20261019t000000+sha.aaaaaaa", notes="ReleaseCandidate")
 
-    # Beta 使用重新打包的真实版本，保留已有签名而非直接改 CI 包通道。
-    def test_beta_version_channel_and_source_are_bound(self):
+    # ReleaseCandidate 使用重新打包的真实版本，保留已有签名而非直接改 CI 包通道。
+    def test_release_candidate_version_channel_and_source_are_bound(self):
         _, identity = self.load()
-        self.assertEqual((identity["channel"], identity["source_ref"]), ("beta", "beta/0.7.1"))
-        for changes in (dict(channel="ci"), dict(version="0.7.1-ci.20261019t000000+sha.aaaaaaa"),
-                        dict(version="0.7.2-beta.0.7.1.20261019t000000+sha.aaaaaaa"),
-                        dict(version="0.7.1-beta.0.7.1.20261019t000000+sha.bbbbbbb"),
-                        dict(version="0.7.1-beta.0.7.20261019t000000+sha.aaaaaaa")):
+        self.assertEqual((identity["channel"], identity["source_ref"]), ("ci", "release/0.7"))
+        for changes in (dict(channel="beta"), dict(version="0.7.1-beta.0.7.1.20261019t000000+sha.aaaaaaa"),
+                        dict(version="0.8.0-ci.20261019t000000+sha.aaaaaaa"),
+                        dict(version="0.7.1-ci.20261019t000000+sha.bbbbbbb"),
+                        dict(version="0.7.1-release_candidate.0.7.20261019t000000+sha.aaaaaaa")):
             original = dict(self.data)
             self.data.update(changes)
             with self.subTest(changes=changes), self.assertRaises(self.client.ClientError):
@@ -34,7 +35,7 @@ class BetaIdentityTests(UpperIdentityTests):
             self.data = original
 
     # 未保护分支及非 push/web 来源不能取得发布资格。
-    def test_unprotected_beta_and_foreign_pipeline_are_rejected(self):
+    def test_unprotected_release_candidate_and_foreign_pipeline_are_rejected(self):
         for changes in (dict(CI_COMMIT_REF_PROTECTED="false"), dict(CI_PIPELINE_SOURCE="merge_request_event"),
                         dict(CI_COMMIT_TAG="v0.7.1"), dict(CI_COMMIT_BRANCH="main")):
             original = dict(self.environment)
@@ -43,18 +44,18 @@ class BetaIdentityTests(UpperIdentityTests):
                 self.load()
             self.environment = original
 
-    # 过期 Beta 源提交在发布前被拒绝，并查询对应 Beta 而非 main。
-    def test_changed_beta_head_blocks_publish(self):
+    # 过期 ReleaseCandidate 源提交在发布前被拒绝，并查询对应 ReleaseCandidate 而非 main。
+    def test_changed_release_candidate_head_blocks_publish(self):
         _, identity = self.load()
         environment = {**self.environment, "CI_SERVER_URL": "http://gitlab.test", "CI_JOB_TOKEN": "fixture"}
         with patch.object(self.client.subprocess, "run", return_value=subprocess.CompletedProcess([], 0,
-                          "b" * 40 + "\trefs/heads/beta/0.7.1\n")) as run:
+                          "b" * 40 + "\trefs/heads/release/0.7\n")) as run:
             with self.assertRaises(self.client.ClientError):
                 self.client.check_current_head(identity, environment)
-        self.assertEqual(run.call_args.args[0][-1], "refs/heads/beta/0.7.1")
+        self.assertEqual(run.call_args.args[0][-1], "refs/heads/release/0.7")
 
     # 发布及匿名回读使用冻结渠道，入库已完成时不重新传输。
-    def test_transfer_publishes_and_confirms_only_frozen_channel(self):
+    def assert_transfer_publishes_and_confirms_only_frozen_channel(self):
         archive, identity = self.load()
         channel = identity["channel"]
         expected = SimpleNamespace(**identity)
@@ -80,7 +81,7 @@ class BetaIdentityTests(UpperIdentityTests):
         before.assert_called_once()
         after.assert_called_once()
 
-        # 发布回执丢失时只查询同一 Beta 包，不回退 CI，也不重新上传。
+        # 发布回执丢失时只查询同一 ReleaseCandidate 包，不回退 CI，也不重新上传。
         lost = grpc.RpcError()
         lost.code = lambda: grpc.StatusCode.UNAVAILABLE
         publisher.PublishRelease.side_effect = lost
@@ -104,27 +105,36 @@ class BetaIdentityTests(UpperIdentityTests):
                                  before_publish=before)
         publisher.PublishRelease.assert_not_called()
 
-    # main 继续发布 CI，不能因增加 Beta 而向 Beta 清单或目录写入。
+    def test_candidate_upload_never_contacts_platform(self):
+        archive, identity = self.load()
+        with patch.object(self.client, "load_metadata", return_value=(archive, identity)), \
+                patch.object(self.client, "check_current_head") as check, \
+                patch.object(self.client, "generate_bindings") as bindings, self.assertRaises(self.client.ClientError):
+            self.client.upload("unused.json")
+        check.assert_not_called()
+        bindings.assert_not_called()
+
+    # main 继续发布 CI，不能因增加 ReleaseCandidate 而向 ReleaseCandidate 清单或目录写入。
     def test_main_transfer_keeps_ci_channel(self):
         self.environment["CI_COMMIT_BRANCH"] = "main"
         self.data.update(channel="ci", source_ref="main", version="0.7.1-ci.20261019t000000+sha.aaaaaaa")
-        self.test_transfer_publishes_and_confirms_only_frozen_channel()
+        self.assert_transfer_publishes_and_confirms_only_frozen_channel()
 
-    # 冻结发生在临时替换版本之后，不能把已写入 package.json 的 Beta 版本当成基础版本。
-    def test_freeze_uses_build_base_and_preserves_the_real_beta_identity(self):
+    # 冻结发生在临时替换版本之后，不能把已写入 package.json 的 ReleaseCandidate 版本当成基础版本。
+    def test_freeze_uses_build_base_and_preserves_the_real_release_candidate_identity(self):
         import freeze_metadata
         original_cwd = os.getcwd()
         self.addCleanup(os.chdir, original_cwd)
         os.chdir(self.root)
         version = self.data["version"]
         (self.root / "package.json").write_text(json.dumps(dict(version=version)), encoding="utf-8")
-        stage = self.root / "package/staging/beta-0.7.1/windows-x64"
+        stage = self.root / "package/staging/ci/windows-x64"
         stage.mkdir(parents=True)
         (stage / "upper.exe").write_bytes(b"installer")
         (stage / "upper.exe.sig").write_text("real-signature-fixture", encoding="utf-8")
         (stage / "staging-manifest.json").write_text(json.dumps(dict(installers=["upper.exe"])), encoding="utf-8")
-        metadata = dict(channel="beta", channelLabel="beta-0.7.1", platform="windows-x64", shortSha="aaaaaaa",
-                        effectiveVersion=version, baseVersion="0.7.1", betaLine="0.7.1", releaseTitle="Beta")
+        metadata = dict(channel="ci", channelLabel="ci", platform="windows-x64", shortSha="aaaaaaa",
+                        effectiveVersion=version, baseVersion="0.7.1", betaLine=None, releaseTitle="ReleaseCandidate")
         source = self.root / "metadata.json"
         source.write_text(json.dumps(metadata), encoding="utf-8")
         with patch.dict(os.environ, self.environment, clear=True), patch.object(freeze_metadata.subprocess, "run",
@@ -136,23 +146,35 @@ class BetaIdentityTests(UpperIdentityTests):
 
 
 class ReleaseSourceTests(unittest.TestCase):
-    # Beta 完整版本线或次版本线必须与基础版本一致，拒绝前导零和额外路径。
+    # ReleaseCandidate 完整版本线或次版本线必须与基础版本一致，拒绝前导零和额外路径。
     def test_base_version_and_branch_validation(self):
         from release_policy import resolve_source
         self.assertEqual(resolve_source("main", "0.8.0"), "ci")
-        for branch in ("beta/0.8", "beta/0.8.0"):
-            self.assertEqual(resolve_source(branch, "0.8.0"), "beta")
-        for branch in ("beta/0.7.0", "beta/0.8.1", "beta/00.8", "beta/0.8/extra", "feature/beta", "v0.8"):
+        for branch in ("release/0.8",):
+            self.assertEqual(resolve_source(branch, "0.8.0"), "ci")
+        for branch in ("release/0.7", "release/0.8.1", "release/00.8", "release/0.8/extra", "beta/0.8", "beta/0.8.0", "feature/release", "v0.8"):
             with self.subTest(branch=branch), self.assertRaises(ValueError):
                 resolve_source(branch, "0.8.0")
 
 
+    def test_gitlab_candidate_has_no_publish_job(self):
+        from test_platform_client import ROOT
+        config = (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8")
+        workflow, publish = config.split("upper-publish:", 1)
+        self.assertNotIn("beta/", workflow)
+        self.assertIn("release", workflow)
+        self.assertIn("CI_COMMIT_REF_PROTECTED", workflow)
+        self.assertNotIn("release", publish.split("interruptible:", 1)[0])
+        self.assertIn("job: upper-ci", publish)
+        self.assertIn("artifacts: true", publish)
+
+
 @unittest.skipUnless(sys.platform == "win32", "需要 Windows Runner 的隔离 PowerShell 进程")
-class BetaPackagingTests(unittest.TestCase):
+class ReleaseCandidatePackagingTests(unittest.TestCase):
     # 实际执行 PowerShell 与渠道选择器，检查传给既有生成器、打包器和冻结器的参数。
-    def test_main_and_beta_pass_their_own_source_and_metadata_to_packaging(self):
+    def test_main_and_release_candidate_pass_their_own_source_and_metadata_to_packaging(self):
         from test_parallel_verify import run_isolated_pipeline
-        for branch, channel in (("main", "ci"), ("beta/0.8.0", "beta")):
+        for branch, channel in (("main", "ci"), ("release/0.8", "ci")):
             result, events, _ = run_isolated_pipeline(stage="package", branch=branch)
             with self.subTest(branch=branch):
                 self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
@@ -173,10 +195,10 @@ class BetaPackagingTests(unittest.TestCase):
                               if "scripts/gitlab/freeze_metadata.py" in entry["arguments"])
                 self.assertEqual(frozen[-2:], ["--metadata", metadata])
 
-    # 错误 Beta 版本线在真实打包命令之前失败，不能上传冒充的版本。
-    def test_wrong_beta_line_blocks_package_commands(self):
+    # 错误 ReleaseCandidate 版本线在真实打包命令之前失败，不能上传冒充的版本。
+    def test_wrong_release_candidate_line_blocks_package_commands(self):
         from test_parallel_verify import run_isolated_pipeline
-        result, events, _ = run_isolated_pipeline(stage="package", branch="beta/0.7.0")
+        result, events, _ = run_isolated_pipeline(stage="package", branch="release/0.7")
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(any(entry["kind"] == "node" for entry in events))
 

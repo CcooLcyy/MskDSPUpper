@@ -1,137 +1,21 @@
-# Releasing
+# 上位机发布约定
 
-## Current Baseline
+现行发布入口是 GitLab：`main` 执行完整验证、NSIS 签名打包并发布 `ci`；受保护 `release/X.Y` 执行相同验证与打包，保留 CI 预发布版本和流水线产物，**不写入全局 CI 或 Stable 通道**；受保护 `vX.Y.Z` 标签执行本标签当前 SHA 的完整验证与打包，成功后自动发布 `stable`。
 
-- App version: `0.8.0`
-- CI updater URL: `https://update.clsclear.top/mskdsp-upper/ci/latest.json`
-- Stable updater URL: `https://update.clsclear.top/mskdsp-upper/stable/latest.json`
-- Beta updater URL: `https://update.clsclear.top/mskdsp-upper/beta/latest.json`
-- Static updater base URL: `https://update.clsclear.top/mskdsp-upper`
-- Stable workflow trigger: push tag `v*`
-- Beta workflow trigger: push branch `beta/**`, or manual `workflow_dispatch`
-- Static source backfill trigger: manual `workflow_dispatch`
-- CI workflow trigger: pull request, or push to `main`
+## 来源与冻结
 
-## Before The First GitHub Run
+- `release/X.Y` 必须与源码基础版本的主、次版本匹配；不接受 `release/X.Y.Z` 或前导零。
+- 正式标签必须与源码基础版本完全一致。保留 Tauri 签名、安装包 SHA256、流水线编号、项目、来源引用和完整 SHA 的冻结校验。
+- 上传前及每次发布前读取远端标签，轻量标签提交或 annotated 标签解引用提交必须等于冻结 SHA。
+- 冻结 SHA 必须位于远端 `main` 或匹配版本的 `release/X.Y` 历史。分支可以已经向前推进，无须 HEAD 等于标签。使用临时完整 Git 仓库抓取所观察的远端分支并做祖先校验，抓取身份变化则停止。
+- 当前标签流水线的验证、打包与发布使用 `needs` 顺序门禁；不额外查询另一条流水线 API 的成功状态。
 
-1. Push the release-prep workflow changes to the default branch first.
-   If the GitHub repository is still empty, this first push should create `main` and establish it as the default branch.
-2. Keep `package.json` and `src-tauri/tauri.conf.json` at the same stable version.
-   The current expected stable tag is `v0.8.0`.
-3. Use a beta branch name that matches the current version line.
-   For `0.8.0`, use `beta/0.8` or `beta/0.8.0`.
-4. Do not create the stable tag from `main` only.
-   `release.yml` verifies that the tagged commit belongs to at least one `beta/*` branch.
+## 退役与操作边界
 
-## CI Static Channel
+Beta 分支触发、Beta 发布 workflow 和静态源 Beta 回填入口退役。历史包版本和元数据仍允许兼容解析，已有远端包、标签和分支不会自动删除。旧 GitHub Release 保留兼容正式发布能力，来源改为 main 或匹配 release/X.Y；现行产品发布以 GitLab 为准。
 
-`CI` runs verification on pull requests and pushes to `main`. Only `main` pushes
-run `package-main`; that job builds the CI package, writes updater metadata for
-the R2 URL above, uploads updater assets to `ci/windows-x64/`, and uploads
-`latest.json` last.
+本次只修改发布规则、脚本、文档和回归，不创建分支或标签。发布前由管理员确认 `release/*` 与 `v*` 的保护规则、Runner 可用性，以及 `environment: ci` 下 protected 签名及平台上传变量对受保护引用可见。构建校验只通过推送后的对应提交 CI 执行；本地不运行测试、构建或静态检查。
 
-## GitHub Secrets
+## 验收
 
-Create these repository secrets in `Settings -> Secrets and variables -> Actions`:
-
-- `TAURI_SIGNING_PRIVATE_KEY`
-  Paste the full content of `C:\Users\mutex\.tauri\mskdsp-upper.key`.
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-  Optional. Leave unset when using a passwordless updater key.
-- `SUBMODULE_TOKEN`
-  Optional. Use a GitHub token that can read `CcooLcyy/MskDSPProto` if anonymous HTTPS checkout is not enough.
-- `SUBMODULE_SSH_KEY`
-  Optional alternative to `SUBMODULE_TOKEN` for submodule access.
-- `R2_ACCOUNT_ID`
-  Cloudflare account ID used to build the R2 S3 endpoint.
-- `R2_ACCESS_KEY_ID`
-  R2 API token access key with read/write access to the update bucket.
-- `R2_SECRET_ACCESS_KEY`
-  Secret corresponding to `R2_ACCESS_KEY_ID`.
-
-Notes:
-
-- `scripts/workflow/Prepare-SubmoduleAccess.ps1` falls back to anonymous HTTPS if neither submodule secret is set.
-- If the `proto` submodule is private, at least one of `SUBMODULE_TOKEN` or `SUBMODULE_SSH_KEY` is required.
-- R2 defaults are configured through repository variables `R2_BUCKET`,
-  `R2_PREFIX` and `R2_PUBLIC_BASE_URL`.
-  If unset, workflows use bucket `mskdsp-update`, prefix `mskdsp-upper`, and
-  the R2 custom domain `https://update.clsclear.top` listed above. The workflow appends the
-  `mskdsp-upper` path automatically; legacy static-server variables are ignored.
-- `Sync Static Updater Source` can backfill the static source from an existing
-  GitHub Release without building or publishing a new version. Leave `release_tag`
-  empty to use `v<package version>` for stable or `beta-latest` for beta.
-
-## Actions Permissions
-
-In `Settings -> Actions -> General`:
-
-1. Make sure GitHub Actions is enabled for this repository.
-2. Under `Workflow permissions`, select `Read and write permissions`.
-3. Save the setting before the first beta/stable run.
-
-The workflows create or update releases and upload release assets, so `contents: write` must be effective.
-
-## First Validation Order
-
-### 1. First Beta
-
-1. Create the beta branch from the same commit you want to validate:
-   `git switch -c beta/0.8.0`
-2. Push the branch:
-   `git push -u origin beta/0.8.0`
-3. Wait for the automatic `Beta` workflow, or run `Actions -> Beta -> Run workflow` with `beta_ref=beta/0.8.0`.
-4. Confirm `verify-beta` and `publish-beta` both succeed.
-5. Open the rolling release `beta-latest` and confirm its assets were refreshed.
-6. Confirm there is also a timestamped beta prerelease whose tag starts with `beta-0-8-0-`.
-7. Open the R2 Beta URL listed in the baseline and confirm it downloads.
-
-### 2. First Stable
-
-1. Pick the commit that already passed beta.
-2. Create the stable tag locally on that exact commit:
-   `git tag -a v0.8.0 <commit-sha> -m "Release v0.8.0"`
-3. Push only the tag:
-   `git push origin v0.8.0`
-4. Wait for `Actions -> Release` to finish successfully.
-5. Open the `v0.8.0` release and confirm it is marked as the latest release.
-6. Open the R2 Stable URL listed in the baseline and confirm it downloads.
-
-### 3. Client Updater Validation
-
-Beta validation:
-
-1. Install an older beta build generated from the beta channel.
-2. Repeat the same updater flow.
-3. Confirm the downloaded metadata comes from the R2 Beta URL listed in the baseline.
-
-Stable validation:
-
-1. Install an older stable build.
-2. Repeat the same updater flow.
-3. Confirm the downloaded metadata comes from the R2 Stable URL listed in the baseline.
-
-## Static Source Backfill
-
-Use `Actions -> Sync Static Updater Source -> Run workflow` when GitHub Release
-assets already exist but the static source is empty or needs to be fully
-resynced.
-
-Inputs:
-
-- `channel`: `stable` or `beta`.
-- `release_tag`: optional. Defaults to `v<package version>` for stable or
-  `beta-latest` for beta.
-- `platform`: optional. Defaults to `windows-x64`.
-
-The workflow downloads all assets from the selected GitHub Release, rewrites
-`latest.json` so `platforms.*.url` points at
-`<R2_PUBLIC_BASE_URL>/mskdsp-upper/<channel>/<platform>/`, uploads all assets
-first, and uploads `latest.json` last. The R2 publish script then removes stale
-objects only from the same channel/platform prefix. No server or nginx restart
-is needed.
-
-## Optional Follow-up
-
-- After a manual stable release, confirm the `stable` channel manifest and the GitHub Release assets are in sync.
-- The pushed tag version must match `package.json`: `release.yml` publishes the version it finds in `package.json`, so a mismatched tag produces a mislabeled release.
+覆盖 main 发布 CI、release 只保留产物、Beta 来源被拒绝、版本线不符及未保护引用被拒绝、正式标签与冻结 SHA 相等、远端 main/release 历史包含旧提交、错误版本线和无祖先关系被拒绝、签名摘要不匹配拒绝及 Stable 回执丢失后同通道确认。尚未运行的 CI 不视为验证通过。

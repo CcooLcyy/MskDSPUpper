@@ -7,7 +7,7 @@ export function isStableUpdateClient(version: string | null): boolean {
 
 export function getLowerUpdateChannels(platform: LowerUpdatePlatform, clientVersion?: string | null): LowerUpdateChannel[] {
   let channels: LowerUpdateChannel[];
-  if (platform === 'linux-arm64') channels = ['stable', 'beta', 'ci'];
+  if (platform === 'linux-arm64') channels = ['stable', 'ci'];
   else if (platform === 'linux-x64') channels = ['ci'];
   else throw new Error(`下位机更新架构不支持: ${platform}`);
   return clientVersion !== undefined && isStableUpdateClient(clientVersion)

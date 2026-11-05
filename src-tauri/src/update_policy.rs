@@ -5,6 +5,10 @@ pub fn is_stable_client(version: &str) -> bool {
 }
 
 pub fn validate_update_channel(client_version: &str, target_channel: &str) -> Result<(), String> {
+    if !matches!(target_channel, "stable" | "ci") {
+        tracing::warn!(target_channel, "拒绝已退役或未知的更新通道");
+        return Err("更新通道仅支持 stable 或 ci，Beta 通道已退役".into());
+    }
     if is_stable_client(client_version) && target_channel != "stable" {
         tracing::warn!(
             client_version,
@@ -24,9 +28,11 @@ mod tests {
     fn only_explicit_beta_and_ci_versions_are_unrestricted() {
         for version in ["0.8.0-beta.1", "0.8.0-ci.123+sha.abcdef0"] {
             assert!(!is_stable_client(version));
-            for channel in ["stable", "beta", "ci"] {
+            for channel in ["stable", "ci"] {
                 assert!(validate_update_channel(version, channel).is_ok());
             }
+            assert!(validate_update_channel(version, "beta").is_err());
+            assert!(validate_update_channel(version, "unknown").is_err());
         }
     }
 
