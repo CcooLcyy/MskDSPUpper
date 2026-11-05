@@ -1,4 +1,4 @@
-"""从已有 staging 产物冻结上位机平台身份，不接受其他通道。"""
+"""从已有 staging 产物冻结上位机 CI/Beta 平台身份。"""
 import argparse
 import json
 import os
@@ -6,14 +6,20 @@ from pathlib import Path
 import shutil
 import subprocess
 from platform_client import ClientError, sha256_file
+from release_policy import resolve_source, validate_pipeline, validate_version
 
 
 def freeze(metadata_path, target_dir):
     metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
     sha = os.environ.get("CI_COMMIT_SHA", "")
     actual = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-    if (metadata["channel"] != "ci" or metadata["shortSha"] != sha[:7] or actual != sha
-            or os.environ.get("CI_COMMIT_BRANCH") != "main"):
+    branch = os.environ.get("CI_COMMIT_BRANCH", "")
+    context = dict(ref=branch, channel=resolve_source(branch, metadata["baseVersion"]))
+    validate_pipeline(os.environ, context["channel"])
+    validate_version(context["ref"], context["channel"], metadata["effectiveVersion"], sha)
+    if (metadata["channel"] != context["channel"] or metadata["shortSha"] != sha[:7] or actual != sha
+            or metadata["effectiveVersion"] != json.loads(Path("package.json").read_text(encoding="utf-8"))["version"]
+            or metadata.get("betaLine") != (context["ref"][5:] if context["channel"] == "beta" else None)):
         raise ClientError("构建与冻结源码身份不一致")
     stage = Path("package/staging") / metadata["channelLabel"] / metadata["platform"]
     manifest = json.loads((stage / "staging-manifest.json").read_text(encoding="utf-8"))
@@ -37,10 +43,10 @@ def freeze(metadata_path, target_dir):
     identity = dict(product="mskdsp-upper", version=metadata["effectiveVersion"], platform="windows-x86_64-nsis",
                     file_name=archive.name, size=archive.stat().st_size, sha256=sha256_file(archive),
                     signature=signature, notes=metadata["releaseTitle"], source_repository=os.environ["CI_PROJECT_URL"],
-                    source_ref="main", source_sha=sha, channel="ci", pipeline_id=os.environ["CI_PIPELINE_ID"])
+                    source_ref=context["ref"], source_sha=sha, channel=context["channel"], pipeline_id=os.environ["CI_PIPELINE_ID"])
     (target / "upload-metadata.json").write_text(json.dumps(identity, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (target / "SHA256SUMS").write_text(identity["sha256"] + "  " + archive.name + "\n", encoding="utf-8")
-    print("已冻结上位机 CI 平台产物：" + archive.name)
+    print("已冻结上位机 " + context["channel"] + " 平台产物：" + archive.name)
 
 
 if __name__ == "__main__":

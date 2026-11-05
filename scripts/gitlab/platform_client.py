@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""将冻结的上位机 CI 安装包续传入库并发布 CI 通道，不执行设备安装。"""
+"""将冻结的上位机 CI/Beta 安装包续传入库并发布对应通道，不执行设备安装。"""
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from init_platform_proto import auth_environment
+from release_policy import resolve_source, validate_pipeline, validate_version
 
 
 class ClientError(ValueError):
@@ -55,7 +56,7 @@ def load_metadata(metadata_path, environ=None):
               "source_repository", "source_ref", "source_sha", "channel", "pipeline_id")
     if not isinstance(data, dict) or any(name not in data for name in fields):
         raise ClientError("冻结元数据字段不完整")
-    if (data["product"] != "mskdsp-upper" or data["channel"] != "ci"
+    if (data["product"] != "mskdsp-upper" or data["channel"] not in ("ci", "beta")
             or data["platform"] != "windows-x86_64-nsis"
             or any(not safe_component(data[name]) for name in ("version", "file_name"))
             or not data["file_name"].endswith(".exe")
@@ -66,15 +67,21 @@ def load_metadata(metadata_path, environ=None):
             or not isinstance(data["signature"], str) or not data["signature"].strip()
             or not repository_url(str(data["source_repository"]))):
         raise ClientError("上位机冻结身份、签名、文件或摘要不合法")
+    try:
+        if resolve_source(data["source_ref"]) != data["channel"]:
+            raise ValueError("分支渠道不匹配")
+        validate_pipeline(environment, data["channel"])
+        validate_version(data["source_ref"], data["channel"], data["version"], data["source_sha"])
+    except (ValueError, TypeError):
+        raise ClientError("冻结产物的分支、真实版本或受保护渠道不合法") from None
     if (environment.get("CI_PIPELINE_SOURCE") not in ("push", "web")
             or environment.get("CI_COMMIT_TAG")
-            or data["source_ref"] != "main"
             or data["source_ref"] != environment.get("CI_COMMIT_BRANCH")
             or data["source_sha"] != environment.get("CI_COMMIT_SHA")
             or str(data["pipeline_id"]) != environment.get("CI_PIPELINE_ID")
             or not re.fullmatch(r"[1-9][0-9]*", str(data["pipeline_id"]))
             or data["source_repository"].rstrip("/") != environment.get("CI_PROJECT_URL", "").rstrip("/")):
-        raise ClientError("仅允许当前主分支 push 或手动流水线发布自身冻结产物")
+        raise ClientError("仅允许当前来源分支 push 或手动流水线发布自身冻结产物")
     archive = path.parent / data["file_name"]
     if (archive.is_symlink() or not archive.is_file() or archive.stat().st_size != data["size"]
             or sha256_file(archive) != data["sha256"]):
@@ -93,7 +100,7 @@ def check_current_head(metadata, environ=None):
                             capture_output=True, text=True, timeout=60, check=False)
     expected = metadata["source_sha"] + "\trefs/heads/" + metadata["source_ref"]
     if result.returncode or result.stdout.strip() != expected:
-        raise ClientError("远端主分支已变化或无法确认，拒绝发布旧构建")
+        raise ClientError("远端来源分支已变化或无法确认，拒绝发布旧构建")
 
 
 def validate_endpoint(endpoint, *, plaintext=False):
@@ -153,7 +160,9 @@ def confirm_manifest(base_url, metadata, *, timeout=30):
     """通过公开清单核对发布身份；HTTP 请求不携带上传令牌。"""
     if not repository_url(base_url):
         raise ClientError("平台公开地址必须为无凭据 HTTP(S) 地址")
-    request = Request(base_url.rstrip("/") + "/mskdsp-upper/ci/latest.json", headers={"Cache-Control": "no-cache"})
+    if metadata["channel"] not in ("ci", "beta"):
+        raise ClientError("不支持的上位机发布通道")
+    request = Request(base_url.rstrip("/") + "/mskdsp-upper/" + metadata["channel"] + "/latest.json", headers={"Cache-Control": "no-cache"})
     with urlopen(request, timeout=timeout) as response:
         body = response.read(1024 * 1024 + 1)
     if len(body) > 1024 * 1024:
@@ -183,6 +192,9 @@ def confirm_manifest(base_url, metadata, *, timeout=30):
 def transfer(publisher, catalog, messages, archive, metadata, token, *, before_publish,
              attempts=4, retry_delay=1, timeout=60, chunk_size=1024 * 1024, after_publish=None):
     import grpc
+    channel = metadata["channel"]
+    if channel not in ("ci", "beta"):
+        raise ClientError("不支持的上位机发布通道")
     if (not 1 <= attempts <= 10 or not 0 < timeout <= 1800 or not 1 <= chunk_size <= 1024 * 1024
             or not token or not token.isascii() or any(ord(char) < 33 or ord(char) > 126 for char in token)):
         raise ClientError("上传配置或发布令牌不合法")
@@ -249,23 +261,23 @@ def transfer(publisher, catalog, messages, archive, metadata, token, *, before_p
             time.sleep(retry_delay)
     if not package_id:
         raise ClientError("平台未确认完成入库")
-    print("上位机安装包已完成校验入库，准备发布 CI 通道")
+    print("上位机安装包已完成校验入库，准备发布 " + channel + " 通道")
 
     def confirm_public():
         package = call(catalog.GetPackage, messages.GetPackageRequest(package_id=package_id), authenticated=False).package
-        packages = call(catalog.ListPackages, messages.ListPackagesRequest(product="mskdsp-upper", channel="ci",
+        packages = call(catalog.ListPackages, messages.ListPackagesRequest(product="mskdsp-upper", channel=channel,
                                                                           platform=metadata["platform"]), authenticated=False).packages
-        if (package.id != package_id or package.metadata != expected or "ci" not in package.channels
+        if (package.id != package_id or package.metadata != expected or channel not in package.channels
                 or not package.ever_published or not any(item.id == package_id and item.metadata == expected
-                                                         and "ci" in item.channels for item in packages)):
-            raise ClientError("公开目录 CI 通道与本次安装包不一致")
+                                                         and channel in item.channels for item in packages)):
+            raise ClientError("公开目录 " + channel + " 通道与本次安装包不一致")
 
     for attempt in range(attempts):
         before_publish()
         try:
-            package = publisher.PublishRelease(messages.PublishReleaseRequest(package_id=package_id, channel="ci"),
+            package = publisher.PublishRelease(messages.PublishReleaseRequest(package_id=package_id, channel=channel),
                                                metadata=authorization, timeout=timeout).package
-            if package.id != package_id or package.metadata != expected or "ci" not in package.channels:
+            if package.id != package_id or package.metadata != expected or channel not in package.channels:
                 raise ClientError("平台发布响应与安装包身份不一致")
             confirm_public()
             if after_publish:
@@ -281,9 +293,9 @@ def transfer(publisher, catalog, messages, archive, metadata, token, *, before_p
                 return dict(state="published", package_id=package_id, upload_id=upload_id)
             except ClientError:
                 if attempt == attempts - 1:
-                    raise ClientError("无法确认平台 CI 通道发布结果") from None
+                    raise ClientError("无法确认平台 " + channel + " 通道发布结果") from None
             time.sleep(retry_delay)
-    raise ClientError("平台 CI 发布未完成")
+    raise ClientError("平台通道发布未完成")
 
 
 def upload(metadata, proto_root=Path(".ci/platform-proto"), timeout=60):
@@ -333,7 +345,7 @@ def main(argv=None):
     except Exception as error:
         print("上位机平台上传发布失败（" + type(error).__name__ + "），请检查网络及协议；底层输出已隐藏", file=sys.stderr)
         return 1
-    print("上位机 CI 通道发布完成：package_id=" + result["package_id"])
+    print("上位机平台通道发布完成：package_id=" + result["package_id"])
     return 0
 
 

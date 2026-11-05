@@ -66,9 +66,11 @@ class UpperIdentityTests(unittest.TestCase):
     def test_public_manifest_download_checks_actual_bytes(self):
         data = self.data
         payload = [b"installer"]
+        requests = []
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
+                requests.append(self.path)
                 if self.path.endswith("latest.json"):
                     body = json.dumps(dict(version=data["version"], platforms={data["platform"]: dict(
                         signature=data["signature"], url=base + "/software/packages/package-id/upper.exe")})).encode()
@@ -87,6 +89,7 @@ class UpperIdentityTests(unittest.TestCase):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         base = "http://127.0.0.1:" + str(server.server_port)
         self.client.confirm_manifest(base, data)
+        self.assertEqual(requests[0], "/mskdsp-upper/" + data["channel"] + "/latest.json")
         payload[0] = b"tampered!"
         with self.assertRaises(self.client.ClientError):
             self.client.confirm_manifest(base, data)

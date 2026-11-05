@@ -13,20 +13,21 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def run_isolated_pipeline(stage="verify", fail_tool="", powershell="powershell.exe"):
+def run_isolated_pipeline(stage="verify", fail_tool="", powershell="powershell.exe", branch="main"):
     # Reuse one real successful verify+package execution for independent read-only contracts.
     # Normalize defaults to positional cache keys; defensive copies prevent assertion interference.
-    return deepcopy(_run_isolated_pipeline_cached(stage, fail_tool, powershell))
+    return deepcopy(_run_isolated_pipeline_cached(stage, fail_tool, powershell, branch))
 
 
-@lru_cache(maxsize=8)
-def _run_isolated_pipeline_cached(stage, fail_tool, powershell):
+@lru_cache(maxsize=16)
+def _run_isolated_pipeline_cached(stage, fail_tool, powershell, branch):
     with tempfile.TemporaryDirectory(prefix="upper parallel test ") as temporary:
         workspace = Path(temporary)
         scripts = workspace / "scripts/gitlab"
         scripts.mkdir(parents=True)
-        for name in ("pipeline.ps1", "verify.py"):
+        for name in ("pipeline.ps1", "verify.py", "release_policy.py"):
             shutil.copyfile(ROOT / "scripts/gitlab" / name, scripts / name)
+        shutil.copyfile(ROOT / "package.json", workspace / "package.json")
         driver = workspace / "stub.py"
         driver.write_text(r'''import json, os, subprocess, sys, time
 from pathlib import Path
@@ -38,6 +39,8 @@ entry = {"kind": kind, "arguments": arguments, "started": time.time(),
          "include": os.environ.get("INCLUDE"), "lib": os.environ.get("LIB"),
          "node_path_first": os.environ.get("PATH", "").split(os.pathsep)[0]}
 if kind == "python" and arguments[-1:] == ["scripts/gitlab/verify.py"]:
+    sys.exit(subprocess.run([sys.executable, *arguments]).returncode)
+if kind == "python" and arguments[-1:] == ["scripts/gitlab/release_policy.py"]:
     sys.exit(subprocess.run([sys.executable, *arguments]).returncode)
 is_runtime = kind == "python" and "scripts/gitlab/ensure_node_runtime.py" in arguments
 if is_runtime:
@@ -101,7 +104,10 @@ if ($Stage -eq 'verify') { & $pipeline -Stage package }
                                  "-File", str(launcher), "-Workspace", str(workspace), "-Stage", stage],
                                 capture_output=True, timeout=45,
                                 env={**os.environ, "PYTHONUTF8": "1", "STUB_EVENTS": str(workspace / "events.jsonl"),
-                                     "FAIL_TOOL": fail_tool})
+                                     "FAIL_TOOL": fail_tool, "CI_PIPELINE_SOURCE": "push", "CI_COMMIT_TAG": "",
+                                     "CI_COMMIT_BRANCH": branch, "CI_COMMIT_REF_PROTECTED": "true",
+                                     "CI_COMMIT_SHA": "a" * 40,
+                                     "UPPER_RELEASE_CHANNEL": "ci" if branch == "main" else "beta"})
         events = sorted((json.loads(path.read_text(encoding="utf-8")) for path in (workspace / "events").glob("*.json")),
                         key=lambda event: event["started"])
         logs = workspace / "package/logs"

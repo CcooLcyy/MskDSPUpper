@@ -70,17 +70,23 @@ if ($Stage -eq 'verify') {
     return
 }
 if ($Stage -eq 'package') {
+    $releaseJson = Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/release_policy.py')
+    $release = $releaseJson | ConvertFrom-Json
+    if ($release.channel -notin @('ci', 'beta') -or -not $release.metadata -or -not $release.config -or -not $release.ref) {
+        throw 'GitLab 发布渠道信息不完整，停止构建'
+    }
+    Write-Host "已确认发布来源：channel=$($release.channel)，branch=$($release.ref)"
     if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw '缺少现有上位机 Tauri 签名私钥，停止发布构建' }
     if (-not $env:PLATFORM_PUBLIC_BASE_URL) { throw '缺少平台公开下载地址' }
     if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $PWD 'src-tauri/target' }
     New-Item -ItemType Directory -Path package/logs -Force | Out-Null
-    Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/emit-build-metadata.mjs', '--channel', 'ci', '--ref', 'main', '--sha', $env:CI_COMMIT_SHA, '--output', 'package/metadata/ci.json')
-    Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/apply-channel-version.mjs', '--metadata-file', 'package/metadata/ci.json', '--backup-dir', 'package/.manifest-backup')
+    Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/emit-build-metadata.mjs', '--channel', $release.channel, '--ref', $release.ref, '--sha', $env:CI_COMMIT_SHA, '--output', $release.metadata)
+    Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/apply-channel-version.mjs', '--metadata-file', $release.metadata, '--backup-dir', 'package/.manifest-backup')
     try {
-        $endpoint = $env:PLATFORM_PUBLIC_BASE_URL.TrimEnd('/') + '/mskdsp-upper/ci/latest.json'
-        Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/render-tauri-config.mjs', '--metadata-file', 'package/metadata/ci.json', '--output', 'package/generated/tauri.ci.conf.json', '--endpoint', $endpoint, '--bundle-targets', 'nsis', '--updater-artifacts', 'true')
+        $endpoint = $env:PLATFORM_PUBLIC_BASE_URL.TrimEnd('/') + '/mskdsp-upper/' + $release.channel + '/latest.json'
+        Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/render-tauri-config.mjs', '--metadata-file', $release.metadata, '--output', $release.config, '--endpoint', $endpoint, '--bundle-targets', 'nsis', '--updater-artifacts', 'true')
         # 客户端更新经平台 gRPC；HTTP 清单仅用于发布后的兼容验收，不配置插件 HTTP 更新源。
-        Invoke-Checked -Program 'node' -Arguments @('-e', 'const fs=require("fs");const p="package/generated/tauri.ci.conf.json";const c=JSON.parse(fs.readFileSync(p,"utf8"));c.plugins.updater.endpoints=[];fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");')
+        Invoke-Checked -Program 'node' -Arguments @('-e', 'const fs=require("fs");const p=process.argv[1];const c=JSON.parse(fs.readFileSync(p,"utf8"));c.plugins.updater.endpoints=[];fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");', $release.config)
         Write-Host '上位机更新使用平台 gRPC，已禁用插件 HTTP 清单端点'
         # 独立作业目录只清理旧打包文件，编译依赖继续复用。
         $bundle = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/bundle/nsis'
@@ -89,9 +95,9 @@ if ($Stage -eq 'package') {
         }
         # Node 显式保留空密码环境变量，避免 PowerShell 5.1 将空字符串视为删除变量后触发密码交互。
         $tauriCommand = 'const {spawnSync}=require("child_process");const r=spawnSync(process.execPath,["node_modules/@tauri-apps/cli/tauri.js",...process.argv.slice(1)],{stdio:"inherit",env:{...process.env,TAURI_SIGNING_PRIVATE_KEY_PASSWORD:process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD??""}});if(r.error)throw r.error;process.exit(r.status??1);'
-        Invoke-Checked -Program 'node' -Arguments @('-e', $tauriCommand, 'build', '--bundles', 'nsis', '--target', 'x86_64-pc-windows-msvc', '--ci', '--config', 'package/generated/tauri.ci.conf.json')
-        Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/stage-release.mjs', '--metadata-file', 'package/metadata/ci.json', '--target-dir', $env:CARGO_TARGET_DIR)
-        Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/freeze_metadata.py')
+        Invoke-Checked -Program 'node' -Arguments @('-e', $tauriCommand, 'build', '--bundles', 'nsis', '--target', 'x86_64-pc-windows-msvc', '--ci', '--config', $release.config)
+        Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/stage-release.mjs', '--metadata-file', $release.metadata, '--target-dir', $env:CARGO_TARGET_DIR)
+        Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/freeze_metadata.py', '--metadata', $release.metadata)
     } finally {
         Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/restore-manifests.mjs', '--backup-dir', 'package/.manifest-backup')
     }
