@@ -4,6 +4,7 @@ import { createRequire, Module } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+const autoConfig = await import('../../src/utils/vertical-security-auto-config.ts');
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
 const filename = fileURLToPath(new URL('../../src/pages/SecurityAccess/SecurityOperator.tsx', import.meta.url));
@@ -26,7 +27,7 @@ function fixture(implementation = async request => response(request.kind, reques
   const element = (type, p) => ({ type, props: p ?? {} });
   const widgets = Object.fromEntries(['Alert', 'Button', 'Card', 'Checkbox', 'Input', 'Modal', 'Popconfirm', 'Select', 'Space', 'Table', 'Tabs', 'Tag'].map(name => [name, name]));
   const loaded = new Module(filename);
-  loaded.require = name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx: element, jsxs: element, Fragment: 'Fragment' } : name === 'antd' ? widgets : name === '../../adapters' ? { api: { runVerticalSecurityOperator: request => { calls.push(request); return implementation(request); } } } : name.endsWith('.css') ? {} : require(name);
+  loaded.require = name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx: element, jsxs: element, Fragment: 'Fragment' } : name === 'antd' ? widgets : name === '../../adapters' ? { api: { runVerticalSecurityOperator: request => { calls.push(request); return implementation(request); } } } : name.endsWith('vertical-security-auto-config') ? autoConfig : name.endsWith('.css') ? {} : require(name);
   loaded._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const render = next => { props = { ...props, ...next }; cursor = 0; tree = loaded.exports.default(props); return tree; };
   const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === 'object' ? [node, ...walk(node.props?.children)] : [];
@@ -360,4 +361,62 @@ test('策略没有可引用隧道时显示前置条件且不能确认草稿', as
   assert.equal(f.modal().props.okButtonProps.disabled, true);
   assert.ok(f.nodes().some(node => node.type === 'Alert' && String(node.props.title).includes('没有可用隧道')));
   confirmDraft(f); assert.ok(f.modal()); assert.equal(f.table().props.dataSource.length, 0); assert.equal(f.calls.length, 0);
+});
+
+
+const automaticAddresses = { device: 'MskDSP', localRtuAddress: '30.19.80.177', localSecurityAddress: '30.19.80.189', localGatewayAddress: '30.19.80.190', remoteRtuAddress: '30.19.0.1', remoteSecurityAddress: '30.19.0.250', remoteGatewayAddress: '30.19.0.254' };
+function automaticStorage() {
+  const original = globalThis.localStorage;
+  const values = new Map();
+  globalThis.localStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  return () => { if (original === undefined) delete globalThis.localStorage; else globalThis.localStorage = original; };
+}
+
+test('自动配置缺少成功应用的DSP网络配置时直接提示且不读取或上传', async () => {
+  const restore = automaticStorage();
+  const f = await settledFixture();
+  try {
+    f.button('自动配置').props.onClick(); await f.settle();
+    assert.deepEqual(f.calls, []);
+    assert.ok(f.nodes().some(node => node.type === 'Alert' && node.props.title?.includes('先在“DSP 网络配置”')));
+    assert.equal(f.modal(), undefined);
+  } finally { f.unmount(); restore(); }
+});
+
+test('自动配置预览选择真实证书、顺序上传全部完成后仅回调一次', async () => {
+  const restore = automaticStorage();
+  autoConfig.rememberAppliedSecurityNetwork(automaticAddresses);
+  let completed = 0;
+  const f = fixture(async request => response(request.kind, request.rows), { onAutoConfigured: () => { completed += 1; } });
+  try {
+    await f.settle(); f.calls.length = 0;
+    f.button('自动配置').props.onClick(); await f.settle();
+    assert.deepEqual(f.calls, initialReads());
+    assert.equal(f.modal().props.title, '自动配置纵密装置');
+    assert.equal(f.modal().props.okText, '依次上传并重启纵密');
+    assert.equal(f.modal().props.okButtonProps.disabled, false);
+    const previewTables = f.nodes(f.modal()).filter(node => node.type === 'Table');
+    assert.deepEqual(previewTables.map(node => node.props.dataSource.length), [2, 2, 1, 4]);
+    f.calls.length = 0;
+    f.modal().props.onOk(); await f.settle();
+    assert.deepEqual(f.calls.map(request => `${request.kind}:${request.action}`), kinds.flatMap(kind => [`${kind}:read`, `${kind}:save`]));
+    assert.equal(completed, 1);
+    f.render(); await f.settle(); assert.equal(completed, 1);
+    assert.deepEqual(f.calls.filter(request => request.action === 'save').map(request => request.rows.length), [2, 2, 1, 4]);
+  } finally { f.unmount(); restore(); }
+});
+
+test('自动配置任一页回读失败后保留草稿、不切换管理员、不继续上传', async () => {
+  const restore = automaticStorage();
+  autoConfig.rememberAppliedSecurityNetwork(automaticAddresses);
+  let completed = 0;
+  const f = fixture(async request => ({ ...response(request.kind, request.rows), verified: !(request.action === 'save' && request.kind === 'routes') }), { onAutoConfigured: () => { completed += 1; } });
+  try {
+    await f.settle();
+    f.button('自动配置').props.onClick(); await f.settle(); f.calls.length = 0;
+    f.modal().props.onOk(); await f.settle();
+    assert.deepEqual(f.calls.map(request => `${request.kind}:${request.action}`), ['network:read', 'network:save', 'routes:read', 'routes:save']);
+    assert.equal(completed, 0);
+    assert.ok(f.nodes().some(node => node.type === 'Alert' && node.props.title?.includes('不会切换管理员或重启')));
+  } finally { f.unmount(); restore(); }
 });

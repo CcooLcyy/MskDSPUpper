@@ -46,6 +46,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const [certificateBusy, setCertificateBusy] = useState(false);
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [adminBusy, setAdminBusy] = useState(false);
+  const [autoRestartBusy, setAutoRestartBusy] = useState(false);
   const [result, setResult] = useState<VerticalSecurityLoginResult | null>(null);
   const [session, setSession] = useState<VerticalSecurityLoginResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +59,9 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
   const sessionRef = useRef<string | null>(null);
   const restoringRef = useRef(getRetainedLogin()?.session_id ?? null);
   const secretInputs = useRef<Array<HTMLInputElement | null>>([]);
-  const locked = busy || certificateBusy || logoutBusy || Boolean(session) || Boolean(getRetainedLogin());
+  const autoRestartRef = useRef(false);
+  const expectedRebootRef = useRef<string | null>(null);
+  const locked = busy || certificateBusy || logoutBusy || autoRestartBusy || Boolean(session) || Boolean(getRetainedLogin());
   const allowed = !initializing && canAttemptLogin(mode, deviceId, capabilities, profile);
   const accountLockSeconds = getLoginLockSeconds(loginLocks, { mode, device_id: deviceId, username }, lockClock);
   const targetLocks = loginLocks.filter(lock => lock.mode === mode && lock.device_id === (mode === 'remote' ? deviceId : null));
@@ -89,7 +92,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
       if (!current || (sessionRef.current !== id && restoringRef.current !== id)) return;
       sessionRef.current = null; restoringRef.current = null;
       setSession(null); setResult(null);
-      if (invalidated) setError('纵密连接已失效或状态无法确认，请重新登录。');
+      if (invalidated && expectedRebootRef.current !== id) setError('纵密连接已失效或状态无法确认，请重新登录。');
     });
     const lockSnapshot = api.getVerticalSecurityLoginLocks().then(locks => ({ locks, sampledAt: performance.now() }));
     void Promise.all([api.getVerticalSecurityLoginCapabilities(), api.getVerticalSecurityCertificateProfile(), checkRetainedLogin(), lockSnapshot]).then(([available, configured, restored, snapshot]) => {
@@ -137,27 +140,60 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
     if (id) { try { await api.cancelVerticalSecurityLogin(id); } catch { /* 后端到期清理仍会关闭该临时连接。 */ } }
   };
 
-  const login = async () => {
-    if (!allowed || locked || accessBusy || activeRef.current) return;
-    if (getLoginLockSeconds(loginLocks, { mode, device_id: deviceId, username }, performance.now()) > 0) {
+  const rebootAuthenticatedAdmin = async (value: VerticalSecurityLoginResult) => {
+    const id = value.session_id;
+    if (!id || value.role !== 1 || value.state !== 'authenticated') throw new Error('重启纵密设备需要已认证的系统管理员。');
+    const generation = generationRef.current;
+    expectedRebootRef.current = id;
+    setNotice('正在发送纵密装置重启命令。'); setError(null);
+    console.info('[纵密设备维护] 使用管理员会话发送设备重启请求');
+    try {
+      const response = await api.runVerticalSecurityAdmin({ session_id: id, action: 'reboot_device' });
+      if (response.status !== 'reboot_requested') throw new Error('纵密重启命令发送结果未确认，请核实装置状态；不会自动重试。');
+      if (mountedRef.current && generationRef.current === generation) setNotice(response.message);
+    } catch (reason) {
+      if (mountedRef.current && generationRef.current === generation) {
+        setNotice(null);
+        setError(reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : '纵密设备重启结果未确认，请核实装置状态后重新登录；不会自动重试。');
+      }
+    } finally {
+      // 重启可能直接断开管理连接；不保留可再次发送维护命令的旧身份。
+      clearRetainedLogin(id);
+      void api.logoutVerticalSecurity(id).catch(() => {});
+      if (mountedRef.current && generationRef.current === generation) {
+        sessionRef.current = null; setSession(null); setResult(null); setRole(1);
+      }
+      if (expectedRebootRef.current === id) expectedRebootRef.current = null;
+    }
+  };
+
+  const login = async (requestedRole = role, restartAfterLogin = false) => {
+    if (!allowed || (!restartAfterLogin && locked) || accessBusy || activeRef.current
+      || (restartAfterLogin && (!autoRestartRef.current || sessionRef.current))) return;
+    const requestedUsername = getOneClickLoginUsername(requestedRole);
+    if (getLoginLockSeconds(loginLocks, { mode, device_id: deviceId, username: requestedUsername }, performance.now()) > 0) {
       console.info('[纵密登录] 账号仍在装置返回的锁定等待期间，未提交认证请求');
+      if (restartAfterLogin) setError('四页配置已上传，但管理员账号仍在锁定等待期间；未发送重启命令，请解锁后登录管理员重启纵密设备。');
       return;
     }
-    const request: VerticalSecurityOneClickLoginRequest = { request_id: `vertical-login-${crypto.randomUUID()}`, mode, ...(mode === 'remote' ? { device_id: deviceId } : {}), role };
-    const identity: LoginIdentity = { ...request, username };
+    const request: VerticalSecurityOneClickLoginRequest = { request_id: `vertical-login-${crypto.randomUUID()}`, mode, ...(mode === 'remote' ? { device_id: deviceId } : {}), role: requestedRole };
+    const identity: LoginIdentity = { ...request, username: requestedUsername };
     const active = { identity, generation: ++generationRef.current, cancelled: false };
     activeRef.current = active;
-    setBusy(true); setResult(null); setError(null); setNotice(null);
+    setBusy(true); setResult(null); setError(null); setNotice(restartAfterLogin ? '四页配置已上传并回读核对，正在认证管理员。' : null);
     clearSecrets();
     try {
-      console.info('[纵密登录] 已提交一键登录请求', { role });
+      console.info('[纵密登录] 已提交一键登录请求', { role: requestedRole });
       const value = await api.loginVerticalSecurityOneClick(request);
       if (!mountedRef.current || active.cancelled || generationRef.current !== active.generation) {
         await cleanupReturnedConnection(value, identity.request_id); return;
       }
       if (!loginContextMatches(identity, value)) {
         await cleanupReturnedConnection(value, identity.request_id);
-        if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) setError('登录结果与当前请求或目标设备不匹配，已拒绝建立纵密身份。');
+        if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) {
+          setError('登录结果与当前请求或目标设备不匹配，已拒绝建立纵密身份。');
+          if (restartAfterLogin) setNotice('四页配置已上传，未发送重启命令。');
+        }
         return;
       }
       if (value.state === 'failed' && value.code === 'account_locked') {
@@ -169,12 +205,21 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
       if (value.state === 'authenticated') {
         if (!isAuthenticatedLogin(identity, value)) {
           await cleanupReturnedConnection(value, identity.request_id);
-          if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) setError('登录身份或初始化结果不完整，已拒绝建立纵密身份。');
+          if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) {
+            setError('登录身份或初始化结果不完整，已拒绝建立纵密身份。');
+            if (restartAfterLogin) setNotice('四页配置已上传，未发送重启命令。');
+          }
           return;
         }
-        sessionRef.current = value.session_id;
-        retainLogin(value);
-        setSession(value); setResult(value);
+        if (restartAfterLogin) {
+          // 自动切号只使用本次认证的管理员连接，不挂载工作台以免初刷与重启并发。
+          setBusy(false); setResult(value);
+          await rebootAuthenticatedAdmin(value);
+        } else {
+          sessionRef.current = value.session_id;
+          retainLogin(value);
+          setSession(value); setResult(value);
+        }
       } else {
         await cleanupReturnedConnection(value, identity.request_id);
         if (!mountedRef.current || active.cancelled || generationRef.current !== active.generation) return;
@@ -182,13 +227,45 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
           setError('一键登录未完成密码处理，当前账号尚未登录。');
         }
         setResult({ ...value, session_id: null });
+        if (restartAfterLogin) setNotice('四页配置已上传，但管理员登录未完成，未发送重启命令。');
       }
     } catch {
-      if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) setError('纵密登录失败，请检查连接与装置状态后手动重试。');
+      if (mountedRef.current && !active.cancelled && generationRef.current === active.generation) {
+        setError('纵密登录失败，请检查连接与装置状态后手动重试。');
+        if (restartAfterLogin) setNotice('四页配置已上传，但管理员登录失败，未发送重启命令。');
+      }
     } finally {
       if (activeRef.current === active && !active.cancelled) activeRef.current = null;
       if (mountedRef.current && generationRef.current === active.generation && !active.cancelled) setBusy(false);
     }
+  };
+
+  const completeAutoConfiguration = async () => {
+    const id = sessionRef.current;
+    if (!id || session?.role !== 2 || autoRestartRef.current || activeRef.current || accessBusy) return;
+    const generation = generationRef.current;
+    autoRestartRef.current = true; setAutoRestartBusy(true); setError(null);
+    setNotice('四页配置已上传并回读核对，正在切换管理员以重启纵密装置。');
+    try {
+      await api.logoutVerticalSecurity(id);
+      clearRetainedLogin(id);
+      if (!mountedRef.current || generationRef.current !== generation) return;
+      sessionRef.current = null; setSession(null); setResult(null); setRole(1);
+      console.info('[纵密自动配置] 四页已核对，安全操作员退出完成，开始管理员认证');
+      await login(1, true);
+    } catch (reason) {
+      if (mountedRef.current && generationRef.current === generation) setError(reason instanceof Error ? reason.message : '四页配置已上传，但退出安全操作员失败；未切换管理员或发送重启命令。');
+    } finally {
+      autoRestartRef.current = false;
+      if (mountedRef.current) { setAutoRestartBusy(false); setAdminBusy(false); }
+    }
+  };
+
+  const rebootCurrentDevice = async () => {
+    if (!session || session.role !== 1 || sessionRef.current !== session.session_id || autoRestartRef.current || accessBusy) return;
+    autoRestartRef.current = true; setAutoRestartBusy(true);
+    try { await rebootAuthenticatedAdmin(session); }
+    finally { autoRestartRef.current = false; if (mountedRef.current) { setAutoRestartBusy(false); setAdminBusy(false); } }
   };
 
   const cancelLogin = async () => {
@@ -250,7 +327,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
 
   const logout = async () => {
     const id = sessionRef.current;
-    if (!id || logoutBusy || adminBusy) return;
+    if (!id || logoutBusy || adminBusy || autoRestartRef.current) return;
     const generation = generationRef.current;
     clearSecrets(); setLogoutBusy(true); setError(null);
     try {
@@ -273,7 +350,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
     {session ? <>
       <header className="security-admin-session" aria-label="当前纵密会话">
         <div><h2>已登录纵密装置</h2><dl><div><dt>当前账号</dt><dd>{session.username}</dd></div><div><dt>当前角色</dt><dd>{ROLE_OPTIONS.find(item => item.value === session.role)?.label}</dd></div><div><dt>装置版本</dt><dd>{session.device_version || '未提供'}</dd></div><div><dt>装置地址</dt><dd>{session.target_ip}</dd></div></dl></div>
-        <Button icon={<LogoutOutlined />} loading={logoutBusy} disabled={adminBusy} onClick={() => void logout()}>退出纵密登录</Button>
+        <Button icon={<LogoutOutlined />} loading={logoutBusy} disabled={adminBusy || autoRestartBusy} onClick={() => void logout()}>退出纵密登录</Button>
       </header>
       {error && <Alert className="security-access-notice" type="error" showIcon title={error} />}
       {notice && <Alert className="security-access-notice" type="info" showIcon title={notice} />}
@@ -316,7 +393,7 @@ export default function SecurityLogin({ mode, deviceId, deviceLabel, accessBusy,
         return <div className="security-access-step" key={stage.id}><Badge status={step?.state === 'success' ? 'success' : step?.state === 'failed' ? 'error' : step?.state === 'unsupported' ? 'warning' : 'default'} /><div><strong>{stage.name}</strong><p>{step?.message || (busy ? '等待装置返回本次检查结果' : '尚未执行')}</p></div><span>{step?.state === 'success' ? '通过' : step?.state === 'failed' ? '失败' : step?.state === 'unsupported' ? '不支持' : '待确认'}</span></div>;
       })}</div>{certificateMatch ? <Alert className="security-access-notice" type={certificateMatch.legacy ? 'warning' : 'info'} showIcon title={certificateMatch.label} description={<>{certificateMatch.compatibility}{certificateMatch.legacy && <p>仅此固定纵密目标、精确配套旧证书允许受限日期与名称兼容；不代表账号已经通过认证。</p>}</>} /> : profile?.source === 'builtin' && <p className="security-login-hint">证书组别待 TLS 匹配确认。</p>}<p className="security-access-boundary">使用纵密装置账号与连接证书。网络检查与身份认证分别显示；ICMP 无响应不阻止尝试登录。</p></aside>
     </div>}
-    {session?.state === 'authenticated' && session.role === 2 && session.session_id && <SecurityOperator key={session.session_id} sessionId={session.session_id} disabled={logoutBusy || accessBusy} onBusyChange={setAdminBusy} />}
-    {session?.state === 'authenticated' && session.role === 1 && session.session_id && <SecurityAdmin key={session.session_id} sessionId={session.session_id} disabled={logoutBusy || accessBusy} onBusyChange={setAdminBusy} />}
+    {session?.state === 'authenticated' && session.role === 2 && session.session_id && <SecurityOperator key={session.session_id} sessionId={session.session_id} disabled={logoutBusy || accessBusy || autoRestartBusy} onBusyChange={setAdminBusy} autoConfigurationAvailable={mode === 'direct'} onAutoConfigured={completeAutoConfiguration} />}
+    {session?.state === 'authenticated' && session.role === 1 && session.session_id && <SecurityAdmin key={session.session_id} sessionId={session.session_id} disabled={logoutBusy || accessBusy || autoRestartBusy} onBusyChange={setAdminBusy} onRebootDevice={rebootCurrentDevice} />}
   </section>;
 }

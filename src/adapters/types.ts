@@ -398,7 +398,7 @@ export interface VerticalSecurityPasswordChangeResult {
   message: string;
 }
 
-export type VerticalSecurityAdminAction = 'status' | 'generate_sm2' | 'export_csr' | 'list_certificates' | 'read_certificate' | 'import_certificate' | 'delete_certificate' | 'list_tunnels' | 'reset_tunnel';
+export type VerticalSecurityAdminAction = 'status' | 'generate_sm2' | 'export_csr' | 'list_certificates' | 'read_certificate' | 'import_certificate' | 'delete_certificate' | 'list_tunnels' | 'reset_tunnel' | 'reboot_device';
 
 export interface VerticalSecurityTunnelStatus {
   id: number;

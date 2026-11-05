@@ -108,7 +108,7 @@ impl AdminRequest {
             self.certificate_type.is_none() && self.name.is_none() && self.data.is_none();
         let no_extra = no_certificate && self.tunnel_id.is_none();
         let valid = match self.action.as_str() {
-            "status" | "generate_sm2" | "export_csr" | "list_certificates" | "list_tunnels" => {
+            "status" | "generate_sm2" | "export_csr" | "list_certificates" | "list_tunnels" | "reboot_device" => {
                 no_extra
             }
             "reset_tunnel" => no_certificate && self.tunnel_id.is_some_and(tunnels::valid_id),
@@ -276,6 +276,14 @@ pub(super) async fn execute<S: AsyncRead + AsyncWrite + Unpin>(
     request.validate().map_err(|m| rejected(&m))?;
     let mut result = AdminResult::default();
     match request.action.as_str() {
+        "reboot_device" => {
+            // 原厂MyMDI重启调用ClientSendCmd(17)，仅发送两个大端整数，不读取应答。
+            // 完整写入并刷新仅能确认本地已发送，不能把断线或发送结果描述为装置重启成功。
+            tracing::info!(frame = "0000001100000000", "发送纵密设备重启命令，不自动重试");
+            send(stream, 17, 0, &[]).await?;
+            result.status = Some("reboot_requested".into());
+            result.message = "纵密设备重启命令已发送，当前会话已结束；实际重启结果请等待装置恢复后核实".into();
+        }
         "list_tunnels" => {
             let bytes = download(stream, "tunnel", true).await?;
             // 完整下载已结束，格式错误不代表协议失步；旧数据由前端标记历史结果。
@@ -409,6 +417,54 @@ pub(super) async fn execute<S: AsyncRead + AsyncWrite + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 重启协议没有应答；对端不回包时也只能报告已发送，且不得发送额外查询或自动重试。
+    #[tokio::test]
+    async fn security_admin_reboot_sends_exact_frame_without_ack() {
+        let (mut client, mut peer) = tokio::io::duplex(1024);
+        let value = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            execute(&mut client, &request("reboot_device"), &mut vec![]),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(value.status.as_deref(), Some("reboot_requested"));
+        assert!(value.message.contains("已发送"));
+        assert!(value.message.contains("核实"));
+        assert!(!value.message.contains("重启成功"));
+        drop(client);
+        let mut frame = Vec::new();
+        peer.read_to_end(&mut frame).await.unwrap();
+        assert_eq!(frame, [0, 0, 0, 17, 0, 0, 0, 0]);
+    }
+    // 发送失败也不能显示已发送或成功，并须让会话层撤销身份。
+    #[tokio::test]
+    async fn security_admin_reboot_write_failure_is_uncertain() {
+        let (mut client, peer) = tokio::io::duplex(1024);
+        drop(peer);
+        let error = execute(&mut client, &request("reboot_device"), &mut vec![])
+            .await
+            .unwrap_err();
+        assert!(error.fatal);
+        assert!(error.message.contains("未确认"));
+    }
+    // 重启只接受会话和操作名，不允许复用证书或隧道参数。
+    #[test]
+    fn security_admin_reboot_rejects_extra_parameters() {
+        let mut req = request("reboot_device");
+        assert!(req.validate().is_ok());
+        req.tunnel_id = Some(1);
+        assert!(req.validate().is_err());
+        req.tunnel_id = None;
+        req.name = Some("peer.cer".into());
+        assert!(req.validate().is_err());
+        req.name = None;
+        req.certificate_type = Some(5);
+        assert!(req.validate().is_err());
+        req.certificate_type = None;
+        req.data = Some(vec![1]);
+        assert!(req.validate().is_err());
+    }
     // 新增隧道查询必须被白名单接受，且固定读取运行状态文件而非配置文件。
     #[tokio::test]
     async fn security_admin_tunnel_download_fixture() {

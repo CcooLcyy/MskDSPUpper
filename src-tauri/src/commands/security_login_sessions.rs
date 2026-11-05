@@ -219,8 +219,9 @@ impl SecurityLoginManager {
                             fatal,
                             "纵密管理员操作结束"
                         );
-                        // 不确定结果先撤销身份，再返回，防止调用方立即重放。
-                        if fatal {
+                        // 重启无装置应答；发送后先撤销当前身份再返回，禁止同一会话立即重放。
+                        let end_session = fatal || request.action == "reboot_device";
+                        if end_session {
                             if let Some(m) = weak.upgrade() {
                                 if let Some(entry) = m.inner.lock().connections.remove(&actor_id) {
                                     entry.close();
@@ -228,7 +229,7 @@ impl SecurityLoginManager {
                             }
                         }
                         let delivered = result.send(outcome.map_err(|e| e.message)).is_ok();
-                        if fatal || !delivered {
+                        if end_session || !delivered {
                             break;
                         }
                     }
@@ -609,13 +610,49 @@ mod tests {
                 None
             };
             let id = manager.retain_connection(ctx, client, old).unwrap();
-            assert!(manager.run_admin(admin_request(&id)).await.is_err());
+            for action in ["status", "reboot_device"] {
+                let mut request = admin_request(&id);
+                request.action = action.into();
+                assert!(manager.run_admin(request).await.is_err());
+            }
             assert!(
                 tokio::time::timeout(Duration::from_millis(10), peer.read_u8())
                     .await
                     .is_err()
             );
         }
+    }
+    // 重启只发送一次，返回前撤销当前管理员身份；其他连接不受影响且不能用旧身份重放。
+    #[tokio::test]
+    async fn security_admin_reboot_consumes_only_its_session_before_return() {
+        let manager = Arc::new(SecurityLoginManager::default());
+        let (_cancel, _guard) = manager.begin("fixture-owner").unwrap();
+        let (client, mut peer) = tokio::io::duplex(1024);
+        let id = manager
+            .retain_connection(context(ConnectionKind::Authenticated), client, None)
+            .unwrap();
+        let (other_client, _other_peer) = tokio::io::duplex(1024);
+        let other = manager
+            .retain_connection(context(ConnectionKind::Authenticated), other_client, None)
+            .unwrap();
+        let mut request = admin_request(&id);
+        request.action = "reboot_device".into();
+        let value = tokio::time::timeout(Duration::from_secs(1), manager.run_admin(request))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.status.as_deref(), Some("reboot_requested"));
+        assert!(!manager.connection_active(&id));
+        assert!(manager.connection_active(&other));
+        let mut repeated = admin_request(&id);
+        repeated.action = "reboot_device".into();
+        assert!(manager.run_admin(repeated).await.is_err());
+        let mut frame = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), peer.read_to_end(&mut frame))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(frame, [0, 0, 0, 17, 0, 0, 0, 0]);
     }
     // 同一会话复用连接并串行执行，忙时拒绝重复提交；中断调用会关闭连接。
     #[tokio::test]

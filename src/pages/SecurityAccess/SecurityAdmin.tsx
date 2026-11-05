@@ -8,10 +8,11 @@ const CERTIFICATE_TYPES = ['一级 CA 证书', '二级 CA 证书', '主操作员
 type Certificate = { name: string; certificate_type: number };
 type AdminRequest = Parameters<typeof api.runVerticalSecurityAdmin>[0];
 
-export default function SecurityAdmin({ sessionId, disabled = false, onBusyChange }: {
+export default function SecurityAdmin({ sessionId, disabled = false, onBusyChange, onRebootDevice }: {
   sessionId: string;
   disabled?: boolean;
   onBusyChange?: (busy: boolean) => void;
+  onRebootDevice?: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,12 +140,18 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
     await request({ action: 'reset_tunnel', tunnel_id: selectedTunnel });
     if (current()) { setNotice('重置命令已受理，请刷新核对隧道状态。'); setSelectedTunnel(null); }
   });
+  const rebootDevice = () => run(async current => {
+    if (onRebootDevice) { await onRebootDevice(); return; }
+    const value = await request({ action: 'reboot_device' });
+    if (current()) setNotice(value.message);
+  });
   const tunnelEmpty = tunnelRead === 'failed' ? '隧道读取失败，请重新刷新' : tunnelRead === 'ready' ? '装置当前没有隧道' : '请刷新隧道状态';
   const tunnelState = (state: number) => ({ 0: '未连接', 1: '连接中', 2: '连接中', 3: '已连接' })[state] ?? `未知状态（${state}）`;
   const hotState = (state: number) => state === 1 ? '主用' : state === 0 ? '备用' : `未知（${state}）`;
   const stateTag = (state: number) => <Tag color={state === 3 ? 'success' : state === 1 || state === 2 ? 'processing' : 'default'}>{tunnelState(state)}</Tag>;
 
   return <section className="security-admin" aria-label="纵密系统管理员工作台" aria-busy={busy}>
+    <div className="security-admin-toolbar"><div><h3>设备维护</h3><p>重启当前登录的纵密装置。</p></div><Popconfirm title="重启纵密设备？" description="纵密业务和当前登录连接将中断，请等待装置恢复后重新登录。" okText="重启设备" cancelText="取消" disabled={blocked} onConfirm={rebootDevice}><Button danger disabled={blocked}>重启设备</Button></Popconfirm></div>
     <Tabs activeKey={page} onChange={next => { setPage(next); setImportOpen(false); setSelectedTunnel(null); }} items={[{ key: 'certificates', label: '初始化与证书' }, { key: 'tunnels', label: '隧道管理' }]} />
     {page === 'certificates' && <Card className="security-admin-panel">
       <div className="security-admin-initialize"><div><h3>初始化网关</h3><p>导出证书申请文件时准备 SM2 密钥；已有密钥继续使用。</p></div><Button type="primary" disabled={blocked} onClick={exportCsr}>导出 SM2 CSR</Button></div>

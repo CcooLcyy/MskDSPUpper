@@ -36,6 +36,7 @@ import {
   deployVerticalSecurityScript,
   isValidIpv4Address,
 } from '../../utils/vertical-security-script';
+import { clearAppliedSecurityNetwork, getAppliedSecurityNetwork, rememberAppliedSecurityNetwork, type AutoConfigAddresses } from '../../utils/vertical-security-auto-config';
 import { lowerUpdateCredentialCoordinator } from '../../utils/lower-update-connection';
 
 type SecurityAuthMethod = 'password' | 'certificate';
@@ -268,7 +269,7 @@ const SecurityConfig: React.FC = () => {
     setIsPollingStatus(false);
   };
 
-  const startStatusPolling = (request: VerticalSecurityStatusRequest) => {
+  const startStatusPolling = (request: VerticalSecurityStatusRequest, addresses: AutoConfigAddresses) => {
     stopStatusPolling();
     const generation = statusPollGenerationRef.current;
     setExecutionStatus(null);
@@ -289,6 +290,7 @@ const SecurityConfig: React.FC = () => {
         if (outcome.completed) {
           keepPolling = false;
           setIsPollingStatus(false);
+          try { rememberAppliedSecurityNetwork(addresses); } catch { messageApi.warning('配置执行完成，但无法保存自动配置所需地址，请检查本地存储后重新应用。'); }
           messageApi.success('纵密配置全部步骤执行完成');
         } else if (outcome.failed) {
           keepPolling = false;
@@ -341,6 +343,8 @@ const SecurityConfig: React.FC = () => {
     setStatusQueryError(null);
 
     try {
+      clearAppliedSecurityNetwork();
+      const addresses: AutoConfigAddresses = { device: values.device ?? '', localRtuAddress: values.localRtuAddress.trim(), localSecurityAddress: values.localSecurityAddress.trim(), localGatewayAddress: values.localGatewayAddress.trim(), remoteRtuAddress: values.remoteRtuAddress.trim(), remoteSecurityAddress: values.remoteSecurityAddress.trim(), remoteGatewayAddress: values.remoteGatewayAddress.trim() };
       const sshPassword = values.sshPassword ?? '';
       const connection: VerticalSecurityStatusRequest = {
         upload_account: values.uploadAccount,
@@ -365,7 +369,7 @@ const SecurityConfig: React.FC = () => {
       }
       setDeployResult(result);
       messageApi.success(`纵密服务启动请求已提交: ${result.service_name}`);
-      startStatusPolling(connection);
+      startStatusPolling(connection, addresses);
     } catch (error) {
       messageApi.error(`下发纵密配置失败: ${error}`);
     } finally {
@@ -483,6 +487,7 @@ const SecurityConfig: React.FC = () => {
             reuseSshPasswordForSudo: true,
             installDir: '/home/megsky',
             device: 'MskDSP',
+            ...getAppliedSecurityNetwork(),
           }}
           disabled={isGenerating}
           onFinish={handleApply}

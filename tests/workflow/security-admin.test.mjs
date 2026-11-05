@@ -224,7 +224,7 @@ test('单隧道重置须选择与确认，仅声明受理，不自动重试或�
   await f.button('刷新隧道').props.onClick(); f.render();
   f.nodes().find(node => node.type === 'Table').props.rowSelection.onChange([7]); f.render();
   assert.equal(f.calls.length, 1);
-  await f.nodes().find(node => node.type === 'Popconfirm').props.onConfirm(); f.render();
+  await f.nodes().find(node => node.type === 'Popconfirm' && String(node.props.title).startsWith('重置隧道')).props.onConfirm(); f.render();
   assert.deepEqual(f.calls[1], { session_id: 'session-a', action: 'reset_tunnel', tunnel_id: 7 });
   assert.equal(f.calls.length, 2);
   assert.ok(f.nodes().some(node => String(node.props.title).includes('命令已受理')));
@@ -280,11 +280,36 @@ test('重置失败不显示已受理且不自动重试；卸载后的迟到应�
     } });
     switchPage(f, 'tunnels'); await f.button('刷新隧道').props.onClick(); f.render();
     f.nodes().find(node => node.type === 'Table').props.rowSelection.onChange([7]); f.render();
-    const task = f.nodes().find(node => node.type === 'Popconfirm').props.onConfirm();
+    const task = f.nodes().find(node => node.type === 'Popconfirm' && String(node.props.title).startsWith('重置隧道')).props.onConfirm();
     if (!fail) { f.unmount(); resolve({ message: '命令已受理' }); }
     await task; f.render();
     assert.equal(f.calls.length, 2);
     assert.ok(!f.nodes().some(node => String(node.props.title).includes('重置命令已受理')));
     if (fail) assert.ok(f.nodes().some(node => node.props.title === '重置应答超时，结果未确认'));
   }
+});
+
+test('管理员设备重启需要明确确认，确认只发送重启设备操作且不混用重置隧道', async () => {
+  const f = await settledFixture();
+  assert.ok(f.button('重启设备'));
+  assert.deepEqual(f.calls, []);
+  const confirm = f.nodes().find(node => node.type === 'Popconfirm' && node.props.title === '重启纵密设备？');
+  assert.ok(confirm);
+  await confirm.props.onConfirm();
+  assert.deepEqual(f.calls, [{ session_id: 'session-a', action: 'reboot_device' }]);
+});
+
+test('管理员设备重启委托登录页处理，忙状态阻止重复确认及其他设备操作', async () => {
+  const f = await settledFixture();
+  let resolve;
+  let requests = 0;
+  f.render({ onRebootDevice: () => { requests += 1; return new Promise(done => { resolve = done; }); } });
+  const confirm = f.nodes().find(node => node.type === 'Popconfirm' && node.props.title === '重启纵密设备？');
+  const task = confirm.props.onConfirm();
+  await confirm.props.onConfirm(); f.render();
+  assert.equal(requests, 1);
+  assert.equal(f.button('重启设备').props.disabled, true);
+  await f.button('导出 SM2 CSR').props.onClick();
+  assert.deepEqual(f.calls, []);
+  resolve(); await task;
 });
