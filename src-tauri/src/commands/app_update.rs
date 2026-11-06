@@ -586,7 +586,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(validate_candidate("0.7.1", &cached).is_err());
-        assert!(validate_candidate("0.7.1-beta.1", &cached).is_ok());
+        assert!(validate_candidate("0.7.1-beta.1", &cached).is_err());
     }
 
     // 历史 Beta 客户端版本转向正式目录，CI 仍查询自身目录。

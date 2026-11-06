@@ -4447,7 +4447,8 @@ mod tests {
         )
         .await
         .is_err());
-        for version in ["0.8.0-beta.1", "0.8.0-ci.1"] {
+        // 非 CI 版本按 Stable 筛选，只有显式 CI 客户端保留 CI 与本地包权限。
+        for (version, expected_count) in [("0.8.0-beta.1", 1), ("0.8.0-ci.1", 3)] {
             assert_eq!(
                 super::list_cached_lower_updates_for_client(
                     temp.path(),
@@ -4458,7 +4459,7 @@ mod tests {
                 .await
                 .unwrap()
                 .len(),
-                3
+                expected_count
             );
         }
     }
@@ -4489,7 +4490,8 @@ mod tests {
                     manifest.checksum.url.clear();
                 }
                 persist_cache_metadata(&directory, &manifest).await.unwrap();
-                let allowed = channel != "beta" && (client != "0.8.0" || channel == "stable");
+                let allowed = channel == "stable"
+                    || (client == "0.8.0-ci.1" && matches!(channel, "ci" | "local"));
                 // 真实上传入口按本地路径、大小及摘要校验。
                 let upload = super::find_verified_update_package(
                     temp.path(),

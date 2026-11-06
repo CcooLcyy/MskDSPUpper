@@ -1,8 +1,8 @@
 import type { LowerUpdateActiveChannel, LowerUpdateChannel, LowerUpdateManifest, LowerUpdatePlatform } from '../adapters/types';
 
-// 版本尚未读取或无法识别时采用 Stable 限制，防止初始化期间越过通道边界。
+// 仅显式 CI 版本使用测试权限，其余版本及未读取状态均采用 Stable 限制。
 export function isStableUpdateClient(version: string | null): boolean {
-  return !version?.includes('-ci.') && !version?.includes('-beta.');
+  return !version?.includes('-ci.');
 }
 
 export function getLowerUpdateChannels(platform: LowerUpdatePlatform, clientVersion?: string | null): LowerUpdateActiveChannel[] {

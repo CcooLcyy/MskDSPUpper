@@ -11,10 +11,10 @@ const compile = (file) => ts.transpileModule(source(file), {
 const loadRules = () => new Function(compile('src/utils/lower-update-platform.ts')
   .replace(/export /g, '') + '\nreturn { isStableUpdateClient, getLowerUpdateChannels, getLowerUpdateChannel, assertLowerUpdateManifest };')();
 
-// Stable 客户端仅能选择 Stable；历史 Beta 和 CI 仅使用现行两个通道。
+// 仅 CI 版本保留 CI 权限；Stable、历史 Beta 及未知版本均使用 Stable 限制。
 test('stable clients restrict both architecture selection and manifest acceptance', () => {
   const rules = loadRules();
-  for (const version of ['0.8.0', null, '']) {
+  for (const version of ['0.8.0', '0.8.0-beta.1', '0.8.0-beta.0.8.20261106t010203+sha.abcdef0', null, '']) {
     assert.equal(rules.isStableUpdateClient(version), true);
     assert.deepEqual(rules.getLowerUpdateChannels('linux-arm64', version), ['stable']);
     assert.deepEqual(rules.getLowerUpdateChannels('linux-x64', version), []);
@@ -22,10 +22,13 @@ test('stable clients restrict both architecture selection and manifest acceptanc
     assert.throws(() => rules.assertLowerUpdateManifest({ platform: 'linux-arm64', channel: 'ci' }, 'linux-arm64', 'ci', version), /通道/);
     rules.assertLowerUpdateManifest({ platform: 'linux-arm64', channel: 'stable' }, 'linux-arm64', 'stable', version);
   }
-  for (const version of ['0.8.0-beta.1', '0.8.0-ci.1']) {
+  for (const version of ['0.8.0-ci.1', '0.8.0-ci.20261106t010203+sha.abcdef0']) {
     assert.equal(rules.isStableUpdateClient(version), false);
     assert.deepEqual(rules.getLowerUpdateChannels('linux-arm64', version), ['stable', 'ci']);
     assert.deepEqual(rules.getLowerUpdateChannels('linux-x64', version), ['ci']);
+    rules.assertLowerUpdateManifest({ platform: 'linux-arm64', channel: 'ci' }, 'linux-arm64', 'ci', version);
+    rules.assertLowerUpdateManifest({ platform: 'linux-x64', channel: 'ci' }, 'linux-x64', 'ci', version);
+    assert.throws(() => rules.assertLowerUpdateManifest({ platform: 'linux-arm64', channel: 'beta' }, 'linux-arm64', 'beta', version), /通道/);
   }
 });
 
@@ -124,21 +127,32 @@ function providerHarness(api, version = '0.8.0-ci.1') {
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 const manifestFor = (platform, channel) => ({ platform, channel, version: '1', asset: { name: `${platform}.tgz`, size: 1, sha256: 'abc' } });
 
-// 历史 Beta 版本仍能运行更新协调器，但不再请求或下载退役通道。
-test('legacy beta client only checks active stable and ci channels', async () => {
+// 历史 Beta 客户端采用 Stable 权限，协调器仅请求 ARM64 Stable，x64 不请求任何通道。
+test('legacy beta client defaults to stable and never checks or downloads ci or beta', async () => {
   const checks = [];
   const downloads = [];
+  const cacheReads = [];
   const render = providerHarness({
-    checkLowerUpdate: async (channel, platform) => { checks.push(channel); return manifestFor(platform, channel); },
-    listCachedLowerUpdates: async () => [],
-    downloadLowerUpdate: async (manifest) => { downloads.push(manifest.channel); return { package_name: manifest.asset.name, package_path: '/active', downloaded_bytes: 1, sha256: 'abc' }; },
+    checkLowerUpdate: async (channel, platform) => { checks.push([platform, channel]); return manifestFor(platform, channel); },
+    listCachedLowerUpdates: async (channel, platform) => { cacheReads.push([platform, channel]); return []; },
+    downloadLowerUpdate: async (manifest) => { downloads.push([manifest.platform, manifest.channel]); return { package_name: manifest.asset.name, package_path: '/stable', downloaded_bytes: 1, sha256: 'abc' }; },
   }, '0.8.0-beta.1');
   render(); await settle();
-  const value = render(); await settle();
+  let value = render(); await settle();
   assert.deepEqual(Object.keys(value.channels).sort(), ['ci', 'stable']);
-  assert.deepEqual(checks, ['stable', 'ci']);
-  assert.deepEqual(downloads, ['stable', 'ci']);
-  assert.throws(() => value.ensureDownloaded(manifestFor('linux-arm64', 'beta')), /通道/);
+  assert.deepEqual(checks, [['linux-arm64', 'stable']]);
+  assert.deepEqual(downloads, [['linux-arm64', 'stable']]);
+  assert.ok(cacheReads.length > 0);
+  assert.ok(cacheReads.every(([platform, channel]) => platform === 'linux-arm64' && channel === 'stable'));
+  for (const channel of ['ci', 'beta']) {
+    assert.throws(() => value.ensureDownloaded(manifestFor('linux-arm64', channel)), /通道/);
+  }
+  value.setPlatform('linux-x64'); value = render(); await settle();
+  assert.equal(value.platform, 'linux-x64');
+  assert.throws(() => value.ensureDownloaded(manifestFor('linux-x64', 'ci')), /通道/);
+  assert.deepEqual(checks, [['linux-arm64', 'stable']]);
+  assert.deepEqual(downloads, [['linux-arm64', 'stable']]);
+  assert.ok(cacheReads.every(([platform, channel]) => platform === 'linux-arm64' && channel === 'stable'));
 });
 
 // 实际执行后台协调器，Stable 启动后只检查和下载 Stable，版本未知时不请求目录。
