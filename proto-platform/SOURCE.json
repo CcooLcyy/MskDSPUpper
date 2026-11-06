@@ -1,5 +1,5 @@
 {
-  "repository": "http://192.168.10.198:8929/mskdsp/mskdspplatformproto.git",
+  "repository": "https://github.com/CcooLcyy/MskDSPPlatformProto.git",
   "path": "platform/v1/software.proto",
   "sha256": "586632f24609b03b536f4c3d71af0888e459c66ce1d9d141578104e36cc6b8ab",
   "commit": "a9723c5ebade10a5588da59bdfc0c51123bfdf67"

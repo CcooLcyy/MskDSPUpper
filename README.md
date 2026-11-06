@@ -26,6 +26,8 @@ git submodule update --init --recursive
 
 如果没有初始化 `proto` submodule，`src-tauri/build.rs` 会直接报错并提示补齐 submodule。
 
+平台软件仓库协议的规范来源为公开仓库 [MskDSPPlatformProto](https://github.com/CcooLcyy/MskDSPPlatformProto)。`proto-platform/SOURCE.json` 记录桌面协议快照的固定提交和摘要；CI 的 `scripts/gitlab/init_platform_proto.py` 从 GitHub 匿名获取同一固定提交，不需要 GitLab 作业令牌或协议项目 allowlist。发布时核对上位机来源分支的 GitLab 认证仍保持独立，不受协议来源切换影响。
+
 ## 开发
 
 安装 Node 依赖：

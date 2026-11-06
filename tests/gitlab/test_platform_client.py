@@ -104,6 +104,8 @@ class ProtocolSnapshotTests(unittest.TestCase):
         pin = (ROOT / "scripts/gitlab/platform-proto.ref").read_text(encoding="utf-8").strip()
         self.assertEqual(init_platform_proto.PIN, pin)
         self.assertEqual(source["commit"], pin)
+        self.assertEqual(source["repository"], "https://github.com/CcooLcyy/MskDSPPlatformProto.git")
+        self.assertEqual(init_platform_proto.REPOSITORY, source["repository"])
         protocol = ROOT / "proto-platform" / source["path"]
         self.assertEqual(hashlib.sha256(protocol.read_text(encoding="utf-8").encode("utf-8")).hexdigest(), source["sha256"])
 
