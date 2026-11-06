@@ -44,6 +44,17 @@ export function formatUtcTimestamp(date = new Date()) {
   return `${year}${month}${day}t${hour}${minute}${second}z`;
 }
 
+// 元数据继续保存 UTC；版本和文件名固定显示北京时间，不依赖 Runner 时区。
+export function formatBeijingTimestamp(timestamp) {
+  const value = normalizeTimestamp(timestamp);
+  const match = value.match(/^(\d{4})(\d{2})(\d{2})t(\d{2})(\d{2})(\d{2})z$/);
+  const instant = new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`);
+  if (!Number.isFinite(instant.getTime())) {
+    throw new Error(`不支持的时间戳格式: ${timestamp}`);
+  }
+  return formatUtcTimestamp(new Date(instant.getTime() + 8 * 60 * 60 * 1000)).replace(/z$/, '');
+}
+
 export function shortenSha(sha) {
   assertNonEmpty('sha', sha);
   return sha.slice(0, 7).toLowerCase();
@@ -63,7 +74,7 @@ export function createEffectiveVersion({
   shortSha,
 }) {
   assertNonEmpty('baseVersion', baseVersion);
-  const normalizedTimestamp = normalizeTimestamp(timestamp).replace(/z$/, '');
+  const normalizedTimestamp = formatBeijingTimestamp(timestamp);
   const normalizedSha = shortenSha(shortSha);
   switch (channel) {
     case 'stable':
@@ -87,9 +98,9 @@ export function createReleaseTag({
     case 'stable':
       return `v${baseVersion}`;
     case 'nightly':
-      return `nightly-${normalizeTimestamp(timestamp)}-${shortenSha(shortSha)}`;
+      return `nightly-${formatBeijingTimestamp(timestamp)}-utc8-${shortenSha(shortSha)}`;
     case 'ci':
-      return `ci-${normalizeTimestamp(timestamp)}-${shortenSha(shortSha)}`;
+      return `ci-${formatBeijingTimestamp(timestamp)}-utc8-${shortenSha(shortSha)}`;
     default:
       throw new Error(`不支持的渠道: ${channel}`);
   }
@@ -113,7 +124,7 @@ export function createArtifactBaseName({
     sanitizeSegment(projectSlug),
     sanitizeSegment(effectiveVersion),
     sanitizeSegment(channelLabel),
-    normalizeTimestamp(timestamp),
+    `${formatBeijingTimestamp(timestamp)}-utc8`,
     shortenSha(shortSha),
     sanitizeSegment(platform),
   ].join('-');

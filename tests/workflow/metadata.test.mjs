@@ -11,6 +11,7 @@ import {
   createChannelLabel,
   createEffectiveVersion,
   createReleaseTag,
+  formatBeijingTimestamp,
 } from '../../scripts/workflow/lib/metadata.mjs';
 
 // 验证 nightly 版本号会带上统一的时间戳与短 SHA 后缀。
@@ -22,7 +23,21 @@ test('nightly metadata uses prerelease semver suffix', () => {
     shortSha: 'abcdef1',
   });
 
-  assert.equal(version, '0.1.0-nightly.20260408t010203+sha.abcdef1');
+  assert.equal(version, '0.1.0-nightly.20260408t090203+sha.abcdef1');
+});
+
+// 北京时间转换覆盖跨日、跨月和跨年，原始输入始终表示 UTC。
+test('Beijing build timestamp handles calendar boundaries', () => {
+  for (const [utc, beijing] of [
+    ['20260408t010203z', '20260408t090203'],
+    ['20260408t180203z', '20260409t020203'],
+    ['20260430t180203z', '20260501t020203'],
+    ['20261231t180203z', '20270101t020203'],
+  ]) {
+    assert.equal(formatBeijingTimestamp(utc), beijing);
+    assert.equal(createEffectiveVersion({ baseVersion: '0.1.0', channel: 'ci', timestamp: utc, shortSha: 'abcdef1' }), `0.1.0-ci.${beijing}+sha.abcdef1`);
+    assert.equal(createReleaseTag({ channel: 'ci', timestamp: utc, shortSha: 'abcdef1' }), `ci-${beijing}-utc8-abcdef1`);
+  }
 });
 
 // 退役后直接调用公共元数据函数也不能创建新的 Beta 包身份。
@@ -51,12 +66,17 @@ test('metadata CLI rejects beta inputs and emits current channels without beta l
   assert.match(obsoleteArgument.stderr, /beta-line/);
   assert.equal(fs.existsSync(output), false);
   for (const channel of ['ci', 'nightly', 'stable']) {
-    const result = run(['--channel', channel]);
+    const result = run(['--channel', channel, '--timestamp', '20261231t180203z']);
     assert.equal(result.status, 0, result.stderr);
     const metadata = JSON.parse(fs.readFileSync(output, 'utf8'));
     assert.equal(metadata.channel, channel);
     assert.equal(metadata.channelLabel, channel);
     assert.equal(Object.hasOwn(metadata, 'betaLine'), false);
+    assert.equal(metadata.timestamp, '20261231t180203z');
+    if (channel !== 'stable') {
+      assert.match(metadata.effectiveVersion, /20270101t020203/);
+      assert.match(metadata.artifactBaseName, /20270101t020203-utc8/);
+    }
   }
 });
 
@@ -64,7 +84,7 @@ test('metadata CLI rejects beta inputs and emits current channels without beta l
 test('artifact base name is stable and channel aware', () => {
   const artifactName = createArtifactBaseName({
     projectSlug: 'mskdsp-upper',
-    effectiveVersion: '0.1.0-nightly.20260408t010203+sha.abcdef1',
+    effectiveVersion: '0.1.0-nightly.20260408t090203+sha.abcdef1',
     channelLabel: 'nightly',
     timestamp: '20260408t010203z',
     shortSha: 'abcdef1',
@@ -73,6 +93,6 @@ test('artifact base name is stable and channel aware', () => {
 
   assert.equal(
     artifactName,
-    'mskdsp-upper-0.1.0-nightly.20260408t010203_sha.abcdef1-nightly-20260408t010203z-abcdef1-windows-x64',
+    'mskdsp-upper-0.1.0-nightly.20260408t090203_sha.abcdef1-nightly-20260408t090203-utc8-abcdef1-windows-x64',
   );
 });
