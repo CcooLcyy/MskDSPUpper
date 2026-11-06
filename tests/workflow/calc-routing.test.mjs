@@ -13,6 +13,19 @@ const baseline = [inputRoute(1, 'A'), inputRoute(2, 'B'), inputRoute(3, 'C'), ou
 const unrelated = { src: external('其他源'), dst: local('其他项/left_input') };
 const config = { group_name: '计算组', trigger_mode: 1, period_ms: 1000, items: [item] };
 const nextConfig = { ...config, period_ms: 2000 };
+
+// 验证多输入逻辑与混合表达式按列表生成槽位，旧二元逻辑继续保留左右标签。
+test('逻辑列表和表达式派生输入标签并迁移旧二元路由', () => {
+  for (const kind of [6, 7, 8, 11]) {
+    assert.deepEqual(calcInputTags({ ...item, operator_kind: kind }), ['总功率/input_1', '总功率/input_2', '总功率/input_3']);
+  }
+  const previousItem = { ...item, operator_kind: 6, operands: [], left_operand: bus, right_operand: bus };
+  assert.deepEqual(calcInputTags(previousItem), ['总功率/left_input', '总功率/right_input']);
+  const oldRoutes = ['left_input', 'right_input'].map((suffix, index) => ({ src: external(index ? 'B' : 'A'), dst: local(`总功率/${suffix}`) }));
+  const plan = buildCalcRoutePlan({ groupName: '计算组', previousItem, item: { ...item, operator_kind: 11, expression: '(A AND B) OR C' }, inputSources: [[external('A')], [external('B')], [external('C')]], outputs: [], baselineRoutes: oldRoutes });
+  assert.deepEqual(plan.removedRoutes, oldRoutes);
+  assert.deepEqual(plan.routes.map(route => route.dst.tag), ['总功率/input_1', '总功率/input_2', '总功率/input_3']);
+});
 const baseOptions = { groupName: '计算组', previousItem: item, item, inputSources: [[external('A')], [external('B')], [external('C')]], outputs: [external('输出1')], baselineRoutes: [...baseline, unrelated] };
 
 // 验证普通、NOT 和聚合的输入槽位与下位机派生规则一致。

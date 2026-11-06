@@ -1165,6 +1165,8 @@ export interface CalcItemConfig {
   right_operand: CalcOperandSpec | null;
   operands: CalcOperandSpec[];
   decimal_places?: number;
+  /** 混合逻辑表达式，变量按输入顺序命名为 A、B、…、AA。 */
+  expression?: string;
 }
 
 export interface CalcOperandStatus {

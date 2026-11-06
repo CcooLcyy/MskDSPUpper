@@ -51,6 +51,18 @@ test('workspace survives a serialize and parse round trip', () => {
   assert.deepEqual(parsed, workspace);
 });
 
+// 混合逻辑表达式及布尔常量在离线文件往返时不得丢失。
+test('workspace preserves logical expressions and ordered operands', () => {
+  const workspace = createEmptyWorkspace('逻辑配置');
+  const config = { group_name: '联锁', trigger_mode: 1, period_ms: 0, items: [{
+    item_name: '允许', operator_kind: 11, expression: '(A AND B) OR NOT C',
+    left_operand: null, right_operand: null,
+    operands: [{ source_kind: 1, constant: null }, { source_kind: 1, constant: null }, { source_kind: 2, constant: { bool_value: false } }],
+  }] };
+  workspace.config.calc.groups = [{ upsert: { config } }];
+  assert.deepEqual(parseWorkspace(serializeWorkspace(workspace)).config.calc.groups, workspace.config.calc.groups);
+});
+
 // 非法 JSON 必须给出中文错误，不能把解析异常直接抛给页面。
 test('parse rejects malformed json with a chinese message', () => {
   assert.throws(() => parseWorkspace('{'), /工作区文件不是合法 JSON/);

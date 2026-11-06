@@ -1,4 +1,5 @@
 import type { ModbusPointTableSaveOptions } from './types';
+import { calcUsesOperandList } from '../utils/calc-operands.ts';
 import type { api as tauriApi } from './tauri';
 import { buildManualSimulationSnapshot } from '../pages/IEC104/manual-simulation.ts';
 import { createSimulationPeriodicMock } from '../pages/IEC104/simulation-periodic.ts';
@@ -662,7 +663,7 @@ function makeDefaultAvcPoints(): AvcDefaultPointInfo[] {
 
 function makeCalcItems(config: CalcGroupConfig): CalcItemInfo[] {
   return config.items.map((item) => {
-    const isAggregate = item.operator_kind === 9 || item.operator_kind === 10;
+    const isAggregate = calcUsesOperandList(item);
     const operands = item.operands ?? [];
     const leftInputTag = isAggregate ? '' : `${item.item_name}/left_input`;
     const rightInputTag = isAggregate ? '' : `${item.item_name}/right_input`;

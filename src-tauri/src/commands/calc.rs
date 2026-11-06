@@ -42,6 +42,9 @@ pub struct CalcItemConfigDto {
     pub operands: Vec<OperandSpecDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decimal_places: Option<u32>,
+    /// 混合逻辑表达式；普通运算为空，语法由 Calc 服务执行权威校验。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub expression: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -146,7 +149,7 @@ impl TypedConstantDto {
                     || self.double_value.is_some()
                     || self.decimal_value.is_some()
             }
-            5..=8 => self.bool_value.is_some(),
+            5..=8 | 11 => self.bool_value.is_some(),
             _ => false,
         }
     }
@@ -185,6 +188,7 @@ impl From<CalcItemConfig> for CalcItemConfigDto {
             right_operand: value.right_operand.map(Into::into),
             operands: value.operands.into_iter().map(Into::into).collect(),
             decimal_places: value.decimal_places,
+            expression: value.expression,
         }
     }
 }
@@ -211,6 +215,7 @@ impl CalcItemConfigDto {
                 .map(|(index, operand)| operand.to_proto(&format!("operands[{index}]")))
                 .collect::<Result<Vec<_>, _>>()?,
             decimal_places: self.decimal_places,
+            expression: self.expression.trim().to_string(),
         })
     }
 }
@@ -307,7 +312,7 @@ fn validate_operand(
                     };
                 return Err(format!("{field_name} 的 constant 必须为 {expected}"));
             }
-            // Ensure the oneof-like DTO does not contain multiple values.
+            // 保证 DTO 常量仅携带一个类型分支。
             constant.to_proto().map(|_| ())
         }
         0 => Err(format!("{field_name} source_kind 不能为空")),
@@ -344,22 +349,44 @@ fn validate_group_config(config: &CalcGroupConfigDto) -> Result<(), String> {
         let is_unary = item.operator_kind == 5;
         let is_binary = matches!(item.operator_kind, 1..=4 | 6..=8);
         let is_aggregate = matches!(item.operator_kind, 9..=10);
-        if !is_unary && !is_binary && !is_aggregate {
+        let is_expression = item.operator_kind == 11;
+        let is_multi_logic = matches!(item.operator_kind, 6..=8) && !item.operands.is_empty();
+        let uses_operands = is_aggregate || is_expression || is_multi_logic;
+        if !is_unary && !is_binary && !is_aggregate && !is_expression {
             return Err(format!("items[{item_name}].operator_kind 非法"));
         }
 
-        if is_aggregate {
-            if item.operands.len() < 2 {
-                return Err(format!("items[{item_name}].operands 至少需要两个操作数"));
+        if is_expression {
+            if item.expression.trim().is_empty() {
+                return Err(format!("items[{item_name}].expression 不能为空"));
+            }
+            if item.expression.len() > 4096 {
+                return Err(format!("items[{item_name}].expression 不能超过 4096 个字符"));
+            }
+        } else if !item.expression.is_empty() {
+            return Err(format!("items[{item_name}].expression 仅适用于混合逻辑表达式"));
+        }
+        if item.operator_kind != 10 && item.decimal_places.is_some() {
+            return Err(format!(
+                "items[{item_name}].decimal_places 仅适用于 AVERAGE"
+            ));
+        }
+
+        if uses_operands {
+            let minimum = if is_expression { 1 } else { 2 };
+            if item.operands.len() < minimum {
+                return Err(format!(
+                    "items[{item_name}].operands 至少需要 {minimum} 个操作数"
+                ));
+            }
+            if (is_expression || is_multi_logic) && item.operands.len() > 256 {
+                return Err(format!(
+                    "items[{item_name}].operands 不能超过 256 个逻辑输入"
+                ));
             }
             if item.left_operand.is_some() || item.right_operand.is_some() {
                 return Err(format!(
-                    "items[{item_name}] 的 SUM/AVERAGE 只能使用 operands，不能携带 left_operand/right_operand"
-                ));
-            }
-            if item.operator_kind == 9 && item.decimal_places.is_some() {
-                return Err(format!(
-                    "items[{item_name}].decimal_places 仅适用于 AVERAGE"
+                    "items[{item_name}] 使用 operands 时不能携带 left_operand/right_operand"
                 ));
             }
             if let Some(decimal_places) = item.decimal_places {
@@ -439,6 +466,8 @@ pub async fn calc_upsert_group(
         group_name = %group_name,
         trigger_mode = config.trigger_mode,
         period_ms = config.period_ms,
+        expression_count = config.items.iter().filter(|item| item.operator_kind == 11).count(),
+        multi_logic_count = config.items.iter().filter(|item| matches!(item.operator_kind, 6..=8) && !item.operands.is_empty()).count(),
         create_only,
         "开始保存数值计算分组配置"
     );
@@ -562,6 +591,114 @@ pub async fn calc_stop_group(state: State<'_, AppState>, group_name: String) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn logic_group(kind: i32, count: usize, expression: &str) -> CalcGroupConfigDto {
+        serde_json::from_value(serde_json::json!({
+            "group_name": "逻辑组",
+            "items": [{
+                "item_name": "混合逻辑", "operator_kind": kind,
+                "operands": (0..count).map(|_| serde_json::json!({"source_kind": 1})).collect::<Vec<_>>(),
+                "expression": expression,
+            }],
+        }))
+        .expect("构造逻辑配置")
+    }
+
+    // 验证：混合逻辑文本和有序布尔输入通过 DTO/protobuf 双向转换后完整保留。
+    #[test]
+    fn logical_expression_round_trips_through_proto() {
+        let config = logic_group(11, 3, "(A AND B) OR NOT C");
+        validate_group_config(&config).expect("表达式配置合法");
+        let proto = config.to_proto().expect("转换表达式配置");
+        assert_eq!(proto.items[0].expression, "(A AND B) OR NOT C");
+        let restored = CalcGroupConfigDto::from(proto);
+        assert_eq!(restored.items[0].expression, "(A AND B) OR NOT C");
+        assert_eq!(restored.items[0].operands.len(), 3);
+    }
+
+    // 验证：旧二元配置缺少表达式字段时仍可反序列化、校验并往返保留左右槽位。
+    #[test]
+    fn legacy_binary_logic_keeps_its_slots() {
+        for kind in 6..=8 {
+            let config: CalcGroupConfigDto = serde_json::from_value(serde_json::json!({
+                "group_name": "旧分组", "items": [{"item_name": "旧逻辑", "operator_kind": kind,
+                    "left_operand": {"source_kind": 1},
+                    "right_operand": {"source_kind": 2, "constant": {"bool_value": false}}}],
+            }))
+            .expect("读取旧配置");
+            validate_group_config(&config).expect("兼容旧二元配置");
+            let restored = CalcGroupConfigDto::from(config.to_proto().expect("转换旧配置"));
+            assert!(restored.items[0].expression.is_empty());
+            assert!(restored.items[0].left_operand.is_some());
+            assert!(restored.items[0].right_operand.is_some());
+            assert!(restored.items[0].operands.is_empty());
+            let json = serde_json::to_value(&restored).expect("序列化旧配置");
+            assert!(json["items"][0].get("expression").is_none());
+        }
+    }
+
+    // 验证：与、或、异或可使用多个有序输入，且逻辑常量只能为布尔值。
+    #[test]
+    fn multi_input_logic_validates_boolean_constants() {
+        for kind in 6..=8 {
+            let mut config = logic_group(kind, 3, "");
+            config.items[0].operands[2] = OperandSpecDto {
+                source_kind: 2,
+                constant: Some(TypedConstantDto {
+                    bool_value: Some(true),
+                    ..TypedConstantDto::default()
+                }),
+            };
+            validate_group_config(&config).expect("多输入逻辑合法");
+            config.items[0].operands[2].constant = Some(TypedConstantDto {
+                int_value: Some(1),
+                ..TypedConstantDto::default()
+            });
+            assert!(validate_group_config(&config)
+                .expect_err("拒绝数字代替布尔")
+                .contains("bool"));
+        }
+    }
+
+    // 验证：新旧输入表示不能混用，逻辑表达式不允许数值精度设置。
+    #[test]
+    fn logical_inputs_reject_mixed_slots_and_numeric_precision() {
+        let mut config = logic_group(11, 2, "A OR B");
+        config.items[0].left_operand = Some(OperandSpecDto {
+            source_kind: 1,
+            constant: None,
+        });
+        assert!(validate_group_config(&config).is_err());
+        config.items[0].left_operand = None;
+        config.items[0].decimal_places = Some(2);
+        assert!(validate_group_config(&config)
+            .expect_err("逻辑不接受精度")
+            .contains("AVERAGE"));
+        config.items[0].decimal_places = None;
+        config.items[0].operands[0] = OperandSpecDto {
+            source_kind: 2,
+            constant: Some(TypedConstantDto {
+                decimal_value: Some("1".into()),
+                ..TypedConstantDto::default()
+            }),
+        };
+        assert!(validate_group_config(&config)
+            .expect_err("表达式拒绝数值常量")
+            .contains("bool"));
+    }
+
+    // 验证：空表达式、过长文本、过多输入以及普通运算携带表达式均在桥接边界拒绝。
+    #[test]
+    fn logical_expression_enforces_boundary_limits() {
+        assert!(validate_group_config(&logic_group(11, 1, "NOT A")).is_ok());
+        assert!(validate_group_config(&logic_group(11, 0, "A")).is_err());
+        assert!(validate_group_config(&logic_group(11, 1, "  ")).is_err());
+        assert!(validate_group_config(&logic_group(11, 1, &"A".repeat(4097))).is_err());
+        assert!(validate_group_config(&logic_group(11, 257, "A")).is_err());
+        assert!(validate_group_config(&logic_group(6, 1, "")).is_err());
+        assert!(validate_group_config(&logic_group(6, 2, "A OR B")).is_err());
+        assert!(validate_group_config(&logic_group(9, 2, "A OR B")).is_err());
+    }
 
     // 验证：精确十进制常量通过 Tauri DTO 后仍以原始字符串进入 protobuf oneof。
     #[test]

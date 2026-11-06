@@ -7,12 +7,14 @@ import { api } from '../../adapters';
 import type { CalcGroupConfig, CalcGroupInfo, CalcItemConfig, DcEndpoint, DcRoute } from '../../adapters';
 import { buildCalcRoutePlan, calcInputTags, CalcSaveError, retryCalcRoutes, saveCalcWithRoutes } from '../../utils/calc-routing';
 import { formatErrorText } from '../../utils/runtime-restart';
-import { defaultItem, defaultOperand, draftFromItem, endpointKey, endpointLabel, formula, isAggregate, isLogic, itemToConfig, operators, validateDraft } from './editor-model';
+import { changeOperandSource, defaultItem, defaultOperand, draftFromItem, endpointKey, endpointLabel, formula, isLogic, isMultiInput, itemToConfig, operators, validateDraft } from './editor-model';
 import type { ItemDraft, OperandDraft } from './editor-model';
+import { inputAlias, removeExpressionInput, validateExpression } from './logic-expression';
 import CalcNavigationGuard from './CalcNavigationGuard';
 import './index.css';
 
 const { Text } = Typography;
+const expressionTokens = [{ label: '与', value: 'AND' }, { label: '或', value: 'OR' }, { label: '异或', value: 'XOR' }, { label: '非', value: 'NOT' }, { label: '(', value: '(' }, { label: ')', value: ')' }];
 const groupStates: Record<number, { label: string; color: string }> = {
   0: { label: '状态未知', color: 'default' }, 1: { label: '已停止', color: 'default' },
   2: { label: '运行中', color: 'success' }, 3: { label: '待删除', color: 'warning' },
@@ -113,12 +115,14 @@ const CalcPage: React.FC = () => {
   const editDraft = (change: (draft: ItemDraft) => ItemDraft) => setEditor((current) => current ? { ...current, draft: change(current.draft) } : current);
   const updateInput = (index: number, patch: Partial<OperandDraft>) => editDraft((draft) => ({ ...draft, inputs: draft.inputs.map((input, i) => i === index ? { ...input, ...patch } : input) }));
   const changeOperator = (kind: number) => editDraft((draft) => {
-    const count = kind === 5 ? 1 : isAggregate(kind) ? Math.max(2, draft.inputs.length) : 2;
+    const count = kind === 5 ? 1 : kind === 11 ? Math.max(1, draft.inputs.length) : isMultiInput(kind) ? Math.max(2, draft.inputs.length) : 2;
     const inputs = Array.from({ length: count }, (_, index) => draft.inputs[index] ?? defaultOperand()).map((input): OperandDraft => {
       if (input.sourceKind !== 2 || isLogic(kind) === (input.constantType === 'bool')) return input;
       return { ...input, constantType: isLogic(kind) ? 'bool' : 'decimal', constantValue: isLogic(kind) ? false : '0' };
     });
-    return { ...draft, operatorKind: kind, inputs };
+    const expression = kind === 11 ? draft.expression ?? (draft.operatorKind === 5 ? `NOT ${inputAlias(0)}` : inputs.map((_, index) => inputAlias(index)).join(draft.operatorKind === 7 ? ' OR ' : draft.operatorKind === 8 ? ' XOR ' : ' AND ')) : draft.expression;
+    console.info('切换计算运算方式', { 运算: kind, 输入数: inputs.length });
+    return { ...draft, operatorKind: kind, inputs, expression, useOperandList: kind === draft.operatorKind ? draft.useOperandList : isMultiInput(kind) };
   });
   const handleSaveError = (error: unknown) => {
     if (error instanceof CalcSaveError && error.configSaved) {
@@ -223,26 +227,39 @@ const CalcPage: React.FC = () => {
     return keys.map((key) => options.find((option) => option.value === key)?.point).filter((point): point is DcEndpoint => Boolean(point));
   };
   const renderInput = (input: OperandDraft, index: number) => <div className="calc-operand-editor" key={index}>
-    <Text strong>输入 {index + 1}</Text>
-    <Select aria-label={`输入${index + 1}来源`} value={input.sourceKind} options={[{ value: 1, label: '点位' }, { value: 2, label: '常量' }]} onChange={(sourceKind) => updateInput(index, { sourceKind })} />
+    <Text strong>{editor?.draft.operatorKind === 11 ? inputAlias(index) : `输入 ${index + 1}`}</Text>
+    <Select aria-label={`输入${index + 1}来源`} value={input.sourceKind} options={[{ value: 1, label: '点位' }, { value: 2, label: '常量' }]} onChange={(sourceKind) => updateInput(index, changeOperandSource(input, sourceKind, editor!.draft.operatorKind))} />
     <div className="calc-operand-value">
       {input.sourceKind === 1 ? <>
         <Select aria-label={`输入${index + 1}关联点位`} showSearch optionFilterProp="label" allowClear mode={input.sources.length > 1 ? 'multiple' : undefined} className="calc-point-select" placeholder="搜索连接名或点位名称" options={pointOptions(input.sources)}
           value={input.sources.length > 1 ? input.sources.map(endpointKey) : input.sources[0] ? endpointKey(input.sources[0]) : undefined}
           onChange={(value: string | string[] | undefined) => updateInput(index, { sources: pointsFromKeys(value === undefined ? [] : Array.isArray(value) ? value : [value], input.sources) })} />
-        {input.sources.length > 1 ? <Text type="warning">已有 {input.sources.length} 个来源，数值以最后到达者为准；求和请拆成独立输入。</Text> : null}
+        {input.sources.length > 1 ? <Text type="warning">已有 {input.sources.length} 个来源，数值以最后到达者为准；需要同时参与运算时请拆成独立输入。</Text> : null}
       </> : <>
         <Select aria-label={`输入${index + 1}常量类型`} value={input.constantType} options={isLogic(editor!.draft.operatorKind) ? [{ value: 'bool', label: '布尔值' }] : [{ value: 'decimal', label: '精确十进制' }, { value: 'int', label: '整数' }]} onChange={(constantType: OperandDraft['constantType']) => updateInput(index, { constantType, constantValue: constantType === 'bool' ? false : '0' })} />
         {input.constantType === 'bool' ? <Select aria-label={`输入${index + 1}常量值`} value={Boolean(input.constantValue)} options={[{ value: true, label: '真' }, { value: false, label: '假' }]} onChange={(constantValue) => updateInput(index, { constantValue })} /> : <InputNumber<string> aria-label={`输入${index + 1}常量值`} stringMode value={String(input.constantValue)} onChange={(constantValue) => updateInput(index, { constantValue: constantValue ?? '' })} />}
       </>}
     </div>
-    {editor && isAggregate(editor.draft.operatorKind) && editor.draft.inputs.length > 2 ? <Button type="text" danger icon={<DeleteOutlined />} aria-label={`移除输入${index + 1}`} onClick={() => editDraft((draft) => ({ ...draft, inputs: draft.inputs.filter((_, i) => i !== index) }))} /> : <span />}
+    {editor && isMultiInput(editor.draft.operatorKind) && editor.draft.inputs.length > (editor.draft.operatorKind === 11 ? 1 : 2) ? <Button type="text" danger icon={<DeleteOutlined />} aria-label={`移除输入${index + 1}`} onClick={() => {
+      const expression = editor.draft.operatorKind === 11 ? removeExpressionInput(editor.draft.expression ?? '', index) : editor.draft.expression;
+      if (expression === null) { messageApi.warning(`请先从表达式中移除输入 ${inputAlias(index)} 的引用`); return; }
+      editDraft((draft) => ({ ...draft, expression, inputs: draft.inputs.filter((_, i) => i !== index) }));
+      console.info('移除计算输入并同步别名', { 输入序号: index + 1 });
+    }} /> : <span />}
   </div>;
   const renderEditor = () => editor ? <div className="calc-inline-editor">
     <div className="calc-editor-head"><Text strong>{editor.index === null ? '新增计算' : '编辑计算'}</Text><Text type="secondary">{dirty ? '有未保存修改' : '配置与关联草稿'}</Text></div>
     <Form layout="vertical" disabled={locked}>
-      <div className="calc-item-basics"><Form.Item label="计算项名称" required><Input aria-label="计算项名称" value={editor.draft.itemName} onChange={(event) => editDraft((draft) => ({ ...draft, itemName: event.target.value }))} /></Form.Item><Form.Item label="运算方式" required><Select aria-label="运算方式" value={editor.draft.operatorKind} options={operators} onChange={changeOperator} /></Form.Item></div>
-      <div className="calc-input-section"><div className="calc-section-heading"><Text strong>输入数据</Text><Text type="secondary">{editor.draft.inputs.length} 项输入</Text>{isAggregate(editor.draft.operatorKind) ? <Button size="small" type="text" icon={<PlusOutlined />} onClick={() => editDraft((draft) => ({ ...draft, inputs: [...draft.inputs, defaultOperand()] }))}>添加输入</Button> : null}</div>{editor.draft.inputs.map(renderInput)}</div>
+      <Form.Item label="配置模式"><Select aria-label="计算配置模式" value={editor.draft.operatorKind === 11 ? 'expression' : 'simple'} options={[{ value: 'simple', label: '简单运算' }, { value: 'expression', label: '逻辑表达式（混合与、或、非）' }]} onChange={(mode) => changeOperator(mode === 'expression' ? 11 : 6)} /></Form.Item>
+      <div className="calc-item-basics"><Form.Item label="计算项名称" required><Input aria-label="计算项名称" value={editor.draft.itemName} onChange={(event) => editDraft((draft) => ({ ...draft, itemName: event.target.value }))} /></Form.Item>{editor.draft.operatorKind !== 11 ? <Form.Item label="运算方式" required><Select aria-label="运算方式" value={editor.draft.operatorKind} options={operators.filter((operator) => operator.value !== 11)} onChange={changeOperator} /></Form.Item> : null}</div>
+      <div className="calc-input-section"><div className="calc-section-heading"><Text strong>输入数据</Text><Text type="secondary">{editor.draft.inputs.length} 项输入</Text>{isMultiInput(editor.draft.operatorKind) ? <Button size="small" type="text" disabled={isLogic(editor.draft.operatorKind) && editor.draft.inputs.length >= 256} icon={<PlusOutlined />} onClick={() => editDraft((draft) => ({ ...draft, inputs: [...draft.inputs, defaultOperand()] }))}>添加输入</Button> : null}</div>{editor.draft.inputs.map(renderInput)}</div>
+      {editor.draft.operatorKind === 11 ? <div className="calc-expression-editor">
+        <Form.Item label="逻辑表达式" required validateStatus={validateExpression(editor.draft.expression ?? '', editor.draft.inputs.length) ? 'error' : undefined} help={validateExpression(editor.draft.expression ?? '', editor.draft.inputs.length) ?? '表达式有效；保存时会检查输入点位。'}>
+          <Input.TextArea aria-label="逻辑表达式" autoSize={{ minRows: 2, maxRows: 6 }} maxLength={4096} showCount value={editor.draft.expression ?? ''} placeholder="例如：(A AND B) OR NOT C" onChange={(event) => editDraft((draft) => ({ ...draft, expression: event.target.value }))} />
+        </Form.Item>
+        <Space wrap>{expressionTokens.map((token) => <Button key={token.value} size="small" onClick={() => editDraft((draft) => ({ ...draft, expression: `${draft.expression ?? ''} ${token.value} ` }))}>{token.label}</Button>)}{editor.draft.inputs.map((_, index) => <Button key={index} size="small" onClick={() => editDraft((draft) => ({ ...draft, expression: `${draft.expression ?? ''} ${inputAlias(index)} ` }))}>{inputAlias(index)}</Button>)}</Space>
+        <p><Text type="secondary">使用输入别名 A、B、C 组合，支持 AND / OR / XOR / NOT 及 && / || / ^ / !。优先级：非 ＞ 与 ＞ 异或 ＞ 或；可用括号指定顺序。每个输入都需引用。</Text></p>
+      </div> : editor.draft.operatorKind === 8 ? <Text type="secondary">异或：为真的输入数量为奇数时，结果为真。</Text> : null}
       <div className="calc-formula-preview"><Text type="secondary">计算关系</Text><Text>{editor.draft.itemName || '计算结果'} = {formula(editor.draft)}</Text></div>
       <div className="calc-output-section"><Form.Item label="结果去向" help="可关联多个目标点；留空则仅生成结果点。"><Select aria-label="结果关联目标" mode="multiple" showSearch optionFilterProp="label" allowClear placeholder="搜索并选择结果对应的目标点" options={pointOptions(editor.draft.outputs)} value={editor.draft.outputs.map(endpointKey)} onChange={(keys: string[]) => editDraft((draft) => ({ ...draft, outputs: pointsFromKeys(keys, draft.outputs) }))} /></Form.Item></div>
       <details className="calc-advanced"><summary>高级设置与运行诊断</summary>

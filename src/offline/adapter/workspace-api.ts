@@ -16,6 +16,7 @@
  */
 
 import { api as tauriApi } from '../../adapters/tauri.ts';
+import { calcUsesOperandList } from '../../utils/calc-operands.ts';
 import type {
   AgcControlProfile,
   AgcDefaultPointInfo,
@@ -379,9 +380,6 @@ const IEC104_BUSINESS_TYPE_REMOTE_CONTROL = 4;
 const IEC104_BUSINESS_TYPE_PARAMETER = 5;
 const IEC104_REMOTE_CONTROL_TYPE_SINGLE = 1;
 const IEC104_COMMAND_EXECUTION_MODE_SELECT_EXECUTE = 2;
-
-/** 聚合运算符（求和/求平均）按 1-based 编号派生 input_N。 */
-const CALC_AGGREGATE_OPERATOR_KINDS = [9, 10];
 
 const DEFAULT_AGC_CONTROL_MODE = 1;
 const DEFAULT_AGC_PERIOD_SECONDS = 1;
@@ -2078,7 +2076,7 @@ function mqttConfigStatus(section: 'modbus_rtu' | 'dlt645'): ModbusMqttConfigSta
 function buildCalcItems(config: CalcGroupConfig): CalcItemInfo[] {
   return (config.items ?? []).map((item) => {
     const itemName = String(item.item_name ?? '');
-    const isAggregate = CALC_AGGREGATE_OPERATOR_KINDS.includes(Number(item.operator_kind));
+    const isAggregate = calcUsesOperandList(item);
     const operands = item.operands ?? [];
     const leftInputTag = isAggregate ? '' : `${itemName}/left_input`;
     const rightInputTag = isAggregate ? '' : `${itemName}/right_input`;

@@ -1,5 +1,6 @@
 import type { CalcGroupConfig, CalcItemConfig, CalcOperandSpec, DcEndpoint, DcRoute } from '../adapters/types';
 import type { api as tauriApi } from '../adapters/tauri';
+import { calcUsesOperandList } from './calc-operands.ts';
 
 export type CalcRoutePlan = {
   routes: DcRoute[];
@@ -15,7 +16,7 @@ export type CalcRouteApi = Pick<typeof tauriApi,
   'calcGetGroup' | 'calcStopGroup' | 'calcStartGroup' | 'calcUpsertGroup' | 'dcUpsertRoutes' | 'dcDeleteRoutes'>
   & Partial<Pick<typeof tauriApi, 'dcListRoutes'>>;
 
-const isAggregate = (item: CalcItemConfig): boolean => item.operator_kind === 9 || item.operator_kind === 10;
+const isAggregate = calcUsesOperandList;
 
 /** 返回按输入行顺序派生的完整标签；常量行也占据对应序号。 */
 export function calcInputTags(item: CalcItemConfig): string[] {

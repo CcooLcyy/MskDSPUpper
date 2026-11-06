@@ -143,6 +143,16 @@ test('calc aggregate items derive numbered inputs and a result tag', () => {
   assert.deepEqual(tags, ['item/input_1', 'item/input_2', 'item/input_3', 'item/result']);
 });
 
+// 多输入逻辑与表达式使用编号槽位，旧二元逻辑标签不变。
+test('calc logical lists and expressions derive numbered inputs', () => {
+  for (const operator_kind of [6, 7, 8, 11]) {
+    assert.deepEqual(deriveCalcItemTags({ item_name: 'item', operator_kind, operands: [{}, {}, {}], left_operand: null, right_operand: null }),
+      ['item/input_1', 'item/input_2', 'item/input_3', 'item/result']);
+  }
+  assert.deepEqual(deriveCalcItemTags({ item_name: 'item', operator_kind: 6, operands: [], left_operand: {}, right_operand: {} }),
+    ['item/left_input', 'item/result', 'item/right_input']);
+});
+
 // Calc 非聚合项（含 NOT）必须派生 left_input 与 right_input。
 test('calc non aggregate items derive left and right input tags', () => {
   assert.deepEqual(

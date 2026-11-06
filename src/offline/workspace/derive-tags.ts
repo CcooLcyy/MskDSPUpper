@@ -18,6 +18,7 @@ import type {
   Iec104Point,
   ModbusPoint,
 } from '../../adapters/types.ts';
+import { calcUsesOperandList } from '../../utils/calc-operands.ts';
 
 /** IEC104 对时标签默认值；模块内可被 config.time_sync_tag 覆盖。 */
 export const IEC104_DEFAULT_TIME_SYNC_TAG = '__time_sync__';
@@ -58,7 +59,7 @@ export const BOARD_IO_DO_CONNECTION = 'board-do';
 export const BOARD_IO_DI_TAGS: readonly string[] = ['DI1', 'DI2', 'DI3', 'DI4'];
 export const BOARD_IO_DO_TAGS: readonly string[] = ['DO1', 'DO2'];
 
-/** 聚合运算符（求和/求平均）按 1-based 编号派生 input_N，其余按左右输入槽位派生。 */
+/** 数值聚合运算符；逻辑列表与表达式的槽位由 calcUsesOperandList 一并判断。 */
 export const CALC_AGGREGATE_OPERATOR_KINDS: readonly number[] = [9, 10];
 
 /** 值模式：2 = 增量值。 */
@@ -90,7 +91,7 @@ export function sortTags(tags: readonly string[]): string[] {
   return Array.from(new Set(tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0))).sort();
 }
 
-/** 单个计算项派生的标签：result + input_N（聚合）或 left/right_input（非聚合）。 */
+/** 单个计算项派生的标签：列表生成 input_N，旧二元和 NOT 保留左右槽位。 */
 export function deriveCalcItemTags(item: Pick<
   CalcItemConfig,
   'item_name' | 'operator_kind' | 'operands' | 'left_operand' | 'right_operand'
@@ -98,7 +99,7 @@ export function deriveCalcItemTags(item: Pick<
   const itemName = String(item.item_name ?? '').trim();
   const tags = [`${itemName}/result`];
 
-  if (CALC_AGGREGATE_OPERATOR_KINDS.includes(Number(item.operator_kind))) {
+  if (calcUsesOperandList(item)) {
     const operandCount = Array.isArray(item.operands) ? item.operands.length : 0;
 
     for (let index = 0; index < operandCount; index += 1) {
