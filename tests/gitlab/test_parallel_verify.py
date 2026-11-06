@@ -1,6 +1,5 @@
 """Exercise real PowerShell/subprocess boundaries using isolated executable tool stubs."""
 import json
-import importlib.util
 from copy import deepcopy
 from functools import lru_cache
 import os
@@ -9,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,24 +33,8 @@ def _run_isolated_pipeline_cached(stage, fail_tool, powershell, branch):
         (workspace / "src-tauri").mkdir()
         (workspace / "src-tauri/Cargo.toml").write_text(
             '[package]\nname = "mskdsp-upper"\nversion = "0.8.0"\n', encoding="utf-8")
-        if stage == "package":
-            # 独立打包场景预置已完成的验证记录，仍保留生产的两阶段成功约束。
-            spec = importlib.util.spec_from_file_location("isolated_cargo_cache", scripts / "cargo_cache.py")
-            cache = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(cache)
-            target = workspace / "target"
-            prepared = cache.prepare(target, "verify", "0.8.0", workspace / "src-tauri/Cargo.toml")
-            output = target / "x86_64-pc-windows-msvc/release/deps/libmskdsp_upper_lib-1111111111111111.rlib"
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(b"isolated verification output")
-            log = workspace / "completed-verify.jsonl"
-            log.write_text(json.dumps({"reason": "compiler-artifact", "package_id": "isolated#mskdsp-upper@0.8.0",
-                                       "manifest_path": str(workspace / "src-tauri/Cargo.toml"),
-                                       "target": {"name": "mskdsp_upper_lib"}, "filenames": [str(output)], "fresh": True})
-                           + '\n' + json.dumps({"reason": "build-finished", "success": True}) + '\n', encoding="utf-8")
-            cache.record(target, prepared["generation"], [log])
         driver = workspace / "stub.py"
-        driver.write_text(r'''import json, os, runpy, subprocess, sys, time
+        driver.write_text(r'''import json, os, subprocess, sys, time
 from pathlib import Path
 kind, *arguments = sys.argv[1:]
 entry = {"kind": kind, "arguments": arguments, "started": time.time(),
@@ -64,10 +48,25 @@ if kind == "python" and arguments[-1:] == ["scripts/gitlab/verify.py"]:
 if kind == "python" and arguments[-1:] == ["scripts/gitlab/release_policy.py"]:
     sys.exit(subprocess.run([sys.executable, *arguments]).returncode)
 if kind == "python" and "scripts/gitlab/cargo_cache.py" in arguments:
-    # 当前桩本身已是真实 Python 进程，直接执行入口，避免比生产多启动一层解释器。
-    sys.argv = arguments[1:] if arguments[:1] == ["-B"] else arguments
-    runpy.run_path(sys.argv[0], run_name="__main__")
-    sys.exit(0)
+    # 此组只验证真实 shell/进程边界；缓存文件行为由 test_cargo_cache 独立覆盖。
+    entry["kind"] = "cargo-cache"
+    operation = arguments[arguments.index("scripts/gitlab/cargo_cache.py") + 1]
+    entry["operation"] = operation
+    target = Path(arguments[arguments.index("--target-dir") + 1])
+    if operation == "prepare":
+        stage = arguments[arguments.index("--stage") + 1]
+        version = arguments[arguments.index("--version") + 1]
+        print(json.dumps({"root": str(target / ".upper-cache"), "generation": stage + "-" + version,
+                          "wrapper": str(target / ".upper-cache/bin/wrapper.cmd"),
+                          "manifest_path": str(Path.cwd() / "src-tauri/Cargo.toml")}))
+    elif operation == "record":
+        assert Path(arguments[arguments.index("--log") + 1]).is_file()
+        assert arguments[arguments.index("--generation") + 1] == os.environ["UPPER_CARGO_GENERATION"]
+        print(json.dumps({"complete": True}))
+    elif operation == "finish":
+        print(json.dumps({"status": arguments[arguments.index("--status") + 1], "deleted": []}))
+    else:
+        raise ValueError("未知缓存命令")
 if kind == "node" and arguments[:1] == ["scripts/workflow/emit-build-metadata.mjs"]:
     # 生成隔离夹具的真实元数据文件，缓存版本读取仍通过实际文件边界。
     destination = Path(arguments[arguments.index("--output") + 1])
@@ -94,7 +93,7 @@ if kind in ("cargo", "dependencies"):
         time.sleep(0.01)
     entry["barrier_peer_observed"] = peer.exists()
 if kind == "cargo" or (kind == "node" and "--bundles" in arguments):
-    # 模拟真实 Cargo JSON 边界，Fresh/构建完成判断由实际缓存模块执行。
+    # 模拟 Cargo 的 stdout 格式，检查脚本是否保留并传递原始构建输出。
     artifact = Path(os.environ["CARGO_TARGET_DIR"]) / "x86_64-pc-windows-msvc/release/deps" / (
         "libmskdsp_upper_lib-aaaaaaaaaaaaaaaa.rlib" if kind == "cargo" else "libmskdsp_upper_lib-bbbbbbbbbbbbbbbb.rlib")
     artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -142,7 +141,8 @@ $pipeline=Join-Path $Workspace 'scripts/gitlab/pipeline.ps1'
 & $pipeline -Stage $Stage
 if ($Stage -eq 'verify') { & $pipeline -Stage package }
 ''', encoding="utf-8-sig")
-        result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        try:
+            result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                  "-File", str(launcher), "-Workspace", str(workspace), "-Stage", stage],
                                 capture_output=True, timeout=45,
                                 env={**os.environ, "PYTHONUTF8": "1", "STUB_EVENTS": str(workspace / "events.jsonl"),
@@ -152,6 +152,18 @@ if ($Stage -eq 'verify') { & $pipeline -Stage package }
                                      "CI_COMMIT_REF_PROTECTED": "true",
                                      "CI_COMMIT_SHA": "a" * 40,
                                      "UPPER_RELEASE_CHANNEL": "stable" if branch.startswith("v") else "ci"})
+        except subprocess.TimeoutExpired as error:
+            def decode(value):
+                return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+            details = {"shell": powershell, "stage": stage, "timeout": 45,
+                       "stdout": decode(error.stdout), "stderr": decode(error.stderr),
+                       "events": [json.loads(path.read_text(encoding="utf-8"))
+                                  for path in (workspace / "events").glob("*.json")]}
+            destination = ROOT / "package/logs" / f"isolated-timeout-{time.time_ns()}.json"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(json.dumps(details, ensure_ascii=False, indent=2), encoding="utf-8")
+            raise RuntimeError("隔离进程超过45秒，现场已保存：" + str(destination)
+                               + "\n" + details["stdout"][-4000:] + "\n" + details["stderr"][-4000:]) from error
         events = sorted((json.loads(path.read_text(encoding="utf-8")) for path in (workspace / "events").glob("*.json")),
                         key=lambda event: event["started"])
         logs = workspace / "package/logs"
@@ -184,6 +196,8 @@ class ParallelVerificationTests(unittest.TestCase):
         self.assertEqual(timing["exit_code"], 0)
         retention = json.loads(logs["cargo-cache-retention.json"].lstrip("\ufeff"))
         self.assertEqual(retention["status"], "success")
+        self.assertEqual([entry["operation"] for entry in events if entry["kind"] == "cargo-cache"],
+                         ["prepare", "record", "prepare", "record", "finish"])
 
     # 固定运行环境必须先于测试与打包，且只在当前作业的 PATH 生效。
     def test_pinned_node_precedes_verification_and_packaging(self):
