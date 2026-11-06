@@ -12,43 +12,6 @@ export function normalizeGitRef(ref) {
     .replace(/^remotes\/origin\//, '');
 }
 
-export function parseBetaLine(ref) {
-  const normalized = normalizeGitRef(ref);
-  const match = normalized.match(/^beta\/([0-9]+(?:\.[0-9]+){1,2})$/);
-  return match ? match[1] : null;
-}
-
-export function compareVersionLine(left, right) {
-  const leftParts = left.split('.').map(Number);
-  const rightParts = right.split('.').map(Number);
-  const length = Math.max(leftParts.length, rightParts.length);
-  for (let index = 0; index < length; index += 1) {
-    const leftValue = leftParts[index] ?? -1;
-    const rightValue = rightParts[index] ?? -1;
-    if (leftValue !== rightValue) {
-      return leftValue - rightValue;
-    }
-  }
-
-  return 0;
-}
-
-export function choosePreferredBetaRef(refs) {
-  const candidates = refs
-    .map((ref) => ({
-      ref: normalizeGitRef(ref),
-      betaLine: parseBetaLine(ref),
-    }))
-    .filter((candidate) => candidate.betaLine);
-
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  candidates.sort((left, right) => compareVersionLine(right.betaLine, left.betaLine));
-  return candidates[0].ref;
-}
-
 export function sanitizeSegment(value, options = {}) {
   const { replaceDots = false } = options;
   assertNonEmpty('value', value);
@@ -86,12 +49,10 @@ export function shortenSha(sha) {
   return sha.slice(0, 7).toLowerCase();
 }
 
-export function createChannelLabel(channel, betaLine) {
-  if (channel === 'beta') {
-    assertNonEmpty('betaLine', betaLine);
-    return `beta-${betaLine}`;
+export function createChannelLabel(channel) {
+  if (!['ci', 'nightly', 'stable'].includes(channel)) {
+    throw new Error(`不支持的渠道: ${channel}`);
   }
-
   return channel;
 }
 
@@ -100,7 +61,6 @@ export function createEffectiveVersion({
   channel,
   timestamp,
   shortSha,
-  betaLine,
 }) {
   assertNonEmpty('baseVersion', baseVersion);
   const normalizedTimestamp = normalizeTimestamp(timestamp).replace(/z$/, '');
@@ -112,9 +72,6 @@ export function createEffectiveVersion({
       return `${baseVersion}-ci.${normalizedTimestamp}+sha.${normalizedSha}`;
     case 'nightly':
       return `${baseVersion}-nightly.${normalizedTimestamp}+sha.${normalizedSha}`;
-    case 'beta':
-      assertNonEmpty('betaLine', betaLine);
-      return `${baseVersion}-beta.${betaLine}.${normalizedTimestamp}+sha.${normalizedSha}`;
     default:
       throw new Error(`不支持的渠道: ${channel}`);
   }
@@ -125,15 +82,12 @@ export function createReleaseTag({
   baseVersion,
   timestamp,
   shortSha,
-  betaLine,
 }) {
   switch (channel) {
     case 'stable':
       return `v${baseVersion}`;
     case 'nightly':
       return `nightly-${normalizeTimestamp(timestamp)}-${shortenSha(shortSha)}`;
-    case 'beta':
-      return `beta-${sanitizeSegment(betaLine, { replaceDots: true })}-${normalizeTimestamp(timestamp)}-${shortenSha(shortSha)}`;
     case 'ci':
       return `ci-${normalizeTimestamp(timestamp)}-${shortenSha(shortSha)}`;
     default:
@@ -167,12 +121,10 @@ export function createArtifactBaseName({
 
 export function createReleaseTitle({
   productName,
-  channel,
   channelLabel,
   effectiveVersion,
 }) {
-  const label = channel === 'beta' ? channelLabel.replace('-', '/') : channelLabel;
-  return `${productName} ${label} ${effectiveVersion}`;
+  return `${productName} ${channelLabel} ${effectiveVersion}`;
 }
 
 export function ensureStableTagMatchesVersion(tag, version) {

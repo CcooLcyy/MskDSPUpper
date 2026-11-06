@@ -11,8 +11,6 @@ import {
   createReleaseTitle,
   ensureStableTagMatchesVersion,
   formatUtcTimestamp,
-  normalizeGitRef,
-  parseBetaLine,
   shortenSha,
 } from './lib/metadata.mjs';
 import { logInfo, resolveRepoRoot, setGithubOutput } from './lib/runtime.mjs';
@@ -31,7 +29,6 @@ const { values } = parseArgs({
     tag: { type: 'string' },
     timestamp: { type: 'string' },
     output: { type: 'string' },
-    'beta-line': { type: 'string' },
     'target-triple': { type: 'string' },
     platform: { type: 'string' },
   },
@@ -49,7 +46,7 @@ const cargoToml = fs.readFileSync(path.join(repoRoot, 'src-tauri', 'Cargo.toml')
 const channel = values.channel;
 const baseVersion = packageJson.version;
 if (channel === 'beta') {
-  throw new Error('Beta publishing has been retired');
+  throw new Error('Beta 发布已退役，请使用现行通道');
 }
 if (channel === 'stable') {
   const cargoVersion = extractCargoValue(cargoToml, /^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
@@ -57,23 +54,20 @@ if (channel === 'stable') {
     throw new Error('Stable source versions must agree before packaging');
   }
 }
-const ref = values.ref ? normalizeGitRef(values.ref) : null;
 const sha = values.sha ?? '0000000';
 const shortSha = shortenSha(sha);
 const timestamp = values.timestamp ?? formatUtcTimestamp();
-const betaLine = values['beta-line'] ?? (ref ? parseBetaLine(ref) : null);
 
 if (channel === 'stable' && values.tag) {
   ensureStableTagMatchesVersion(values.tag, baseVersion);
 }
 
-const channelLabel = createChannelLabel(channel, betaLine);
+const channelLabel = createChannelLabel(channel);
 const effectiveVersion = createEffectiveVersion({
   baseVersion,
   channel,
   timestamp,
   shortSha,
-  betaLine,
 });
 
 const binaryName =
@@ -106,7 +100,6 @@ const releaseTag =
         baseVersion,
         timestamp,
         shortSha,
-        betaLine,
       });
 
 const metadata = {
@@ -116,7 +109,6 @@ const metadata = {
   binaryName,
   channel,
   channelLabel,
-  betaLine,
   baseVersion,
   effectiveVersion,
   releaseTag,
@@ -150,4 +142,3 @@ setGithubOutput('effective_version', effectiveVersion);
 setGithubOutput('artifact_base_name', artifactBaseName);
 setGithubOutput('release_tag', releaseTag);
 setGithubOutput('release_title', metadata.releaseTitle);
-setGithubOutput('beta_line', betaLine ?? '');

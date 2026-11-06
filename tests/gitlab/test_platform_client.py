@@ -2,6 +2,7 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from contextlib import redirect_stderr
 import io
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -93,6 +94,18 @@ class UpperIdentityTests(unittest.TestCase):
         payload[0] = b"tampered!"
         with self.assertRaises(self.client.ClientError):
             self.client.confirm_manifest(base, data)
+
+
+class ProtocolSnapshotTests(unittest.TestCase):
+    # 构建时固定的发布协议与桌面协议快照使用相同来源，摘要按协议仓库的 LF 文本计算，兼容 Windows 检出换行。
+    def test_protocol_pin_matches_snapshot_commit_and_content(self):
+        import init_platform_proto
+        source = json.loads((ROOT / "proto-platform/SOURCE.json").read_text(encoding="utf-8"))
+        pin = (ROOT / "scripts/gitlab/platform-proto.ref").read_text(encoding="utf-8").strip()
+        self.assertEqual(init_platform_proto.PIN, pin)
+        self.assertEqual(source["commit"], pin)
+        protocol = ROOT / "proto-platform" / source["path"]
+        self.assertEqual(hashlib.sha256(protocol.read_text(encoding="utf-8").encode("utf-8")).hexdigest(), source["sha256"])
 
 
 class SafeDiagnosticsTests(unittest.TestCase):

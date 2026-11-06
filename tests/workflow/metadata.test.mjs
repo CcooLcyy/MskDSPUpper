@@ -1,10 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import {
   createArtifactBaseName,
   createChannelLabel,
   createEffectiveVersion,
+  createReleaseTag,
 } from '../../scripts/workflow/lib/metadata.mjs';
 
 // 验证 nightly 版本号会带上统一的时间戳与短 SHA 后缀。
@@ -19,18 +25,39 @@ test('nightly metadata uses prerelease semver suffix', () => {
   assert.equal(version, '0.1.0-nightly.20260408t010203+sha.abcdef1');
 });
 
-// 验证 beta 版本线会进入 prerelease 语义，避免不同候选包版本冲突。
-test('beta metadata includes beta line in effective version', () => {
-  const version = createEffectiveVersion({
-    baseVersion: '1.2.3',
-    channel: 'beta',
-    timestamp: '20260408t010203z',
-    shortSha: '1234567',
-    betaLine: '1.2',
-  });
+// 退役后直接调用公共元数据函数也不能创建新的 Beta 包身份。
+test('metadata producers reject retired beta channel', () => {
+  const options = {
+    baseVersion: '1.2.3', channel: 'beta', timestamp: '20260408t010203z', shortSha: '1234567',
+  };
+  assert.throws(() => createEffectiveVersion(options), /不支持的渠道/);
+  assert.throws(() => createReleaseTag(options), /不支持的渠道/);
+  assert.throws(() => createChannelLabel('beta'), /不支持的渠道/);
+});
 
-  assert.equal(version, '1.2.3-beta.1.2.20260408t010203+sha.1234567');
-  assert.equal(createChannelLabel('beta', '1.2'), 'beta-1.2');
+// CLI 拒绝 Beta 和旧版本线参数；现行包元数据不再输出 Beta 专用字段。
+test('metadata CLI rejects beta inputs and emits current channels without beta line', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'upper-metadata-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const script = fileURLToPath(new URL('../../scripts/workflow/emit-build-metadata.mjs', import.meta.url));
+  const output = path.join(directory, 'metadata.json');
+  const run = (args) => spawnSync(process.execPath, [script, ...args, '--output', output], { encoding: 'utf8', env: { ...process.env, GITHUB_OUTPUT: '' } });
+  const beta = run(['--channel', 'beta']);
+  assert.notEqual(beta.status, 0);
+  assert.match(beta.stderr, /Beta/);
+  assert.equal(fs.existsSync(output), false);
+  const obsoleteArgument = run(['--channel', 'ci', '--beta-line', '1.2']);
+  assert.notEqual(obsoleteArgument.status, 0);
+  assert.match(obsoleteArgument.stderr, /beta-line/);
+  assert.equal(fs.existsSync(output), false);
+  for (const channel of ['ci', 'nightly', 'stable']) {
+    const result = run(['--channel', channel]);
+    assert.equal(result.status, 0, result.stderr);
+    const metadata = JSON.parse(fs.readFileSync(output, 'utf8'));
+    assert.equal(metadata.channel, channel);
+    assert.equal(metadata.channelLabel, channel);
+    assert.equal(Object.hasOwn(metadata, 'betaLine'), false);
+  }
 });
 
 // 验证交付物命名同时包含项目、渠道、时间戳、SHA 与平台信息。

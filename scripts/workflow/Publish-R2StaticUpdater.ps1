@@ -15,6 +15,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# 在读取安装包或凭据前拒绝退役渠道，避免直接调用脚本恢复旧发布入口。
+if ($ChannelPath -cnotin @("ci", "nightly", "stable")) {
+    throw "ChannelPath 仅允许 ci、nightly 或 stable；Beta 发布已退役"
+}
+
 function Assert-NonEmpty {
     param(
         [Parameter(Mandatory = $true)]

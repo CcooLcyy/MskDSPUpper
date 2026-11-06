@@ -134,7 +134,7 @@ class ReleaseCandidateIdentityTests(UpperIdentityTests):
         (stage / "upper.exe.sig").write_text("real-signature-fixture", encoding="utf-8")
         (stage / "staging-manifest.json").write_text(json.dumps(dict(installers=["upper.exe"])), encoding="utf-8")
         metadata = dict(channel="ci", channelLabel="ci", platform="windows-x64", shortSha="aaaaaaa",
-                        effectiveVersion=version, baseVersion="0.7.1", betaLine=None, releaseTitle="ReleaseCandidate")
+                        effectiveVersion=version, baseVersion="0.7.1", releaseTitle="ReleaseCandidate")
         source = self.root / "metadata.json"
         source.write_text(json.dumps(metadata), encoding="utf-8")
         with patch.dict(os.environ, self.environment, clear=True), patch.object(freeze_metadata.subprocess, "run",

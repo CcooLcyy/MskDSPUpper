@@ -135,6 +135,7 @@ test('legacy beta client only checks active stable and ci channels', async () =>
   }, '0.8.0-beta.1');
   render(); await settle();
   const value = render(); await settle();
+  assert.deepEqual(Object.keys(value.channels).sort(), ['ci', 'stable']);
   assert.deepEqual(checks, ['stable', 'ci']);
   assert.deepEqual(downloads, ['stable', 'ci']);
   assert.throws(() => value.ensureDownloaded(manifestFor('linux-arm64', 'beta')), /通道/);

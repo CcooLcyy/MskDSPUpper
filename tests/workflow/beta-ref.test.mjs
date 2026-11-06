@@ -1,47 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
-import { resolveBetaRef } from '../../scripts/workflow/lib/git.mjs';
-import {
-  choosePreferredBetaRef,
-  compareVersionLine,
-  parseBetaLine,
-} from '../../scripts/workflow/lib/metadata.mjs';
-
-test('parseBetaLine accepts supported beta ref naming', () => {
-  assert.equal(parseBetaLine('refs/heads/beta/1.2'), '1.2');
-  assert.equal(parseBetaLine('origin/beta/1.2.3'), '1.2.3');
-  assert.equal(parseBetaLine('feature/demo'), null);
-});
-
-test('compareVersionLine sorts higher beta line first', () => {
-  assert.ok(compareVersionLine('1.3', '1.2') > 0);
-  assert.ok(compareVersionLine('1.2.4', '1.2') > 0);
-});
-
-test('choosePreferredBetaRef picks newest beta branch', () => {
-  const ref = choosePreferredBetaRef([
-    'origin/beta/1.2',
-    'origin/beta/1.3',
-    'origin/beta/1.2.9',
-  ]);
-
-  assert.equal(ref, 'beta/1.3');
-});
-
-test('resolveBetaRef allows scheduled beta runs to skip when no beta branch exists', () => {
-  const ref = resolveBetaRef(null, 'main', [], { allowMissing: true });
-  assert.equal(ref, null);
-});
-
-test('resolveBetaRef rejects invalid explicit beta refs', () => {
-  assert.throws(() => {
-    resolveBetaRef('feature/demo', 'main', ['beta/1.2']);
-  });
-});
-
-test('resolveBetaRef rejects invalid current beta refs instead of falling back', () => {
-  assert.throws(() => {
-    resolveBetaRef(null, 'beta/foo', ['beta/1.2']);
-  }, /Invalid current beta ref/);
+// 删除已退役的生产入口，同时保留拒绝旧通道与历史包兼容的独立回归。
+test('retired beta entry points cannot resolve or validate publishing branches', () => {
+  for (const file of ['resolve-beta-ref.mjs', 'verify-beta-lineage.mjs']) {
+    assert.equal(fs.existsSync(new URL(`../../scripts/workflow/${file}`, import.meta.url)), false);
+  }
 });

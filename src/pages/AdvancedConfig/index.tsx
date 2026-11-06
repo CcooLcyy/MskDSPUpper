@@ -882,7 +882,7 @@ const AdvancedConfigPage: React.FC = () => {
       const imported = await api.importLocalLowerUpdate();
       if (!imported || !deploymentPageMountedRef.current) return;
       const importedPlatform = imported.manifest.platform as LowerUpdatePlatform;
-      if (!imported.manifest.local_import || !getLowerUpdateChannels(importedPlatform, clientVersion).includes(imported.manifest.channel)) {
+      if (!imported.manifest.local_import || !getLowerUpdateChannels(importedPlatform, clientVersion).some((candidate) => candidate === imported.manifest.channel)) {
         throw new Error('导入结果缺少本地来源或有效架构');
       }
       cacheReadRequestRef.current += 1;
@@ -1477,7 +1477,7 @@ const AdvancedConfigPage: React.FC = () => {
                     value={isLocalPackageSelected ? 'local' : channel}
                     options={[
                       ...(isLocalPackageSelected ? [{ label: '本地安装包', value: 'local' as const }] : []),
-                      ...UPDATE_CHANNEL_OPTIONS.filter((option) => getLowerUpdateChannels(platform, clientVersion).includes(option.value)),
+                      ...UPDATE_CHANNEL_OPTIONS.filter((option) => getLowerUpdateChannels(platform, clientVersion).some((candidate) => candidate === option.value)),
                     ]}
                     disabled={isSelectingLowerUpdate || isDownloadTaskActive || isDeployingLowerUpdate}
                     onChange={(value) => {

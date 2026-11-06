@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mskdsp-upper.local/schema/build-metadata.schema.json",
   "title": "MskDSP Upper Build Metadata",
+  "$comment": "兼容读取历史 Beta 包；新元数据生成器和发布入口只接受现行通道，不再生成 betaLine。",
   "type": "object",
   "required": [
     "projectSlug",

@@ -1183,9 +1183,9 @@ export const browserApi: typeof tauriApi = {
   },
   listCachedLowerUpdates: async (channel?: LowerUpdateChannel, platform: LowerUpdatePlatform = 'linux-arm64'): Promise<LowerUpdateCachedPackage[]> => {
     const channels = getLowerUpdateChannels(platform);
-    if (channel && !channels.includes(channel)) throw new Error('所选架构不支持该下位机更新通道');
+    if (channel && !channels.some((candidate) => candidate === channel)) throw new Error('所选架构不支持该下位机更新通道');
     const values = [...browserCachedLowerPackages.values()]
-      .filter((item) => item.manifest.platform === platform && channels.includes(item.manifest.channel) && Boolean(item.manifest.image_id?.trim()));
+      .filter((item) => item.manifest.platform === platform && channels.some((candidate) => candidate === item.manifest.channel) && Boolean(item.manifest.image_id?.trim()));
     return clone(channel ? values.filter((item) => item.manifest.channel === channel) : values);
   },
   importLocalLowerUpdate: async (): Promise<LowerUpdateCachedPackage | null> => {

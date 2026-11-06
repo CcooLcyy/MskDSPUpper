@@ -77,6 +77,9 @@ assertNonEmpty('package-output-dir', packageOutputDir);
 assertNonEmpty('channel-path', channelPath);
 assertNonEmpty('platform', platform);
 assertNonEmpty('base-url', baseUrl);
+if (!['ci', 'nightly', 'stable'].includes(channelPath)) {
+  throw new Error('静态源回填仅允许 ci、nightly 或 stable；Beta 已退役');
+}
 
 const latestJsonPath = path.join(packageOutputDir, 'latest.json');
 if (!fs.existsSync(latestJsonPath)) {

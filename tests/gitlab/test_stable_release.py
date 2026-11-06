@@ -67,7 +67,7 @@ class StableIdentityTests(UpperIdentityTests):
         (stage / "staging-manifest.json").write_text(json.dumps(dict(installers=["upper.exe"])), encoding="utf-8")
         source = self.root / "metadata.json"
         source.write_text(json.dumps(dict(channel="stable", channelLabel="stable", platform="windows-x64",
-                          shortSha="aaaaaaa", effectiveVersion="0.7.1", baseVersion="0.7.1", betaLine=None,
+                          shortSha="aaaaaaa", effectiveVersion="0.7.1", baseVersion="0.7.1",
                           releaseTitle="Stable")), encoding="utf-8")
         with patch.dict(os.environ, self.environment, clear=True), patch.object(freeze_metadata.subprocess, "run",
                 return_value=subprocess.CompletedProcess([], 0, "a" * 40 + "\n")), redirect_stdout(io.StringIO()):

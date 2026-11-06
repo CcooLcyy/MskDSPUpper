@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { api } from '../../adapters';
 import type {
   LowerUpdateCachedPackage,
-  LowerUpdateChannel,
+  LowerUpdateActiveChannel,
   LowerUpdateDownloadResult,
   LowerUpdateManifest,
   LowerUpdatePlatform,
@@ -92,7 +92,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateChannelStatus = useCallback(
-    (platform: LowerUpdatePlatform, channel: LowerUpdateChannel, next: Partial<LowerUpdateAutoStatus['channels'][LowerUpdateChannel]>) => {
+    (platform: LowerUpdatePlatform, channel: LowerUpdateActiveChannel, next: Partial<LowerUpdateAutoStatus['channels'][LowerUpdateActiveChannel]>) => {
       if (!mountedRef.current) {
         return;
       }
@@ -205,7 +205,7 @@ export function LowerUpdateAutoProvider({ children }: { children: ReactNode }) {
     return taskPromise;
   }, [clientVersion, updateChannelStatus]);
 
-  const runChannelCheckAndDownload = useCallback(async (platform: LowerUpdatePlatform, channel: LowerUpdateChannel): Promise<void> => {
+  const runChannelCheckAndDownload = useCallback(async (platform: LowerUpdatePlatform, channel: LowerUpdateActiveChannel): Promise<void> => {
     const channelKey = `${platform}:${channel}`;
     const activeDownload = activeChannelDownloadRef.current[channelKey];
     if (activeDownload) {

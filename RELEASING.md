@@ -12,7 +12,7 @@
 
 ## 退役与操作边界
 
-Beta 分支触发、Beta 发布 workflow 和静态源 Beta 回填入口退役。历史包版本和元数据仍允许兼容解析，已有远端包、标签和分支不会自动删除。旧 GitHub Release 保留兼容正式发布能力，来源改为 main 或匹配 release/X.Y；现行产品发布以 GitLab 为准。
+Beta 分支触发、Beta 发布 workflow 和静态源 Beta 回填入口退役；分支解析和来源校验专用脚本已删除，新构建元数据及 R2 上传入口拒绝 Beta，不再接受 Beta 版本线参数。历史包版本和元数据仍允许兼容解析，已有远端包、标签和分支不会自动删除。旧 GitHub Release 保留兼容正式发布能力，来源改为 main 或匹配 release/X.Y；现行产品发布以 GitLab 为准。
 
 本次只修改发布规则、脚本、文档和回归，不创建分支或标签。发布前由管理员确认 `release/*` 与 `v*` 的保护规则、Runner 可用性，以及 `environment: ci` 下 protected 签名及平台上传变量对受保护引用可见。构建校验只通过推送后的对应提交 CI 执行；本地不运行测试、构建或静态检查。
 

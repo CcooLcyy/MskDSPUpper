@@ -74,7 +74,9 @@ export interface CacheClearResult {
   reclaimed_bytes: number;
 }
 
-export type LowerUpdateChannel = 'stable' | 'beta' | 'ci';
+export type LowerUpdateActiveChannel = 'stable' | 'ci';
+/** 历史包清单仍允许标记 Beta；不能用于新的检查、下载或安装。 */
+export type LowerUpdateChannel = LowerUpdateActiveChannel | 'beta';
 export type LowerUpdatePlatform = 'linux-arm64' | 'linux-x64';
 
 export interface LowerUpdateSource {

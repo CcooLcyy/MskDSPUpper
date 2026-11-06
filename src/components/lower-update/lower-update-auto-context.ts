@@ -4,7 +4,7 @@ import type {
   LowerUpdateDownloadResult,
   LowerUpdateDownloadProgress,
   LowerUpdateManifest,
-  LowerUpdateChannel,
+  LowerUpdateActiveChannel,
   LowerUpdatePlatform,
 } from '../../adapters';
 
@@ -18,7 +18,7 @@ export type LowerUpdateAutoStatusKind =
   | 'error';
 
 export interface LowerUpdateAutoChannelStatus {
-  channel: LowerUpdateChannel;
+  channel: LowerUpdateActiveChannel;
   kind: LowerUpdateAutoStatusKind;
   message: string;
   manifest: LowerUpdateManifest | null;
@@ -29,7 +29,7 @@ export interface LowerUpdateAutoChannelStatus {
 }
 
 export interface LowerUpdateAutoStatus {
-  channels: Record<LowerUpdateChannel, LowerUpdateAutoChannelStatus>;
+  channels: Record<LowerUpdateActiveChannel, LowerUpdateAutoChannelStatus>;
 }
 
 export interface LowerUpdateAutoContextValue extends LowerUpdateAutoStatus {
@@ -39,7 +39,7 @@ export interface LowerUpdateAutoContextValue extends LowerUpdateAutoStatus {
   ensureDownloaded(manifest: LowerUpdateManifest): Promise<LowerUpdateDownloadResult>;
 }
 
-function createInitialChannelStatus(channel: LowerUpdateChannel): LowerUpdateAutoChannelStatus {
+function createInitialChannelStatus(channel: LowerUpdateActiveChannel): LowerUpdateAutoChannelStatus {
   return {
     channel,
     kind: 'idle',
@@ -55,7 +55,6 @@ function createInitialChannelStatus(channel: LowerUpdateChannel): LowerUpdateAut
 export const initialLowerUpdateAutoStatus: LowerUpdateAutoStatus = {
   channels: {
     stable: createInitialChannelStatus('stable'),
-    beta: createInitialChannelStatus('beta'),
     ci: createInitialChannelStatus('ci'),
   },
 };

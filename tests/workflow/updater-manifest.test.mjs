@@ -330,7 +330,7 @@ test('rewrite-static-updater-manifest decodes asset names before checking files'
       '--package-output-dir',
       tempRoot,
       '--channel-path',
-      'beta',
+      'stable',
       '--platform',
       'windows-x64',
       '--base-url',
@@ -347,7 +347,7 @@ test('rewrite-static-updater-manifest decodes asset names before checking files'
   const latestJson = JSON.parse(fs.readFileSync(path.join(tempRoot, 'latest.json'), 'utf8'));
   assert.equal(
     latestJson.platforms['windows-x86_64'].url,
-    'https://update.clsclear.top/mskdsp-upper/beta/windows-x64/MskDSP%20Upper%20Setup.exe',
+    'https://update.clsclear.top/mskdsp-upper/stable/windows-x64/MskDSP%20Upper%20Setup.exe',
   );
 });
 
@@ -389,4 +389,16 @@ test('rewrite-static-updater-manifest fails when manifest asset is missing', (t)
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /资产不存在/);
+});
+
+// 已退役通道不能通过静态源重写工具生成新的回填清单。
+test('rewrite-static-updater-manifest rejects beta before reading assets', () => {
+  const result = spawnSync(process.execPath, [
+    path.join(repoRoot, 'scripts/workflow/rewrite-static-updater-manifest.mjs'),
+    '--package-output-dir', 'missing-assets', '--channel-path', 'beta',
+    '--base-url', 'https://update.example.com/mskdsp-upper',
+  ], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Beta/);
+  assert.doesNotMatch(result.stderr, /latest.json 不存在/);
 });
