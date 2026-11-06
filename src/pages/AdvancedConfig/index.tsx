@@ -30,6 +30,7 @@ import {
 import {
   api,
   type AppUpdateStatusKind,
+  type LowerUpdateActiveChannel,
   type LowerUpdateChannel,
   type LowerUpdatePlatform,
   type LowerUpdateCachedPackage,
@@ -103,12 +104,12 @@ type DownloadStage = LowerUpdateDownloadProgress['stage'] | 'idle' | 'failed';
 const SSH_ACCOUNT_PATTERN = /^([A-Za-z_][A-Za-z0-9_-]*)@([^@:]+):(\d+)$/;
 const LINUX_ABSOLUTE_PATH_PATTERN = /^\/[^\s]*$/;
 
-const UPDATE_CHANNEL_OPTIONS: Array<{ label: string; value: LowerUpdateChannel }> = [
+const UPDATE_CHANNEL_OPTIONS: Array<{ label: string; value: LowerUpdateActiveChannel }> = [
   { label: 'Stable', value: 'stable' },
   { label: 'CI', value: 'ci' },
 ];
 
-const DEFAULT_LOWER_UPDATE_CHANNEL: LowerUpdateChannel = 'ci';
+const DEFAULT_LOWER_UPDATE_CHANNEL: LowerUpdateActiveChannel = 'ci';
 const DEFAULT_LOWER_UPDATE_AUTH_METHOD: LowerUpdateAuthMethod = 'password';
 const UPDATE_CHANNEL_LABELS: Record<LowerUpdateChannel, string> = UPDATE_CHANNEL_OPTIONS.reduce(
   (labels, option) => ({
@@ -430,7 +431,7 @@ const AdvancedConfigPage: React.FC = () => {
   const [credentialReadRevision, setCredentialReadRevision] = useState(0);
   const [searchParams] = useSearchParams();
   const activeUpdateTab = normalizeSoftwareUpdateView(searchParams.get(SOFTWARE_UPDATE_VIEW_QUERY_KEY));
-  const [selectedChannel, setChannel] = useState<LowerUpdateChannel>(DEFAULT_LOWER_UPDATE_CHANNEL);
+  const [selectedChannel, setChannel] = useState<LowerUpdateActiveChannel>(DEFAULT_LOWER_UPDATE_CHANNEL);
   const [currentLowerImageId, setCurrentLowerImageId] = useState('-');
   const [latestLowerImageId, setLatestLowerImageId] = useState('-');
   const [packageName, setPackageName] = useState('-');
@@ -882,18 +883,20 @@ const AdvancedConfigPage: React.FC = () => {
       const imported = await api.importLocalLowerUpdate();
       if (!imported || !deploymentPageMountedRef.current) return;
       const importedPlatform = imported.manifest.platform as LowerUpdatePlatform;
-      if (!imported.manifest.local_import || !getLowerUpdateChannels(importedPlatform, clientVersion).some((candidate) => candidate === imported.manifest.channel)) {
+      const importedChannel = getLowerUpdateChannels(importedPlatform, clientVersion)
+        .find((candidate) => candidate === imported.manifest.channel);
+      if (!imported.manifest.local_import || !importedChannel) {
         throw new Error('导入结果缺少本地来源或有效架构');
       }
       cacheReadRequestRef.current += 1;
       setIsLoadingCachedPackages(false);
-      lowerUpdateSelectionRef.current = { platform: importedPlatform, channel: imported.manifest.channel };
+      lowerUpdateSelectionRef.current = { platform: importedPlatform, channel: importedChannel };
       setPlatform(importedPlatform);
-      setChannel(imported.manifest.channel);
+      setChannel(importedChannel);
       resetUpdateState();
       setCachedPackages((previous) => [imported, ...previous.filter((item) =>
         item.package_path !== imported.package_path
-        && matchesLowerUpdateSelection(item.manifest, importedPlatform, imported.manifest.channel))]);
+        && matchesLowerUpdateSelection(item.manifest, importedPlatform, importedChannel))]);
       applyCachedPackage(imported);
       console.info('已选择本地下位机安装包', { version: imported.manifest.version, platform: importedPlatform, sha256: imported.sha256 });
       messageApi.success(`已导入本地版本 ${imported.manifest.version}，可点击下发并安装`);
@@ -1473,7 +1476,7 @@ const AdvancedConfigPage: React.FC = () => {
                   </Text>
                 </Form.Item>
                 <Form.Item label="版本来源">
-                  <Select<LowerUpdateChannel | 'local'>
+                  <Select<LowerUpdateActiveChannel | 'local'>
                     value={isLocalPackageSelected ? 'local' : channel}
                     options={[
                       ...(isLocalPackageSelected ? [{ label: '本地安装包', value: 'local' as const }] : []),
