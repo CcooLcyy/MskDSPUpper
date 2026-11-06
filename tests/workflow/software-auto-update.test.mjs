@@ -30,7 +30,7 @@ test('upper updater separates download from install and keeps the 30 second time
   assert.doesNotMatch(provider, /downloadAndInstallAppUpdate/);
 });
 
-// 验证下位机后台任务检查全部通道，只使用本地下载接口，不执行部署。
+// 验证下位机后台任务仅检查现行通道，只使用本地下载接口，不执行部署。
 test('lower updater auto coordinator downloads every channel without deployment', () => {
   const coordinator = source('src/components/lower-update/LowerUpdateAutoProvider.tsx');
   const design = source('doc/软件自动更新方案.md');
@@ -44,7 +44,8 @@ test('lower updater auto coordinator downloads every channel without deployment'
   assert.match(coordinator, /api\.checkLowerUpdate\(channel, platform\)/);
   assert.match(coordinator, /api\.listCachedLowerUpdates\(channel, platform\)/);
   assert.match(coordinator, /api\.downloadLowerUpdate\(manifest/);
-  assert.match(context, /channels: Record<LowerUpdateChannel, LowerUpdateAutoChannelStatus>/);
+  assert.match(context, /channels: Record<LowerUpdateActiveChannel, LowerUpdateAutoChannelStatus>/);
+  assert.doesNotMatch(context, /beta: createInitialChannelStatus/);
   assert.match(design, /`stable`、`ci` 两个通道/);
   assert.match(coordinator, /downloadLowerUpdate/);
   assert.doesNotMatch(coordinator, /uploadLowerUpdatePackage/);
