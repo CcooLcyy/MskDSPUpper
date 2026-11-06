@@ -120,6 +120,11 @@ sys.exit(exit_code)
         (scripts / "ensure_node_modules.py").write_text(
             f'import subprocess, sys\nsys.exit(subprocess.run([sys.executable, {str(driver)!r}, "dependencies"]).returncode)\n',
             encoding="utf-8")
+        # verify.py 使用 sys.executable 直接调用入口，也必须经过相同的隔离工具边界。
+        (scripts / "cargo_cache.py").write_text(
+            'import runpy, sys\n'
+            f'sys.argv = [{str(driver)!r}, "python", "-B", "scripts/gitlab/cargo_cache.py", *sys.argv[1:]]\n'
+            f'runpy.run_path({str(driver)!r}, run_name="__main__")\n', encoding="utf-8")
         (workspace / "cl.exe").write_bytes(b"")
         developer = workspace / "vsenv.cmd"
         developer.write_text('@echo off\nset "CARGO_INCREMENTAL=0"\n'
