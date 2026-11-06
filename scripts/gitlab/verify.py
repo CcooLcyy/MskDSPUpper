@@ -108,6 +108,7 @@ def run_verification():
 
     executor = ThreadPoolExecutor(max_workers=2)
     interrupted = False
+    cache_record_code = 0
     futures = []
     try:
         futures = [executor.submit(branch, "frontend", [
@@ -116,11 +117,18 @@ def run_verification():
             ("offline", ["npm", "run", "test:offline"]),
             ("lint", ["npm", "run", "lint"]),
         ]), executor.submit(branch, "rust", [
-            ("cargo-test", ["cargo", "test", "--locked", "--manifest-path", "src-tauri/Cargo.toml",
-                            "--target", "x86_64-pc-windows-msvc"]),
+            ("cargo-test", ["cargo", "test", "--release", "--locked", "--manifest-path", "src-tauri/Cargo.toml",
+                            "--target", "x86_64-pc-windows-msvc", "--message-format=json-render-diagnostics"]),
         ])]
         # Wait for both branches even after a failure; no verification child survives into packaging.
         codes = [future.result() for future in futures]
+        if os.environ.get("UPPER_CARGO_GENERATION"):
+            # 即使命中 Fresh 产物也记录精确归属，失败构建不会因此晋升为成功缓存。
+            cache_record_code = subprocess.run([sys.executable, "-B", "scripts/gitlab/cargo_cache.py", "record",
+                                         "--target-dir", os.environ["CARGO_TARGET_DIR"],
+                                         "--generation", os.environ["UPPER_CARGO_GENERATION"],
+                                         "--log", str(logs / "verify-rust.log")], cwd=ROOT).returncode
+            codes.append(cache_record_code)
     except BaseException:
         interrupted = True
         cancelled.set()
@@ -132,7 +140,8 @@ def run_verification():
     finally:
         executor.shutdown(wait=True)
         result.update(finished_at=utc_now(), elapsed_seconds=round(time.monotonic()-started, 3),
-                      exit_code=1 if interrupted else (0 if all(f.done() and not f.exception() and f.result() == 0
+                      cache_record_exit_code=cache_record_code,
+                      exit_code=1 if interrupted else (0 if cache_record_code == 0 and all(f.done() and not f.exception() and f.result() == 0
                                                               for f in futures) else 1))
         (logs / "verify-timing.json").write_text(json.dumps(result, ensure_ascii=False, indent=2)+"\n",
                                                 encoding="utf-8")

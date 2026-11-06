@@ -12,9 +12,17 @@
 
 为修复 Node 测试运行器对中文标准输出的反序列化异常，verify/package 在导入 MSVC 环境后使用固定 Node 24.22.2 便携运行环境。缓存位于 `RUNNER_ENV_ROOT/cache/mskdsp-upper-node`，未配置环境根时使用作业工作区 `.ci-tools/node`；只覆盖当前作业 PATH，不修改 Runner 全局 Node。下载及复用均校验官方固定 SHA256 与实际安装文件，失败阻止后续步骤；不回退旧版本或重试失败用例。安装细节和原始失败证据见 [CI 测试运行器反序列化修复](../doc/CI测试运行器反序列化修复.md)。
 
-完整 Python CI 脚本测试先执行；随后前端依赖准备、workflow/offline 测试和严格 lint 与 Rust 测试在独立进程中并行。两个分支都成功后才进入 package；任一分支失败都会阻止打包，等待另一分支退出后返回失败，异常或中断则清理已启动的子进程。验证输出与分支耗时写入 `package/logs`，便于定位失败与比较并行效果。发布阶段继续串行，原 resource group 防止共享 Cargo 目录发生跨作业竞争。
+完整 Python CI 脚本测试先执行；随后前端依赖准备、workflow/offline 测试和严格 lint 与 Rust 测试在独立进程中并行。两个分支都成功后才进入 package；任一分支失败都会阻止打包，等待另一分支退出后返回失败，异常或中断则清理已启动的子进程。验证输出与分支耗时写入 `package/logs`，便于定位失败与比较并行效果。所有通道统一使用 `upper-windows-cargo` resource group，防止共享 Cargo 目录在编译与回收时发生跨作业竞争。
 
-`.gitlab-ci.yml` 默认 `CARGO_INCREMENTAL=0`；`pipeline.ps1` 在 Runner 与 MSVC 环境导入完成后为 verify 和 CI package 显式设为 `1`。Release 保持原优化等级，并固定原有的 16 个 codegen units，避免启用增量后隐式改变这个值；GitHub 兼容工作流不受影响。首次建立 Release 增量缓存可能更慢；即使 16/3 与旧默认有效值一致，改为显式 profile 配置也可能使既有依赖首次重新编译，需与后续运行区分。现有发布脚本每轮改写 Cargo 的包版本；版本参与 crate 身份计算，因此主程序跨版本的增量目录会变化，不能假定下一条流水线命中上一版本的主程序缓存。依赖仍按既有规则复用，实际收益以构建日志为准，不能把缓存启用等同于已证明提速。签名、源码身份冻结和公开下载验收继续完整执行。
+GitLab Rust 验证使用 `cargo test --release`，保留原有 Rust 测试，不再为该验证生成 Debug profile 的编译产物。`.gitlab-ci.yml` 默认 `CARGO_INCREMENTAL=0`；`pipeline.ps1` 在 Runner 与 MSVC 环境导入完成后，为 verify 和 package 统一设置 `CARGO_INCREMENTAL=1`、Release 优化等级 `3` 和 `16` 个 codegen units；GitHub 兼容工作流不受影响。Release 测试仍需要独立的 test harness，测试依赖启用的 features 也可能与正式打包不同，不能保证测试和打包完全共用编译缓存。首次建立 Release 测试缓存可能更慢，实际耗时与复用收益以对应提交的 CI 日志为准。
+
+现有版本时间戳规则保持不变，发布脚本每轮仍改写 Cargo 的包版本。版本参与 crate 身份计算，因此主程序跨版本的增量目录会变化，不能假定下一条流水线命中上一版本的主程序缓存。依赖仍按既有规则复用，不能把缓存启用等同于已证明提速。签名、源码身份冻结和公开下载验收继续完整执行。
+
+编译缓存按保留当前任务和最近成功构建所需产物的原则回收旧内容，清理时必须避开活动任务及其正在使用的文件。旧 Debug 产物的清理仅限本项目确认使用的缓存目录，不清理其他项目或共享工具链；保留的 Release 缓存继续供后续构建复用。
+
+`cargo_cache.py` 在目标目录的 `.upper-cache` 内保存项目身份和构建记录。稳定路径的 workspace wrapper 仅将上位机主项目的 incremental 输出改到按测试基础版本或打包版本命名的目录；第三方依赖仍使用原缓存。测试和打包的 Cargo JSON（包括 Fresh 事件）用于记录精确产物及构建脚本目录。完整成功构建保留本次和上一成功记录；失败、取消或记录不完整不能推进成功记录。原有无归属的主项目历史缓存先保留，至少两次受管构建完整成功后才回收已确认不再使用的主项目旧缓存；其他项目、第三方依赖、未知目录及工具链不在回收范围。首次引入 workspace wrapper 会使主项目建立新的编译身份，不代表依赖需要全部重编。
+
+构建结束的回收清单写入 `package/logs/cargo-cache-retention.json`；可使用 `finish --dry-run` 查看计划而不修改状态或删除文件。不得绕过路径身份、重解析点和完整记录检查来清理未知目录。
 
 验证基线为流水线 #51：作业约 588 秒，依赖安装约 91 秒，Rust Release 编译 279 秒。优化验收需要至少一次建立缓存和一次后续运行，分别记录依赖命中、并行区间、编译耗时和平台包校验结果。
 

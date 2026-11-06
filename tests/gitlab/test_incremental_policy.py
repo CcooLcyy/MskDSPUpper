@@ -13,6 +13,8 @@ class IncrementalPolicyTests(unittest.TestCase):
         cargo = [entry for entry in events if entry["kind"] == "cargo"]
         self.assertEqual(len(cargo), 1)
         self.assertEqual(cargo[0]["incremental"], "1")
+        self.assertIn("--release", cargo[0]["arguments"])
+        self.assertEqual((cargo[0]["units"], cargo[0]["optimization"]), ("16", "3"))
 
     def test_release_enables_incremental_and_keeps_original_optimization_after_import(self):
         # The shared successful execution runs verify and then package; inspect its real node children.

@@ -1,4 +1,4 @@
-﻿param([ValidateSet('verify', 'package', 'publish')][string]$Stage)
+﻿param([ValidateSet('verify', 'package', 'publish', 'cache-finish')][string]$Stage)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $env:PYTHONUTF8 = '1'
@@ -6,6 +6,28 @@ $env:PYTHONUTF8 = '1'
 function Invoke-Checked([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) { throw "命令执行失败：$Program（退出码 $LASTEXITCODE）" }
+}
+
+function Initialize-CargoCache([string]$CacheStage, [string]$Version) {
+    if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $PWD 'src-tauri/target' }
+    $cacheJson = Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/cargo_cache.py', 'prepare', '--stage', $CacheStage, '--version', $Version, '--target-dir', $env:CARGO_TARGET_DIR)
+    $cache = $cacheJson | ConvertFrom-Json
+    if (-not $cache.wrapper -or -not $cache.root -or -not $cache.generation -or -not $cache.manifest_path) {
+        throw 'Cargo 缓存归属初始化不完整，停止构建'
+    }
+    $env:RUSTC_WORKSPACE_WRAPPER = $cache.wrapper
+    $env:UPPER_CARGO_CACHE_ROOT = $cache.root
+    $env:UPPER_CARGO_GENERATION = $cache.generation
+    $env:UPPER_CARGO_MANIFEST_PATH = $cache.manifest_path
+    $env:UPPER_CARGO_PYTHON = (Get-Command python -ErrorAction Stop).Source
+    Write-Host "已准备上位机 $CacheStage 编译缓存，version=$Version"
+}
+
+if ($Stage -eq 'cache-finish') {
+    # 失败或取消不推进成功保留集；原始日志继续作为作业产物上传。
+    if ($env:CI_JOB_STATUS -eq 'success' -or -not $env:CARGO_TARGET_DIR) { return }
+    Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/cargo_cache.py', 'finish', '--target-dir', $env:CARGO_TARGET_DIR, '--status', 'failed')
+    return
 }
 
 if ($Stage -in @('verify', 'package')) {
@@ -54,18 +76,17 @@ if ($Stage -in @('verify', 'package')) {
 }
 
 if ($Stage -in @('verify', 'package')) {
-    # Runner 与 MSVC 环境导入后再覆盖；仅 GitLab CI 启用测试与 Release 增量。
+    # 测试与打包统一使用 Release；在环境导入后固定相同优化设置以复用依赖。
     $env:CARGO_INCREMENTAL = '1'
-    if ($Stage -eq 'package') {
-        # 保持原 Release 默认优化及代码生成并行度，避免增量默认切换为 256 个单元。
-        $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '16'
-        $env:CARGO_PROFILE_RELEASE_OPT_LEVEL = '3'
-    }
-    Write-Host "Rust 增量编译设置：stage=$Stage，CARGO_INCREMENTAL=$env:CARGO_INCREMENTAL"
+    $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = '16'
+    $env:CARGO_PROFILE_RELEASE_OPT_LEVEL = '3'
+    Write-Host "Rust Release 编译设置：stage=$Stage，incremental=$env:CARGO_INCREMENTAL，codegen_units=16，opt_level=3"
 }
 
 if ($Stage -eq 'verify') {
     Invoke-Checked -Program 'python' -Arguments @('-B', '-m', 'unittest', 'discover', '-s', 'tests/gitlab', '-v')
+    $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+    Initialize-CargoCache -CacheStage verify -Version $version
     Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/verify.py')
     return
 }
@@ -88,6 +109,8 @@ if ($Stage -eq 'package') {
     Invoke-Checked -Program 'node' -Arguments $metadataArguments
     Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/apply-channel-version.mjs', '--metadata-file', $release.metadata, '--backup-dir', 'package/.manifest-backup')
     try {
+        $effectiveVersion = (Get-Content -LiteralPath $release.metadata -Raw | ConvertFrom-Json).effectiveVersion
+        Initialize-CargoCache -CacheStage package -Version $effectiveVersion
         $endpoint = $env:PLATFORM_PUBLIC_BASE_URL.TrimEnd('/') + '/mskdsp-upper/' + $release.channel + '/latest.json'
         Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/render-tauri-config.mjs', '--metadata-file', $release.metadata, '--output', $release.config, '--endpoint', $endpoint, '--bundle-targets', 'nsis', '--updater-artifacts', 'true')
         # 客户端更新经平台 gRPC；HTTP 清单仅用于发布后的兼容验收，不配置插件 HTTP 更新源。
@@ -100,12 +123,22 @@ if ($Stage -eq 'package') {
         }
         # Node 显式保留空密码环境变量，避免 PowerShell 5.1 将空字符串视为删除变量后触发密码交互。
         $tauriCommand = 'const {spawnSync}=require("child_process");const r=spawnSync(process.execPath,["node_modules/@tauri-apps/cli/tauri.js",...process.argv.slice(1)],{stdio:"inherit",env:{...process.env,TAURI_SIGNING_PRIVATE_KEY_PASSWORD:process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD??""}});if(r.error)throw r.error;process.exit(r.status??1);'
-        Invoke-Checked -Program 'node' -Arguments @('-e', $tauriCommand, 'build', '--bundles', 'nsis', '--target', 'x86_64-pc-windows-msvc', '--ci', '--config', $release.config)
+        $cargoLog = Join-Path $PWD 'package/logs/package-cargo.jsonl'
+        $buildLines = @()
+        try {
+            Invoke-Checked -Program 'node' -Arguments @('-e', $tauriCommand, 'build', '--bundles', 'nsis', '--target', 'x86_64-pc-windows-msvc', '--ci', '--config', $release.config, '--', '--message-format=json-render-diagnostics') | Tee-Object -Variable buildLines
+        } finally {
+            $buildLines | Out-File -LiteralPath $cargoLog -Encoding utf8
+        }
+        Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/cargo_cache.py', 'record', '--target-dir', $env:CARGO_TARGET_DIR, '--generation', $env:UPPER_CARGO_GENERATION, '--log', $cargoLog)
         Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/stage-release.mjs', '--metadata-file', $release.metadata, '--target-dir', $env:CARGO_TARGET_DIR)
         Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/freeze_metadata.py', '--metadata', $release.metadata)
     } finally {
         Invoke-Checked -Program 'node' -Arguments @('scripts/workflow/restore-manifests.mjs', '--backup-dir', 'package/.manifest-backup')
     }
+    $report = Invoke-Checked -Program 'python' -Arguments @('-B', 'scripts/gitlab/cargo_cache.py', 'finish', '--target-dir', $env:CARGO_TARGET_DIR, '--generation', $env:UPPER_CARGO_GENERATION, '--status', 'success')
+    $report | Out-File -LiteralPath package/logs/cargo-cache-retention.json -Encoding utf8
+    Write-Host $report
     return
 }
 if ($Stage -eq 'publish') {

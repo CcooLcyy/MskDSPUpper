@@ -1,5 +1,6 @@
 """Exercise real PowerShell/subprocess boundaries using isolated executable tool stubs."""
 import json
+import importlib.util
 from copy import deepcopy
 from functools import lru_cache
 import os
@@ -25,10 +26,29 @@ def _run_isolated_pipeline_cached(stage, fail_tool, powershell, branch):
         workspace = Path(temporary)
         scripts = workspace / "scripts/gitlab"
         scripts.mkdir(parents=True)
-        for name in ("pipeline.ps1", "verify.py", "release_policy.py"):
+        for name in ("pipeline.ps1", "verify.py", "release_policy.py", "cargo_cache.py", "cargo_workspace_wrapper.cmd"):
             shutil.copyfile(ROOT / "scripts/gitlab" / name, scripts / name)
         # 隔离夹具固定使用 0.8.0，版本线断言不随产品主干升级而漂移。
         (workspace / "package.json").write_text(json.dumps({"version": "0.8.0"}), encoding="utf-8")
+        (workspace / "src-tauri").mkdir()
+        (workspace / "src-tauri/Cargo.toml").write_text(
+            '[package]\nname = "mskdsp-upper"\nversion = "0.8.0"\n', encoding="utf-8")
+        if stage == "package":
+            # 独立打包场景预置已完成的验证记录，仍保留生产的两阶段成功约束。
+            spec = importlib.util.spec_from_file_location("isolated_cargo_cache", scripts / "cargo_cache.py")
+            cache = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(cache)
+            target = workspace / "target"
+            prepared = cache.prepare(target, "verify", "0.8.0", workspace / "src-tauri/Cargo.toml")
+            output = target / "x86_64-pc-windows-msvc/release/deps/libmskdsp_upper_lib-1111111111111111.rlib"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"isolated verification output")
+            log = workspace / "completed-verify.jsonl"
+            log.write_text(json.dumps({"reason": "compiler-artifact", "package_id": "isolated#mskdsp-upper@0.8.0",
+                                       "manifest_path": str(workspace / "src-tauri/Cargo.toml"),
+                                       "target": {"name": "mskdsp_upper_lib"}, "filenames": [str(output)], "fresh": True})
+                           + '\n' + json.dumps({"reason": "build-finished", "success": True}) + '\n', encoding="utf-8")
+            cache.record(target, prepared["generation"], [log])
         driver = workspace / "stub.py"
         driver.write_text(r'''import json, os, subprocess, sys, time
 from pathlib import Path
@@ -43,6 +63,14 @@ if kind == "python" and arguments[-1:] == ["scripts/gitlab/verify.py"]:
     sys.exit(subprocess.run([sys.executable, *arguments]).returncode)
 if kind == "python" and arguments[-1:] == ["scripts/gitlab/release_policy.py"]:
     sys.exit(subprocess.run([sys.executable, *arguments]).returncode)
+if kind == "python" and "scripts/gitlab/cargo_cache.py" in arguments:
+    sys.exit(subprocess.run([sys.executable, *arguments]).returncode)
+if kind == "node" and arguments[:1] == ["scripts/workflow/emit-build-metadata.mjs"]:
+    # 生成隔离夹具的真实元数据文件，缓存版本读取仍通过实际文件边界。
+    destination = Path(arguments[arguments.index("--output") + 1])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    version = os.environ.get("CI_COMMIT_TAG", "").removeprefix("v") or "0.8.0-ci.20261106t000000+sha.aaaaaaa"
+    destination.write_text(json.dumps({"effectiveVersion": version}), encoding="utf-8")
 is_runtime = kind == "python" and "scripts/gitlab/ensure_node_runtime.py" in arguments
 if is_runtime:
     entry["kind"] = "node-runtime"
@@ -62,6 +90,16 @@ if kind in ("cargo", "dependencies"):
             break
         time.sleep(0.01)
     entry["barrier_peer_observed"] = peer.exists()
+if kind == "cargo" or (kind == "node" and "--bundles" in arguments):
+    # 模拟真实 Cargo JSON 边界，Fresh/构建完成判断由实际缓存模块执行。
+    artifact = Path(os.environ["CARGO_TARGET_DIR"]) / "x86_64-pc-windows-msvc/release/deps" / (
+        "libmskdsp_upper_lib-aaaaaaaaaaaaaaaa.rlib" if kind == "cargo" else "libmskdsp_upper_lib-bbbbbbbbbbbbbbbb.rlib")
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"isolated Rust artifact")
+    print(json.dumps({"reason": "compiler-artifact", "package_id": "isolated#mskdsp-upper@0.8.0",
+                      "manifest_path": str(Path.cwd() / "src-tauri/Cargo.toml"),
+                      "target": {"name": "mskdsp_upper_lib"}, "filenames": [str(artifact)], "fresh": False}))
+    print(json.dumps({"reason": "build-finished", "success": exit_code == 0}))
 entry["finished"] = time.time()
 # Each process writes its own event file; simultaneous barrier release must not race on append.
 event_directory = Path(os.environ["STUB_EVENTS"]).with_suffix("")
@@ -135,12 +173,14 @@ class ParallelVerificationTests(unittest.TestCase):
                         min(cargo["finished"], dependencies["finished"]))
         self.assertEqual([event["arguments"] for event in events if event["kind"] == "npm"],
                          [["run", "test:workflow"], ["run", "test:offline"], ["run", "lint"]])
-        self.assertEqual(cargo["arguments"], ["test", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "--target", "x86_64-pc-windows-msvc"])
+        self.assertEqual(cargo["arguments"], ["test", "--release", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "--target", "x86_64-pc-windows-msvc", "--message-format=json-render-diagnostics"])
         self.assertEqual((cargo["incremental"], cargo["include"], cargo["lib"]), ("1", "mock-sdk", "mock-sdk"))
         self.assertTrue(any(event["kind"] == "node" for event in events))
         self.assertIn("END cargo-test: exit=0", logs["verify-rust.log"])
         self.assertIn("END lint: exit=0", logs["verify-frontend.log"])
         self.assertEqual(timing["exit_code"], 0)
+        retention = json.loads(logs["cargo-cache-retention.json"].lstrip("\ufeff"))
+        self.assertEqual(retention["status"], "success")
 
     # 固定运行环境必须先于测试与打包，且只在当前作业的 PATH 生效。
     def test_pinned_node_precedes_verification_and_packaging(self):
