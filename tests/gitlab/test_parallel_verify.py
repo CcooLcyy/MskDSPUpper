@@ -50,7 +50,7 @@ def _run_isolated_pipeline_cached(stage, fail_tool, powershell, branch):
                            + '\n' + json.dumps({"reason": "build-finished", "success": True}) + '\n', encoding="utf-8")
             cache.record(target, prepared["generation"], [log])
         driver = workspace / "stub.py"
-        driver.write_text(r'''import json, os, subprocess, sys, time
+        driver.write_text(r'''import json, os, runpy, subprocess, sys, time
 from pathlib import Path
 kind, *arguments = sys.argv[1:]
 entry = {"kind": kind, "arguments": arguments, "started": time.time(),
@@ -64,7 +64,10 @@ if kind == "python" and arguments[-1:] == ["scripts/gitlab/verify.py"]:
 if kind == "python" and arguments[-1:] == ["scripts/gitlab/release_policy.py"]:
     sys.exit(subprocess.run([sys.executable, *arguments]).returncode)
 if kind == "python" and "scripts/gitlab/cargo_cache.py" in arguments:
-    sys.exit(subprocess.run([sys.executable, *arguments]).returncode)
+    # 当前桩本身已是真实 Python 进程，直接执行入口，避免比生产多启动一层解释器。
+    sys.argv = arguments[1:] if arguments[:1] == ["-B"] else arguments
+    runpy.run_path(sys.argv[0], run_name="__main__")
+    sys.exit(0)
 if kind == "node" and arguments[:1] == ["scripts/workflow/emit-build-metadata.mjs"]:
     # 生成隔离夹具的真实元数据文件，缓存版本读取仍通过实际文件边界。
     destination = Path(arguments[arguments.index("--output") + 1])
