@@ -3,7 +3,7 @@
 GitHub Actions 使用 `ci.yml` 验证和签名打包，再将冻结产物发布到 MskDSPPlatform。详细通道规则见 [上位机发布约定](../RELEASING.md)。
 
 - 验证和签名打包在 GitHub 托管 Windows Runner 上执行。两个公开协议库均按源码记录的提交获取。
-- 平台发布使用独立作业，下载同一次运行的冻结产物。上传及发布前检查远端来源，完成后核对公开目录、清单、下载包 SHA256 和签名。
+- 平台发布使用独立作业，下载同一次运行的冻结产物。上传及发布前检查远端来源，完成后核对公开目录中的签名及来源，并回读安装包校验大小和 SHA256。
 - `release/X.Y` 只保留 Actions 产物。正式标签从已迁移工作流的 main 或匹配版本维护分支创建。手动重跑可使用 `gh workflow run ci.yml --ref <分支或标签>`。重跑历史正式标签会发布该版本，仅在需要回退时使用。
 - 旧的 R2 发布和回填工作流已退役。上位机通过平台 gRPC 查询和下载更新。
 
@@ -17,7 +17,7 @@ GitHub Actions 使用 `ci.yml` 验证和签名打包，再将冻结产物发布�
 | 变量 | 用途 |
 | --- | --- |
 | `PLATFORM_GRPC_ENDPOINT` | 平台上传地址，格式为 `host:port` |
-| `PLATFORM_PUBLIC_BASE_URL` | 发布后核对清单和安装包使用的平台 HTTP(S) 根地址 |
+| `PLATFORM_PUBLIC_BASE_URL` | 可选的平台 HTTP(S) 根地址。配置后核对公开清单和 HTTP 下载包，留空则用同一个 gRPC 入口回读安装包 |
 | `PLATFORM_GRPC_PLAINTEXT` | 使用明文入口时设为 `1`，默认 TLS |
 | `PLATFORM_GRPC_PUBLIC_PLAINTEXT_ENDPOINT` | 公网明文例外，必须与上传地址的数字 IP 和端口完全一致 |
 | `PLATFORM_GRPC_CA_FILE` | 使用私有 CA 时设置为发布 Runner 上的 CA 文件路径 |

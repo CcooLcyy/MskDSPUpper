@@ -10,6 +10,7 @@ from subprocess import CompletedProcess
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -224,6 +225,40 @@ class SafeDiagnosticsTests(unittest.TestCase):
         self.assertNotIn("Authorization", output.getvalue())
 
 
+class GrpcDownloadTests(unittest.TestCase):
+    def test_public_download_requires_contiguous_bytes_with_expected_digest_and_eof(self):
+        import platform_client
+        from dataclasses import dataclass, replace
+
+        @dataclass
+        class Chunk:
+            offset: int
+            data: bytes
+            total_size: int
+            sha256: str
+            eof: bool
+
+        class RpcError(Exception):
+            pass
+
+        payload = b"installer"
+        sha256 = hashlib.sha256(payload).hexdigest()
+        identity = dict(size=len(payload), sha256=sha256)
+        first = Chunk(0, payload[:3], len(payload), sha256, False)
+        last = Chunk(3, payload[3:], len(payload), sha256, True)
+        catalog, messages = MagicMock(), MagicMock()
+        catalog.DownloadPackage.return_value = iter((first, last))
+        with patch.dict(sys.modules, {"grpc": SimpleNamespace(RpcError=RpcError)}):
+            platform_client.confirm_grpc_download(catalog, messages, "package", identity, timeout=10)
+            messages.DownloadPackageRequest.assert_called_once_with(package_id="package", offset=0)
+            catalog.DownloadPackage.assert_called_once_with(messages.DownloadPackageRequest.return_value, timeout=10)
+            for chunks in ((first,), (first, replace(last, offset=2)),
+                           (first, replace(last, data=b"broken")), (first, last, last)):
+                with self.subTest(chunks=chunks), self.assertRaises(platform_client.ClientError):
+                    catalog.DownloadPackage.return_value = iter(chunks)
+                    platform_client.confirm_grpc_download(catalog, messages, "package", identity, timeout=10)
+
+
 class UploadTransportTests(unittest.TestCase):
     def test_plaintext_bypasses_proxy_while_tls_keeps_default_transport(self):
         import platform_client
@@ -236,14 +271,25 @@ class UploadTransportTests(unittest.TestCase):
                 bindings.__enter__.return_value = (MagicMock(), MagicMock())
                 environment = dict(PLATFORM_GRPC_PLAINTEXT="1" if plaintext else "0",
                                    PLATFORM_GRPC_PUBLIC_PLAINTEXT_ENDPOINT=allowed,
-                                   PLATFORM_GRPC_ENDPOINT=endpoint, PLATFORM_PUBLIC_BASE_URL="https://platform.example.com",
+                                   PLATFORM_GRPC_ENDPOINT=endpoint,
+                                   PLATFORM_PUBLIC_BASE_URL="" if allowed else "https://platform.example.com",
                                    HTTPS_PROXY="http://proxy.example.com:8080")
+                identity = {"channel": "ci", "source_ref": "main"}
+                result = {"state": "published", "package_id": "package"}
                 with patch.dict("os.environ", environment, clear=True), patch.dict(sys.modules, {"grpc": grpc}), \
-                        patch.object(platform_client, "load_metadata", return_value=(Path("unused.exe"), {"channel": "ci", "source_ref": "main"})), \
+                        patch.object(platform_client, "load_metadata", return_value=(Path("unused.exe"), identity)), \
                         patch.object(platform_client, "check_current_head"), patch.object(platform_client, "generate_bindings"), \
                         patch.object(platform_client, "load_bindings", return_value=bindings), \
-                        patch.object(platform_client, "transfer", return_value="published"):
-                    self.assertEqual(platform_client.upload("unused.json"), "published")
+                        patch.object(platform_client, "confirm_grpc_download") as confirm, \
+                        patch.object(platform_client, "transfer", return_value=result) as transfer:
+                    self.assertEqual(platform_client.upload("unused.json"), result)
+                    if allowed:
+                        confirm.assert_called_once_with(transfer.call_args.args[1], transfer.call_args.args[2],
+                                                        "package", identity, timeout=60)
+                        self.assertIsNone(transfer.call_args.kwargs["after_publish"])
+                    else:
+                        confirm.assert_not_called()
+                        self.assertTrue(callable(transfer.call_args.kwargs["after_publish"]))
                     if plaintext:
                         grpc.insecure_channel.assert_called_once_with(endpoint, options=(("grpc.enable_http_proxy", 0),))
                         grpc.secure_channel.assert_not_called()

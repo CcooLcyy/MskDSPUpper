@@ -207,6 +207,33 @@ def confirm_manifest(base_url, metadata, *, timeout=30):
         raise ClientError("公开安装包大小或 SHA256 与本次产物不一致")
 
 
+def confirm_grpc_download(catalog, messages, package_id, metadata, *, timeout):
+    """从公开 gRPC 目录回读安装包，按冻结身份校验实际字节。"""
+    import grpc
+    expected_size = metadata["size"]
+    expected_sha256 = metadata["sha256"]
+    digest = hashlib.sha256()
+    received = 0
+    eof = False
+    request = messages.DownloadPackageRequest(package_id=package_id, offset=0)
+    try:
+        # 回读使用客户端可用的公开下载接口，避免携带发布令牌。
+        for chunk in catalog.DownloadPackage(request, timeout=timeout):
+            if (eof or chunk.offset != received or chunk.total_size != expected_size
+                    or chunk.sha256 != expected_sha256 or not (chunk.data or chunk.eof)):
+                raise ClientError("平台 gRPC 下载分块与冻结身份不一致")
+            received += len(chunk.data)
+            if received > expected_size:
+                raise ClientError("平台 gRPC 下载超过冻结大小")
+            digest.update(chunk.data)
+            eof = chunk.eof
+    except grpc.RpcError as error:
+        raise ClientError("平台 gRPC 下载验证失败：" + error.code().name) from None
+    if not eof or received != expected_size or digest.hexdigest() != expected_sha256:
+        raise ClientError("平台 gRPC 下载未完整结束，或安装包大小或 SHA256 不一致")
+    print("已通过平台 gRPC 核对下载包大小和 SHA256")
+
+
 def transfer(publisher, catalog, messages, archive, metadata, token, *, before_publish,
              attempts=4, retry_delay=1, timeout=60, chunk_size=1024 * 1024, after_publish=None):
     import grpc
@@ -330,7 +357,7 @@ def upload(metadata, proto_root=Path(".ci/platform-proto"), timeout=60):
     if plaintext and ca_file:
         raise ClientError("明文连接不能配置 TLS CA 文件")
     public_base = os.environ.get("PLATFORM_PUBLIC_BASE_URL", "")
-    if not repository_url(public_base):
+    if public_base and not repository_url(public_base):
         raise ClientError("平台公开地址必须为无凭据 HTTP(S) 地址")
     with tempfile.TemporaryDirectory(prefix="upper-platform-grpc-") as temporary:
         generate_bindings(proto_root, temporary)
@@ -343,10 +370,14 @@ def upload(metadata, proto_root=Path(".ci/platform-proto"), timeout=60):
                 roots = Path(ca_file).read_bytes() if ca_file else None
                 channel = grpc.secure_channel(endpoint, grpc.ssl_channel_credentials(roots))
             with channel:
-                return transfer(services.SoftwarePublishServiceStub(channel), services.SoftwareCatalogServiceStub(channel),
-                                messages, archive, identity, os.environ.get("PLATFORM_UPLOAD_TOKEN", ""),
-                                before_publish=lambda: check_current_head(identity), timeout=timeout,
-                                after_publish=(lambda: confirm_manifest(public_base, identity, timeout=timeout)) if public_base else None)
+                catalog = services.SoftwareCatalogServiceStub(channel)
+                result = transfer(services.SoftwarePublishServiceStub(channel), catalog,
+                                  messages, archive, identity, os.environ.get("PLATFORM_UPLOAD_TOKEN", ""),
+                                  before_publish=lambda: check_current_head(identity), timeout=timeout,
+                                  after_publish=(lambda: confirm_manifest(public_base, identity, timeout=timeout)) if public_base else None)
+                if not public_base:
+                    confirm_grpc_download(catalog, messages, result["package_id"], identity, timeout=timeout)
+                return result
 
 
 class SafeArgumentParser(argparse.ArgumentParser):
