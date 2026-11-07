@@ -1,6 +1,6 @@
 """验证上位机平台发布的冻结身份和边界条件。"""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 import io
 import hashlib
 import json

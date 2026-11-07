@@ -112,6 +112,8 @@ def ensure(cache_root):
     root = Path(cache_root).absolute()
     reject_links(root)
     root.mkdir(parents=True, exist_ok=True)
+    # Windows Runner 的临时目录可能使用 8.3 短路径，统一返回规范路径。
+    root = root.resolve(strict=True)
     target = root / DIRECTORY
     if target.exists() or target.is_symlink():
         validate(target)
