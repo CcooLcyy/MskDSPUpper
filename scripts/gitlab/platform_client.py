@@ -120,7 +120,7 @@ def check_current_head(metadata, environ=None):
         raise ClientError("远端来源分支已变化或无法确认，拒绝发布旧构建")
 
 
-def validate_endpoint(endpoint, *, plaintext=False):
+def validate_endpoint(endpoint, *, plaintext=False, allowed_public_plaintext_endpoint=""):
     try:
         parsed = urlsplit("//" + endpoint)
         valid_port = parsed.port and 0 < parsed.port <= 65535
@@ -134,10 +134,11 @@ def validate_endpoint(endpoint, *, plaintext=False):
         try:
             address = ipaddress.ip_address(parsed.hostname)
             networks = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128", "fc00::/7")
-            if not any(address in ipaddress.ip_network(network) for network in networks):
+            if (endpoint != allowed_public_plaintext_endpoint
+                    and not any(address in ipaddress.ip_network(network) for network in networks)):
                 raise ValueError()
         except ValueError:
-            raise ClientError("明文上传仅允许显式内网或回环 IP") from None
+            raise ClientError("明文上传仅允许内网、回环或显式配置的公网 IP 和端口") from None
     return endpoint
 
 
@@ -321,7 +322,10 @@ def upload(metadata, proto_root=Path(".ci/platform-proto"), timeout=60):
         raise ClientError("候选分支只保留流水线产物，禁止写入全局 CI 通道")
     check_current_head(identity)
     plaintext = os.environ.get("PLATFORM_GRPC_PLAINTEXT", "0") == "1"
-    endpoint = validate_endpoint(os.environ.get("PLATFORM_GRPC_ENDPOINT", ""), plaintext=plaintext)
+    endpoint = validate_endpoint(
+        os.environ.get("PLATFORM_GRPC_ENDPOINT", ""), plaintext=plaintext,
+        allowed_public_plaintext_endpoint=os.environ.get("PLATFORM_GRPC_PUBLIC_PLAINTEXT_ENDPOINT", ""),
+    )
     ca_file = os.environ.get("PLATFORM_GRPC_CA_FILE")
     if plaintext and ca_file:
         raise ClientError("明文连接不能配置 TLS CA 文件")
@@ -333,7 +337,7 @@ def upload(metadata, proto_root=Path(".ci/platform-proto"), timeout=60):
         import grpc
         with load_bindings(temporary) as (messages, services):
             if plaintext:
-                # 已验证的内网明文入口直连，避免继承构建代理后转发上传令牌。
+                # 明文入口直连，避免构建代理转发上传令牌。
                 channel = grpc.insecure_channel(endpoint, options=(("grpc.enable_http_proxy", 0),))
             else:
                 roots = Path(ca_file).read_bytes() if ca_file else None

@@ -18,7 +18,8 @@ GitHub Actions 使用 `ci.yml` 验证和签名打包，再将冻结产物发布�
 | --- | --- |
 | `PLATFORM_GRPC_ENDPOINT` | 平台上传地址，格式为 `host:port` |
 | `PLATFORM_PUBLIC_BASE_URL` | 发布后核对清单和安装包使用的平台 HTTP(S) 根地址 |
-| `PLATFORM_GRPC_PLAINTEXT` | 显式使用内网 IP 明文入口时设为 `1`，默认 TLS |
+| `PLATFORM_GRPC_PLAINTEXT` | 使用明文入口时设为 `1`，默认 TLS |
+| `PLATFORM_GRPC_PUBLIC_PLAINTEXT_ENDPOINT` | 公网明文例外，必须与上传地址的数字 IP 和端口完全一致 |
 | `PLATFORM_GRPC_CA_FILE` | 使用私有 CA 时设置为发布 Runner 上的 CA 文件路径 |
 
 首次切换应先验证 main 的 CI 通道及客户端更新，再发正式标签。验收以同一次 Actions 运行的签名安装包、平台记录和下载摘要为准。

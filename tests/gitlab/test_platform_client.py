@@ -66,6 +66,14 @@ class UpperIdentityTests(unittest.TestCase):
         with self.assertRaises(self.client.ClientError):
             self.client.validate_endpoint("8.8.8.8:50000", plaintext=True)
 
+    def test_public_plaintext_exception_matches_ip_and_port(self):
+        allowed = "8.8.8.8:50000"
+        self.assertEqual(self.client.validate_endpoint(allowed, plaintext=True,
+                         allowed_public_plaintext_endpoint=allowed), allowed)
+        for endpoint in ("8.8.4.4:50000", "8.8.8.8:50001"):
+            with self.subTest(endpoint=endpoint), self.assertRaises(self.client.ClientError):
+                self.client.validate_endpoint(endpoint, plaintext=True, allowed_public_plaintext_endpoint=allowed)
+
     def test_public_manifest_download_checks_actual_bytes(self):
         data = self.data
         payload = [b"installer"]
@@ -217,14 +225,17 @@ class SafeDiagnosticsTests(unittest.TestCase):
 
 
 class UploadTransportTests(unittest.TestCase):
-    def test_private_plaintext_bypasses_proxy_while_tls_keeps_default_transport(self):
+    def test_plaintext_bypasses_proxy_while_tls_keeps_default_transport(self):
         import platform_client
-        for plaintext, endpoint in ((True, "192.168.10.198:50000"), (False, "platform.example.com:443")):
-            with self.subTest(plaintext=plaintext):
+        for plaintext, endpoint, allowed in ((True, "192.168.10.198:50000", ""),
+                                             (True, "8.8.8.8:50000", "8.8.8.8:50000"),
+                                             (False, "platform.example.com:443", "")):
+            with self.subTest(endpoint=endpoint):
                 grpc = MagicMock()
                 bindings = MagicMock()
                 bindings.__enter__.return_value = (MagicMock(), MagicMock())
                 environment = dict(PLATFORM_GRPC_PLAINTEXT="1" if plaintext else "0",
+                                   PLATFORM_GRPC_PUBLIC_PLAINTEXT_ENDPOINT=allowed,
                                    PLATFORM_GRPC_ENDPOINT=endpoint, PLATFORM_PUBLIC_BASE_URL="https://platform.example.com",
                                    HTTPS_PROXY="http://proxy.example.com:8080")
                 with patch.dict("os.environ", environment, clear=True), patch.dict(sys.modules, {"grpc": grpc}), \
