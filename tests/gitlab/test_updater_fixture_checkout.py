@@ -78,7 +78,7 @@ class SignedFixtureCheckoutTests(unittest.TestCase):
             commit("protect")
             git("fetch", "-q", "origin", "main", cwd=checkout)
             git("-c", "core.autocrlf=true", "checkout", "-q", "--force", "--detach", "FETCH_HEAD", cwd=checkout)
-            for line in (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8").splitlines():
+            for line in (ROOT / "tests/gitlab/fixtures/gitlab-ci.yml").read_text(encoding="utf-8").splitlines():
                 if line.strip().startswith("- git restore "):
                     command = shlex.split(line.strip()[2:])
                     git("-c", "core.autocrlf=true", *command[1:], cwd=checkout)

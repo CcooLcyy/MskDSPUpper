@@ -1,6 +1,6 @@
 # 上位机 CI 包接入平台
 
-现行产品发布以 [上位机发布约定](../RELEASING.md) 为准：`main` 发布 CI，受保护的 `release/X.Y` 仅保留流水线产物，受保护的 `vX.Y.Z` 标签发布 Stable。Beta 发布入口已退役。下文描述 CI 通道接入及构建缓存机制。GitLab Windows Runner 完成检查、固定提交构建和 NSIS 打包，经平台 gRPC 续传、校验入库，再显式发布 CI 通道；发布后必须读取公开目录、清单及下载安装包核对 SHA256，才判定成功。
+现行入口见 [上位机发布约定](../RELEASING.md)。以下记录已退役的 GitLab 构建缓存和平台接入流程。GitLab Windows Runner 完成检查、固定提交构建和 NSIS 打包，经平台 gRPC 续传、校验入库，再显式发布 CI 通道。发布后读取公开目录、清单及下载安装包核对 SHA256。
 
 沿用现有 `emit-build-metadata`、`apply-channel-version`、`render-tauri-config`、`stage-release`。协议按 `platform-proto.ref` 固定提交获取，设备协议子模块仅在 GitLab 作业内改为同实例地址，GitHub 兼容发布仍使用其现有子模块配置。Runner 可通过 `RUNNER_ENV_PATH` 注入工具环境，不把机器目录写入源码。
 

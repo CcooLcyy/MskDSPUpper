@@ -39,15 +39,15 @@ class PublicProtocolTests(unittest.TestCase):
                         GIT_CONFIG_VALUE_0="Authorization: secret", GIT_CONFIG_KEY_1="credential.helper",
                         GIT_CONFIG_VALUE_1="injected", HTTPS_PROXY="http://proxy.example.com")
         snapshot = original.copy()
-        environment = init.public_protocol_environment(original)
+        environment = init.public_github_environment(original)
         self.assertEqual(original, snapshot)
         self.assertNotIn("CI_JOB_TOKEN", environment)
         self.assertNotIn("GIT_CONFIG_PARAMETERS", environment)
-        self.assertNotIn("GIT_CONFIG_KEY_1", environment)
-        self.assertNotIn("GIT_CONFIG_VALUE_1", environment)
-        self.assertEqual(environment["GIT_CONFIG_COUNT"], "1")
+        self.assertEqual(environment["GIT_CONFIG_COUNT"], "2")
         self.assertEqual(environment["GIT_CONFIG_KEY_0"], "http.https://github.com/.extraHeader")
         self.assertEqual(environment["GIT_CONFIG_VALUE_0"], "")
+        self.assertEqual(environment["GIT_CONFIG_KEY_1"], "credential.helper")
+        self.assertEqual(environment["GIT_CONFIG_VALUE_1"], "")
         self.assertEqual(environment["HTTPS_PROXY"], original["HTTPS_PROXY"])
 
     # 来源分支检查仍保留独立的 GitLab 认证，不因公开协议而移除。

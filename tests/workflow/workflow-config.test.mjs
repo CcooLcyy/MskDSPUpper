@@ -3,465 +3,146 @@ import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-function extractStepBlock(fileText, stepName) {
-  const lines = fileText.split(/\r?\n/);
-  const startIndex = lines.findIndex((line) => line.trim() === `- name: ${stepName}`);
-  assert.notEqual(startIndex, -1, `missing workflow step: ${stepName}`);
-
-  const blockLines = [lines[startIndex]];
-  for (let index = startIndex + 1; index < lines.length; index += 1) {
-    if (lines[index].trimStart().startsWith('- name: ')) {
-      break;
-    }
-    blockLines.push(lines[index]);
-  }
-
-  return blockLines.join('\n');
-}
-
-function extractNamedStepBlocks(fileText) {
-  const lines = fileText.split(/\r?\n/);
-  const blocks = [];
-  let currentBlock = null;
-
-  for (const line of lines) {
-    if (line.trimStart().startsWith('- name: ')) {
-      if (currentBlock) {
-        blocks.push(currentBlock.join('\n'));
-      }
-      currentBlock = [line];
-    } else if (currentBlock) {
-      currentBlock.push(line);
-    }
-  }
-
-  if (currentBlock) {
-    blocks.push(currentBlock.join('\n'));
-  }
-
-  return blocks;
-}
-
-function extractRunBlock(stepBlock) {
-  const lines = stepBlock.split('\n');
-  const runIndex = lines.findIndex((line) => /^\s*run:/.test(line));
-  if (runIndex === -1) {
-    return null;
-  }
-
-  const runLine = lines[runIndex];
-  const inlineValue = runLine.replace(/^\s*run:\s*/, '');
-  if (!/^[|>]/.test(inlineValue)) {
-    return inlineValue;
-  }
-
-  const runIndent = runLine.match(/^\s*/)[0].length;
-  const bodyLines = [];
-
-  for (let index = runIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (line.trim() === '') {
-      bodyLines.push(line);
-      continue;
-    }
-    if (line.match(/^\s*/)[0].length <= runIndent) {
-      break;
-    }
-    bodyLines.push(line);
-  }
-
-  return bodyLines.join('\n');
-}
-
-function extractJobBlock(fileText, jobName) {
-  const lines = fileText.split(/\r?\n/);
-  const startIndex = lines.findIndex((line) => line === `  ${jobName}:`);
-  assert.notEqual(startIndex, -1, `missing workflow job: ${jobName}`);
-
-  const blockLines = [lines[startIndex]];
-  for (let index = startIndex + 1; index < lines.length; index += 1) {
-    if (/^  \S/.test(lines[index])) {
-      break;
-    }
-    blockLines.push(lines[index]);
-  }
-
-  return blockLines.join('\n');
-}
-
-function listJobBlocks(fileText) {
-  const lines = fileText.split('\n');
-  const jobsIndex = lines.findIndex((line) => /^jobs:\s*$/.test(line));
-  assert.notEqual(jobsIndex, -1, 'missing jobs: section');
-
-  const blocks = [];
-  let current = null;
-
-  for (let index = jobsIndex + 1; index < lines.length; index += 1) {
-    if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[index])) {
-      if (current) {
-        blocks.push(current);
-      }
-      current = { name: lines[index].trim().replace(/:$/, ''), lines: [] };
-    }
-    if (current) {
-      current.lines.push(lines[index]);
-    }
-  }
-
-  if (current) {
-    blocks.push(current);
-  }
-
-  return blocks.map((block) => ({ name: block.name, block: block.lines.join('\n') }));
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+const read = (file) => fs.readFileSync(path.join(repoRoot, file), 'utf8').replaceAll('\r\n', '\n');
+const exists = (file) => fs.existsSync(path.join(repoRoot, file));
+const workflow = read('.github/workflows/ci.yml');
+const packager = read('scripts/workflow/build-platform-package.ps1');
 
-for (const [workflowPath, stepName] of [
-  ['.github/workflows/release.yml', 'Render stable tauri config'],
-  ['.github/workflows/ci.yml', 'Render release tauri config'],
-]) {
-  test(`${workflowPath} forces updater artifact generation for release packaging`, () => {
-    const fileText = fs.readFileSync(path.join(repoRoot, workflowPath), 'utf8');
-    const stepBlock = extractStepBlock(fileText, stepName);
-
-    assert.match(stepBlock, /--updater-artifacts true/);
-  });
+function job(name) {
+  const lines = workflow.split('\n');
+  const start = lines.indexOf('  ' + name + ':', lines.indexOf('jobs:') + 1);
+  assert.notEqual(start, -1, '缺少作业 ' + name);
+  const end = lines.findIndex((line, index) => index > start && /^  \S/.test(line));
+  return lines.slice(start, end === -1 ? undefined : end).join('\n');
 }
 
-test('release workflow skips stable manifest rewrite when versions already match', () => {
-  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8');
-  const detectBlock = extractStepBlock(fileText, 'Detect stable manifest alignment');
-  const applyBlock = extractStepBlock(fileText, 'Apply stable version');
+function stepUsing(jobText, action) {
+  const block = jobText.split(/(?=^      - name: )/m)
+    .find((step) => step.includes('uses: ' + action + '@'));
+  assert.ok(block, '缺少步骤 ' + action);
+  return block;
+}
 
-  assert.match(detectBlock, /Cargo\.toml/);
-  assert.match(detectBlock, /needs_apply=/);
-  assert.match(applyBlock, /if: steps\.manifest_alignment\.outputs\.needs_apply == 'true'/);
+function assertOrder(text, before, after) {
+  const first = text.indexOf(before);
+  const second = text.indexOf(after);
+  assert.ok(first >= 0 && second > first, before + ' 必须先于 ' + after);
+}
+
+test('主干、维护分支、正式标签和 PR 使用统一验证入口', () => {
+  const triggers = workflow.split(/^permissions:/m)[0];
+  assert.match(triggers, /^  pull_request:$/m);
+  assert.match(triggers, /^  push:\n    branches:\n      - main\n      - 'release\/\*'\n    tags:\n      - 'v\*'$/m);
+  assert.match(triggers, /^  workflow_dispatch:$/m);
+  assert.doesNotMatch(triggers, /beta/);
 });
 
-test('ci workflow only runs push builds on main while keeping pull request checks', () => {
-  const fileText = fs
-    .readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
-    .replace(/\r\n/g, '\n');
-
-  assert.match(fileText, /^\s{2}pull_request:\s*$/m);
-  assert.match(fileText, /^\s{2}push:\s*$/m);
-  assert.match(fileText, /^\s{6}- main\s*$/m);
-  assert.doesNotMatch(fileText, /^\s{6}- master\s*$/m);
-  assert.doesNotMatch(fileText, /^\s{6}- beta\/\*\*\s*$/m);
-
-  assert.match(
-    fileText,
-    /^  package-build:\n    if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'$/m,
-  );
+test('冻结安装包只能在验证通过后打包，PR 不进入签名环境', () => {
+  const verify = job('verify');
+  const packageJob = job('package');
+  assert.match(packageJob, /^    needs: verify$/m);
+  assert.match(packageJob, /^    if: github\.event_name != 'pull_request'$/m);
+  assert.match(packageJob, /^    environment: upper-signing$/m);
+  assert.match(packageJob, /TAURI_SIGNING_PRIVATE_KEY:.*secrets\.TAURI_SIGNING_PRIVATE_KEY\b/);
+  assert.doesNotMatch(verify, /TAURI_SIGNING_PRIVATE_KEY|PLATFORM_UPLOAD_TOKEN/);
 });
 
-test('ci workflow gates static publishing behind verification and packaging', () => {
-  const fileText = fs
-    .readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
-    .replace(/\r\n/g, '\n');
-
-  const packageBlock = extractJobBlock(fileText, 'package-build');
-  const publishBlock = extractJobBlock(fileText, 'publish');
-
-  assert.doesNotMatch(
-    packageBlock,
-    /^    needs:/m,
-    'package-build must start in parallel with verify-debug instead of waiting for it',
-  );
-  assert.match(publishBlock, /^    needs:\n      - verify-debug\n      - package-build$/m);
-  assert.match(
-    publishBlock,
-    /^    if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'$/m,
-  );
-
-  assert.match(
-    packageBlock,
-    /^      artifact_base_name: \$\{\{ steps\.metadata\.outputs\.artifact_base_name \}\}$/m,
-  );
-  assert.doesNotMatch(packageBlock, /Publish-R2StaticUpdater\.ps1/);
-  assert.ok(
-    packageBlock.indexOf('Upload CI package artifact') <
-      packageBlock.indexOf('name: Restore manifests'),
-    'package-build must upload its artifact before restoring manifests',
-  );
-  assert.ok(
-    publishBlock.indexOf('Download CI package artifact') <
-      publishBlock.indexOf('Sync CI static updater source'),
-    'publish must download the package artifact before syncing to the static channel',
-  );
-  assert.match(
-    publishBlock,
-    /name: \$\{\{ needs\.package-build\.outputs\.artifact_base_name \}\}/,
-  );
-  assert.match(
-    publishBlock,
-    /-PackageOutputDir "\$\{\{ needs\.package-build\.outputs\.output_dir \}\}"/,
-  );
+test('验证作业覆盖原有测试、前端类型和完整 Rust 目标', () => {
+  const verify = job('verify');
+  assert.match(workflow, /^  NODE_VERSION: '24\.22\.2'$/m);
+  assert.match(verify, /npm run test:workflow\b/);
+  assert.match(verify, /npm run test:offline\b/);
+  assert.match(verify, /npm run lint\b/);
+  assert.match(verify, /npm run build\b/);
+  assert.match(verify, /python -B -m unittest discover -s tests\/gitlab\b/);
+  assert.match(verify, /cargo test --release --locked --manifest-path src-tauri\/Cargo\.toml\b/);
+  assert.doesNotMatch(verify, /--lib\b/);
 });
 
-test('ci package publishes updater artifacts to the ci static channel', () => {
-  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
-  const renderBlock = extractStepBlock(fileText, 'Render release tauri config');
-  const stageBlock = extractStepBlock(fileText, 'Stage artifacts');
-  const syncBlock = extractStepBlock(fileText, 'Sync CI static updater source');
-
-  assert.match(renderBlock, /\$env:STATIC_UPDATE_BASE_URL\/ci\/latest\.json/);
-  assert.match(stageBlock, /\$env:STATIC_UPDATE_BASE_URL\/ci\/\$env:PLATFORM_ID/);
-  assert.match(syncBlock, /Publish-R2StaticUpdater\.ps1/);
-  assert.match(syncBlock, /AWS_ACCESS_KEY_ID: \$\{\{ secrets\.R2_ACCESS_KEY_ID \}\}/);
-  assert.match(syncBlock, /AWS_SECRET_ACCESS_KEY: \$\{\{ secrets\.R2_SECRET_ACCESS_KEY \}\}/);
-  assert.match(syncBlock, /-ChannelPath ci/);
+test('验证与打包都检出设备协议，发布作业无需协议子模块', () => {
+  for (const name of ['verify', 'package']) {
+    const checkout = stepUsing(job(name), 'actions/checkout');
+    assert.match(checkout, /submodules:\s*(?:true|recursive)\b/);
+    assert.match(checkout, /persist-credentials: false\b/);
+  }
+  assert.doesNotMatch(stepUsing(job('publish'), 'actions/checkout'), /submodules:\s*(?:true|recursive)\b/);
 });
 
-// 验证 Rust 依赖和 target 产物均缓存，并为每个缓存步骤输出命中状态。
-test('release workflows enable Rust target caching and report cache hits', () => {
-  const workflowPaths = [
-    '.github/workflows/ci.yml',
+test('签名验证恢复夹具原始字节，打包保留 Tauri 更新签名', () => {
+  assertOrder(job('verify'), 'git restore --source=HEAD --worktree -- src-tauri/testdata/updater/fixture.bin', 'cargo test');
+  assert.match(job('package'), /run: \.\/scripts\/workflow\/build-platform-package\.ps1/);
+  assert.match(packager, /'--updater-artifacts', 'true'/);
+  assert.match(packager, /\.plugins\.updater\.endpoints = @\(\)/);
+  assertOrder(packager, 'stage-release.mjs', 'freeze_metadata.py');
+  assert.match(packager, /finally\s*\{\s*Invoke-Checked 'node' @\('scripts\/workflow\/restore-manifests\.mjs'/);
+});
+
+test('发布依赖本次打包产物且仅接受主干或标签', () => {
+  const packageJob = job('package');
+  const publish = job('publish');
+  assert.match(publish, /^    needs: package$/m);
+  assert.match(publish, /^    if: github\.event_name != 'pull_request' && \(github\.ref == 'refs\/heads\/main' \|\| github\.ref_type == 'tag'\)$/m);
+
+  const name = packageJob.match(/^      artifact_name:\s*(.+)$/m)?.[1];
+  const upload = packageJob.split(/(?=^      - name: )/m)
+    .find((step) => step.includes('uses: actions/upload-artifact@') && step.includes('path: package/platform/'));
+  assert.ok(name && upload, '缺少冻结安装包或产物名称');
+  assert.match(name, /steps\.build\.outputs\.artifact_base_name/);
+  assert.ok(upload.includes('name: ' + name), '发布作业必须接收实际上传的产物名称');
+  assert.match(upload, /if-no-files-found: error\b/);
+
+  const download = stepUsing(publish, 'actions/download-artifact');
+  assert.match(download, /name:.*needs\.package\.outputs\.artifact_name\b/);
+  assert.match(download, /path: package\/platform\//);
+  assertOrder(publish, 'actions/download-artifact@', 'init_platform_proto.py');
+  assertOrder(publish, 'init_platform_proto.py', 'platform_client.py');
+  assert.match(publish, /platform_client\.py --metadata package\/platform\/upload-metadata\.json/);
+});
+
+test('平台发布按通道串行，新提交不能取消正在发布的作业', () => {
+  const globalSettings = workflow.split(/^jobs:/m)[0];
+  const publish = job('publish');
+  assert.doesNotMatch(globalSettings, /^concurrency:/m);
+  assert.match(publish, /^      group: upper-platform-.*github\.ref_type == 'tag' && 'stable' \|\| 'ci'/m);
+  assert.match(publish, /^      cancel-in-progress: false$/m);
+  assert.match(publish, /^      queue: max$/m);
+  assert.match(job('verify'), /^      cancel-in-progress: true$/m);
+});
+
+test('正式版在构建前检查远端标签及来源历史', () => {
+  const verify = job('verify');
+  assertOrder(verify, 'release_policy.py', 'verify_stable_source.py');
+  assert.match(verify, /verify_stable_source\.py --repository origin --tag \$env:GITHUB_REF_NAME --sha \$env:GITHUB_SHA/);
+});
+
+test('验证和打包报告 Rust 缓存命中并允许在线解析', () => {
+  assert.doesNotMatch(workflow, /CARGO_NET_OFFLINE/);
+  for (const name of ['verify', 'package']) {
+    const block = job(name);
+    const cache = stepUsing(block, 'Swatinem/rust-cache');
+    const id = cache.match(/^\s*id:\s*([\w-]+)$/m)?.[1];
+    assert.ok(id, 'Rust 缓存需要步骤标识以报告命中状态');
+    assert.match(cache, /cache-targets: 'true'/);
+    assert.ok(block.includes('steps.' + id + '.outputs.cache-hit'), '需要报告 Rust 缓存命中状态');
+  }
+});
+
+test('发布工作流使用 PowerShell 7，支持中文脚本与原生命令退出码', () => {
+  for (const name of ['verify', 'package', 'publish']) {
+    assert.match(job(name), /^    defaults:\n      run:\n        shell: pwsh$/m);
+  }
+  assert.doesNotMatch(workflow, /^\s*shell:\s*powershell\b/m);
+});
+
+test('已退役的 R2、Beta 和 GitLab 发布入口保持关闭', () => {
+  assert.doesNotMatch(workflow, /Publish-R2StaticUpdater|R2_ACCESS_KEY|STATIC_UPDATE_BASE_URL/);
+  for (const file of [
+    '.gitlab-ci.yml',
+    '.github/workflows/beta.yml',
     '.github/workflows/release.yml',
-  ];
-  let rustCacheStepCount = 0;
-
-  for (const workflowPath of workflowPaths) {
-    const fileText = fs.readFileSync(path.join(repoRoot, workflowPath), 'utf8');
-    const namedStepBlocks = extractNamedStepBlocks(fileText);
-    const rustCacheEntries = namedStepBlocks
-      .map((block, index) => ({ block, index }))
-      .filter(({ block }) => /uses:\s*Swatinem\/rust-cache@/m.test(block));
-    const rustCacheSteps = rustCacheEntries.map(({ block }) => block);
-
-    assert.ok(rustCacheSteps.length > 0, `${workflowPath} must configure Swatinem/rust-cache`);
-    rustCacheStepCount += rustCacheSteps.length;
-
-    for (const [entryIndex, { block: stepBlock, index: stepIndex }] of rustCacheEntries.entries()) {
-      assert.match(
-        stepBlock,
-        /^\s*cache-targets:\s*'true'\s*$/m,
-        `${workflowPath} Rust cache step ${entryIndex + 1} must enable target caching`,
-      );
-
-      const idMatch = stepBlock.match(/^\s*id:\s*([A-Za-z_][\w-]*)\s*$/m);
-      assert.ok(idMatch, `${workflowPath} Rust cache step ${entryIndex + 1} must define an id`);
-
-      const nextCacheStepIndex = rustCacheEntries[entryIndex + 1]?.index ?? namedStepBlocks.length;
-      const followingSteps = namedStepBlocks.slice(stepIndex, nextCacheStepIndex).join('\n');
-      const cacheHitOutput = new RegExp(
-        `steps\\.${escapeRegExp(idMatch[1])}\\.outputs\\.cache-hit`,
-      );
-      assert.match(
-        followingSteps,
-        cacheHitOutput,
-        `${workflowPath} must report cache-hit for Rust cache id ${idMatch[1]}`,
-      );
-    }
+    '.github/workflows/sync-static-updater.yml',
+  ]) {
+    assert.equal(exists(file), false, '退役入口仍存在 ' + file);
   }
-
-  assert.equal(rustCacheStepCount, 3, 'ci/release should expose three Rust cache steps');
-});
-
-// 回归：rust-cache 恢复的 registry 索引无法支撑 offline 解析，缓存命中时开启 CARGO_NET_OFFLINE
-// 会让 cargo 直接报 "no matching package named `anyhow` found"，因此 CI 不得强制离线模式。
-test('ci workflow does not force cargo into offline mode', () => {
-  const fileText = fs
-    .readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
-    .replace(/\r\n/g, '\n');
-
-  assert.doesNotMatch(
-    fileText,
-    /CARGO_NET_OFFLINE/,
-    'CARGO_NET_OFFLINE breaks cargo resolution on a Rust cache hit',
-  );
-});
-
-// 回归：run 块会被 runner 写成无 BOM 的 UTF-8 脚本，Windows PowerShell 5.1 按 ANSI 代码页读取，
-// 非 ASCII 字符可能被解码成智能引号并触发 ParserError，因此 5.1 步骤的 run 块必须保持纯 ASCII。
-test('powershell 5.1 steps keep their run blocks ASCII-only', () => {
-  const workflowPaths = [
-    '.github/workflows/ci.yml',
-    '.github/workflows/release.yml',
-  ];
-  let checkedStepCount = 0;
-
-  for (const workflowPath of workflowPaths) {
-    const fileText = fs
-      .readFileSync(path.join(repoRoot, workflowPath), 'utf8')
-      .replace(/\r\n/g, '\n');
-
-    for (const stepBlock of extractNamedStepBlocks(fileText)) {
-      if (!/^\s*shell:\s*powershell\b/m.test(stepBlock)) {
-        continue;
-      }
-
-      const runBlock = extractRunBlock(stepBlock);
-      assert.notEqual(runBlock, null, `${workflowPath} powershell step must define a run block`);
-      checkedStepCount += 1;
-
-      assert.doesNotMatch(
-        runBlock,
-        /[^\t\n\r\x20-\x7e]/,
-        `${workflowPath} powershell 5.1 run block must stay ASCII-only`,
-      );
-    }
-  }
-
-  assert.ok(checkedStepCount > 0, 'expected at least one powershell 5.1 step to check');
-});
-
-// 回归：runner 会先注入 $ErrorActionPreference='Stop'，而 cargo 即使成功也会把进度写到 stderr；
-// 只要 run 块接了 2>&1，那一行 stderr 就会被当成终止性错误（定时构建曾因此每天必挂）。
-// 凡含 2>&1 的 5.1 步骤都必须覆盖成 Continue；真实失败仍由各步的 $LASTEXITCODE 判断负责。
-test('powershell 5.1 steps with 2>&1 must relax $ErrorActionPreference', () => {
-  const workflowPaths = [
-    '.github/workflows/ci.yml',
-    '.github/workflows/release.yml',
-  ];
-  let checkedStepCount = 0;
-
-  for (const workflowPath of workflowPaths) {
-    const fileText = fs
-      .readFileSync(path.join(repoRoot, workflowPath), 'utf8')
-      .replace(/\r\n/g, '\n');
-
-    for (const stepBlock of extractNamedStepBlocks(fileText)) {
-      if (!/^\s*shell:\s*powershell\b/m.test(stepBlock)) {
-        continue;
-      }
-
-      const runBlock = extractRunBlock(stepBlock);
-      if (runBlock === null || !/2>&1/.test(runBlock)) {
-        continue;
-      }
-
-      checkedStepCount += 1;
-      assert.match(
-        stepBlock,
-        /\$ErrorActionPreference\s*=\s*["']Continue["']/,
-        `${workflowPath} 步骤使用了 2>&1，必须在 run 块内覆盖 $ErrorActionPreference 为 Continue`,
-      );
-    }
-  }
-
-  assert.ok(
-    checkedStepCount >= 11,
-    `CI/Stable 应至少覆盖 11 个受保护的 2>&1 步骤，实际为 ${checkedStepCount}`,
-  );
-});
-
-// 回归：PowerShell 向原生命令传参时会丢掉空字符串元素，于是后面的 flag 会被当成它的值，
-// node 的 parseArgs 会报 "argument is ambiguous"（beta 的 resolve 步骤曾经如此）。
-test('powershell steps do not pass possibly-empty expressions as standalone arguments', () => {
-  const workflowPaths = [
-    '.github/workflows/ci.yml',
-    '.github/workflows/release.yml',
-  ];
-
-  for (const workflowPath of workflowPaths) {
-    const lines = fs
-      .readFileSync(path.join(repoRoot, workflowPath), 'utf8')
-      .replace(/\r\n/g, '\n')
-      .split('\n');
-
-    for (let index = 0; index < lines.length - 1; index += 1) {
-      if (!/^\s*'--[a-zA-Z][\w-]*'?,?\s*$/.test(lines[index])) {
-        continue;
-      }
-
-      // 只盯"确实可能为空"的命名空间：dispatch 输入、仓库变量、环境变量。
-      // github.ref_name / github.sha / github.repository 这类在支持的事件里不会为空。
-      assert.doesNotMatch(
-        lines[index + 1],
-        /^\s*"\$\{\{\s*(?:github\.event\.inputs|inputs|vars|env)\./,
-        `${workflowPath}:${index + 2} 把可能为空的表达式当作独立参数传递，PowerShell 会丢弃空字符串`,
-      );
-    }
-  }
-});
-
-// 回归：tests/workflow 里有 4 个用例直接读取 proto/*.proto，凡是执行该测试套件的 job 都必须
-// 让子模块可用（checkout 时 submodules: true，或显式 git submodule update --init），
-// 否则会以 ENOENT 失败（曾有 workflow 因为忘记拉子模块而整条链路失败）。
-test('jobs running the workflow test suite must make the proto submodule available', () => {
-  const workflowDir = path.join(repoRoot, '.github', 'workflows');
-  const workflowPaths = fs
-    .readdirSync(workflowDir)
-    .filter((file) => /\.ya?ml$/.test(file))
-    .map((file) => `.github/workflows/${file}`);
-  const checkedJobs = [];
-
-  for (const workflowPath of workflowPaths) {
-    const fileText = fs
-      .readFileSync(path.join(repoRoot, workflowPath), 'utf8')
-      .replace(/\r\n/g, '\n');
-
-    for (const job of listJobBlocks(fileText)) {
-      if (!/npm run test:workflow|node --test tests\/workflow/.test(job.block)) {
-        continue;
-      }
-
-      checkedJobs.push(`${workflowPath}:${job.name}`);
-      assert.match(
-        job.block,
-        /git submodule update --init|submodules:\s*true/,
-        `${workflowPath} 的 job「${job.name}」会运行 tests/workflow，必须先让 proto 子模块可用`,
-      );
-    }
-  }
-
-  assert.deepEqual(checkedJobs.sort(), [
-    '.github/workflows/ci.yml:verify-debug',
-    '.github/workflows/release.yml:publish-release',
-  ]);
-});
-
-// publish 工作区是干净检出，package/metadata 与 package/.manifest-backup 都不存在，
-// 因此产物来源只能用已下载产物自身内嵌的提交信息校验。
-test('ci publish verifies the downloaded artifact against the current commit', () => {
-  const fileText = fs
-    .readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8')
-    .replace(/\r\n/g, '\n');
-  const verifyBlock = extractStepBlock(fileText, 'Verify artifact commit');
-
-  assert.match(verifyBlock, /needs\.package-build\.outputs\.output_dir/);
-  assert.match(verifyBlock, /latest\.json/);
-  assert.match(verifyBlock, /\$env:GITHUB_SHA\.Substring\(0, 7\)/);
-  assert.match(verifyBlock, /sha\\\./);
-  assert.doesNotMatch(
-    verifyBlock,
-    /package[/\\]metadata/,
-    'publish 工作区没有 package/metadata，不能据此校验产物来源',
-  );
-});
-
-test('Beta publishing is retired and Stable verifies remote history', () => {
-  assert.equal(fs.existsSync(path.join(repoRoot, '.github/workflows/beta.yml')), false);
-  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8');
-  const sourceBlock = extractStepBlock(fileText, 'Verify stable source');
-  assert.match(sourceBlock, /verify_stable_source.py/);
-  assert.doesNotMatch(fileText, /verify-beta-lineage|refs\/heads\/beta/);
-  const syncText = fs.readFileSync(path.join(repoRoot, '.github/workflows/sync-static-updater.yml'), 'utf8');
-  assert.doesNotMatch(syncText, /beta-latest|channel -eq "beta"|          - beta/);
-});
-
-test('release workflow verifies an existing tag before creating the release', () => {
-  const fileText = fs.readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8');
-  const resolveBlock = extractStepBlock(fileText, 'Resolve release target');
-  const releaseBlock = extractStepBlock(fileText, 'Create or update GitHub Release');
-  assert.match(resolveBlock, /github\.event\.inputs\.release_tag \|\| github\.ref_name/);
-  assert.match(resolveBlock, /refs\/tags\/\$tag/);
-  assert.doesNotMatch(resolveBlock, /git describe/);
-  assert.match(releaseBlock, /gh release create \$tag \$files --verify-tag --title \$title --generate-notes --latest/);
-});
-
-test('release workflow keeps manual stable publishing path', () => {
-  const fileText = fs
-    .readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8')
-    .replace(/\r\n/g, '\n');
-
-  assert.match(fileText, /^\s{2}push:\n\s{4}tags:\n\s{6}- v\*$/m);
-  assert.match(fileText, /^\s{2}workflow_dispatch:$/m);
 });

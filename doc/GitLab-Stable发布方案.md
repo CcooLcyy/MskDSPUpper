@@ -1,4 +1,6 @@
-# 上位机发布约定
+# GitLab Stable 发布方案（历史）
+
+现行入口见 [GitHub Actions 与发版策略](GitHub-Actions与发版策略.md)。以下保留原 GitLab 发布约定供查阅。
 
 现行发布入口是 GitLab：`main` 执行完整验证、NSIS 签名打包并发布 `ci`；受保护 `release/X.Y` 执行相同验证与打包，保留 CI 预发布版本和流水线产物，**不写入全局 CI 或 Stable 通道**；受保护 `vX.Y.Z` 标签执行本标签当前 SHA 的完整验证与打包，成功后自动发布 `stable`。
 

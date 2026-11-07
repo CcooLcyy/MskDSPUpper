@@ -1,4 +1,4 @@
-"""GitLab CI/候选分支/Stable 的来源和真实安装包版本约束，不读取或输出凭据。"""
+"""校验发布流水线身份和安装包版本，不读取或输出凭据。"""
 from datetime import datetime
 import json
 import os
@@ -27,15 +27,42 @@ def resolve_source(branch, base_version=None):
     return "ci"
 
 
-def validate_pipeline(environment, channel):
-    tag = environment.get("CI_COMMIT_TAG", "")
-    branch = environment.get("CI_COMMIT_BRANCH", "")
-    if (environment.get("CI_PIPELINE_SOURCE") not in ("push", "web")
-            or (channel == "stable" and (not tag or branch))
-            or (channel != "stable" and (tag or not branch))
-            or (channel == "stable" or branch.startswith("release/")) and environment.get("CI_COMMIT_REF_PROTECTED") != "true"
+def release_identity(environment):
+    if environment.get("GITHUB_ACTIONS") == "true":
+        ref_type = environment.get("GITHUB_REF_TYPE")
+        prefix = {"branch": "refs/heads/", "tag": "refs/tags/"}.get(ref_type)
+        ref = environment.get("GITHUB_REF", "")
+        if (not prefix or not ref.startswith(prefix)
+                or environment.get("GITHUB_EVENT_NAME") not in ("push", "workflow_dispatch")):
+            raise ValueError("GitHub 发布仅接受分支或标签的 push 或手动触发")
+        ref = ref[len(prefix):]
+        tag, branch = (ref, "") if ref_type == "tag" else ("", ref)
+        protected = environment.get("GITHUB_REF_PROTECTED") == "true"
+        sha = environment.get("GITHUB_SHA", "")
+        pipeline_id = environment.get("GITHUB_RUN_ID", "")
+        server = environment.get("GITHUB_SERVER_URL", "")
+        repository_name = environment.get("GITHUB_REPOSITORY", "")
+        if (server != "https://github.com" or not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", repository_name)
+                or repository_name.split("/")[1] in (".", "..")):
+            raise ValueError("GitHub 发布仓库地址不合法")
+        repository = f"{server}/{repository_name}"
+    else:
+        if environment.get("CI_PIPELINE_SOURCE") not in ("push", "web"):
+            raise ValueError("GitLab 发布仅接受 push 或手动流水线")
+        tag = environment.get("CI_COMMIT_TAG", "")
+        branch = environment.get("CI_COMMIT_BRANCH", "")
+        ref = tag or branch
+        protected = environment.get("CI_COMMIT_REF_PROTECTED") == "true"
+        sha = environment.get("CI_COMMIT_SHA", "")
+        pipeline_id = environment.get("CI_PIPELINE_ID", "")
+        repository = environment.get("CI_PROJECT_URL", "")
+    channel = resolve_source(ref)
+    if (channel == "stable" and (not tag or branch)
+            or channel != "stable" and (tag or not branch)
+            or (channel == "stable" or branch.startswith("release/")) and not protected
             or environment.get("UPPER_RELEASE_CHANNEL", channel) != channel):
-        raise ValueError("仅允许当前 push/web 流水线，Release/Stable 必须使用受保护引用且渠道一致")
+        raise ValueError("Release/Stable 必须使用受保护引用，且引用类型与渠道一致")
+    return dict(channel=channel, ref=ref, tag=tag, sha=sha, pipeline_id=pipeline_id, repository=repository)
 
 
 def validate_version(branch, channel, version, sha):
@@ -59,11 +86,10 @@ def validate_version(branch, channel, version, sha):
 
 def release_context(root, environment=None):
     environment = os.environ if environment is None else environment
-    branch = environment.get("CI_COMMIT_TAG") or environment.get("CI_COMMIT_BRANCH", "")
+    identity = release_identity(environment)
     base = json.loads((Path(root) / "package.json").read_text(encoding="utf-8"))["version"]
-    channel = resolve_source(branch, base)
-    validate_pipeline(environment, channel)
-    return dict(channel=channel, ref=branch, tag=branch if channel == "stable" else "", metadata=f"package/metadata/{channel}.json",
+    channel = resolve_source(identity["ref"], base)
+    return dict(channel=channel, ref=identity["ref"], tag=identity["tag"], metadata=f"package/metadata/{channel}.json",
                 config=f"package/generated/tauri.{channel}.conf.json")
 
 
@@ -71,4 +97,4 @@ if __name__ == "__main__":
     try:
         print(json.dumps(release_context(Path.cwd())))
     except (ValueError, KeyError, OSError):
-        raise SystemExit("无法确定 GitLab 发布渠道，请检查基础版本、分支及受保护流水线来源") from None
+        raise SystemExit("无法确定发布渠道，请检查基础版本、分支及受保护流水线来源") from None

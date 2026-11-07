@@ -47,21 +47,22 @@ def validate_protocol(destination):
         raise InitError("固定协议提交缺少软件仓库协议")
 
 
-def public_protocol_environment(environ):
-    """保留网络配置，隔离与公开协议获取无关的 GitLab 凭据及认证头。"""
+def public_github_environment(environ):
+    """保留网络配置，匿名读取 GitHub 协议和发布来源。"""
     environment = dict(environ)
     environment.pop("CI_JOB_TOKEN", None)
     environment.pop("GIT_CONFIG_PARAMETERS", None)
     for name in list(environment):
         if name.startswith("GIT_CONFIG_KEY_") or name.startswith("GIT_CONFIG_VALUE_"):
             environment.pop(name)
-    environment.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_COUNT="1",
-                       GIT_CONFIG_KEY_0="http.https://github.com/.extraHeader", GIT_CONFIG_VALUE_0="")
+    environment.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_COUNT="2",
+                       GIT_CONFIG_KEY_0="http.https://github.com/.extraHeader", GIT_CONFIG_VALUE_0="",
+                       GIT_CONFIG_KEY_1="credential.helper", GIT_CONFIG_VALUE_1="")
     return environment
 
 
 def initialize(destination, environ=None):
-    environment = public_protocol_environment(os.environ if environ is None else environ)
+    environment = public_github_environment(os.environ if environ is None else environ)
     pin_file = Path(__file__).with_name("platform-proto.ref")
     if pin_file.read_text(encoding="utf-8").strip() != PIN or not re.fullmatch(r"[a-f0-9]{40}", PIN):
         raise InitError("平台协议固定提交不一致")

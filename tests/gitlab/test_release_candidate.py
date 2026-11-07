@@ -159,7 +159,7 @@ class ReleaseSourceTests(unittest.TestCase):
 
     def test_gitlab_candidate_has_no_publish_job(self):
         from test_platform_client import ROOT
-        config = (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8")
+        config = (ROOT / "tests/gitlab/fixtures/gitlab-ci.yml").read_text(encoding="utf-8")
         workflow, publish = config.split("upper-publish:", 1)
         self.assertNotIn("beta/", workflow)
         self.assertIn("release", workflow)

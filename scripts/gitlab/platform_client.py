@@ -18,8 +18,8 @@ import time
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from init_platform_proto import auth_environment
-from release_policy import resolve_source, validate_pipeline, validate_version
+from init_platform_proto import auth_environment, public_github_environment
+from release_policy import release_identity, validate_version
 from verify_stable_source import verify_stable_source
 
 
@@ -69,18 +69,17 @@ def load_metadata(metadata_path, environ=None):
             or not repository_url(str(data["source_repository"]))):
         raise ClientError("上位机冻结身份、签名、文件或摘要不合法")
     try:
-        if resolve_source(data["source_ref"]) != data["channel"]:
+        context = release_identity(environment)
+        if data["channel"] != context["channel"]:
             raise ValueError("分支渠道不匹配")
-        validate_pipeline(environment, data["channel"])
         validate_version(data["source_ref"], data["channel"], data["version"], data["source_sha"])
     except (ValueError, TypeError):
         raise ClientError("冻结产物的分支、真实版本或受保护渠道不合法") from None
-    if (environment.get("CI_PIPELINE_SOURCE") not in ("push", "web")
-            or data["source_ref"] != (environment.get("CI_COMMIT_TAG") or environment.get("CI_COMMIT_BRANCH"))
-            or data["source_sha"] != environment.get("CI_COMMIT_SHA")
-            or str(data["pipeline_id"]) != environment.get("CI_PIPELINE_ID")
+    if (data["source_ref"] != context["ref"]
+            or data["source_sha"] != context["sha"]
+            or str(data["pipeline_id"]) != context["pipeline_id"]
             or not re.fullmatch(r"[1-9][0-9]*", str(data["pipeline_id"]))
-            or data["source_repository"].rstrip("/") != environment.get("CI_PROJECT_URL", "").rstrip("/")):
+            or data["source_repository"].rstrip("/") != context["repository"].rstrip("/")):
         raise ClientError("仅允许当前来源分支 push 或手动流水线发布自身冻结产物")
     archive = path.parent / data["file_name"]
     if (archive.is_symlink() or not archive.is_file() or archive.stat().st_size != data["size"]
@@ -91,8 +90,19 @@ def load_metadata(metadata_path, environ=None):
 
 def check_current_head(metadata, environ=None):
     environment = os.environ if environ is None else environ
-    _, git_environment = auth_environment(environment)
-    repository = metadata["source_repository"].rstrip("/")
+    if environment.get("GITHUB_ACTIONS") == "true":
+        try:
+            context = release_identity(environment)
+        except ValueError as error:
+            raise ClientError(str(error)) from None
+        if (metadata["source_ref"] != context["ref"] or metadata["source_sha"] != context["sha"]
+                or metadata["channel"] != context["channel"]):
+            raise ClientError("远端来源检查必须使用当前 Actions 引用和提交")
+        repository = context["repository"]
+        git_environment = public_github_environment(environment)
+    else:
+        _, git_environment = auth_environment(environment)
+        repository = metadata["source_repository"].rstrip("/")
     if not repository.endswith(".git"):
         repository += ".git"
     if metadata["channel"] == "stable":
