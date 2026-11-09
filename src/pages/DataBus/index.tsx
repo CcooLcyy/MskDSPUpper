@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { UNSAFE_DataRouterContext, useBlocker, useSearchParams } from 'react-router-dom';
 import {
   App as AntApp,
   Button,
@@ -42,6 +42,7 @@ import { DATA_BUS_VIEW_QUERY_KEY, normalizeDataBusView } from '../../components/
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import { usePointerReorder } from '../../components/interaction/use-pointer-reorder';
 import { useAppMode } from '../../offline/app-mode-context';
+import { useConfigDraft, useHasConfigDraft } from '../../drafts/config-drafts';
 import { createRouteDirectionDraft, hasDraftSelection, changeDraftConnection, getDraftPairs, removeDraftPair, classifyDraftRoutes, filterTags, selectFilteredTags, matchSameNameTags, findInvalidConnectionGroups } from './route-draft';
 import type { RouteBatchMode, RouteDirectionDraft } from './route-draft';
 import './index.css';
@@ -73,6 +74,24 @@ type RouteTagDrag = {
   side: 'source' | 'destination';
   index: number;
 };
+type RouteDraftSnapshot = {
+  directions: RouteDirectionDraft[];
+  activeId: number | null;
+  initial: string;
+  connections: DcConnectionInfo[];
+};
+const routeDraftKey = 'routes';
+
+function RouteSubmitGuard({ submitting }: { submitting: boolean }) {
+  const blocker = useBlocker(submitting);
+  const { message: messages } = AntApp.useApp();
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    blocker.reset();
+    messages.warning('正在创建路由，请等待本次操作完成后切页');
+  }, [blocker, messages]);
+  return null;
+}
 
 const ROUTE_TAG_DRAG_PREFIX = 'mskdsp-route-tag:';
 const ROUTE_TAG_POINTER_SEPARATOR = '\u0000';
@@ -126,8 +145,11 @@ const formatPointValue = (value: DcPointUpdate['value']): string => {
 
 const DataBus: React.FC = () => {
   const { modal } = AntApp.useApp();
+  const dataRouter = useContext(UNSAFE_DataRouterContext);
   const [searchParams, setSearchParams] = useSearchParams();
   const { can, workspace } = useAppMode();
+  const { read, write, clear } = useConfigDraft<RouteDraftSnapshot>('/data-bus');
+  const retainedRoute = useHasConfigDraft('/data-bus');
   const [catalogCollapsed, setCatalogCollapsed] = useState(false);
   const [connectionSearch, setConnectionSearch] = useState('');
   const [catalogTagSearch, setCatalogTagSearch] = useState('');
@@ -151,6 +173,9 @@ const DataBus: React.FC = () => {
   const [routeSubmitting, setRouteSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const nextDraftId = useRef(0);
+  const [routeInitial, setRouteInitial] = useState('');
+  const routeConnections = useRef<DcConnectionInfo[]>([]);
+  const routeDirty = routeDirections.length > 0 && JSON.stringify(routeDirections) !== routeInitial;
   const activeGroupButtonRef = useRef<HTMLButtonElement | null>(null);
   const groupEditorRef = useRef<HTMLElement | null>(null);
   const [connectionChange, setConnectionChange] = useState<{ draftId: number; side: 'source' | 'destination'; connId: number } | null>(null);
@@ -254,6 +279,24 @@ const DataBus: React.FC = () => {
     .filter((connection) => !isControlOrchestratorConnection(connection))
     .map((connection) => ({ value: connection.conn_id, label: `${connection.module_name}/${connection.conn_name}` }));
   const openCreateRoute = useCallback((sourceTag?: string) => {
+    if (loading) return;
+    const stored = read(routeDraftKey);
+    if (stored) {
+      // 连接 ID 可能在设备重启或重建连接后被复用，以模块名和连接名恢复。
+      const restoreId = (id: number | null) => {
+        const previous = stored.connections.find((connection) => connection.conn_id === id);
+        return previous ? connections.find((connection) => connection.module_name === previous.module_name && connection.conn_name === previous.conn_name)?.conn_id ?? null : null;
+      };
+      const restored = stored.directions.map((direction) => ({ ...direction, sourceConnId: restoreId(direction.sourceConnId), destinationConnId: restoreId(direction.destinationConnId) }));
+      setRouteInitial(stored.initial);
+      routeConnections.current = connections;
+      nextDraftId.current = Math.max(0, ...restored.map((direction) => direction.id));
+      setRouteDirections(restored);
+      setActiveRouteDirectionId(stored.activeId);
+      setRouteDrag(null);
+      setRouteModalOpen(true);
+      return;
+    }
     const directionId = ++nextDraftId.current;
     setSourceTagSearch('');
     setDestinationTagSearch('');
@@ -262,13 +305,22 @@ const DataBus: React.FC = () => {
       ? connections.find((connection) => !isControlOrchestratorConnection(connection))?.conn_id ?? null
       : selectedConnection?.conn_id ?? connections.find((connection) => !isControlOrchestratorConnection(connection))?.conn_id ?? null;
     const draft = createRouteDirectionDraft(directionId, defaultSourceConnId, null);
+    setRouteInitial(JSON.stringify([draft]));
+    routeConnections.current = connections;
     if (sourceTag && selectedConnection && !isControlOrchestratorConnection(selectedConnection)) draft.sourceTags = [sourceTag];
     setRouteDirections([draft]);
     setActiveRouteDirectionId(directionId);
     setRouteDrag(null);
     setRouteModalOpen(true);
     console.info('数据总线打开新增路由草稿', { sourceConnId: defaultSourceConnId, sourceTag: draft.sourceTags[0] });
-  }, [connections, selectedConnId]);
+  }, [connections, loading, read, selectedConnId]);
+
+  useLayoutEffect(() => {
+    if (!routeModalOpen) return;
+    if (routeDirty) {
+      write(routeDraftKey, { directions: routeDirections, activeId: activeRouteDirectionId, initial: routeInitial, connections: routeConnections.current });
+    } else clear(routeDraftKey);
+  }, [activeRouteDirectionId, clear, routeDirections, routeDirty, routeInitial, routeModalOpen, write]);
 
   const updateActiveDirection = useCallback((patch: Partial<RouteDirectionDraft>) => {
     if (activeRouteDirectionId === null || submittingRef.current) return;
@@ -341,9 +393,13 @@ const DataBus: React.FC = () => {
 
   const closeRouteModal = () => {
     if (submittingRef.current) return;
-    if (routeDirections.some(hasDraftSelection)) {
-      modal.confirm({ title: '放弃本次路由草稿？', content: '关闭后，所有映射组中尚未创建的点位配对将被丢弃。', okText: '放弃草稿', cancelText: '继续配置', okButtonProps: { danger: true }, onOk: () => setRouteModalOpen(false) });
-    } else setRouteModalOpen(false);
+    const discard = () => {
+      clear(routeDraftKey);
+      setRouteModalOpen(false);
+    };
+    if (routeDirty) {
+      modal.confirm({ title: '放弃本次路由草稿？', content: '关闭后，所有映射组中尚未创建的点位配对将被丢弃。', okText: '放弃草稿', cancelText: '继续配置', okButtonProps: { danger: true }, onOk: discard });
+    } else discard();
   };
 
   const draftRouteStatuses = useMemo(
@@ -387,6 +443,7 @@ const DataBus: React.FC = () => {
       });
       await api.dcUpsertRoutes(routesToSubmit, false);
       messageApi.success(`已创建 ${routesToSubmit.length} 条路由`);
+      clear(routeDraftKey);
       setRouteModalOpen(false);
       await refreshRoutes();
     } catch (e) {
@@ -395,7 +452,7 @@ const DataBus: React.FC = () => {
       submittingRef.current = false;
       setRouteSubmitting(false);
     }
-  }, [bidirectionalRouteCount, duplicateRouteCount, existingRouteCount, incompletePairCount, messageApi, refreshRoutes]);
+  }, [bidirectionalRouteCount, clear, duplicateRouteCount, existingRouteCount, incompletePairCount, messageApi, refreshRoutes]);
 
   const handleRouteSubmit = useCallback(async () => {
     if (submittingRef.current) return;
@@ -407,6 +464,16 @@ const DataBus: React.FC = () => {
     if (incompleteDirectionCount > 0) {
       console.warn('数据总线提交被连接校验阻止', { incompleteDirectionCount });
       messageApi.error(`还有 ${incompleteDirectionCount} 个映射组未选择有效的源连接和目标连接，请重新选择`);
+      return;
+    }
+    const connectionChanged = routeDirections.filter(hasDraftSelection).some((direction) =>
+      [direction.sourceConnId, direction.destinationConnId].some((id) => {
+        const before = routeConnections.current.find((connection) => connection.conn_id === id);
+        const current = connections.find((connection) => connection.conn_id === id);
+        return before?.module_name !== current?.module_name || before?.conn_name !== current?.conn_name;
+      }));
+    if (connectionChanged) {
+      messageApi.error('点位连接已变化，请暂存后重新打开草稿核对');
       return;
     }
     if (selfRouteCount > 0) {
@@ -692,6 +759,7 @@ const DataBus: React.FC = () => {
 
   return <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
     {contextHolder}
+    {dataRouter && <RouteSubmitGuard submitting={routeSubmitting} />}
     {view === 'config' ? <ResizableSplit
       className={`data-bus-config-grid${catalogCollapsed ? ' is-catalog-collapsed' : ''}`}
       defaultSize={400}
@@ -700,7 +768,7 @@ const DataBus: React.FC = () => {
       storageKey="mskdsp.layout.data-bus.config"
     >
       <div style={{ minHeight: 0 }}>{connectionPanel}</div>
-      <Card className="data-bus-route-card" title={<Space size={8}>{catalogCollapsed && <Button type="text" size="small" title="展开连接目录" aria-label="展开连接目录" icon={<MenuUnfoldOutlined />} onClick={toggleCatalog} />}<span>路由配置</span><Tag color="blue">{visibleRoutes.length}</Tag></Space>} size="small" extra={<div className="data-bus-route-actions"><Button icon={<ReloadOutlined aria-hidden />} onClick={() => void refreshRoutes()}>刷新</Button><Button type="primary" icon={<PlusOutlined aria-hidden />} onClick={() => openCreateRoute()}>新增路由</Button>{visibleRoutes.length > 0 && <Dropdown menu={{ items: [{ key: 'delete-all', label: '全部删除', danger: true, disabled: routeDeleting }], onClick: ({ key }) => { if (key === 'delete-all') handleDeleteAllRoutes(); } }} trigger={['click']}><Button aria-label="更多路由操作" title="更多路由操作" icon={<EllipsisOutlined />} /></Dropdown>}</div>} styles={{ body: { padding: 0 } }}>
+      <Card className="data-bus-route-card" title={<Space size={8}>{catalogCollapsed && <Button type="text" size="small" title="展开连接目录" aria-label="展开连接目录" icon={<MenuUnfoldOutlined />} onClick={toggleCatalog} />}<span>路由配置</span><Tag color="blue">{visibleRoutes.length}</Tag>{retainedRoute && <Tag color="warning">未保存 · 草稿已暂存</Tag>}</Space>} size="small" extra={<div className="data-bus-route-actions"><Button icon={<ReloadOutlined aria-hidden />} onClick={() => void refreshRoutes()}>刷新</Button><Button type="primary" disabled={loading} icon={<PlusOutlined aria-hidden />} onClick={() => openCreateRoute()}>{retainedRoute ? '继续编辑路由草稿' : '新增路由'}</Button>{visibleRoutes.length > 0 && <Dropdown menu={{ items: [{ key: 'delete-all', label: '全部删除', danger: true, disabled: routeDeleting }], onClick: ({ key }) => { if (key === 'delete-all') handleDeleteAllRoutes(); } }} trigger={['click']}><Button aria-label="更多路由操作" title="更多路由操作" icon={<EllipsisOutlined />} /></Dropdown>}</div>} styles={{ body: { padding: 0 } }}>
         <div className="data-bus-route-hint"><Text type="secondary">源点最新值 → 目标点</Text><Tooltip title="同一对点位不允许同时配置两个方向。控制编排自动维护的内部路由不在本页显示。已配置不代表正在转发。"><Button type="text" size="small" aria-label="路由规则说明" icon={<InfoCircleOutlined />} /></Tooltip>{can('realtime') && <Button type="link" size="small" onClick={() => { const next = new URLSearchParams(searchParams); next.set(DATA_BUS_VIEW_QUERY_KEY, 'monitor'); setSearchParams(next, { replace: true }); }}>查看运行数据</Button>}</div>
         {can('workspace.manage') && <div className="data-bus-route-hint"><Tag color="gold">离线工作区</Tag><Text>{workspace?.workspace_name ?? '未命名工作区'}</Text><Text type="secondary">仅修改本地工作区，不会自动下发到设备；可从顶部导出配置。</Text></div>}
         {visibleRoutes.length > 0 ? <><div className="route-filter-toolbar">
@@ -758,7 +826,7 @@ const DataBus: React.FC = () => {
       <Table rowKey="key" columns={realtimeColumns} dataSource={filteredRealtimeData} pagination={false} size="middle" scroll={{ x: 1100, y: 'calc(100vh - 290px)' }} locale={{ emptyText: connections.length ? '暂无最新值，请确认目标连接已启动并产生数据' : '暂无已注册连接' }} />
     </Card>}
     <Modal
-      title="批量新增路由"
+      title={<Space>批量新增路由{routeDirty && <Tag color="warning">未保存 · 草稿已暂存</Tag>}</Space>}
       className="route-mapping-modal"
       open={routeModalOpen}
       onOk={() => void handleRouteSubmit()}
@@ -782,7 +850,7 @@ const DataBus: React.FC = () => {
           {bidirectionalRouteCount + selfRouteCount > 0 && <Tag color="red">冲突 {bidirectionalRouteCount + selfRouteCount} 条</Tag>}
           {incompletePairCount > 0 && <Tag color="orange">未配对 {incompletePairCount} 个</Tag>}
         </div>
-        <Space><CancelBtn /><OkBtn /></Space>
+        <Space>{routeDirty && <Button disabled={routeSubmitting} onClick={() => setRouteModalOpen(false)}>暂存并收起</Button>}<CancelBtn /><OkBtn /></Space>
       </div>}
     >
       <ConfigProvider componentDisabled={routeSubmitting}>

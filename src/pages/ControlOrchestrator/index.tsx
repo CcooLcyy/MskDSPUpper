@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { UNSAFE_DataRouterContext, useBlocker } from 'react-router-dom';
 import {
   Alert,
   App,
@@ -36,6 +37,7 @@ import {
   resolveEditablePointValueType,
 } from '../../utils/control-point-value';
 import type { EditablePointValueType } from '../../utils/control-point-value';
+import { useConfigDraft } from '../../drafts/config-drafts';
 import './index.css';
 
 const { Text } = Typography;
@@ -120,6 +122,14 @@ function draftFromConfig(config: ControlOrchestratorWorkflowConfig): WorkflowDra
     trigger_conn_name: config.trigger?.conn_name ?? '',
     trigger_tag: config.trigger?.tag ?? '',
   };
+}
+
+async function checkSavedConfig(expected: ControlOrchestratorWorkflowConfig) {
+  const configs = await api.controlOrchestratorListSequences();
+  const current = configs.find((config) => config.sequence_name === expected.sequence_name);
+  if (!current || JSON.stringify(draftFromConfig(current)) !== JSON.stringify(draftFromConfig(expected))) {
+    throw new Error('设备中的编排已变化，请刷新后重新核对配置');
+  }
 }
 
 function configFromDraft(draft: WorkflowDraft): ControlOrchestratorWorkflowConfig {
@@ -258,6 +268,26 @@ type PendingBinding = {
   config: ControlOrchestratorWorkflowConfig;
   reason: string;
 };
+type RetainedEditor = {
+  draft: WorkflowDraft;
+  baseline: WorkflowDraft;
+  config: ControlOrchestratorWorkflowConfig | null;
+  pendingBinding: PendingBinding | null;
+};
+const editorDraftKey = 'editor';
+
+function SaveNavigationGuard({ blocked }: { blocked: boolean }) {
+  const blocker = useBlocker(blocked);
+  const { message: messageApi } = App.useApp();
+  useEffect(() => {
+    if (blocker.state === 'blocked') {
+      blocker.reset();
+      messageApi.warning('正在保存编排或同步路由，请等待本次操作完成后切页');
+    }
+  }, [blocker, messageApi]);
+  return null;
+}
+
 type ExecutionRecord = {
   sequenceName: string;
   startedAt: string;
@@ -269,19 +299,23 @@ type ExecutionRecord = {
 
 const ControlOrchestratorPage: React.FC = () => {
   const { modal } = App.useApp();
+  const dataRouter = useContext(UNSAFE_DataRouterContext);
+  const { read, write, clear } = useConfigDraft<RetainedEditor>('/control-orchestrator');
+  const [retained] = useState(() => read(editorDraftKey));
   const [configs, setConfigs] = useState<ControlOrchestratorWorkflowConfig[]>([]);
-  const [selectedName, setSelectedName] = useState<string | null>(null);
-  const [draft, setDraft] = useState<WorkflowDraft>(emptyDraft);
+  const [selectedName, setSelectedName] = useState<string | null>(retained?.config?.sequence_name ?? null);
+  const [draft, setDraft] = useState<WorkflowDraft>(() => retained?.draft ?? emptyDraft());
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [editorConfig, setEditorConfig] = useState<ControlOrchestratorWorkflowConfig | null>(null);
-  const baseline = useRef('');
+  const [editorConfig, setEditorConfig] = useState<ControlOrchestratorWorkflowConfig | null>(retained?.config ?? null);
+  const [baseline, setBaseline] = useState<WorkflowDraft>(() => retained?.baseline ?? emptyDraft());
+  const editing = editorConfig !== null;
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   const formContainer = useRef<HTMLDivElement>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const operationRef = useRef<Operation | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
-  const [pendingBinding, setPendingBinding] = useState<PendingBinding | null>(null);
+  const [pendingBinding, setPendingBinding] = useState<PendingBinding | null>(retained?.pendingBinding ?? null);
   const [execution, setExecution] = useState<ExecutionRecord | null>(null);
   const [executeModalOpen, setExecuteModalOpen] = useState(false);
   const [executeValueType, setExecuteValueType] = useState<EditablePointValueType>('Decimal');
@@ -301,6 +335,14 @@ const ControlOrchestratorPage: React.FC = () => {
   const deleting = operation === 'deleting';
   const retrying = operation === 'retrying';
   const selected = useMemo(() => configs.find((config) => config.sequence_name === selectedName) ?? null, [configs, selectedName]);
+
+  useLayoutEffect(() => {
+    if (dirty || pendingBinding) {
+      write(editorDraftKey, { draft, baseline, config: editorConfig, pendingBinding });
+    } else {
+      clear(editorDraftKey);
+    }
+  }, [baseline, clear, dirty, draft, editorConfig, pendingBinding, write]);
 
   const acquire = (next: Operation) => {
     if (operationRef.current) return false;
@@ -383,18 +425,24 @@ const ControlOrchestratorPage: React.FC = () => {
     setErrors({});
   };
   const openEditor = (config: ControlOrchestratorWorkflowConfig | null) => {
-    if (operationRef.current || (pendingBinding && config?.sequence_name !== pendingBinding.config.sequence_name)) return;
+    if (operationRef.current || dirty || (pendingBinding && config?.sequence_name !== pendingBinding.config.sequence_name)) return;
     const next = config ? draftFromConfig(config) : emptyDraft();
-    setEditing(Boolean(config)); setEditorConfig(config); setDraft(next);
-    baseline.current = JSON.stringify(next); setErrors({}); setModalOpen(true);
+    setEditorConfig(config); setDraft(next);
+    setBaseline(next); setErrors({}); setModalOpen(true);
+  };
+  const collapseEditor = () => {
+    if (operationRef.current) return;
+    console.info('控制编排草稿已暂存并收起');
+    setModalOpen(false);
   };
   const closeEditor = () => {
     if (operationRef.current) return;
-    if (JSON.stringify(draft) !== baseline.current) {
+    if (dirty) {
       console.info('控制编排请求确认放弃未保存的修改');
       modal.confirm({
         title: '放弃未保存的修改？', content: '本次编辑的内容尚未保存，关闭后将丢弃这些修改。',
-        okText: '放弃修改', cancelText: '继续编辑', onOk: () => setModalOpen(false),
+        okText: '放弃修改', cancelText: '继续编辑',
+        onOk: () => { setDraft(baseline); setModalOpen(false); },
       });
     } else setModalOpen(false);
   };
@@ -466,12 +514,13 @@ const ControlOrchestratorPage: React.FC = () => {
     });
     if (!acquire('saving')) return;
     try {
+      if (editorConfig) await checkSavedConfig(editorConfig);
       const previous = pendingBinding
         ? (pendingBinding.previous?.trigger ? pendingBinding.previous : pendingBinding.config)
         : editing ? editorConfig : null;
       await api.controlOrchestratorUpsertSequence(config, !editing);
       // 新建配置一旦保存即切换编辑态，路由同步失败后不会再次发起仅创建请求。
-      setEditing(true); setEditorConfig(config); baseline.current = JSON.stringify(draft);
+      setEditorConfig(config); setBaseline(draft);
       setConfigs((current) => [...current.filter((item) => item.sequence_name !== config.sequence_name), config]);
       setSelectedName(config.sequence_name);
       console.info('控制编排配置已保存，开始自动同步路由', { sequenceName: config.sequence_name });
@@ -494,6 +543,7 @@ const ControlOrchestratorPage: React.FC = () => {
     if (!pendingBinding || !acquire('retrying')) return;
     const pending = pendingBinding;
     try {
+      await checkSavedConfig(pending.config);
       await syncBinding(pending.previous, pending.config);
       setPendingBinding(null); messageApi.success('自动路由已同步');
       console.info('控制编排自动路由重试成功', { sequenceName: pending.config.sequence_name });
@@ -504,7 +554,7 @@ const ControlOrchestratorPage: React.FC = () => {
     } finally { release(); }
   };
   const remove = async () => {
-    if (!selected || pendingBinding || !acquire('deleting')) return;
+    if (!selected || pendingBinding || (dirty && selected.sequence_name === editorConfig?.sequence_name) || !acquire('deleting')) return;
     try {
       try { await syncBinding(selected, null); }
       catch (error) { messageApi.error(`自动路由清理失败，编排未删除：${errorText(error)}`); await refresh(); return; }
@@ -585,15 +635,18 @@ const ControlOrchestratorPage: React.FC = () => {
   ];
   const needsTriggerValue = selected?.steps.some((step) => step.use_trigger_value);
   const executionLabels = { running: '执行中', success: '执行成功', failure: '执行失败', 'communication-error': '通信异常，执行结果未知' };
+  const deleteBlocked = !selected || busy || Boolean(pendingBinding) || (dirty && selected.sequence_name === editorConfig?.sequence_name);
 
   return <div className="orchestrator-page">
     {contextHolder}
+    {dataRouter && <SaveNavigationGuard blocked={saving || retrying} />}
     {pendingNotice}
     <Card className="orchestrator-toolbar" size="small"><Space wrap>
-      <Button type="primary" icon={<PlusOutlined aria-hidden="true" />} disabled={busy || Boolean(pendingBinding)} onClick={() => openEditor(null)}>新建编排</Button>
-      <Button icon={<EditOutlined aria-hidden="true" />} disabled={!selected || busy || Boolean(pendingBinding && selected?.sequence_name !== pendingBinding.config.sequence_name)} onClick={() => selected && openEditor(selected)}>编辑</Button>
-      <Popconfirm title={`确认删除编排“${selected?.sequence_name ?? ''}”？`} description="删除时会自动清理该编排维护的路由。" okText="删除" cancelText="取消" onConfirm={remove} disabled={!selected || busy || Boolean(pendingBinding)}>
-        <Button danger icon={<DeleteOutlined aria-hidden="true" />} loading={deleting} disabled={!selected || busy || Boolean(pendingBinding)}>删除</Button>
+      <Button type="primary" icon={<PlusOutlined aria-hidden="true" />} disabled={busy || dirty || Boolean(pendingBinding)} onClick={() => openEditor(null)}>新建编排</Button>
+      <Button icon={<EditOutlined aria-hidden="true" />} disabled={!selected || busy || dirty || Boolean(pendingBinding && selected.sequence_name !== pendingBinding.config.sequence_name)} onClick={() => selected && openEditor(selected)}>编辑</Button>
+      {dirty && !modalOpen && <><Button disabled={busy} onClick={() => { setErrors({}); setModalOpen(true); }}>继续编辑草稿</Button><Tag color="warning">未保存 · 草稿已暂存</Tag></>}
+      <Popconfirm title={`确认删除编排“${selected?.sequence_name ?? ''}”？`} description="删除时会自动清理该编排维护的路由。" okText="删除" cancelText="取消" onConfirm={remove} disabled={deleteBlocked}>
+        <Button danger icon={<DeleteOutlined aria-hidden="true" />} loading={deleting} disabled={deleteBlocked}>删除</Button>
       </Popconfirm>
       <Button icon={<PlayCircleOutlined aria-hidden="true" />} loading={executing} disabled={!selected || busy || Boolean(pendingBinding)} onClick={execute}>{executing ? '执行中' : '执行'}</Button>
       <Button icon={<ReloadOutlined aria-hidden="true" />} loading={loading} disabled={busy} onClick={() => void refresh()}>刷新</Button>
@@ -621,9 +674,11 @@ const ControlOrchestratorPage: React.FC = () => {
     </Card>
     <Modal className="orchestrator-editor-modal" title={editing ? '编辑编排' : '新建编排'} open={modalOpen} onCancel={closeEditor} onOk={() => void save()} confirmLoading={saving}
       cancelText={pendingBinding ? '关闭' : '取消'} okText="保存并同步路由" width={960} style={{ top: 24 }} keyboard={!busy} closable={{ disabled: busy, 'aria-label': '关闭' }} maskClosable={false}
-      cancelButtonProps={{ disabled: busy }} okButtonProps={{ disabled: busy || endpointLoading }}>
+      cancelButtonProps={{ disabled: busy }} okButtonProps={{ disabled: busy || endpointLoading }}
+      footer={(_, { CancelBtn, OkBtn }) => <Space wrap>{dirty && <Button disabled={busy} onClick={collapseEditor}>暂存并收起</Button>}<CancelBtn /><OkBtn /></Space>}>
       <div ref={formContainer} className="orchestrator-editor-body">
         {pendingNotice}
+        {(dirty || (editing && !pendingBinding)) && <Space><Tag color={dirty ? 'warning' : 'success'}>{dirty ? '未保存 · 草稿已暂存' : '已保存'}</Tag></Space>}
         <Alert type="info" showIcon title="选择点位仅更新当前草稿。点击“保存并同步路由”后，才保存编排并自动建立或更新路由。" description="设置触发源点后，来自该源点的同步控制将进入本编排；全部留空时仅支持手工执行。" />
         <div className="orchestrator-point-toolbar"><Text type="secondary">从数据中心已注册点位中选择目标和遥信。</Text><Button icon={<ReloadOutlined aria-hidden="true" />} loading={endpointLoading} disabled={busy} onClick={() => void refreshEndpointOptions()}>刷新点表</Button></div>
         {endpointError && <Alert type="error" title={endpointError} description="请刷新点表后重试，当前结果不能用于判断连接或点名是否已注册。" />}

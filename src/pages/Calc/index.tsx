@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { UNSAFE_DataRouterContext } from 'react-router-dom';
 import { App, Alert, Button, Card, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, EditOutlined, MoreOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
@@ -12,6 +12,7 @@ import type { ItemDraft, OperandDraft } from './editor-model';
 import { inputAlias } from './logic-expression';
 import { namedInputs } from './named-expression';
 import CalcNavigationGuard from './CalcNavigationGuard';
+import { useConfigDraft } from '../../drafts/config-drafts';
 import './index.css';
 
 const { Text } = Typography;
@@ -23,6 +24,8 @@ const groupStates: Record<number, { label: string; color: string }> = {
 type PointOption = { value: string; label: string; point: DcEndpoint };
 type Editor = { index: number | null; draft: ItemDraft; initial: string; config: CalcGroupConfig; routes: DcRoute[] };
 type GroupDraft = { originalName: string | null; name: string; trigger: number; period: number };
+type CalcDraft = { editor: Editor } | { group: GroupDraft; initial: string; baseline: CalcGroupConfig | null };
+const draftKey = 'calculation';
 
 /** 点目录部分加载失败时，已有映射仍独立完整回显。 */
 async function loadPointOptions(): Promise<{ options: PointOption[]; warning: string | null }> {
@@ -43,8 +46,12 @@ const CalcPage: React.FC = () => {
   const { modal } = App.useApp();
   const dataRouter = useContext(UNSAFE_DataRouterContext);
   const [messageApi, contextHolder] = message.useMessage();
+  const { read, write, clear } = useConfigDraft<CalcDraft>('/calc');
+  const [retained] = useState(() => read(draftKey));
+  const retainedEditor = retained && 'editor' in retained ? retained.editor : null;
+  const retainedGroup = retained && 'group' in retained ? retained : null;
   const [groups, setGroups] = useState<CalcGroupInfo[]>([]);
-  const [groupName, setGroupName] = useState<string | null>(null);
+  const [groupName, setGroupName] = useState<string | null>(retainedEditor?.config.group_name ?? retainedGroup?.group.originalName ?? null);
   const [routes, setRoutes] = useState<DcRoute[]>([]);
   const [points, setPoints] = useState<PointOption[]>([]);
   const [catalogWarning, setCatalogWarning] = useState<string | null>(null);
@@ -52,16 +59,23 @@ const CalcPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
-  const [editor, setEditor] = useState<Editor | null>(null);
+  const [editor, setEditor] = useState<Editor | null>(retainedEditor);
   const [pending, setPending] = useState<CalcSaveError | null>(null);
-  const [groupDraft, setGroupDraft] = useState<GroupDraft | null>(null);
-  const groupInitial = useRef('');
+  const [savedGroup, setSavedGroup] = useState<string | null>(null);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [groupDraft, setGroupDraft] = useState<GroupDraft | null>(retainedGroup?.group ?? null);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const groupInitial = useRef(retainedGroup?.initial ?? '');
+  const groupBaseline = useRef(retainedGroup?.baseline ?? null);
   const requestRef = useRef(0);
   const group = groups.find((item) => item.config?.group_name === groupName) ?? null;
   const config = group?.config ?? null;
   const dirty = Boolean(editor && JSON.stringify(editor.draft) !== editor.initial);
   const groupDirty = Boolean(groupDraft && JSON.stringify(groupDraft) !== groupInitial.current);
   const locked = busy || Boolean(pending);
+  const originalItemName = editor && editor.index !== null ? editor.config.items[editor.index].item_name : null;
+  const detachedEditor = Boolean(editor && (editor.config.group_name !== config?.group_name
+    || (originalItemName && !config?.items.some((item) => item.item_name === originalItemName))));
   const expressionDraft = editor?.draft.operatorKind === 11 ? editor.draft : null;
   const expressionInputNames = expressionDraft ? namedInputs(expressionDraft.inputs) : [];
   const expressionText = expressionDraft ? draftExpressionText(expressionDraft, expressionInputNames) : '';
@@ -85,6 +99,11 @@ const CalcPage: React.FC = () => {
     } finally { if (request === requestRef.current) setLoading(false); }
   }, []);
   useEffect(() => { void refresh(); return () => { requestRef.current += 1; }; }, [refresh]);
+  useLayoutEffect(() => {
+    if (!pending && editor && dirty) write(draftKey, { editor });
+    else if (!pending && groupDraft && groupDirty) write(draftKey, { group: groupDraft, initial: groupInitial.current, baseline: groupBaseline.current });
+    else clear(draftKey);
+  }, [clear, dirty, editor, groupDirty, groupDraft, pending, write]);
   useEffect(() => {
     if (!dirty && !pending && !groupDirty) return;
     const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
@@ -95,7 +114,7 @@ const CalcPage: React.FC = () => {
   const guard = (action: () => void) => {
     if (busyRef.current) return;
     if (pending) { messageApi.warning('请先完成待重试的路由同步或恢复运行'); return; }
-    if (dirty) modal.confirm({ title: '放弃未保存修改？', content: '当前计算与点位关联尚未保存。', okText: '放弃修改', cancelText: '继续编辑', onOk: action });
+    if (dirty || groupDirty) modal.confirm({ title: '放弃未保存修改？', content: '当前计算草稿尚未保存。', okText: '放弃修改', cancelText: '继续编辑', onOk: () => { setGroupDraft(null); action(); } });
     else action();
   };
   const begin = () => { if (busyRef.current) return false; busyRef.current = true; setBusy(true); return true; };
@@ -112,6 +131,7 @@ const CalcPage: React.FC = () => {
       const draft = item ? draftFromItem(groupName, item, baselineRoutes) : defaultItem(`计算项${latest.config.items.length + 1}`);
       setGroups((current) => current.map((value) => value.config?.group_name === groupName ? latest : value));
       setRoutes(baselineRoutes); setPoints(catalog.options); setCatalogWarning(catalog.warning); setLoadError(null);
+      setSaveFailed(false);
       setEditor({ index: actualIndex, draft, initial: JSON.stringify(draft), config: latest.config, routes: baselineRoutes });
       console.info('打开计算清单内编辑', { 分组: groupName, 计算项: draft.itemName, 新增: index === null });
     } catch (error) { setLoadError(`加载计算项及关联失败：${formatErrorText(error)}`); }
@@ -147,11 +167,15 @@ const CalcPage: React.FC = () => {
     if (error instanceof CalcSaveError && error.configSaved) {
       setPending(error);
       messageApi.warning(error.phase === 'restart' ? '计算与关联已保存，恢复分组运行失败' : '计算已保存，路由同步失败，请重试');
-    } else messageApi.error(`保存失败：${formatErrorText(error)}`);
+    } else {
+      setSaveFailed(true);
+      messageApi.error(`保存失败：${formatErrorText(error)}`);
+    }
     console.error('保存计算与关联失败', error);
   };
   const saveItem = async () => {
-    if (!editor || pending || loadError || !begin()) return;
+    if (!editor || pending || loadError || loading || detachedEditor || !begin()) return;
+    setSaveFailed(false);
     try {
       const error = validateDraft(editor.draft);
       if (error) { messageApi.warning(error); return; }
@@ -162,13 +186,14 @@ const CalcPage: React.FC = () => {
         previousItem: editor.index === null ? null : editor.config.items[editor.index], item,
         inputSources: editor.draft.inputs.map((input) => input.sourceKind === 1 ? input.sources : []), outputs: editor.draft.outputs, baselineRoutes: editor.routes });
       await saveCalcWithRoutes({ config: { ...editor.config, items }, expectedConfig: editor.config, plan, api });
+      setSavedGroup(editor.config.group_name);
       setEditor(null); setPending(null); await refresh(); messageApi.success('计算与关联已保存');
       console.info('计算与关联已保存', { 分组: editor.config.group_name, 计算项: item.item_name });
     } catch (error) { handleSaveError(error); await refresh(); } finally { end(); }
   };
   const retry = async () => {
     if (!pending || !begin()) return;
-    try { await retryCalcRoutes(pending, api); setPending(null); setEditor(null); await refresh(); messageApi.success('计算与关联同步完成'); }
+    try { await retryCalcRoutes(pending, api); setSavedGroup(pending.config.group_name); setPending(null); setEditor(null); await refresh(); messageApi.success('计算与关联同步完成'); }
     catch (error) { handleSaveError(error); } finally { end(); }
   };
   const reloadPending = () => modal.confirm({
@@ -193,12 +218,16 @@ const CalcPage: React.FC = () => {
   const openGroup = (create: boolean) => guard(() => {
     setEditor(null);
     const draft = { originalName: create ? null : config?.group_name ?? null, name: create ? `计算组${groups.length + 1}` : config?.group_name ?? '', trigger: create ? 1 : config?.trigger_mode === 2 ? 2 : 1, period: create ? 1000 : config?.period_ms || 1000 };
-    groupInitial.current = JSON.stringify(draft); setGroupDraft(draft);
+    groupInitial.current = JSON.stringify(draft);
+    groupBaseline.current = create ? null : config;
+    setGroupDraft(draft);
+    setGroupModalOpen(true);
   });
   const closeGroup = () => {
     if (busyRef.current) return;
-    if (groupDirty) modal.confirm({ title: '放弃未保存的分组修改？', okText: '放弃修改', cancelText: '继续编辑', onOk: () => setGroupDraft(null) });
-    else setGroupDraft(null);
+    const discard = () => { setGroupModalOpen(false); setGroupDraft(null); };
+    if (groupDirty) modal.confirm({ title: '放弃未保存的分组修改？', okText: '放弃修改', cancelText: '继续编辑', onOk: discard });
+    else discard();
   };
   const saveGroup = async () => {
     if (!groupDraft || !begin()) return;
@@ -213,7 +242,7 @@ const CalcPage: React.FC = () => {
         if ((await api.calcGetGroup(name)).state === 2) await api.calcStopGroup(name);
       } else {
         const latest = await api.calcGetGroup(groupDraft.originalName);
-        if (!latest.config || JSON.stringify(latest.config) !== JSON.stringify(config)) throw new Error('分组已变化，请刷新后编辑');
+        if (!latest.config || JSON.stringify(latest.config) !== JSON.stringify(groupBaseline.current)) throw new Error('分组已变化，请刷新后编辑');
         await saveCalcWithRoutes({ config: { ...latest.config, trigger_mode: groupDraft.trigger, period_ms: groupDraft.period }, expectedConfig: latest.config, plan: { routes: [], removedRoutes: [] }, api });
         if (name !== groupDraft.originalName) {
           const running = (await api.calcGetGroup(groupDraft.originalName)).state === 2;
@@ -222,9 +251,9 @@ const CalcPage: React.FC = () => {
           finally { if (running) { const all = await api.calcListGroups(); const actual = all.some((value) => value.config?.group_name === name) ? name : groupDraft.originalName; await api.calcStartGroup(actual); } }
         }
       }
-      setGroupName(name); setGroupDraft(null); await refresh(); messageApi.success('分组配置已保存');
+      setGroupName(name); setGroupModalOpen(false); setGroupDraft(null); await refresh(); messageApi.success('分组配置已保存');
       console.info('保存计算分组设置完成', { 分组: name });
-    } catch (error) { if (error instanceof CalcSaveError && error.configSaved) setGroupDraft(null); handleSaveError(error); } finally { end(); }
+    } catch (error) { if (error instanceof CalcSaveError && error.configSaved) { setGroupModalOpen(false); setGroupDraft(null); } handleSaveError(error); } finally { end(); }
   };
   const toggleGroup = async () => {
     if (!groupName || !begin()) return;
@@ -269,7 +298,7 @@ const CalcPage: React.FC = () => {
     }} /> : <span />}
   </div>;
   const renderEditor = () => editor ? <div className="calc-inline-editor">
-    <div className="calc-editor-head"><Text strong>{editor.index === null ? '新增计算' : '编辑计算'}</Text><Text type="secondary">{dirty ? '有未保存修改' : '配置与关联草稿'}</Text></div>
+    <div className="calc-editor-head"><Text strong>{editor.index === null ? '新增计算' : '编辑计算'}</Text>{!pending && dirty ? <Tag color={saveFailed ? 'error' : 'warning'}>{saveFailed ? '保存失败 · 草稿已暂存' : '未保存 · 草稿已暂存'}</Tag> : null}</div>
     <Form layout="vertical" disabled={locked}>
       <Form.Item label="配置模式"><Select aria-label="计算配置模式" value={editor.draft.operatorKind === 11 ? 'expression' : 'simple'} options={[{ value: 'simple', label: '简单运算' }, { value: 'expression', label: '逻辑表达式（混合与、或、非）' }]} onChange={(mode) => changeOperator(mode === 'expression' ? 11 : 6)} /></Form.Item>
       <div className="calc-item-basics"><Form.Item label="计算项名称" required><Input aria-label="计算项名称" value={editor.draft.itemName} onChange={(event) => editDraft((draft) => ({ ...draft, itemName: event.target.value }))} /></Form.Item>{editor.draft.operatorKind !== 11 ? <Form.Item label="运算方式" required><Select aria-label="运算方式" value={editor.draft.operatorKind} options={operators.filter((operator) => operator.value !== 11)} onChange={changeOperator} /></Form.Item> : null}</div>
@@ -294,7 +323,7 @@ const CalcPage: React.FC = () => {
         {editor.index !== null && group?.items.find((item) => item.config?.item_name === editor.draft.itemName)?.last_error ? <Text type="danger">{group.items.find((item) => item.config?.item_name === editor.draft.itemName)?.last_error}</Text> : null}
       </details>
     </Form>
-    <div className="calc-editor-footer"><Text type="secondary">选择点位后，保存时统一同步路由。</Text><Space wrap><Button disabled={locked} onClick={() => guard(() => setEditor(null))}>取消</Button><Button type="primary" disabled={Boolean(pending) || Boolean(loadError)} loading={busy} onClick={() => void saveItem()}>保存计算与关联</Button></Space></div>
+    <div className="calc-editor-footer"><Text type="secondary">选择点位后，保存时统一同步路由。</Text><Space wrap><Button disabled={locked} onClick={() => guard(() => setEditor(null))}>取消</Button><Button type="primary" disabled={Boolean(pending) || Boolean(loadError) || loading || detachedEditor} loading={busy} onClick={() => void saveItem()}>保存计算与关联</Button></Space></div>
   </div> : null;
   const itemStatus = (item: CalcItemConfig) => {
     const info = group?.items.find((value) => value.config?.item_name === item.item_name);
@@ -308,25 +337,28 @@ const CalcPage: React.FC = () => {
     { title: '运算摘要', key: 'formula', render: (_, item) => <div className="calc-item-summary"><Text>{operators.find((operator) => operator.value === item.operator_kind)?.label ?? '未知运算'}</Text><Text type="secondary" ellipsis={{ tooltip: formula(draftFromItem(groupName ?? '', item, routes)) }}>{formula(draftFromItem(groupName ?? '', item, routes))}</Text></div> },
     { title: '结果去向', key: 'output', width: '20%', responsive: ['lg'], render: (_, item) => { const outputs = draftFromItem(groupName ?? '', item, routes).outputs; return <Text type="secondary" ellipsis={{ tooltip: outputs.map(endpointLabel).join('；') }}>{outputs.length ? outputs.length === 1 ? endpointLabel(outputs[0]) : `${outputs.length} 个关联目标` : '仅生成结果点'}</Text>; } },
     { title: '状态', key: 'state', width: 100, render: (_, item) => itemStatus(item) },
-    { title: '操作', key: 'actions', width: 120, render: (_, item, index) => <Space size={4}><Button size="small" disabled={locked || loading} onClick={() => guard(() => { if (editor?.index === index) setEditor(null); else void openEditor(index); })}>{editor?.index === index ? '收起' : '编辑'}</Button><Button size="small" danger aria-label={`删除${item.item_name}`} disabled={locked || loading} icon={<DeleteOutlined />} onClick={() => guard(() => modal.confirm({ title: '删除计算项及相关路由？', content: item.item_name, okText: '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteItem(item) }))} /></Space> },
+    { title: '操作', key: 'actions', width: 120, render: (_, item, index) => <Space size={4}><Button size="small" disabled={locked || loading} onClick={() => guard(() => { if (originalItemName === item.item_name) setEditor(null); else void openEditor(index); })}>{originalItemName === item.item_name ? '收起' : '编辑'}</Button><Button size="small" danger aria-label={`删除${item.item_name}`} disabled={locked || loading} icon={<DeleteOutlined />} onClick={() => guard(() => modal.confirm({ title: '删除计算项及相关路由？', content: item.item_name, okText: '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteItem(item) }))} /></Space> },
   ];
   const state = groupStates[group?.state ?? 0] ?? groupStates[0];
   return <div className="calc-page">
     {contextHolder}
-    {dataRouter ? <CalcNavigationGuard blocked={dirty || groupDirty || locked} locked={locked} /> : null}
-    <div className="calc-page-header"><div><Typography.Title level={4}>数值计算</Typography.Title><Text type="secondary">选择输入点，配置运算，并关联结果去向。</Text></div><Space wrap><Button disabled={locked} loading={loading} icon={<ReloadOutlined />} onClick={() => guard(() => { setEditor(null); void refresh(); })}>刷新</Button><Button disabled={locked} icon={<PlusOutlined />} onClick={() => openGroup(true)}>新建分组</Button></Space></div>
+    {dataRouter ? <CalcNavigationGuard blocked={locked} /> : null}
+    <div className="calc-page-header"><div><Typography.Title level={4}>数值计算</Typography.Title><Text type="secondary">选择输入点，配置运算，并关联结果去向。</Text></div><Space wrap>{groupDirty && !groupModalOpen ? <Button onClick={() => setGroupModalOpen(true)}>继续编辑分组草稿</Button> : null}{!dirty && !groupDirty && !pending && savedGroup && savedGroup === groupName ? <Tag color="success">已保存</Tag> : null}<Button disabled={locked} loading={loading} icon={<ReloadOutlined />} onClick={() => guard(() => { setEditor(null); void refresh(); })}>刷新</Button><Button disabled={locked} icon={<PlusOutlined />} onClick={() => openGroup(true)}>新建分组</Button></Space></div>
     {loadError ? <Alert type="error" showIcon title={loadError} action={<Button size="small" disabled={locked} onClick={() => void refresh()}>重新加载</Button>} /> : null}
     {catalogWarning ? <Alert type="warning" showIcon title={catalogWarning} /> : null}
+    {detachedEditor && !loading && !pending ? <Alert type="warning" showIcon title="草稿对应的计算分组或计算项已不存在，草稿已保留。" /> : null}
     {pending ? <Alert type="warning" showIcon title={pending.phase === 'restart' ? '计算与关联已保存，恢复分组运行失败' : '计算已保存，路由同步失败'} description={formatErrorText(pending)} action={<Space wrap><Button disabled={busy} onClick={reloadPending}>重新加载当前配置</Button><Button loading={busy} onClick={() => void retry()}>{pending.phase === 'restart' ? '重试恢复运行' : '重试路由同步'}</Button></Space>} /> : null}
     <div className="calc-group-toolbar"><Space wrap><Select aria-label="计算分组" placeholder="请选择计算分组" className="calc-group-select" value={groupName} disabled={locked || loading} options={groups.map((value) => ({ value: value.config?.group_name, label: value.config?.group_name }))} onChange={(name: string) => guard(() => { setEditor(null); setGroupName(name); })} />{config ? <><Tag color={state.color}>{state.label}</Tag><Text type="secondary">{config.trigger_mode === 2 ? `每 ${config.period_ms} ms 计算` : '输入变化时计算'} · {config.items.length} 项</Text></> : null}</Space>
       {config ? <Space wrap><Button type="primary" disabled={locked || loading} icon={<PlusOutlined />} onClick={() => guard(() => { void openEditor(null); })}>新增计算项</Button><Button disabled={locked} icon={group?.state === 2 ? <PauseCircleOutlined /> : <PlayCircleOutlined />} onClick={() => guard(() => { setEditor(null); void toggleGroup(); })}>{group?.state === 2 ? '停止分组' : '启动分组'}</Button><Dropdown disabled={locked} trigger={['click']} menu={{ items: [{ key: 'edit', label: '编辑分组', icon: <EditOutlined /> }, { key: 'delete', label: '删除分组', danger: true, icon: <DeleteOutlined /> }], onClick: ({ key }) => key === 'edit' ? openGroup(false) : guard(() => modal.confirm({ title: '删除计算分组？', content: groupName, okText: '删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: deleteGroup })) }}><Button disabled={locked} icon={<MoreOutlined />} aria-label="更多分组操作" /></Dropdown></Space> : null}
     </div>
-    <Card className="calc-list-card" size="small">{config ? <>
+    <Card className="calc-list-card" size="small">{detachedEditor && !pending ? renderEditor() : null}{config ? <>
       {group?.last_error ? <details className="calc-group-diagnostic"><summary>分组诊断</summary><Text type="warning">{group.last_error}</Text></details> : null}
-      {editor?.index === null ? <div className="calc-new-editor">{renderEditor()}</div> : null}
-      <Table<CalcItemConfig> className="calc-items-table" rowKey="item_name" size="middle" tableLayout="fixed" columns={columns} dataSource={config.items} loading={loading} pagination={false} expandable={{ expandedRowKeys: editor && editor.index !== null ? [pending?.configSaved ? editor.draft.itemName.trim() : editor.config.items[editor.index].item_name] : [], expandedRowRender: renderEditor, showExpandColumn: false }} />
+      {editor?.index === null && !detachedEditor ? <div className="calc-new-editor">{renderEditor()}</div> : null}
+      <Table<CalcItemConfig> className="calc-items-table" rowKey="item_name" size="middle" tableLayout="fixed" columns={columns} dataSource={config.items} loading={loading} pagination={false} expandable={{ expandedRowKeys: editor && originalItemName ? [pending?.configSaved ? editor.draft.itemName.trim() : originalItemName] : [], expandedRowRender: renderEditor, showExpandColumn: false }} />
     </> : <div className="calc-empty"><Text type="secondary">暂无计算分组，请先新建。</Text><Button icon={<PlusOutlined />} onClick={() => openGroup(true)}>新建分组</Button></div>}</Card>
-    <Modal title={groupDraft?.originalName ? '编辑计算分组' : '新建计算分组'} open={Boolean(groupDraft)} onOk={() => void saveGroup()} confirmLoading={busy} okText="保存分组" cancelText="取消" onCancel={closeGroup} mask={{ closable: false }}>
+    <Modal title={groupDraft?.originalName ? '编辑计算分组' : '新建计算分组'} open={groupModalOpen} onOk={() => void saveGroup()} confirmLoading={busy} okText="保存分组" cancelText="取消" onCancel={closeGroup} mask={{ closable: false }}
+      footer={(_, { OkBtn, CancelBtn }) => <Space>{groupDirty && <Button disabled={busy} onClick={() => setGroupModalOpen(false)}>暂存并收起</Button>}<CancelBtn /><OkBtn /></Space>}>
+      {groupDirty ? <Tag color="warning">未保存 · 草稿已暂存</Tag> : null}
       {groupDraft ? <Form layout="vertical" disabled={busy}><Form.Item label="分组名称" required><Input aria-label="分组名称" value={groupDraft.name} onChange={(event) => setGroupDraft({ ...groupDraft, name: event.target.value })} /></Form.Item><Form.Item label="触发方式"><Select value={groupDraft.trigger} options={[{ value: 1, label: '变化触发' }, { value: 2, label: '周期定时' }]} onChange={(trigger) => setGroupDraft({ ...groupDraft, trigger })} /></Form.Item>{groupDraft.trigger === 2 ? <Form.Item label="计算周期（毫秒）"><InputNumber min={1} precision={0} value={groupDraft.period} onChange={(period) => setGroupDraft({ ...groupDraft, period: period ?? 0 })} /></Form.Item> : null}</Form> : null}
     </Modal>
   </div>;

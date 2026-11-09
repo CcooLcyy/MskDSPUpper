@@ -26,6 +26,7 @@ pub struct ConnectionStatus {
     remote: bool,
     device_id: Option<String>,
     active: bool,
+    manager_addr: String,
 }
 #[tauri::command]
 pub async fn remote_list_devices(state: State<'_, AppState>) -> Result<Vec<RemoteDevice>, String> {
@@ -40,6 +41,7 @@ pub fn remote_connection_status(state: State<'_, AppState>) -> ConnectionStatus 
         remote: remote.is_some(),
         device_id: remote.as_ref().map(|r| r.device.device_id.clone()),
         active: remote.as_ref().is_some_and(|r| r.active()),
+        manager_addr: state.conn_manager.manager_addr(),
     }
 }
 #[tauri::command]

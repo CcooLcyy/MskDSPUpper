@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -49,6 +49,9 @@ import ControlRouteRetry from '../../components/control/ControlRouteRetry';
 import ControlRuntimeStatus from '../../components/control/ControlRuntimeStatus';
 import AgcRuntimeOverview from '../../components/control/AgcRuntimeOverview';
 import useControlMappings from '../../components/control/useControlMappings';
+import { controlDraftFingerprint } from '../../components/control/control-group-draft';
+import type { ControlGroupDraft } from '../../components/control/control-group-draft';
+import { useConfigDraft } from '../../drafts/config-drafts';
 import usePendingControlRoutes from '../../components/control/usePendingControlRoutes';
 import type { ControlMappingField } from '../../utils/control-mapping-editor';
 import { PARAMETER_HELP } from '../../components/help/parameter-help';
@@ -451,7 +454,12 @@ const collectMappingFields = (config: Partial<AgcGroupConfig>): ControlMappingFi
   return fields;
 };
 
+type GroupDraft = ControlGroupDraft<AgcGroupConfig, AgcGroupConfig, AgcMemberConfig, AgcMemberEndpoints> & { editorTab: string; advancedCommandKeys: string[]; groupDirty: boolean };
+
 const AGC: React.FC = () => {
+  const { read: readGroupDraft, write: writeGroupDraft, clear: clearGroupDraft } = useConfigDraft<GroupDraft>('/control');
+  const [groupDraftAvailable, setGroupDraftAvailable] = useState(() => Boolean(readGroupDraft('agc')));
+  const [draftOriginal, setDraftOriginal] = useState<GroupDraft['original']>(null);
   const [groups, setGroups] = useState<AgcGroupInfo[]>([]);
   const [selectedGroupName, setSelectedGroupName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -492,9 +500,10 @@ const AGC: React.FC = () => {
   const [memberForm] = Form.useForm<AgcMemberConfig>();
   const [tuningForm] = Form.useForm<AgcTuningConfig>();
   const [searchParams] = useSearchParams();
+  const watchedMember = Form.useWatch([], { form: memberForm, preserve: true });
 
   const controlMode = effectiveControlMode(Form.useWatch('control_mode', groupForm));
-  const watchedGroup = Form.useWatch([], groupForm);
+  const watchedGroup = Form.useWatch([], { form: groupForm, preserve: true });
   const allMappingFields = collectMappingFields({ ...watchedGroup, members: [] });
   const commandMappingFields = allMappingFields.filter((field) => field.direction === 'input');
   const mappingFields = allMappingFields.filter((field) => field.direction === 'output');
@@ -708,11 +717,13 @@ const AGC: React.FC = () => {
   }, [selectedGroupName]);
 
   const openCreateGroup = useCallback(() => {
+    if (readGroupDraft('agc')) { messageApi.info('请先继续编辑或放弃现有草稿'); return; }
     if (pendingRouteError) {
       messageApi.warning('请先完成上次配置的映射重试，再新增或编辑控制组。');
       return;
     }
     setGroupDirty(false);
+    setDraftOriginal(null);
     setEditingGroup(null);
     setGroupEditorTab('basic');
     setAdvancedCommandKeys([]);
@@ -726,9 +737,10 @@ const AGC: React.FC = () => {
     console.info('AGC 新建控制组，派生输出点使用系统默认配置');
     setGroupModalOpen(true);
     void mappings.open('', undefined);
-  }, [groupForm, mappings, messageApi, pendingRouteError]);
+  }, [groupForm, mappings, messageApi, pendingRouteError, readGroupDraft]);
 
   const openEditGroup = useCallback(() => {
+    if (readGroupDraft('agc')) { messageApi.info('请先继续编辑或放弃现有草稿'); return; }
     if (pendingRouteError) {
       messageApi.warning('请先完成上次配置的映射重试，再新增或编辑控制组。');
       return;
@@ -746,6 +758,7 @@ const AGC: React.FC = () => {
       members: selectedGroup.config.members.map((member) => cloneMember(member)),
       outputs: cloneOutputs(selectedGroup.config.outputs),
     });
+    setDraftOriginal({ connId: selectedGroup.conn_id, fingerprint: controlDraftFingerprint(selectedGroup.config) });
     setEditingGroup(config);
     setGroupEditorTab('basic');
     setAdvancedCommandKeys([]);
@@ -769,14 +782,87 @@ const AGC: React.FC = () => {
     console.info('AGC 编辑控制组，保留原有派生输出配置', { 控制组: config.group_name });
     setGroupModalOpen(true);
     void mappings.open(config.group_name, selectedGroup.conn_id);
-  }, [groupForm, mappings, messageApi, pendingRouteError, selectedGroup]);
+  }, [groupForm, mappings, messageApi, pendingRouteError, readGroupDraft, selectedGroup]);
+
+  const draftChanged = groupDirty || memberDirty || mappings.changed;
+  const { changed: mappingsChanged, edited: editedMappings, routes: mappingRoutes, loading: mappingsLoading, error: mappingsError } = mappings;
+
+  useLayoutEffect(() => {
+    if (!groupModalOpen) return;
+    const currentValues = groupForm.getFieldsValue(true);
+    if (!groupDirty && !memberDirty && !mappingsChanged) {
+      clearGroupDraft('agc');
+      return;
+    }
+    const existingMapping = readGroupDraft('agc')?.mapping;
+    writeGroupDraft('agc', {
+      original: draftOriginal,
+      editingGroup,
+      values: structuredClone(currentValues),
+      allocationMode,
+      members: membersDraft,
+      removedMemberFields,
+      editorTab: groupEditorTab, advancedCommandKeys, groupDirty,
+      mapping: mappingsLoading || mappingsError ? existingMapping : { routes: mappingRoutes, edited: editedMappings },
+      member: memberEditorOpen && memberDirty ? {
+        index: editingMemberIndex,
+        values: structuredClone(memberForm.getFieldsValue(true)),
+        endpoints: memberEndpoints,
+        initialEndpoints: memberInitialEndpoints,
+        endpointChanges: memberEndpointChanges,
+      } : undefined,
+    });
+  }, [
+    advancedCommandKeys, groupDirty, groupEditorTab, allocationMode, clearGroupDraft, draftOriginal, editedMappings, editingGroup,
+    editingMemberIndex, groupForm, groupModalOpen, mappingRoutes, mappingsChanged, mappingsError, mappingsLoading,
+    memberDirty, memberEditorOpen, memberEndpointChanges, memberEndpoints, memberForm, memberInitialEndpoints,
+    membersDraft, readGroupDraft, removedMemberFields, watchedGroup, watchedMember, writeGroupDraft,
+  ]);
+
+  const dismissGroupDraft = useCallback(() => {
+    clearGroupDraft('agc');
+    setGroupDraftAvailable(false);
+    setGroupModalOpen(false);
+  }, [clearGroupDraft]);
+
+  const minimizeGroupDraft = () => {
+    setGroupDraftAvailable(Boolean(readGroupDraft('agc')));
+    setGroupModalOpen(false);
+  };
+
+  const resumeGroupDraft = () => {
+    if (pendingRouteError) return;
+    const draft = readGroupDraft('agc');
+    if (!draft) return;
+    setDraftOriginal(draft.original);
+    setEditingGroup(draft.editingGroup);
+    setAllocationMode(draft.allocationMode);
+    setMembersDraft(draft.members);
+    setRemovedMemberFields(draft.removedMemberFields);
+    setGroupEditorTab(draft.editorTab);
+    setAdvancedCommandKeys(draft.advancedCommandKeys);
+    setGroupDirty(draft.groupDirty);
+    groupForm.resetFields();
+    groupForm.setFieldsValue(structuredClone(draft.values));
+    setMemberEditorOpen(Boolean(draft.member));
+    setMemberDirty(Boolean(draft.member));
+    if (draft.member) {
+      setEditingMemberIndex(draft.member.index);
+      setMemberEndpoints(draft.member.endpoints);
+      setMemberInitialEndpoints(draft.member.initialEndpoints);
+      setMemberEndpointChanges(draft.member.endpointChanges);
+      memberForm.resetFields();
+      memberForm.setFieldsValue(structuredClone(draft.member.values));
+    }
+    const name = draft.editingGroup?.group_name;
+    if (name) handleSelectGroup(name);
+    void mappings.open(name ?? '', draft.original?.connId, draft.mapping);
+    setGroupModalOpen(true);
+  };
 
   const closeGroupDraft = () => {
     if (groupSubmitting || memberEditorOpen) return;
-    if (!groupDirty && !memberDirty && !mappings.changed) {
-      setGroupModalOpen(false);
-      return;
-    }
+    if (!draftChanged) { dismissGroupDraft(); return; }
     modalApi.confirm({
       title: '放弃未保存的控制组草稿？',
       content: '控制组、成员编辑和点位绑定的改动尚未保存。',
@@ -784,7 +870,7 @@ const AGC: React.FC = () => {
       cancelText: '继续编辑',
       onOk: () => {
         console.info('AGC 用户放弃控制组草稿');
-        setGroupModalOpen(false);
+        dismissGroupDraft();
       },
     });
   };
@@ -1203,6 +1289,12 @@ const AGC: React.FC = () => {
     setGroupSubmitting(true);
     let submittedConfig: AgcGroupConfig | null = null;
     try {
+      if (editingGroup && draftOriginal) {
+        const latest = await api.agcGetGroup(editingGroup.group_name);
+        if (latest.conn_id !== draftOriginal.connId || controlDraftFingerprint(latest.config) !== draftOriginal.fingerprint) {
+          throw new Error('控制组已被其他操作修改，请核对当前配置后重新编辑');
+        }
+      }
       const activeMember = memberEditorOpen ? await handleMemberSubmit() : null;
       if (memberEditorOpen && !activeMember) return;
       const submittedMembers = activeMember?.members ?? membersDraft;
@@ -1311,7 +1403,7 @@ const AGC: React.FC = () => {
             : savedText,
         );
       }
-      setGroupModalOpen(false);
+      dismissGroupDraft();
       await refreshGroups();
       setSelectedGroupName(config.group_name);
     } catch (e) {
@@ -1342,7 +1434,7 @@ const AGC: React.FC = () => {
               : group
           )));
         }
-        setGroupModalOpen(false);
+        dismissGroupDraft();
         await refreshGroups();
         setSelectedGroupName(groupName);
         return;
@@ -1420,6 +1512,14 @@ const AGC: React.FC = () => {
 
   return (
     <div className="protocol-page">
+      {groupDraftAvailable && !groupModalOpen && (
+        <Alert type="warning" showIcon title="未保存 · 草稿已暂存" action={<Space wrap>
+          <Button size="small" disabled={loading || !!pendingRouteError} onClick={resumeGroupDraft}>继续编辑</Button>
+          <Popconfirm title="放弃控制组草稿？" onConfirm={dismissGroupDraft}>
+            <Button size="small">放弃草稿</Button>
+          </Popconfirm>
+        </Space>} />
+      )}
       {contextHolder}
       {modalContextHolder}
       <ControlRouteRetry error={pendingRouteError} onComplete={() => setPendingRouteError(null)} onFailure={setPendingRouteError} />
@@ -1704,8 +1804,8 @@ const AGC: React.FC = () => {
         className="control-config-modal control-group-modal agc-group-modal"
         destroyOnClose
         footer={(_origin, { OkBtn, CancelBtn }) => <div className="agc-member-modal__footer">
-          <Text type="secondary">全部页签共用草稿，保存后统一生效</Text>
-          <Space><CancelBtn /><OkBtn /></Space>
+          <Text type="secondary">{draftChanged ? '未保存 · 草稿已暂存' : '全部页签共用草稿，保存后统一生效'}</Text>
+          <Space><Button disabled={!draftChanged || groupSubmitting || memberSubmitting} onClick={minimizeGroupDraft}>暂存并收起</Button><CancelBtn /><OkBtn /></Space>
         </div>}
       >
         <Form form={groupForm} component="div" layout="vertical" size="small" disabled={groupSubmitting} onValuesChange={() => setGroupDirty(true)}>
@@ -2004,8 +2104,8 @@ const AGC: React.FC = () => {
         className="control-config-modal control-member-modal agc-member-modal"
         destroyOnHidden
         footer={(_origin, { OkBtn, CancelBtn }) => <div className="agc-member-modal__footer">
-          <Typography.Text type="secondary">确认后返回成员列表，保存控制组时下发成员与路由</Typography.Text>
-          <Space><CancelBtn /><OkBtn /></Space>
+          <Typography.Text type="secondary">{memberDirty ? '未保存 · 草稿已暂存' : '确认后返回成员列表，保存控制组时下发成员与路由'}</Typography.Text>
+          <Space><Button disabled={!draftChanged || groupSubmitting || memberSubmitting} onClick={minimizeGroupDraft}>暂存并收起</Button><CancelBtn /><OkBtn /></Space>
         </div>}
       >
         <AgcMemberEditor

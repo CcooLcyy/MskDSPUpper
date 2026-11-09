@@ -187,21 +187,17 @@ try {
       await page.screenshot({path:path.join(output,`editor-${width}.png`),fullPage:true});
     }
   });
-  // ReactRouter 站内导航同样保护草稿，pending 不允许通过路由切换丢失重试计划。
-  await test('站内导航保护草稿与待重试计划',async () => {
+  // 未提交的草稿可直接切页；部分保存成功后仍需先处理待重试计划。
+  await test('切页恢复草稿且保护待重试计划',async () => {
     await editFirst();
     await choosePoint('输入1关联点位','功率D');
     await page.evaluate(()=>{void window.__calcMock.router.navigate('/other');});
-    await page.getByRole('dialog').waitFor();
-    await page.getByRole('button',{name:/继续编辑/}).click();
-    assert.equal(await page.getByText('其他页面',{exact:true}).count(),0);
-    assert.match(await page.locator('.calc-inline-editor').innerText(),/功率D/);
-    await page.evaluate(()=>{void window.__calcMock.router.navigate('/other');});
-    await page.getByRole('dialog').getByRole('button',{name:/放弃/}).click();
     await page.getByText('其他页面',{exact:true}).waitFor();
-    await openFixture();
-    await editFirst();
-    await choosePoint('输入1关联点位','功率D');
+    assert.equal(await page.evaluate(()=>window.__calcMock.calls.length),0);
+    await page.evaluate(()=>{void window.__calcMock.router.navigate('/');});
+    const editor=page.locator('.calc-inline-editor');
+    await editor.getByText('未保存 · 草稿已暂存',{exact:true}).waitFor();
+    assert.match(await editor.innerText(),/功率D/);
     await page.evaluate(()=>{window.__calcMock.failRoutes=true;});
     await page.getByRole('button',{name:/保存计算与关联/}).click();
     await page.getByText(/计算已保存.*路由/).first().waitFor();

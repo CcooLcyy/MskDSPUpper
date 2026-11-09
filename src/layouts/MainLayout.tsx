@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Layout, Menu, Space, Typography } from 'antd';
+import { Alert, Badge, Button, Layout, Menu, Space, Spin, Typography } from 'antd';
+import { invoke } from '@tauri-apps/api/core';
 import {
   AlertOutlined,
   ApiOutlined,
@@ -24,11 +25,22 @@ import { useAppMode } from '../offline/app-mode-context.ts';
 import type { Capability } from '../offline/capabilities.ts';
 import OfflineModeControls from '../offline/ui/OfflineModeControls.tsx';
 import { PlatformAccountControl } from '../auth/PlatformAccountControl';
+import { ConfigDraftContext, createConfigDraftStore, useHasConfigDraft } from '../drafts/config-drafts';
 import './MainLayout.css';
 import '../components/protocol/protocol-page.css';
 
 const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
+
+const configDraftPages = new Set([
+  '/calc', '/data-bus', '/control', '/control-orchestrator',
+  '/protocol/iec104', '/protocol/iec61850', '/protocol/modbus-rtu', '/protocol/modbus-tcp', '/protocol/dlt645',
+]);
+
+function DraftMenuLabel({ page, label }: { page: string; label: string }) {
+  const hasDraft = useHasConfigDraft(page);
+  return <Space size={6}>{label}{hasDraft && <span title="有未保存的草稿" aria-label="有未保存的草稿"><Badge status="warning" /></span>}</Space>;
+}
 
 interface MenuItemConfig {
   key: string;
@@ -116,7 +128,38 @@ const MainLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { hasAvailableUpdate } = useAppUpdate();
-  const { can } = useAppMode();
+  const { can, mode, desktopRuntime, workspace, workspaceFilePath } = useAppMode();
+  const [draftStore] = useState(createConfigDraftStore);
+  const path = location.pathname;
+  const [visit, setVisit] = useState({ path, mode, id: 0 });
+  if (visit.path !== path || visit.mode !== mode) setVisit({ path, mode, id: visit.id + 1 });
+  const [target, setTarget] = useState<{ visitId: number; scope: string | null }>();
+  const [targetRetry, retryTarget] = useState(0);
+  const needsOnlineTarget = mode === 'online' && desktopRuntime;
+  const visitId = visit.id;
+  useEffect(() => {
+    if (!needsOnlineTarget) return;
+    let current = true;
+    void invoke<{ remote: boolean; device_id: string | null; manager_addr: string }>('remote_connection_status')
+      .then((status) => {
+        if (!current) return;
+        const scope = status.remote
+          ? status.device_id && JSON.stringify(['remote', status.device_id])
+          : status.manager_addr && JSON.stringify(['direct', status.manager_addr]);
+        setTarget({ visitId, scope: scope || null });
+      })
+      .catch((error: unknown) => {
+        if (!current) return;
+        console.warn('无法确认配置草稿所属设备', error);
+        setTarget({ visitId, scope: null });
+      });
+    return () => { current = false; };
+  }, [needsOnlineTarget, targetRetry, visitId]);
+  const draftScope = mode === 'offline'
+    ? workspace && JSON.stringify(['offline', workspaceFilePath, workspace.created_at])
+    : needsOnlineTarget ? target?.scope ?? null : 'browser';
+  const draftPage = configDraftPages.has(path);
+  const targetPending = draftPage && needsOnlineTarget && target?.visitId !== visitId;
   const [collapsed, setCollapsed] = useState(false);
   // 分组只负责展开，页面级视图切换继续放在顶部。
   const parentMenuKeys = new Set(['/protocol', '/alerts-logs', '/security']);
@@ -179,6 +222,14 @@ const MainLayout: React.FC = () => {
       .flatMap((item) => ('children' in item ? item.children || [] : []))
       .find((child) => child.key === selectedKey)?.label ||
     'MskDSP';
+  const menuWithDraftLabels = useMemo(() => renderedMenuItems.map((item) => ({
+    ...item,
+    label: configDraftPages.has(item.key) ? <DraftMenuLabel page={item.key} label={item.label} /> : item.label,
+    children: item.children?.map((child) => ({
+      ...child,
+      label: configDraftPages.has(child.key) ? <DraftMenuLabel page={child.key} label={child.label} /> : child.label,
+    })),
+  })), [renderedMenuItems]);
   const isSecurityPage = renderedMenuItems.some(item => item.key === '/security' && item.children?.some(child => child.key === selectedKey));
   const isProtocolPage = location.pathname.startsWith('/protocol/');
   const isIec61850Page = location.pathname === '/protocol/iec61850';
@@ -190,6 +241,7 @@ const MainLayout: React.FC = () => {
   const contentOverflow = location.pathname.startsWith('/module-ops') || isProtocolPage || isControlPage || location.pathname.startsWith('/calc') || location.pathname.startsWith('/control-orchestrator') ? 'hidden' : 'auto';
 
   return (
+    <ConfigDraftContext.Provider value={{ store: draftStore, scope: draftScope ?? 'unavailable' }}>
     <Layout style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
       <Sider
         collapsible
@@ -226,7 +278,7 @@ const MainLayout: React.FC = () => {
             selectedKeys={[selectedKey]}
             openKeys={expandedMenu.keys}
             onOpenChange={keys => setExpandedMenu({ locationKey: location.key, keys })}
-            items={renderedMenuItems}
+            items={menuWithDraftLabels}
             className="main-layout-sider-menu"
             onClick={({ key }) => {
               if (!parentMenuKeys.has(key)) {
@@ -275,10 +327,15 @@ const MainLayout: React.FC = () => {
             minHeight: 0,
           }}
         >
-          <Outlet />
+          {targetPending ? <Spin style={{ marginTop: 24 }} /> : draftPage && !draftScope
+            ? <Alert type="error" showIcon title="无法确认当前配置目标" action={needsOnlineTarget
+              ? <Button size="small" onClick={() => { setTarget(undefined); retryTarget((value) => value + 1); }}>重试</Button>
+              : undefined} />
+            : <Outlet key={draftPage ? draftScope : 'page'} />}
         </Content>
       </Layout>
     </Layout>
+    </ConfigDraftContext.Provider>
   );
 };
 
