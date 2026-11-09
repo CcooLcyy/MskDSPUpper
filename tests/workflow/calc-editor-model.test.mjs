@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { defaultItem, draftFromItem, itemToConfig, validateDraft, formula, changeOperandSource } from '../../src/pages/Calc/editor-model.ts';
+import { defaultItem, draftFromItem, itemToConfig, validateDraft, formula, changeOperandSource, removeDraftInput, replaceDraftInputs } from '../../src/pages/Calc/editor-model.ts';
 const source = (tag) => ({ module_name: 'ModbusRTU', conn_name: '逆变器', tag });
 const bus = { source_kind: 1, constant: null };
 const item = { item_name: '总功率', operator_kind: 9, left_operand: null, right_operand: null, operands: [bus,bus,bus] };
@@ -72,9 +72,28 @@ test('calc expression draft persists expression and validates Boolean inputs', (
   assert.equal(itemToConfig(draft).expression, 'A OR NOT B');
   assert.equal(itemToConfig(draft).operands.length, 2);
   assert.equal(itemToConfig(draft).right_operand, null);
-  assert.equal(formula(draft), ' A 或 非 B ');
+  assert.match(formula(draft), /"开关"\s+或\s+非\s*"常量[^"]*假[^"]*"/);
   draft.inputs[1].constantType = 'decimal';
   assert.match(validateDraft(draft), /布尔/);
+});
+
+// 编辑点位名称后沿用输入槽位，保留原有逻辑和点位身份。
+test('calc expression follows a renamed or reselected point without moving operands', () => {
+  const draft = defaultItem('联锁');
+  draft.operatorKind = 11;
+  draft.namedExpression = '"并网运行" 与 非 "过压"';
+  draft.inputs[0].sources = [source('并网运行')];
+  draft.inputs[1].sources = [source('过压')];
+  assert.equal(removeDraftInput(draft, 0), null);
+  const spare = { ...draft.inputs[0], sources: [source('备用')] };
+  const withSpare = { ...draft, inputs: [draft.inputs[0], spare, draft.inputs[1]] };
+  const revised = replaceDraftInputs(withSpare, [
+    { ...draft.inputs[0], sources: [source('远方运行')] }, spare, draft.inputs[1],
+  ]);
+  const trimmed = removeDraftInput(revised, 1);
+  assert.equal(trimmed.namedExpression, '"远方运行" 与 非 "过压"');
+  assert.equal(validateDraft(trimmed), null);
+  assert.match(itemToConfig(trimmed).expression, /^A\s*&&\s*!\s*B$/);
 });
 
 // 新的输入列表和表达式允许全布尔常量，旧左右二元配置仍保留总线输入要求。

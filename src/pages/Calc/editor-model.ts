@@ -1,6 +1,7 @@
 import type { CalcItemConfig, CalcOperandSpec, DcEndpoint, DcRoute } from '../../adapters';
 import { calcInputTags } from '../../utils/calc-routing.ts';
-import { expressionPreview, validateExpression } from './logic-expression.ts';
+import { validateExpression } from './logic-expression.ts';
+import { compileNamedExpression, displayNamedExpression, hasNamedReference, namedInputs, renameNamedReferences } from './named-expression.ts';
 import { getDecimalTextError, isDecimalTextZero } from '../../utils/decimal-input.ts';
 
 export const operators = [
@@ -24,6 +25,7 @@ export type ItemDraft = {
   outputs: DcEndpoint[];
   decimalPlaces?: number;
   expression?: string;
+  namedExpression?: string;
   useOperandList?: boolean;
 };
 export const isAggregate = (kind: number) => kind === 9 || kind === 10;
@@ -65,10 +67,44 @@ export function itemToConfig(draft: ItemDraft): CalcItemConfig {
     : { source_kind: 2, constant: input.constantType === 'bool' ? { bool_value: Boolean(input.constantValue) }
       : input.constantType === 'int' ? { int_value: Number(input.constantValue) } : { decimal_value: String(input.constantValue) } });
   const list = usesOperandList(draft);
+  const expression = draft.operatorKind === 11
+    ? draft.namedExpression === undefined
+      ? draft.expression?.trim()
+      : compileNamedExpression(draft.namedExpression, namedInputs(draft.inputs)).expression
+    : undefined;
   return { item_name: draft.itemName.trim(), operator_kind: draft.operatorKind,
     left_operand: list ? null : operands[0],
     right_operand: list || draft.operatorKind === 5 ? null : operands[1],
-    operands: list ? operands : [], expression: draft.operatorKind === 11 ? draft.expression?.trim() : undefined, decimal_places: draft.operatorKind === 10 ? draft.decimalPlaces : undefined };
+    operands: list ? operands : [], expression, decimal_places: draft.operatorKind === 10 ? draft.decimalPlaces : undefined };
+}
+
+export function draftExpressionText(draft: ItemDraft, names = namedInputs(draft.inputs)): string {
+  return draft.namedExpression ?? displayNamedExpression(draft.expression ?? '', names);
+}
+
+export function draftExpressionError(draft: ItemDraft, names = namedInputs(draft.inputs)): string | null {
+  // 已有表达式按存储文本校验，避免显示用的空格改变旧配置的长度。
+  if (draft.namedExpression !== undefined) return compileNamedExpression(draft.namedExpression, names).error;
+  const error = validateExpression(draft.expression?.trim() ?? '', names.length);
+  return error ? compileNamedExpression(draftExpressionText(draft, names), names).error ?? error : null;
+}
+
+/** 修改点位时沿用输入槽位，包含同名消歧后需要更新的其他引用。 */
+export function replaceDraftInputs(draft: ItemDraft, inputs: OperandDraft[]): ItemDraft {
+  const namedExpression = draft.namedExpression === undefined
+    ? undefined
+    : renameNamedReferences(draft.namedExpression, namedInputs(draft.inputs), namedInputs(inputs));
+  return { ...draft, inputs, namedExpression };
+}
+
+export function removeDraftInput(draft: ItemDraft, index: number): ItemDraft | null {
+  const before = namedInputs(draft.inputs);
+  const text = draftExpressionText(draft, before);
+  if (hasNamedReference(text, before[index])) return null;
+  const inputs = draft.inputs.filter((_, i) => i !== index);
+  const after = namedInputs(inputs);
+  const replacements = before.map((_, i) => i === index ? undefined : after[i < index ? i : i - 1]);
+  return { ...draft, inputs, expression: undefined, namedExpression: renameNamedReferences(text, before, replacements) };
 }
 
 export function validateDraft(draft: ItemDraft): string | null {
@@ -76,7 +112,10 @@ export function validateDraft(draft: ItemDraft): string | null {
   if (draft.itemName.includes('/')) return '计算项名称不能包含 /';
   if (isLogic(draft.operatorKind) && draft.inputs.length > 256) return '逻辑运算最多支持 256 个输入';
   if (isMultiInput(draft.operatorKind) && draft.operatorKind !== 11 && draft.inputs.length < 2) return '此运算至少需要两个输入';
-  if (draft.operatorKind === 11) { const error = validateExpression(draft.expression ?? '', draft.inputs.length); if (error) return error; }
+  if (draft.operatorKind === 11) {
+    const error = draftExpressionError(draft);
+    if (error) return error;
+  }
   if (!usesOperandList(draft) && !draft.inputs.some((input) => input.sourceKind === 1)) return '至少保留一个输入使用数据总线点位';
   for (const [index, input] of draft.inputs.entries()) {
     if (input.sourceKind === 1) {
@@ -93,10 +132,10 @@ export function validateDraft(draft: ItemDraft): string | null {
 }
 
 export function formula(draft: ItemDraft): string {
+  if (draft.operatorKind === 11) return draftExpressionText(draft);
   const inputs = draft.inputs.map((input, index) => input.sourceKind === 1
     ? input.sources.length === 1 ? `${input.sources[0].conn_name} / ${input.sources[0].tag}` : input.sources.length > 1 ? `输入${index + 1}（${input.sources.length} 个来源）` : `输入${index + 1}`
     : input.constantType === 'bool' ? input.constantValue ? '真' : '假' : String(input.constantValue));
-  if (draft.operatorKind === 11) return expressionPreview(draft.expression ?? '');
   if (isAggregate(draft.operatorKind)) return `${draft.operatorKind === 9 ? 'SUM' : 'AVERAGE'}(${inputs.join('、')})`;
   if (draft.operatorKind === 5) return `NOT(${inputs[0]})`;
   const symbols: Record<number, string> = { 1: '+', 2: '−', 3: '×', 4: '÷', 6: 'AND', 7: 'OR', 8: 'XOR' };

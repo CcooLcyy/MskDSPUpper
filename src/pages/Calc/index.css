@@ -182,6 +182,15 @@
   border-radius: 6px;
 }
 
+.calc-named-operand {
+  grid-template-columns: minmax(60px, 1fr) 140px minmax(0, 3fr) 32px;
+}
+
+.calc-expression-points {
+  display: flex;
+  margin-top: 8px;
+}
+
 .calc-operand-editor > *,
 .calc-operand-editor .ant-form-item,
 .calc-operand-editor .ant-form-item-control,
@@ -364,6 +373,10 @@
   .calc-operand-editor {
     grid-template-columns: 60px minmax(0, 1fr) 32px;
     gap: 8px 12px;
+  }
+
+  .calc-named-operand {
+    grid-template-columns: minmax(60px, 1fr) minmax(0, 1.4fr) 32px;
   }
 
   .calc-operand-editor > :nth-child(3) {
