@@ -17,7 +17,7 @@ function Get-VerifiedDownload([string]$Url, [string]$Path, [string]$Sha1) {
 }
 
 # Tauri 可能复用旧版 NSIS，升级 CLI 时先同步下方的下载地址与哈希。
-$lock = Get-Content -LiteralPath package-lock.json -Raw | ConvertFrom-Json
+$lock = Get-Content -LiteralPath package-lock.json -Raw | ConvertFrom-Json -AsHashtable
 $cliVersion = $lock.packages.'node_modules/@tauri-apps/cli'.version
 if ($cliVersion -ne '2.10.1') {
     throw "Tauri CLI 已变更为 $cliVersion，请核对 NSIS 版本与校验值后更新脚本"
