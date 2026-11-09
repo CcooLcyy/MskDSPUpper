@@ -7,6 +7,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { createSshOutputAcks } from '../../utils/remote-ssh-output';
 import { sshUiError } from '../../utils/remote-ssh-ui-error';
+import { changeConfigDraftTarget } from '../../drafts/config-draft-target';
 
 interface Device {
   device_id: string; display_name: string; online: boolean;
@@ -139,7 +140,7 @@ export default function RemoteAccessPanel({ directAddress, onModeChange, onConne
     onConnectionIntent?.();
     setBusy(true); closeSsh();
     try {
-      await invoke('remote_select_device', { deviceId: selected });
+      await changeConfigDraftTarget(() => invoke('remote_select_device', { deviceId: selected }));
       await load();
       if (!mounted.current) return;
       messages.success(`已选择远程设备：${device?.display_name ?? selected}`);
@@ -151,7 +152,7 @@ export default function RemoteAccessPanel({ directAddress, onModeChange, onConne
   async function returnToDirect() {
     onConnectionIntent?.();
     setBusy(true); closeSsh();
-    try { await invoke('remote_use_direct', { address: directAddress }); await load(); }
+    try { await changeConfigDraftTarget(() => invoke('remote_use_direct', { address: directAddress })); await load(); }
     catch (error) { if (mounted.current) messages.error(`切换直连失败：${error}`); return; }
     finally { setBusy(false); }
     if (mounted.current) await onConnected();

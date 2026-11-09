@@ -17,6 +17,9 @@ const AUTOSAVE_DELAY_MS = 1000;
 
 let currentWorkspace: OfflineWorkspace | null = null;
 let currentFilePath: string | null = null;
+let currentDraftIdentity = 0;
+let nextDraftIdentity = 0;
+const fileDraftIdentities = new Map<string, number>();
 let saveTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 const workspaceListeners = new Set<() => void>();
 
@@ -36,6 +39,14 @@ export function getWorkspaceFilePath(): string | null {
   return currentFilePath;
 }
 
+export function getWorkspaceDraftIdentity(): number {
+  return currentDraftIdentity;
+}
+
+function fileDraftKey(filePath: string, workspace: OfflineWorkspace) {
+  return JSON.stringify([filePath, workspace.created_at]);
+}
+
 export function subscribeWorkspace(listener: () => void): () => void {
   workspaceListeners.add(listener);
 
@@ -48,6 +59,9 @@ export function subscribeWorkspace(listener: () => void): () => void {
 export function openWorkspace(workspace: OfflineWorkspace, filePath: string | null): OfflineWorkspace {
   currentWorkspace = workspace;
   currentFilePath = filePath;
+  const key = filePath && fileDraftKey(filePath, workspace);
+  currentDraftIdentity = (key && fileDraftIdentities.get(key)) || ++nextDraftIdentity;
+  if (key) fileDraftIdentities.set(key, currentDraftIdentity);
   notifyWorkspaceChanged();
 
   return currentWorkspace;
@@ -56,6 +70,7 @@ export function openWorkspace(workspace: OfflineWorkspace, filePath: string | nu
 export function closeWorkspace(): void {
   currentWorkspace = null;
   currentFilePath = null;
+  currentDraftIdentity = 0;
   notifyWorkspaceChanged();
 }
 
@@ -73,6 +88,7 @@ export function seedWorkspaceFromSnapshot(
   const base = currentWorkspace ?? createEmptyWorkspace(workspaceName, nowIso);
   const seeded = snapshotToWorkspace({ ...base, workspace_name: workspaceName }, snapshot, { nowIso });
 
+  if (currentFilePath) fileDraftIdentities.delete(fileDraftKey(currentFilePath, seeded));
   return openWorkspace(seeded, currentFilePath);
 }
 
@@ -110,8 +126,13 @@ export async function flushWorkspace(): Promise<void> {
 /** 另存为指定路径，并把它设为当前文件。 */
 export async function saveWorkspaceTo(filePath: string): Promise<string> {
   const workspace = getWorkspace();
+  const draftIdentity = currentDraftIdentity;
   const savedPath = await tauriApi.saveWorkspace(ensureWorkspaceFileName(filePath), serializeWorkspace(workspace));
 
+  if (draftIdentity !== currentDraftIdentity) return savedPath;
+  // 另存后的当前工作区沿用编辑中的草稿；旧文件重新打开时独立编辑。
+  if (currentFilePath && currentFilePath !== savedPath) fileDraftIdentities.delete(fileDraftKey(currentFilePath, workspace));
+  fileDraftIdentities.set(fileDraftKey(savedPath, workspace), draftIdentity);
   currentFilePath = savedPath;
   notifyWorkspaceChanged();
 

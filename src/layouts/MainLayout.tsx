@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Alert, Badge, Button, Layout, Menu, Space, Spin, Typography } from 'antd';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -26,6 +26,8 @@ import type { Capability } from '../offline/capabilities.ts';
 import OfflineModeControls from '../offline/ui/OfflineModeControls.tsx';
 import { PlatformAccountControl } from '../auth/PlatformAccountControl';
 import { ConfigDraftContext, createConfigDraftStore, useHasConfigDraft } from '../drafts/config-drafts';
+import { getConfigDraftTarget, subscribeConfigDraftTarget } from '../drafts/config-draft-target';
+import { getWorkspaceDraftIdentity, subscribeWorkspace } from '../offline/workspace/store';
 import './MainLayout.css';
 import '../components/protocol/protocol-page.css';
 
@@ -128,17 +130,19 @@ const MainLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { hasAvailableUpdate } = useAppUpdate();
-  const { can, mode, desktopRuntime, workspace, workspaceFilePath } = useAppMode();
+  const { can, mode, desktopRuntime } = useAppMode();
   const [draftStore] = useState(createConfigDraftStore);
+  const workspaceDraftIdentity = useSyncExternalStore(subscribeWorkspace, getWorkspaceDraftIdentity);
+  const targetChange = useSyncExternalStore(subscribeConfigDraftTarget, getConfigDraftTarget);
   const path = location.pathname;
   const [visit, setVisit] = useState({ path, mode, id: 0 });
   if (visit.path !== path || visit.mode !== mode) setVisit({ path, mode, id: visit.id + 1 });
-  const [target, setTarget] = useState<{ visitId: number; scope: string | null }>();
+  const [target, setTarget] = useState<{ visitId: number; revision: number; scope: string | null }>();
   const [targetRetry, retryTarget] = useState(0);
   const needsOnlineTarget = mode === 'online' && desktopRuntime;
   const visitId = visit.id;
   useEffect(() => {
-    if (!needsOnlineTarget) return;
+    if (!needsOnlineTarget || targetChange.pending) return;
     let current = true;
     void invoke<{ remote: boolean; device_id: string | null; manager_addr: string }>('remote_connection_status')
       .then((status) => {
@@ -146,20 +150,21 @@ const MainLayout: React.FC = () => {
         const scope = status.remote
           ? status.device_id && JSON.stringify(['remote', status.device_id])
           : status.manager_addr && JSON.stringify(['direct', status.manager_addr]);
-        setTarget({ visitId, scope: scope || null });
+        setTarget({ visitId, revision: targetChange.revision, scope: scope || null });
       })
       .catch((error: unknown) => {
         if (!current) return;
         console.warn('无法确认配置草稿所属设备', error);
-        setTarget({ visitId, scope: null });
+        setTarget({ visitId, revision: targetChange.revision, scope: null });
       });
     return () => { current = false; };
-  }, [needsOnlineTarget, targetRetry, visitId]);
+  }, [needsOnlineTarget, targetChange, targetRetry, visitId]);
+  const targetVerified = !targetChange.pending && target?.visitId === visitId && target.revision === targetChange.revision;
   const draftScope = mode === 'offline'
-    ? workspace && JSON.stringify(['offline', workspaceFilePath, workspace.created_at])
-    : needsOnlineTarget ? target?.scope ?? null : 'browser';
+    ? workspaceDraftIdentity ? `offline:${workspaceDraftIdentity}` : null
+    : needsOnlineTarget ? targetVerified ? target?.scope ?? null : null : 'browser';
   const draftPage = configDraftPages.has(path);
-  const targetPending = draftPage && needsOnlineTarget && target?.visitId !== visitId;
+  const targetPending = draftPage && needsOnlineTarget && !targetVerified;
   const [collapsed, setCollapsed] = useState(false);
   // 分组只负责展开，页面级视图切换继续放在顶部。
   const parentMenuKeys = new Set(['/protocol', '/alerts-logs', '/security']);

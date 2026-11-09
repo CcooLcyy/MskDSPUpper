@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createConfigDraftStore } from '../../src/drafts/config-drafts.ts';
+import { changeConfigDraftTarget, getConfigDraftTarget } from '../../src/drafts/config-draft-target.ts';
 
 test('草稿按设备、工作区、页面及配置对象隔离', () => {
   const store = createConfigDraftStore();
@@ -32,4 +33,22 @@ test('页标记保留到最后一份草稿清除', () => {
   assert.deepEqual(states, [true, false]);
   assert.equal(store.read(scope, page, '通信配置'), undefined);
   assert.equal(store.read(scope, page, '点映射'), undefined);
+});
+
+test('并发切换设备时等待最后一个请求结束再核对草稿目标', async () => {
+  const first = Promise.withResolvers();
+  const second = Promise.withResolvers();
+  const initial = getConfigDraftTarget();
+  const firstChange = changeConfigDraftTarget(() => first.promise);
+  const secondChange = changeConfigDraftTarget(() => second.promise);
+
+  assert.equal(getConfigDraftTarget().pending, 2);
+  first.resolve();
+  await firstChange;
+  assert.equal(getConfigDraftTarget().pending, 1);
+
+  second.reject(new Error('切换失败'));
+  await assert.rejects(secondChange, /切换失败/);
+  assert.equal(getConfigDraftTarget().pending, 0);
+  assert.equal(getConfigDraftTarget().revision, initial.revision + 4);
 });

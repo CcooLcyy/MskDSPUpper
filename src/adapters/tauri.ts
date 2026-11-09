@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { changeConfigDraftTarget } from '../drafts/config-draft-target.ts';
 import type {
   AgcControlProfile,
   AgcGroupConfig,
@@ -175,7 +176,7 @@ export const api = {
   },
 
   setManagerAddr: (addr: string, forceReconnect = false) =>
-    invoke<void>('set_manager_addr', { addr, forceReconnect }),
+    changeConfigDraftTarget(() => invoke<void>('set_manager_addr', { addr, forceReconnect })),
   getModuleInfo: () => invoke<ModuleInfo[]>('get_module_info'),
   getRunningModuleInfo: () => invoke<ModuleRunningInfo[]>('get_running_module_info'),
   startModule: (moduleInfo: ModuleInfo) => invoke<void>('start_module', { moduleInfo }),

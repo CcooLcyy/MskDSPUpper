@@ -154,6 +154,7 @@ const DataBus: React.FC = () => {
   const [connectionSearch, setConnectionSearch] = useState('');
   const [catalogTagSearch, setCatalogTagSearch] = useState('');
   const [connections, setConnections] = useState<DcConnectionInfo[]>([]);
+  const [connectionsReady, setConnectionsReady] = useState(false);
   const [selectedConnId, setSelectedConnId] = useState<number | null>(null);
   const [allConnTags, setAllConnTags] = useState<Map<number, string[]>>(new Map());
   const [routes, setRoutes] = useState<DcRoute[]>([]);
@@ -196,8 +197,10 @@ const DataBus: React.FC = () => {
     try {
       const conns = await api.dcListConnections();
       setConnections(conns);
+      setConnectionsReady(true);
       setSelectedConnId((current) => conns.some((connection) => connection.conn_id === current) ? current : conns[0]?.conn_id ?? null);
     } catch (e) {
+      setConnectionsReady(false);
       messageApi.error(`刷新连接列表失败: ${e}`);
     } finally {
       setLoading(false);
@@ -282,14 +285,27 @@ const DataBus: React.FC = () => {
     if (loading) return;
     const stored = read(routeDraftKey);
     if (stored) {
+      if (!connectionsReady) {
+        messageApi.warning('请先刷新连接目录，再恢复路由草稿');
+        return;
+      }
       // 连接 ID 可能在设备重启或重建连接后被复用，以模块名和连接名恢复。
+      const missing = new Map<number, DcConnectionInfo>();
       const restoreId = (id: number | null) => {
         const previous = stored.connections.find((connection) => connection.conn_id === id);
-        return previous ? connections.find((connection) => connection.module_name === previous.module_name && connection.conn_name === previous.conn_name)?.conn_id ?? null : null;
+        if (!previous) return null;
+        const current = connections.find((connection) => connection.module_name === previous.module_name && connection.conn_name === previous.conn_name);
+        if (current) return current.conn_id;
+        const retained = missing.get(previous.conn_id);
+        if (retained) return retained.conn_id;
+        // 缺失的连接使用独立占位 ID，保留旧身份和标签供下一次恢复。
+        const placeholder = { ...previous, conn_id: -1 - missing.size };
+        missing.set(previous.conn_id, placeholder);
+        return placeholder.conn_id;
       };
       const restored = stored.directions.map((direction) => ({ ...direction, sourceConnId: restoreId(direction.sourceConnId), destinationConnId: restoreId(direction.destinationConnId) }));
       setRouteInitial(stored.initial);
-      routeConnections.current = connections;
+      routeConnections.current = [...connections, ...missing.values()];
       nextDraftId.current = Math.max(0, ...restored.map((direction) => direction.id));
       setRouteDirections(restored);
       setActiveRouteDirectionId(stored.activeId);
@@ -313,7 +329,7 @@ const DataBus: React.FC = () => {
     setRouteDrag(null);
     setRouteModalOpen(true);
     console.info('数据总线打开新增路由草稿', { sourceConnId: defaultSourceConnId, sourceTag: draft.sourceTags[0] });
-  }, [connections, loading, read, selectedConnId]);
+  }, [connections, connectionsReady, loading, messageApi, read, selectedConnId]);
 
   useLayoutEffect(() => {
     if (!routeModalOpen) return;
@@ -768,7 +784,7 @@ const DataBus: React.FC = () => {
       storageKey="mskdsp.layout.data-bus.config"
     >
       <div style={{ minHeight: 0 }}>{connectionPanel}</div>
-      <Card className="data-bus-route-card" title={<Space size={8}>{catalogCollapsed && <Button type="text" size="small" title="展开连接目录" aria-label="展开连接目录" icon={<MenuUnfoldOutlined />} onClick={toggleCatalog} />}<span>路由配置</span><Tag color="blue">{visibleRoutes.length}</Tag>{retainedRoute && <Tag color="warning">未保存 · 草稿已暂存</Tag>}</Space>} size="small" extra={<div className="data-bus-route-actions"><Button icon={<ReloadOutlined aria-hidden />} onClick={() => void refreshRoutes()}>刷新</Button><Button type="primary" disabled={loading} icon={<PlusOutlined aria-hidden />} onClick={() => openCreateRoute()}>{retainedRoute ? '继续编辑路由草稿' : '新增路由'}</Button>{visibleRoutes.length > 0 && <Dropdown menu={{ items: [{ key: 'delete-all', label: '全部删除', danger: true, disabled: routeDeleting }], onClick: ({ key }) => { if (key === 'delete-all') handleDeleteAllRoutes(); } }} trigger={['click']}><Button aria-label="更多路由操作" title="更多路由操作" icon={<EllipsisOutlined />} /></Dropdown>}</div>} styles={{ body: { padding: 0 } }}>
+      <Card className="data-bus-route-card" title={<Space size={8}>{catalogCollapsed && <Button type="text" size="small" title="展开连接目录" aria-label="展开连接目录" icon={<MenuUnfoldOutlined />} onClick={toggleCatalog} />}<span>路由配置</span><Tag color="blue">{visibleRoutes.length}</Tag>{retainedRoute && <Tag color="warning">未保存 · 草稿已暂存</Tag>}</Space>} size="small" extra={<div className="data-bus-route-actions"><Button icon={<ReloadOutlined aria-hidden />} onClick={() => { void refreshConnections(); void refreshRoutes(); }}>刷新</Button><Button type="primary" disabled={loading} icon={<PlusOutlined aria-hidden />} onClick={() => openCreateRoute()}>{retainedRoute ? '继续编辑路由草稿' : '新增路由'}</Button>{visibleRoutes.length > 0 && <Dropdown menu={{ items: [{ key: 'delete-all', label: '全部删除', danger: true, disabled: routeDeleting }], onClick: ({ key }) => { if (key === 'delete-all') handleDeleteAllRoutes(); } }} trigger={['click']}><Button aria-label="更多路由操作" title="更多路由操作" icon={<EllipsisOutlined />} /></Dropdown>}</div>} styles={{ body: { padding: 0 } }}>
         <div className="data-bus-route-hint"><Text type="secondary">源点最新值 → 目标点</Text><Tooltip title="同一对点位不允许同时配置两个方向。控制编排自动维护的内部路由不在本页显示。已配置不代表正在转发。"><Button type="text" size="small" aria-label="路由规则说明" icon={<InfoCircleOutlined />} /></Tooltip>{can('realtime') && <Button type="link" size="small" onClick={() => { const next = new URLSearchParams(searchParams); next.set(DATA_BUS_VIEW_QUERY_KEY, 'monitor'); setSearchParams(next, { replace: true }); }}>查看运行数据</Button>}</div>
         {can('workspace.manage') && <div className="data-bus-route-hint"><Tag color="gold">离线工作区</Tag><Text>{workspace?.workspace_name ?? '未命名工作区'}</Text><Text type="secondary">仅修改本地工作区，不会自动下发到设备；可从顶部导出配置。</Text></div>}
         {visibleRoutes.length > 0 ? <><div className="route-filter-toolbar">
