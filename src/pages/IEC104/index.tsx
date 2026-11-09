@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -46,6 +46,8 @@ import Iec104PointTable from './PointTable';
 import ManualSimulationEditor from './ManualSimulationEditor';
 import SimulationPeriodicControl from './SimulationPeriodicControl';
 import { api } from '../../adapters';
+import { useConfigDraft } from '../../drafts/config-drafts';
+import { useFormDraft } from '../../drafts/use-form-draft';
 import CapabilityGate from '../../offline/ui/CapabilityGate.tsx';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import ResizableSplit from '../../components/layout/ResizableSplit';
@@ -274,6 +276,38 @@ type IoaAdjustmentDraft = {
   originalIoa: number;
   ioa: number;
 };
+
+type BatchPointConfigDraft = {
+  text: string;
+  category: IoaCategoryKey;
+  start: number;
+  step: number;
+  type: number;
+  scale: string;
+  offset: string;
+  deadband: string;
+  remoteControlType: number;
+  commandExecutionMode: number;
+};
+
+type IoaConfigDraft = {
+  rows: IoaAdjustmentDraft[];
+  strategy: IoaAdjustmentStrategy;
+  start: number;
+  step: number;
+  offset: number;
+  skipOccupied: boolean;
+};
+
+type BatchEditConfigDraft = {
+  targets: Iec104Point[];
+  slaveStation: boolean;
+  pointType?: number;
+  remoteControlType?: number;
+  commandExecutionMode?: number;
+};
+
+const getIec104DraftKey = (form: string, conn: string | null) => JSON.stringify([form, conn]);
 
 const buildDataBusConnectionOptions = (connections: DcConnectionInfo[]): DataBusConnectionOption[] =>
   connections
@@ -594,6 +628,67 @@ const IEC104: React.FC = () => {
   const [ioaAdjustOffset, setIoaAdjustOffset] = useState(0);
   const [ioaAdjustSkipOccupied, setIoaAdjustSkipOccupied] = useState(true);
   const [ioaAdjustDragKey, setIoaAdjustDragKey] = useState<string | null>(null);
+  const batchPointDraft = useConfigDraft<BatchPointConfigDraft>('/protocol/iec104');
+  const ioaDraft = useConfigDraft<IoaConfigDraft>('/protocol/iec104');
+  const batchEditDraft = useConfigDraft<BatchEditConfigDraft>('/protocol/iec104');
+  const batchPointDraftKey = getIec104DraftKey('批量添加点位', selectedConn);
+  const ioaDraftKey = getIec104DraftKey('批量调整 IOA', selectedConn);
+  const batchEditDraftKey = getIec104DraftKey('批量编辑点位', selectedConn);
+  const [batchPointDraftSession, setBatchPointDraftSession] = useState<{ key: string; base: string } | null>(null);
+  const [ioaDraftSession, setIoaDraftSession] = useState<{ key: string; base: string } | null>(null);
+  const [batchEditDraftSession, setBatchEditDraftSession] = useState<{ key: string; targets: Iec104Point[]; slaveStation: boolean } | null>(null);
+  const batchPointConfigDraft = batchPointDraft.read(batchPointDraftKey);
+  const ioaConfigDraft = ioaDraft.read(ioaDraftKey);
+  const batchEditConfigDraft = batchEditDraft.read(batchEditDraftKey);
+  const batchEditHasChanges = pointTypeBatchValue !== undefined
+    || pointRemoteControlTypeBatchValue !== undefined
+    || pointCommandExecutionModeBatchValue !== undefined;
+  const batchPointSnapshot: BatchPointConfigDraft = {
+    text: batchPointText,
+    category: batchPointCategory,
+    start: batchPointStartIoa,
+    step: batchPointStep,
+    type: batchPointType,
+    scale: batchPointScale,
+    offset: batchPointOffset,
+    deadband: batchPointDeadband,
+    remoteControlType: batchRemoteControlType,
+    commandExecutionMode: batchCommandExecutionMode,
+  };
+  const ioaSnapshot: IoaConfigDraft = {
+    rows: ioaAdjustDrafts,
+    strategy: ioaAdjustStrategy,
+    start: ioaAdjustStart,
+    step: ioaAdjustStep,
+    offset: ioaAdjustOffset,
+    skipOccupied: ioaAdjustSkipOccupied,
+  };
+  const batchPointHasChanges = Boolean(batchPointModalOpen && batchPointDraftSession?.key === batchPointDraftKey
+    && JSON.stringify(batchPointSnapshot) !== batchPointDraftSession.base);
+  const ioaHasChanges = Boolean(ioaAdjustModalOpen && ioaDraftSession?.key === ioaDraftKey
+    && JSON.stringify(ioaSnapshot) !== ioaDraftSession.base);
+  useLayoutEffect(() => {
+    if (batchPointModalOpen && batchPointDraftSession?.key === batchPointDraftKey) {
+      if (batchPointHasChanges && JSON.stringify(batchPointDraft.read(batchPointDraftKey)) !== JSON.stringify(batchPointSnapshot)) batchPointDraft.write(batchPointDraftKey, batchPointSnapshot);
+      if (!batchPointHasChanges) batchPointDraft.clear(batchPointDraftKey);
+    }
+    if (ioaAdjustModalOpen && ioaDraftSession?.key === ioaDraftKey) {
+      if (ioaHasChanges && JSON.stringify(ioaDraft.read(ioaDraftKey)) !== JSON.stringify(ioaSnapshot)) ioaDraft.write(ioaDraftKey, ioaSnapshot);
+      if (!ioaHasChanges) ioaDraft.clear(ioaDraftKey);
+    }
+    if (pointTypeBatchModalOpen && batchEditDraftSession?.key === batchEditDraftKey) {
+      if (batchEditHasChanges) {
+        const next: BatchEditConfigDraft = {
+          targets: batchEditDraftSession.targets,
+          slaveStation: batchEditDraftSession.slaveStation,
+          pointType: pointTypeBatchValue,
+          remoteControlType: pointRemoteControlTypeBatchValue,
+          commandExecutionMode: pointCommandExecutionModeBatchValue,
+        };
+        if (JSON.stringify(batchEditDraft.read(batchEditDraftKey)) !== JSON.stringify(next)) batchEditDraft.write(batchEditDraftKey, next);
+      } else batchEditDraft.clear(batchEditDraftKey);
+    }
+  });
   const [filterExpanded, setFilterExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [pointsLoading, setPointsLoading] = useState(false);
@@ -630,6 +725,8 @@ const IEC104: React.FC = () => {
 
   const [linkForm] = Form.useForm();
   const [pointForm] = Form.useForm();
+  const linkFormDraft = useFormDraft('/protocol/iec104', linkForm);
+  const pointFormDraft = useFormDraft('/protocol/iec104', pointForm);
   const linkRole = Form.useWatch('role', linkForm);
   const pointIoaCategory = Form.useWatch('ioa_category', pointForm) as IoaCategoryKey | undefined;
   const pointType = Form.useWatch('point_type', pointForm);
@@ -787,10 +884,7 @@ const IEC104: React.FC = () => {
   const importStationRole = isSlaveStationConfig(selectedLink?.config) ? 'slave' : 'master';
   const hasRemoteControlImportDrafts = importPointDrafts.some((draft) =>
     isRemoteControlBusinessType(draft.business_type));
-  const selectedPointTagSet = useMemo(() => new Set(selectedPointTags), [selectedPointTags]);
-  const selectedRemoteControlPointCount = useMemo(() => points.filter((point) =>
-    selectedPointTagSet.has(point.tag) && isRemoteControlBusinessType(point.business_type)).length,
-  [points, selectedPointTagSet]);
+  const selectedRemoteControlPointCount = batchEditDraftSession?.targets.filter((point) => isRemoteControlBusinessType(point.business_type)).length ?? 0;
   const importValidation = useMemo(() => {
     const cellIssues = new Map<string, string[]>();
     const rowIssues = new Map<string, string[]>();
@@ -1207,8 +1301,7 @@ const IEC104: React.FC = () => {
 
   const openCreateLink = useCallback(() => {
     setEditingLink(null);
-    linkForm.resetFields();
-    linkForm.setFieldsValue({
+    linkFormDraft.begin(getIec104DraftKey('新增连接', null), null, {
       role: ROLE_SERVER,
       station_role: 2,
       ca: 1,
@@ -1231,13 +1324,13 @@ const IEC104: React.FC = () => {
       time_sync_tag: 'sys_time',
     });
     setLinkModalOpen(true);
-  }, [linkForm]);
+  }, [linkFormDraft]);
 
   const openEditLink = useCallback(() => {
     if (!selectedLink?.config) return;
     const c = selectedLink.config;
     setEditingLink(c);
-    linkForm.setFieldsValue({
+    linkFormDraft.begin(getIec104DraftKey('编辑连接', c.conn_name), c, {
       conn_name: c.conn_name,
       role: c.role,
       station_role: c.station_role,
@@ -1261,7 +1354,7 @@ const IEC104: React.FC = () => {
       time_sync_tag: c.time_sync_tag,
     });
     setLinkModalOpen(true);
-  }, [selectedLink, linkForm]);
+  }, [selectedLink, linkFormDraft]);
 
   const handleLinkFormValuesChange = useCallback(
     (
@@ -1317,11 +1410,12 @@ const IEC104: React.FC = () => {
   );
 
   const handleLinkSubmit = useCallback(async () => {
-    if (linkSubmitting) {
+    if (linkSubmitting || linkFormDraft.stale) {
       return;
     }
 
     setLinkSubmitting(true);
+    const finishDraft = linkFormDraft.beginSubmit();
     let renameCompleted = false;
     try {
       const values = await linkForm.validateFields();
@@ -1402,6 +1496,7 @@ const IEC104: React.FC = () => {
       } else {
         messageApi.success(createOnly ? '链路创建成功' : renamed ? '链路已改名并更新成功' : '链路更新成功');
       }
+      finishDraft();
       setLinkModalOpen(false);
       await refreshLinks();
       setSelectedConn(config.conn_name);
@@ -1414,6 +1509,10 @@ const IEC104: React.FC = () => {
         }
         const connName = linkForm.getFieldValue('conn_name');
         if (typeof connName === 'string' && connName) {
+          const refreshed = await api.iec104GetLink(connName).catch(() => null);
+          const currentConfig = refreshed?.config ?? (editingLink ? { ...editingLink, conn_name: connName } : null);
+          setEditingLink(currentConfig);
+          linkFormDraft.move(getIec104DraftKey('编辑连接', connName), currentConfig);
           setSelectedConn(connName);
         }
         messageApi.error(`连接已改名，但保存其他配置失败: ${e}`);
@@ -1423,12 +1522,15 @@ const IEC104: React.FC = () => {
     } finally {
       setLinkSubmitting(false);
     }
-  }, [editingLink, linkForm, linkSubmitting, messageApi, refreshLinks, runSelectedLinkStopped]);
+  }, [editingLink, linkForm, linkFormDraft, linkSubmitting, messageApi, refreshLinks, runSelectedLinkStopped]);
 
   const handleDeleteLink = useCallback(
     async (connName: string) => {
       try {
         await api.iec104DeleteLink(connName);
+        batchPointDraft.clear(getIec104DraftKey('批量添加点位', connName));
+        ioaDraft.clear(getIec104DraftKey('批量调整 IOA', connName));
+        batchEditDraft.clear(getIec104DraftKey('批量编辑点位', connName));
         messageApi.success(`链路 ${connName} 已删除`);
         if (selectedConn === connName) {
           setSelectedConn(null);
@@ -1438,7 +1540,7 @@ const IEC104: React.FC = () => {
         messageApi.error(`删除失败: ${e}`);
       }
     },
-    [messageApi, selectedConn, refreshLinks],
+    [batchEditDraft, batchPointDraft, ioaDraft, messageApi, selectedConn, refreshLinks],
   );
 
   const handleCopyLink = useCallback(
@@ -1564,24 +1666,31 @@ const IEC104: React.FC = () => {
 
   const openCreatePoint = useCallback(() => {
     setEditingPointIndex(null);
-    pointForm.resetFields();
-    pointForm.setFieldsValue(getCreatePointInitialValues(points));
+    pointFormDraft.begin(getIec104DraftKey('新增点位', selectedConn), selectedSlaveStation, getCreatePointInitialValues(points));
     setPointModalOpen(true);
-  }, [pointForm, points]);
+  }, [pointFormDraft, points, selectedConn, selectedSlaveStation]);
 
   const openBatchPointModal = useCallback(() => {
-    setBatchPointText('');
-    setBatchPointCategory('custom');
-    setBatchPointStartIoa(getNextAvailableIoa(new Set(points.map((point) => point.ioa))));
-    setBatchPointStep(1);
-    setBatchPointType(getDefaultImportedPointType(points));
-    setBatchPointScale(DEFAULT_POINT_FORM_VALUES.scale);
-    setBatchPointOffset(DEFAULT_POINT_FORM_VALUES.offset);
-    setBatchPointDeadband(DEFAULT_POINT_FORM_VALUES.deadband);
-    setBatchRemoteControlType(DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type);
-    setBatchCommandExecutionMode(DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode);
+    const initial: BatchPointConfigDraft = {
+      text: '', category: 'custom', start: getNextAvailableIoa(new Set(points.map((point) => point.ioa))),
+      step: 1, type: getDefaultImportedPointType(points), ...DEFAULT_POINT_FORM_VALUES,
+      remoteControlType: DEFAULT_REMOTE_CONTROL_FIELDS.remote_control_type,
+      commandExecutionMode: DEFAULT_REMOTE_CONTROL_FIELDS.command_execution_mode,
+    };
+    const restored = batchPointDraft.read(batchPointDraftKey) ?? initial;
+    setBatchPointDraftSession({ key: batchPointDraftKey, base: JSON.stringify(initial) });
+    setBatchPointText(restored.text);
+    setBatchPointCategory(restored.category);
+    setBatchPointStartIoa(restored.start);
+    setBatchPointStep(restored.step);
+    setBatchPointType(restored.type);
+    setBatchPointScale(restored.scale);
+    setBatchPointOffset(restored.offset);
+    setBatchPointDeadband(restored.deadband);
+    setBatchRemoteControlType(restored.remoteControlType);
+    setBatchCommandExecutionMode(restored.commandExecutionMode);
     setBatchPointModalOpen(true);
-  }, [points]);
+  }, [batchPointDraft, batchPointDraftKey, points]);
 
   const handleBatchPointCategoryChange = useCallback(
     (nextCategory: IoaCategoryKey) => {
@@ -1601,7 +1710,7 @@ const IEC104: React.FC = () => {
   );
 
   const handleBatchPointSubmit = useCallback(async () => {
-    if (!selectedConn || pointSubmitting) return;
+    if (!selectedConn || pointSubmitting || batchPointDraftSession?.key !== batchPointDraftKey) return;
     if (batchPointResult.drafts.length === 0) {
       messageApi.error('请至少输入一个点名');
       return;
@@ -1611,6 +1720,7 @@ const IEC104: React.FC = () => {
       return;
     }
 
+    const submittedDraft = batchPointDraft.read(batchPointDraftKey);
     const normalizedPoints: Iec104Point[] = batchPointResult.drafts.map((draft) => ({
       tag: draft.tag,
       ioa: draft.ioa,
@@ -1632,6 +1742,7 @@ const IEC104: React.FC = () => {
       const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
       setPoints(newPoints);
       setSimulationSnapshot(null);
+      if (batchPointDraft.read(batchPointDraftKey) === submittedDraft) batchPointDraft.clear(batchPointDraftKey);
       setBatchPointModalOpen(false);
       console.info('IEC104 批量添加点位完成', {
         connName: selectedConn,
@@ -1655,7 +1766,7 @@ const IEC104: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [batchPointCategory, batchPointResult, batchPointStartIoa, batchPointStep, messageApi, pointSubmitting, points, runSelectedLinkStopped, selectedConn]);
+  }, [batchPointCategory, batchPointDraft, batchPointDraftKey, batchPointDraftSession, batchPointResult, batchPointStartIoa, batchPointStep, messageApi, pointSubmitting, points, runSelectedLinkStopped, selectedConn]);
 
   const openImportPointModal = useCallback(() => {
     setImportSourceConnId(undefined);
@@ -1676,8 +1787,9 @@ const IEC104: React.FC = () => {
   const openEditPoint = useCallback(
     (index: number) => {
       const p = points[index];
+      if (!p) return;
       setEditingPointIndex(index);
-      pointForm.setFieldsValue({
+      pointFormDraft.begin(getIec104DraftKey(`编辑点位 ${p.tag}`, selectedConn), [p, selectedSlaveStation], {
         tag: p.tag,
         ioa: p.ioa,
         ioa_category: getIoaCategoryByIoa(p.ioa),
@@ -1693,7 +1805,7 @@ const IEC104: React.FC = () => {
       });
       setPointModalOpen(true);
     },
-    [points, pointForm, selectedSlaveStation],
+    [points, pointFormDraft, selectedConn, selectedSlaveStation],
   );
 
   const reorderImportDrafts = useCallback((fromKey: string, toKey: string) => {
@@ -1731,6 +1843,19 @@ const IEC104: React.FC = () => {
   }, [importAllocationSkipOccupied, importAllocationStart, importAllocationStep, importBatchCategory, importPointDrafts.length, points]);
 
   const openIoaAdjustModal = useCallback(() => {
+    const restored = ioaDraft.read(ioaDraftKey);
+    if (restored) {
+      setIoaDraftSession({ key: ioaDraftKey, base: '' });
+      setIoaAdjustDrafts(restored.rows);
+      setIoaAdjustStrategy(restored.strategy);
+      setIoaAdjustStart(restored.start);
+      setIoaAdjustStep(restored.step);
+      setIoaAdjustOffset(restored.offset);
+      setIoaAdjustSkipOccupied(restored.skipOccupied);
+      setIoaAdjustDragKey(null);
+      setIoaAdjustModalOpen(true);
+      return;
+    }
     if (selectedPointTags.length === 0) {
       messageApi.info('请先在点表中勾选需要调整 IOA 的点位');
       return;
@@ -1750,13 +1875,16 @@ const IEC104: React.FC = () => {
       step: 1,
       skipOccupied: true,
     });
-    setIoaAdjustDrafts(selected.map((point, index) => ({
+    const rows = selected.map((point, index) => ({
       key: point.tag,
       tag: point.tag,
       pointType: point.point_type,
       originalIoa: point.ioa,
       ioa: allocatedIoas[index] ?? point.ioa,
-    })));
+    }));
+    const initial: IoaConfigDraft = { rows, strategy: 'sequence', start: selected[0].ioa, step: 1, offset: 0, skipOccupied: true };
+    setIoaDraftSession({ key: ioaDraftKey, base: JSON.stringify(initial) });
+    setIoaAdjustDrafts(rows);
     setIoaAdjustStrategy('sequence');
     setIoaAdjustStart(selected[0].ioa);
     setIoaAdjustStep(1);
@@ -1764,9 +1892,18 @@ const IEC104: React.FC = () => {
     setIoaAdjustSkipOccupied(true);
     setIoaAdjustDragKey(null);
     setIoaAdjustModalOpen(true);
-  }, [messageApi, points, selectedPointTags]);
+  }, [ioaDraft, ioaDraftKey, messageApi, points, selectedPointTags]);
 
   const openPointTypeBatchModal = useCallback(() => {
+    const restored = batchEditDraft.read(batchEditDraftKey);
+    if (restored) {
+      setBatchEditDraftSession({ key: batchEditDraftKey, targets: restored.targets, slaveStation: restored.slaveStation });
+      setPointTypeBatchValue(restored.pointType);
+      setPointRemoteControlTypeBatchValue(restored.remoteControlType);
+      setPointCommandExecutionModeBatchValue(restored.commandExecutionMode);
+      setPointTypeBatchModalOpen(true);
+      return;
+    }
     if (selectedPointTags.length === 0) {
       messageApi.info('请先在点表中勾选需要批量编辑的点位');
       return;
@@ -1780,21 +1917,25 @@ const IEC104: React.FC = () => {
     setPointTypeBatchValue(undefined);
     setPointRemoteControlTypeBatchValue(undefined);
     setPointCommandExecutionModeBatchValue(undefined);
+    setBatchEditDraftSession({ key: batchEditDraftKey, targets: selected, slaveStation: selectedSlaveStation });
     setPointTypeBatchModalOpen(true);
-  }, [messageApi, points, selectedPointTags]);
+  }, [batchEditDraft, batchEditDraftKey, messageApi, points, selectedPointTags, selectedSlaveStation]);
+
+  const batchEditConflict = Boolean(pointTypeBatchModalOpen && batchEditDraftSession && (
+    batchEditDraftSession.slaveStation !== selectedSlaveStation
+    || batchEditDraftSession.targets.some((target) => !points.some((point) => point.tag === target.tag && JSON.stringify(point) === JSON.stringify(target)))
+  ));
 
   const handlePointTypeBatchSubmit = useCallback(async () => {
     if (
       !selectedConn
       || pointSubmitting
-      || (
-        pointTypeBatchValue === undefined
-        && pointRemoteControlTypeBatchValue === undefined
-        && pointCommandExecutionModeBatchValue === undefined
-      )
+      || batchEditDraftSession?.key !== batchEditDraftKey
+      || batchEditConflict
+      || !batchEditHasChanges
     ) return;
 
-    const selectedTags = new Set(selectedPointTags);
+    const selectedTags = new Set(batchEditDraftSession.targets.map((point) => point.tag));
     const selectedPoints = points.filter((point) => selectedTags.has(point.tag));
     if (selectedPoints.length === 0) {
       messageApi.info('当前没有可编辑的已选点位');
@@ -1841,15 +1982,18 @@ const IEC104: React.FC = () => {
     const changedCount = newPoints.filter((point, index) => point !== points[index]).length;
     if (changedCount === 0) {
       messageApi.info('所选点位已经符合目标配置');
+      batchEditDraft.clear(batchEditDraftKey);
       setPointTypeBatchModalOpen(false);
       return;
     }
 
+    const submittedDraft = batchEditDraft.read(batchEditDraftKey);
     setPointSubmitting(true);
     try {
       const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
       setPoints(newPoints);
       setSimulationSnapshot(null);
+      if (batchEditDraft.read(batchEditDraftKey) === submittedDraft) batchEditDraft.clear(batchEditDraftKey);
       setPointTypeBatchModalOpen(false);
       setSelectedPointTags([]);
       console.info('IEC104 已批量更新点位配置', {
@@ -1871,7 +2015,7 @@ const IEC104: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [messageApi, pointCommandExecutionModeBatchValue, pointRemoteControlTypeBatchValue, pointSubmitting, pointTypeBatchValue, points, runSelectedLinkStopped, selectedConn, selectedPointTags, selectedSlaveStation]);
+  }, [batchEditConflict, batchEditDraft, batchEditDraftKey, batchEditDraftSession, batchEditHasChanges, messageApi, pointCommandExecutionModeBatchValue, pointRemoteControlTypeBatchValue, pointSubmitting, pointTypeBatchValue, points, runSelectedLinkStopped, selectedConn, selectedSlaveStation]);
 
   const reorderIoaAdjustDrafts = useCallback((fromKey: string, toKey: string) => {
     if (fromKey === toKey) return;
@@ -1944,8 +2088,11 @@ const IEC104: React.FC = () => {
     return { issues, changedCount };
   }, [ioaAdjustDrafts, points]);
 
+  const ioaDraftConflict = ioaAdjustModalOpen && ioaAdjustDrafts.some((row) =>
+    !points.some((point) => point.tag === row.key && point.ioa === row.originalIoa && point.point_type === row.pointType));
+
   const handleIoaAdjustSubmit = useCallback(async () => {
-    if (!selectedConn || pointSubmitting || ioaAdjustDrafts.length === 0) return;
+    if (!selectedConn || pointSubmitting || ioaDraftConflict || ioaAdjustDrafts.length === 0 || ioaDraftSession?.key !== ioaDraftKey) return;
     if (ioaAdjustValidation.issues.size > 0) {
       messageApi.error(`请先修正 ${ioaAdjustValidation.issues.size} 个 IOA 冲突`);
       return;
@@ -1955,6 +2102,7 @@ const IEC104: React.FC = () => {
       return;
     }
 
+    const submittedDraft = ioaDraft.read(ioaDraftKey);
     const ioaByTag = new Map(ioaAdjustDrafts.map((item) => [item.key, item.ioa]));
     const newPoints = points.map((point) => ({
       ...point,
@@ -1964,6 +2112,7 @@ const IEC104: React.FC = () => {
     try {
       const restartResult = await runSelectedLinkStopped(() => api.iec104UpsertPointTable(selectedConn, newPoints, true));
       setPoints(newPoints);
+      if (ioaDraft.read(ioaDraftKey) === submittedDraft) ioaDraft.clear(ioaDraftKey);
       setIoaAdjustModalOpen(false);
       setSelectedPointTags([]);
       messageApi.success(`已调整 ${ioaAdjustValidation.changedCount} 个点位的 IOA`);
@@ -1977,7 +2126,7 @@ const IEC104: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [ioaAdjustDrafts, ioaAdjustValidation, messageApi, pointSubmitting, points, runSelectedLinkStopped, selectedConn]);
+  }, [ioaAdjustDrafts, ioaAdjustValidation, ioaDraft, ioaDraftConflict, ioaDraftKey, ioaDraftSession, messageApi, pointSubmitting, points, runSelectedLinkStopped, selectedConn]);
 
   const handlePointIoaCategoryChange = useCallback(
     (nextCategory: IoaCategoryKey) => {
@@ -2016,8 +2165,9 @@ const IEC104: React.FC = () => {
   );
 
   const handlePointSubmit = useCallback(async () => {
-    if (!selectedConn || pointSubmitting) return;
+    if (!selectedConn || pointSubmitting || pointFormDraft.stale) return;
     setPointSubmitting(true);
+    const finishDraft = pointFormDraft.beginSubmit();
     try {
       const validatedValues = await pointForm.validateFields();
       const values = { ...pointForm.getFieldsValue(true), ...validatedValues };
@@ -2068,6 +2218,7 @@ const IEC104: React.FC = () => {
       } else if (restartResult.stoppedBeforeRun) {
         messageApi.success('点表已保存并重新启动链路');
       }
+      finishDraft();
       setPointModalOpen(false);
       setPoints(newPoints);
     } catch (e) {
@@ -2078,7 +2229,7 @@ const IEC104: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [selectedConn, pointForm, pointFixedValueAvailable, editingPointIndex, points, messageApi, pointSubmitting, runSelectedLinkStopped]);
+  }, [selectedConn, pointForm, pointFormDraft, pointFixedValueAvailable, editingPointIndex, points, messageApi, pointSubmitting, runSelectedLinkStopped]);
 
   const openCopyPoint = useCallback((index: number) => {
     if (!selectedConn || pointSubmitting) return;
@@ -2096,8 +2247,7 @@ const IEC104: React.FC = () => {
     }
 
     setEditingPointIndex(null);
-    pointForm.resetFields();
-    pointForm.setFieldsValue({
+    pointFormDraft.begin(getIec104DraftKey(`复制点位 ${source.tag}`, selectedConn), [source, selectedSlaveStation], {
       tag: source.tag,
       ioa,
       ioa_category: getIoaCategoryByIoa(ioa),
@@ -2112,7 +2262,7 @@ const IEC104: React.FC = () => {
       deadband: resolveIec104PointDecimalText(source, 'deadband'),
     });
     setPointModalOpen(true);
-  }, [messageApi, pointForm, pointSubmitting, points, selectedConn, selectedSlaveStation]);
+  }, [messageApi, pointFormDraft, pointSubmitting, points, selectedConn, selectedSlaveStation]);
 
   useEffect(() => {
     if (!pointModalOpen || editingPointIndex !== null) {
@@ -2240,7 +2390,7 @@ const IEC104: React.FC = () => {
     },
     {
       key: 'batch',
-      label: '批量添加点位',
+      label: batchPointConfigDraft ? '批量添加点位 · 有草稿' : '批量添加点位',
       icon: <FileTextOutlined />,
       disabled: pointAddDisabled || pointTableView !== 'config',
     },
@@ -3317,18 +3467,18 @@ const IEC104: React.FC = () => {
                 <Button
                   size="small"
                   icon={<ThunderboltOutlined />}
-                  disabled={!selectedConn || pointTableView !== 'config' || selectedPointTags.length === 0 || actionsDisabled}
+                  disabled={!selectedConn || pointTableView !== 'config' || (!ioaConfigDraft && selectedPointTags.length === 0) || actionsDisabled}
                   onClick={openIoaAdjustModal}
                 >
-                  IOA 调整{selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}
+                  IOA 调整{ioaConfigDraft ? ' · 有草稿' : selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}
                 </Button>
                 <Button
                   size="small"
                   icon={<EditOutlined />}
-                  disabled={!selectedConn || pointTableView !== 'config' || selectedPointTags.length === 0 || actionsDisabled}
+                  disabled={!selectedConn || pointTableView !== 'config' || (!batchEditConfigDraft && selectedPointTags.length === 0) || actionsDisabled}
                   onClick={openPointTypeBatchModal}
                 >
-                  批量编辑类型{selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}
+                  批量编辑类型{batchEditConfigDraft ? ' · 有草稿' : selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}
                 </Button>
                 <Dropdown
                   menu={{ items: pointAddMenuItems, onClick: handlePointAddMenuClick }}
@@ -3561,16 +3711,27 @@ const IEC104: React.FC = () => {
 
       {/* Link Modal */}
       <Modal
-        title={editingLink ? '编辑连接' : '新增连接'}
+        title={<Space wrap>{editingLink ? '编辑连接' : '新增连接'}{linkFormDraft.dirty ? <>
+          <Text type={linkFormDraft.stale ? 'danger' : 'warning'}>
+            {linkFormDraft.stale ? '配置已变化 · 草稿已暂存' : '未保存 · 草稿已暂存'}
+          </Text>
+          <Button size="small" disabled={linkSubmitting} onClick={() => {
+            linkFormDraft.discard();
+            setLinkModalOpen(false);
+          }}>放弃草稿</Button>
+        </> : null}</Space>}
         open={linkModalOpen}
         onOk={() => void handleLinkSubmit()}
         onCancel={() => {
           if (!linkSubmitting) {
+            linkFormDraft.capture();
             setLinkModalOpen(false);
           }
         }}
         width={680}
         className="iec104-config-modal"
+        cancelText={linkFormDraft.dirty ? '关闭并保留草稿' : '取消'}
+        okButtonProps={{ disabled: linkFormDraft.stale }}
         confirmLoading={linkSubmitting}
         maskClosable={!linkSubmitting}
         closable={!linkSubmitting}
@@ -3579,10 +3740,14 @@ const IEC104: React.FC = () => {
       >
         <Form
           form={linkForm}
+          disabled={linkSubmitting}
           layout="vertical"
           size="small"
           autoComplete="off"
-          onValuesChange={handleLinkFormValuesChange}
+          onValuesChange={(changedValues, allValues) => {
+            handleLinkFormValuesChange(changedValues, allValues);
+            linkFormDraft.onValuesChange();
+          }}
         >
           <Row gutter={16}>
             <Col xs={24} sm={12} lg={8}>
@@ -3756,18 +3921,28 @@ const IEC104: React.FC = () => {
 
       {/* Point Modal */}
       <Modal
-        title={editingPointIndex !== null ? '编辑点位' : '添加点位'}
+        title={<Space wrap>{editingPointIndex !== null ? '编辑点位' : '添加点位'}{pointFormDraft.dirty ? <>
+          <Text type={pointFormDraft.stale ? 'danger' : 'warning'}>
+            {pointFormDraft.stale ? '配置已变化 · 草稿已暂存' : '未保存 · 草稿已暂存'}
+          </Text>
+          <Button size="small" disabled={pointSubmitting} onClick={() => {
+            pointFormDraft.discard();
+            setPointModalOpen(false);
+          }}>放弃草稿</Button>
+        </> : null}</Space>}
         open={pointModalOpen}
         onOk={() => void handlePointSubmit()}
         onCancel={() => {
           if (!pointSubmitting) {
+            pointFormDraft.capture();
             setPointModalOpen(false);
           }
         }}
         width={680}
         className="iec104-config-modal"
         okText={editingPointIndex !== null ? '保存修改' : '添加点位'}
-        cancelText="取消"
+        cancelText={pointFormDraft.dirty ? '关闭并保留草稿' : '取消'}
+        okButtonProps={{ disabled: pointFormDraft.stale }}
         confirmLoading={pointSubmitting}
         maskClosable={!pointSubmitting}
         closable={!pointSubmitting}
@@ -3776,6 +3951,7 @@ const IEC104: React.FC = () => {
       >
         <Form
           form={pointForm}
+          disabled={pointSubmitting}
           layout="vertical"
           size="small"
           onValuesChange={(changedValues, values) => {
@@ -3786,6 +3962,7 @@ const IEC104: React.FC = () => {
                 console.info('IEC104 点位类型或业务变更后解除非法固定值模式，保留原固定数值');
               }
             }
+            pointFormDraft.onValuesChange();
           }}
         >
           <Row gutter={16}>
@@ -3993,7 +4170,14 @@ const IEC104: React.FC = () => {
 
       {/* Point Batch Edit Modal */}
       <Modal
-        title="批量编辑点位"
+        title={<Space wrap>批量编辑点位{batchEditHasChanges ? <>
+          <Text type="warning">未保存 · 草稿已暂存</Text>
+          <Button size="small" disabled={pointSubmitting} onClick={() => {
+            setBatchEditDraftSession(null);
+            batchEditDraft.clear(batchEditDraftKey);
+            setPointTypeBatchModalOpen(false);
+          }}>放弃草稿</Button>
+        </> : null}</Space>}
         open={pointTypeBatchModalOpen}
         onOk={() => void handlePointTypeBatchSubmit()}
         onCancel={() => {
@@ -4004,14 +4188,10 @@ const IEC104: React.FC = () => {
         width={620}
         className="iec104-config-modal"
         okText="保存批量修改"
-        cancelText="取消"
+        cancelText={batchEditHasChanges ? '关闭并保留草稿' : '取消'}
         confirmLoading={pointSubmitting}
         okButtonProps={{
-          disabled: pointSubmitting || (
-            pointTypeBatchValue === undefined
-            && pointRemoteControlTypeBatchValue === undefined
-            && pointCommandExecutionModeBatchValue === undefined
-          ),
+          disabled: pointSubmitting || batchEditConflict || !batchEditHasChanges,
         }}
         maskClosable={!pointSubmitting}
         closable={!pointSubmitting}
@@ -4019,10 +4199,11 @@ const IEC104: React.FC = () => {
         destroyOnClose
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {batchEditConflict ? <Alert type="error" showIcon message="点表已变化，请核对草稿后放弃并重新选择点位。" /> : null}
           <Alert
             type="warning"
             showIcon
-            message={`当前选中 ${selectedPointTags.length} 个点位`}
+            message={`当前选中 ${batchEditDraftSession?.targets.length ?? 0} 个点位`}
             description={`只会应用已选择的配置项；SINGLE 不使用 Scale、Offset、Deadband，这三个参数会重置为 1、0、0。遥控配置仅作用于其中 ${selectedRemoteControlPointCount} 个遥控业务点。`}
           />
           <Select<number>
@@ -4064,7 +4245,14 @@ const IEC104: React.FC = () => {
 
       {/* 批量添加点位弹窗 */}
       <Modal
-        title="批量添加点位"
+        title={<Space wrap>批量添加点位{batchPointHasChanges ? <>
+          <Text type="warning">未保存 · 草稿已暂存</Text>
+          <Button size="small" disabled={pointSubmitting} onClick={() => {
+            setBatchPointDraftSession(null);
+            batchPointDraft.clear(batchPointDraftKey);
+            setBatchPointModalOpen(false);
+          }}>放弃草稿</Button>
+        </> : null}</Space>}
         open={batchPointModalOpen}
         onOk={() => void handleBatchPointSubmit()}
         onCancel={() => {
@@ -4075,7 +4263,7 @@ const IEC104: React.FC = () => {
         width={980}
         className="iec104-config-modal iec104-batch-point-modal"
         okText={pointSubmitting ? '保存中…' : `添加 ${batchPointResult.drafts.length} 个点位`}
-        cancelText="取消"
+        cancelText={batchPointHasChanges ? '关闭并保留草稿' : '取消'}
         confirmLoading={pointSubmitting}
         okButtonProps={{
           disabled: pointSubmitting || batchPointResult.drafts.length === 0 || batchPointResult.issues.length > 0,
@@ -4259,7 +4447,14 @@ const IEC104: React.FC = () => {
 
       {/* IOA Batch Adjustment Modal */}
       <Modal
-        title="批量调整 IOA"
+        title={<Space wrap>批量调整 IOA{ioaHasChanges ? <>
+          <Text type="warning">未保存 · 草稿已暂存</Text>
+          <Button size="small" disabled={pointSubmitting} onClick={() => {
+            setIoaDraftSession(null);
+            ioaDraft.clear(ioaDraftKey);
+            setIoaAdjustModalOpen(false);
+          }}>放弃草稿</Button>
+        </> : null}</Space>}
         open={ioaAdjustModalOpen}
         onOk={() => void handleIoaAdjustSubmit()}
         onCancel={() => {
@@ -4270,17 +4465,18 @@ const IEC104: React.FC = () => {
         width={860}
         className="iec104-config-modal iec104-ioa-adjust-modal"
         okText={ioaAdjustValidation.changedCount > 0 ? `保存 ${ioaAdjustValidation.changedCount} 个 IOA` : '保存调整'}
-        cancelText="取消"
+        cancelText={ioaHasChanges ? '关闭并保留草稿' : '取消'}
         confirmLoading={pointSubmitting}
         maskClosable={!pointSubmitting}
         closable={!pointSubmitting}
         keyboard={!pointSubmitting}
         okButtonProps={{
-          disabled: pointSubmitting || ioaAdjustDrafts.length === 0 || ioaAdjustValidation.issues.size > 0 || ioaAdjustValidation.changedCount === 0,
+          disabled: pointSubmitting || ioaDraftConflict || ioaAdjustDrafts.length === 0 || ioaAdjustValidation.issues.size > 0 || ioaAdjustValidation.changedCount === 0,
         }}
         destroyOnClose
       >
         <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          {ioaDraftConflict ? <Alert type="error" showIcon message="点表已变化，请核对草稿后放弃并重新选择点位。" /> : null}
           <Alert
             type="warning"
             showIcon

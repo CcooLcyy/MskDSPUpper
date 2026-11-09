@@ -1,7 +1,7 @@
 import type { ModbusTemplateContext } from '../../adapters/types';
 import type { TemplateCommit } from '../../features/modbus-templates/bindings';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, App, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Typography } from 'antd';
+import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Space, Typography } from 'antd';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
 import type { ModbusLinkConfig, ModbusLinkInfo, ModbusPoint, ModbusReadPlan, ModbusSerialConfig } from '../../adapters';
@@ -17,6 +17,8 @@ import {
 import { formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import ConnectionConfig from './components/ConnectionConfig';
 import PointTable from './components/PointTable';
+import { useConfigDraft } from '../../drafts/config-drafts';
+import { useFormDraft } from '../../drafts/use-form-draft';
 import TemplateModal from '../../features/modbus-templates/TemplateModal';
 import { saveBoundTemplatePoints, pointRenameSaveOptions } from '../../features/modbus-templates/save-template';
 import MqttConfigPanel from './components/MqttConfigPanel';
@@ -34,6 +36,7 @@ import {
   getDefaultRegCount,
   getNextDuplicatePointAddress,
   getMinimumAddress,
+  readPlanDraftKey,
 } from './modbus-form-rules';
 import type { ModbusPointFormValues } from './modbus-form-rules';
 import {
@@ -143,7 +146,7 @@ interface LinkFormValues {
 }
 
 const ModbusRTU: React.FC = () => {
-  const { modal } = App.useApp();
+  const { clear: clearReadPlanDraft } = useConfigDraft('/protocol/modbus-rtu');
   const [links, setLinks] = useState<ModbusLinkInfo[]>([]);
   const [selectedConn, setSelectedConn] = useState<string | null>(null);
   const [points, setPoints] = useState<ModbusPoint[]>([]);
@@ -167,9 +170,10 @@ const ModbusRTU: React.FC = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [linkForm] = Form.useForm<LinkFormValues>();
   const [pointForm] = Form.useForm<ModbusPointFormValues & { address_base: number }>();
+  const linkFormDraft = useFormDraft('/protocol/modbus-rtu', linkForm);
+  const pointFormDraft = useFormDraft('/protocol/modbus-rtu', pointForm);
   const [searchParams] = useSearchParams();
   const pointLoadRequestRef = useRef(0);
-  const readPlanDirtyRef = useRef(false);
 
   const selectedLink = links.find((l) => l.config?.conn_name === selectedConn) ?? null;
   const currentView = normalizeProtocolView(searchParams.get(PROTOCOL_VIEW_QUERY_KEY));
@@ -331,8 +335,7 @@ const ModbusRTU: React.FC = () => {
 
   const openCreateLink = useCallback(() => {
     setEditingLink(null);
-    linkForm.resetFields();
-    linkForm.setFieldsValue({
+    linkFormDraft.begin(JSON.stringify(['新增连接']), null, {
       conn_name: '',
       transport_type: 2,
       device_id: 1,
@@ -351,7 +354,7 @@ const ModbusRTU: React.FC = () => {
       serial_est_size: 256,
     });
     setLinkModalOpen(true);
-  }, [linkForm]);
+  }, [linkFormDraft]);
 
   const openEditLink = useCallback(() => {
     if (!selectedLink?.config) {
@@ -359,7 +362,7 @@ const ModbusRTU: React.FC = () => {
     }
     const c = selectedLink.config;
     setEditingLink(c);
-    linkForm.setFieldsValue({
+    linkFormDraft.begin(JSON.stringify(['编辑连接', c.conn_name]), c, {
       conn_name: c.conn_name,
       transport_type: c.transport_type || 1,
       device_id: c.device_id,
@@ -378,9 +381,11 @@ const ModbusRTU: React.FC = () => {
       address_base: c.address_base || 1,
     });
     setLinkModalOpen(true);
-  }, [selectedLink, linkForm]);
+  }, [selectedLink, linkFormDraft]);
 
   const handleLinkSubmit = useCallback(async () => {
+    if (linkSubmitting || linkFormDraft.stale) return;
+    const finishDraft = linkFormDraft.beginSubmit();
     let renameCompleted = false;
     let values: LinkFormValues;
     try {
@@ -464,6 +469,7 @@ const ModbusRTU: React.FC = () => {
       } else {
         messageApi.success(createOnly ? '连接创建成功' : renamed ? '连接已改名并更新成功' : '连接更新成功');
       }
+      finishDraft();
       setLinkModalOpen(false);
       await refreshLinks();
       setSelectedConn(config.conn_name);
@@ -476,6 +482,10 @@ const ModbusRTU: React.FC = () => {
         }
         const connName = linkForm.getFieldValue('conn_name');
         if (typeof connName === 'string' && connName) {
+          const refreshed = await api.modbusRtuGetLink(connName).catch(() => null);
+          const currentConfig = refreshed?.config ?? (editingLink ? { ...editingLink, conn_name: connName } : null);
+          setEditingLink(currentConfig);
+          linkFormDraft.move(JSON.stringify(['编辑连接', connName]), currentConfig);
           setSelectedConn(connName);
         }
         messageApi.error(`连接已改名，但保存其他配置失败: ${error}`);
@@ -485,7 +495,7 @@ const ModbusRTU: React.FC = () => {
     } finally {
       setLinkSubmitting(false);
     }
-  }, [editingLink, linkForm, messageApi, refreshLinks, runSelectedLinkStopped]);
+  }, [editingLink, linkForm, linkFormDraft, linkSubmitting, messageApi, refreshLinks, runSelectedLinkStopped]);
 
   const handleReadPlanSave = useCallback(async (readPlan: ModbusReadPlan): Promise<boolean> => {
     if (!selectedLink?.config || !selectedConn) {
@@ -527,6 +537,7 @@ const ModbusRTU: React.FC = () => {
     setLinkMutation('delete');
     try {
       await api.modbusRtuDeleteLink(connName);
+      clearReadPlanDraft(readPlanDraftKey(connName));
       messageApi.success(`连接 ${connName} 已删除`);
       if (selectedConn === connName) {
         setSelectedConn(null);
@@ -538,7 +549,7 @@ const ModbusRTU: React.FC = () => {
     } finally {
       setLinkMutation(null);
     }
-  }, [linkMutation, messageApi, refreshLinks, selectedConn]);
+  }, [clearReadPlanDraft, linkMutation, messageApi, refreshLinks, selectedConn]);
 
   const handleCopyLink = useCallback(async (sourceConnName: string) => {
     if (linkMutation !== null) {
@@ -658,20 +669,22 @@ const ModbusRTU: React.FC = () => {
 
   const openCreatePoint = useCallback(() => {
     setEditingPointIndex(null);
-    pointForm.resetFields();
-    pointForm.setFieldsValue({
-      ...createDefaultModbusPoint(selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO),
+    const addressBase = selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO;
+    pointFormDraft.begin(JSON.stringify(['新增点位', selectedConn]), addressBase, {
+      ...createDefaultModbusPoint(addressBase),
       bool_mode: 'bit',
       enum_value: null,
-      address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
+      address_base: addressBase,
     });
     setPointModalOpen(true);
-  }, [pointForm, selectedLink?.config?.address_base]);
+  }, [pointFormDraft, selectedConn, selectedLink?.config?.address_base]);
 
   const openEditPoint = useCallback((index: number) => {
     const point = points[index];
+    if (!point) return;
     setEditingPointIndex(index);
-    pointForm.setFieldsValue({
+    const addressBase = selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO;
+    pointFormDraft.begin(JSON.stringify(['编辑点位', selectedConn, point.tag]), [point, addressBase], {
       tag: point.tag,
       function: point.function as ModbusPointFormValues['function'],
       address: point.address,
@@ -685,10 +698,10 @@ const ModbusRTU: React.FC = () => {
       bit_index: point.bit_index ?? null,
       enum_value: point.enum_value ?? null,
       bool_mode: getModbusBoolMode(point),
-      address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
+      address_base: addressBase,
     });
     setPointModalOpen(true);
-  }, [pointForm, points, selectedLink?.config?.address_base]);
+  }, [pointFormDraft, points, selectedConn, selectedLink?.config?.address_base]);
 
   const openCopyPoint = useCallback((index: number) => {
     const point = points[index];
@@ -697,8 +710,8 @@ const ModbusRTU: React.FC = () => {
     }
 
     setEditingPointIndex(null);
-    pointForm.resetFields();
-    pointForm.setFieldsValue({
+    const addressBase = selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO;
+    pointFormDraft.begin(JSON.stringify(['复制点位', selectedConn, point.tag]), [point, addressBase], {
       tag: point.tag,
       function: point.function as ModbusPointFormValues['function'],
       address: getNextDuplicatePointAddress(point, points),
@@ -712,10 +725,10 @@ const ModbusRTU: React.FC = () => {
       bit_index: point.bit_index ?? null,
       enum_value: point.enum_value ?? null,
       bool_mode: getModbusBoolMode(point),
-      address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
+      address_base: addressBase,
     });
     setPointModalOpen(true);
-  }, [pointForm, points, selectedLink?.config?.address_base]);
+  }, [pointFormDraft, points, selectedConn, selectedLink?.config?.address_base]);
 
   useEffect(() => {
     if (!pointModalOpen || editingPointIndex !== null) {
@@ -728,9 +741,10 @@ const ModbusRTU: React.FC = () => {
   }, [editingPointIndex, pointForm, pointModalOpen, points]);
 
   const handlePointSubmit = useCallback(async () => {
-    if (!selectedConn) {
+    if (!selectedConn || pointSubmitting || pointFormDraft.stale) {
       return;
     }
+    const finishDraft = pointFormDraft.beginSubmit();
     let values: ModbusPointFormValues & { address_base: number };
     try {
       values = await pointForm.validateFields();
@@ -789,6 +803,7 @@ const ModbusRTU: React.FC = () => {
         ? await api.applyModbusRtuTemplate(selectedConn, newPoints, metadata, renameContext.link.config, renameContext.runtime_generation)
           .then(result => ({ restartError: result.restart_error, stoppedBeforeRun: renameContext.link.state === 2 }))
         : await runSelectedLinkStopped(() => api.modbusRtuUpsertPointTable(selectedConn, newPoints, true));
+      finishDraft();
       if (metadata && renameContext) {
         const current = await api.getModbusRtuTemplateContext(selectedConn).catch(() => null);
         if (current?.runtime_generation !== renameContext.runtime_generation || templateSelectedConn.current !== selectedConn) {
@@ -810,7 +825,7 @@ const ModbusRTU: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [editingPointIndex, messageApi, pointForm, points, runSelectedLinkStopped, selectedConn]);
+  }, [editingPointIndex, messageApi, pointForm, pointFormDraft, pointSubmitting, points, runSelectedLinkStopped, selectedConn]);
 
   const handleDeletePoint = useCallback(async (index: number) => {
     if (!selectedConn || pointSubmitting) {
@@ -898,32 +913,13 @@ const ModbusRTU: React.FC = () => {
     }
   }, [messageApi, pointSubmitting, selectedConn, runSelectedLinkStopped]);
 
-  const handleReadPlanDirtyChange = useCallback((dirty: boolean) => {
-    readPlanDirtyRef.current = dirty;
-  }, []);
-
   const selectConnection = useCallback((connName: string) => {
     if (actionsDisabled || connName === selectedConn) {
       return;
     }
 
-    if (readPlanDirtyRef.current) {
-      console.info('Modbus RTU 请求确认放弃读取方案并切换连接');
-      modal.confirm({
-        title: '放弃未保存的读取方案？',
-        content: '切换连接会丢弃当前连接尚未应用的读取区间修改。',
-        okText: '放弃并切换',
-        cancelText: '继续编辑',
-        onOk: () => {
-          readPlanDirtyRef.current = false;
-          setSelectedConn(connName);
-        },
-      });
-      return;
-    }
-
     setSelectedConn(connName);
-  }, [actionsDisabled, modal, selectedConn]);
+  }, [actionsDisabled, selectedConn]);
 
   useEffect(() => {
     void refreshLinks();
@@ -945,12 +941,25 @@ const ModbusRTU: React.FC = () => {
 
   const renderLinkModal = (): React.ReactNode => (
     <Modal
-      title={editingLink ? '编辑连接' : '新增连接'}
+      title={<Space wrap>{editingLink ? '编辑连接' : '新增连接'}{linkFormDraft.dirty ? <>
+        <Text type={linkFormDraft.stale ? 'danger' : 'warning'}>
+          {linkFormDraft.stale ? '配置已变化 · 草稿已暂存' : '未保存 · 草稿已暂存'}
+        </Text>
+        <Button size="small" disabled={linkSubmitting} onClick={() => {
+          linkFormDraft.discard();
+          setLinkModalOpen(false);
+        }}>放弃草稿</Button>
+      </> : null}</Space>}
       open={linkModalOpen}
-      onCancel={() => setLinkModalOpen(false)}
+      onCancel={() => {
+        if (linkSubmitting) return;
+        linkFormDraft.capture();
+        setLinkModalOpen(false);
+      }}
       onOk={() => void handleLinkSubmit()}
       okText={editingLink ? '保存修改' : '创建连接'}
-      cancelText="取消"
+      cancelText={linkFormDraft.dirty ? '关闭并保留草稿' : '取消'}
+      okButtonProps={{ disabled: linkFormDraft.stale }}
       confirmLoading={linkSubmitting}
       maskClosable={!linkSubmitting}
       closable={!linkSubmitting}
@@ -958,7 +967,7 @@ const ModbusRTU: React.FC = () => {
       className="modbus-config-modal"
       destroyOnClose
     >
-      <Form form={linkForm} layout="vertical" autoComplete="off">
+      <Form form={linkForm} disabled={linkSubmitting} layout="vertical" autoComplete="off" onValuesChange={linkFormDraft.onValuesChange}>
         <div className="modbus-form-section">
           <Text className="modbus-form-section-title">基础信息</Text>
           <Row gutter={16}>
@@ -1108,12 +1117,25 @@ const ModbusRTU: React.FC = () => {
 
   const renderPointModal = (): React.ReactNode => (
     <Modal
-      title={editingPointIndex !== null ? '编辑点位' : '新增点位'}
+      title={<Space wrap>{editingPointIndex !== null ? '编辑点位' : '新增点位'}{pointFormDraft.dirty ? <>
+        <Text type={pointFormDraft.stale ? 'danger' : 'warning'}>
+          {pointFormDraft.stale ? '配置已变化 · 草稿已暂存' : '未保存 · 草稿已暂存'}
+        </Text>
+        <Button size="small" disabled={pointSubmitting} onClick={() => {
+          pointFormDraft.discard();
+          setPointModalOpen(false);
+        }}>放弃草稿</Button>
+      </> : null}</Space>}
       open={pointModalOpen}
-      onCancel={() => setPointModalOpen(false)}
+      onCancel={() => {
+        if (pointSubmitting) return;
+        pointFormDraft.capture();
+        setPointModalOpen(false);
+      }}
       onOk={() => void handlePointSubmit()}
       okText={editingPointIndex !== null ? '保存修改' : '添加点位'}
-      cancelText="取消"
+      cancelText={pointFormDraft.dirty ? '关闭并保留草稿' : '取消'}
+      okButtonProps={{ disabled: pointFormDraft.stale }}
       confirmLoading={pointSubmitting}
       maskClosable={!pointSubmitting}
       closable={!pointSubmitting}
@@ -1121,7 +1143,7 @@ const ModbusRTU: React.FC = () => {
       className="modbus-config-modal"
       destroyOnClose
     >
-      <Form form={pointForm} layout="vertical">
+      <Form form={pointForm} disabled={pointSubmitting} layout="vertical" onValuesChange={pointFormDraft.onValuesChange}>
         <Form.Item name="address_base" hidden>
           <InputNumber />
         </Form.Item>
@@ -1417,7 +1439,6 @@ const ModbusRTU: React.FC = () => {
             readPlanSaving={readPlanSaving}
             runtimeRunning={selectedLink?.state === 2}
             onReadPlanSave={handleReadPlanSave}
-            onReadPlanDirtyChange={handleReadPlanDirtyChange}
             onAdd={openCreatePoint}
             onApplyTemplate={() => void openTemplateModal()}
             onEdit={(index) => openEditPoint(index)}

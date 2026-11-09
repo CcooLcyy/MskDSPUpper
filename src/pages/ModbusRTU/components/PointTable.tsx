@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   App,
@@ -29,6 +29,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { DcSourcePointUpdate, ModbusPoint, ModbusReadPlan } from '../../../adapters';
+import { useConfigDraft } from '../../../drafts/config-drafts';
 import {
   type ProtocolRealtimeCellRevision,
   renderProtocolRealtimeQualityCell,
@@ -43,6 +44,7 @@ import {
   getMinimumAddress,
   formatModbusBoolSource,
   isExplicitReadFunction,
+  readPlanDraftKey,
 } from '../modbus-form-rules';
 import { resolveModbusPointDecimalText } from '../modbus-decimal';
 
@@ -69,7 +71,7 @@ const DATA_TYPE_LABELS: Record<number, string> = {
 
 const WORD_ORDER_LABELS: Record<number, string> = { 0: '默认 (HL)', 1: 'HL', 2: 'LH' };
 const BYTE_ORDER_LABELS: Record<number, string> = { 0: '默认 (AB)', 1: 'AB', 2: 'BA' };
-const DEFAULT_READ_PLAN_EDITOR_EXPANDED = false;
+type ReadPlanDraft = { base: string; value: ModbusReadPlan };
 const MODBUS_MAX_ADDRESS = 65535;
 const MODBUS_MAX_READ_QUANTITY = 125;
 
@@ -95,7 +97,6 @@ interface Props {
   runtimeRunning: boolean;
   showReadPlan?: boolean;
   onReadPlanSave: (readPlan: ModbusReadPlan) => Promise<boolean>;
-  onReadPlanDirtyChange?: (dirty: boolean) => void;
   onAdd: () => void;
   onApplyTemplate?: () => void;
   onEdit: (index: number) => void;
@@ -118,7 +119,6 @@ const PointTable: React.FC<Props> = ({
   runtimeRunning,
   showReadPlan = true,
   onReadPlanSave,
-  onReadPlanDirtyChange,
   onAdd,
   onApplyTemplate,
   onEdit,
@@ -140,22 +140,16 @@ const PointTable: React.FC<Props> = ({
     }),
     [readPlan],
   );
-  const savedReadPlanSignature = JSON.stringify(savedReadPlan);
-  const draftSourceKey = `${selectedConn ?? ''}|${addressBase}|${savedReadPlanSignature}`;
-  const [activeDraftSourceKey, setActiveDraftSourceKey] = useState(draftSourceKey);
-  const [draftReadPlanMode, setDraftReadPlanMode] = useState(savedReadPlan.mode || 1);
-  const [draftReadPlanBlocks, setDraftReadPlanBlocks] = useState(savedReadPlan.blocks.map((block) => ({ ...block })));
-  const [draftReadPlanEditorExpanded, setDraftReadPlanEditorExpanded] = useState(
-    DEFAULT_READ_PLAN_EDITOR_EXPANDED,
-  );
-  const draftIsCurrent = activeDraftSourceKey === draftSourceKey;
-  // A connection/address-base change is an external boundary. Derive the current view from
-  // external state immediately instead of applying an old local draft to the new connection.
-  const readPlanMode = draftIsCurrent ? draftReadPlanMode : (savedReadPlan.mode || 1);
-  const readPlanBlocks = draftIsCurrent ? draftReadPlanBlocks : savedReadPlan.blocks;
-  const readPlanEditorExpanded = draftIsCurrent
-    ? draftReadPlanEditorExpanded
-    : DEFAULT_READ_PLAN_EDITOR_EXPANDED;
+  const { read, write, clear } = useConfigDraft<ReadPlanDraft>('/protocol/modbus-rtu');
+  const [, redrawDraft] = useState(0);
+  const [expandedConn, setExpandedConn] = useState<string | null>(null);
+  const draftKey = showReadPlan && selectedConn ? readPlanDraftKey(selectedConn) : null;
+  const savedReadPlanSignature = JSON.stringify([addressBase, savedReadPlan]);
+  const draft = draftKey ? read(draftKey) : undefined;
+  const draftConflict = Boolean(draft && draft.base !== savedReadPlanSignature);
+  const currentReadPlan = draft?.value ?? savedReadPlan;
+  const { mode: readPlanMode, blocks: readPlanBlocks } = currentReadPlan;
+  const readPlanEditorExpanded = selectedConn !== null && expandedConn === selectedConn;
 
   const registerPoints = useMemo(
     () => points.filter((point) => isExplicitReadFunction(point.function)),
@@ -222,56 +216,33 @@ const PointTable: React.FC<Props> = ({
 
     return { invalidIndexes, overlapIndexes, issuesByIndex };
   }, [addressBase, readPlanBlocks]);
-  const currentReadPlan = useMemo<ModbusReadPlan>(
-    () => ({ mode: readPlanMode, blocks: readPlanBlocks }),
-    [readPlanBlocks, readPlanMode],
-  );
   const readPlanStale = readPlanMode === 2 && uncoveredPoints.length > 0;
   const readPlanInvalid = readPlanMode === 2 && readPlanValidation.invalidIndexes.size > 0;
-  const readPlanDirty = JSON.stringify(currentReadPlan) !== savedReadPlanSignature
-    || readPlanStale
-    || readPlanInvalid;
+  const readPlanDirty = Boolean(draft) || readPlanStale || readPlanInvalid;
 
-  useEffect(() => {
-    onReadPlanDirtyChange?.(showReadPlan && readPlanDirty);
-    return () => onReadPlanDirtyChange?.(false);
-  }, [onReadPlanDirtyChange, readPlanDirty, showReadPlan]);
+  const storeReadPlan = (next: ModbusReadPlan) => {
+    if (!draftKey || actionsDisabled) return;
+    if (JSON.stringify([addressBase, next]) === savedReadPlanSignature) clear(draftKey);
+    else write(draftKey, { base: draft?.base ?? savedReadPlanSignature, value: next });
+    redrawDraft((revision) => revision + 1);
+  };
 
   const setReadPlanBlocks = (
     next: ModbusReadPlan['blocks'] | ((current: ModbusReadPlan['blocks']) => ModbusReadPlan['blocks']),
   ): void => {
-    setActiveDraftSourceKey(draftSourceKey);
-    setDraftReadPlanBlocks((current) => {
-      const base = activeDraftSourceKey === draftSourceKey ? current : savedReadPlan.blocks;
-      return typeof next === 'function' ? next(base) : next;
-    });
-  };
-
-  const setReadPlanMode = (next: number): void => {
-    setActiveDraftSourceKey(draftSourceKey);
-    setDraftReadPlanMode(next);
-  };
-
-  const updateDraftExpanded = (next: boolean | ((current: boolean) => boolean)): void => {
-    setActiveDraftSourceKey(draftSourceKey);
-    setDraftReadPlanEditorExpanded((current) => {
-      const base = activeDraftSourceKey === draftSourceKey
-        ? current
-        : DEFAULT_READ_PLAN_EDITOR_EXPANDED;
-      return typeof next === 'function' ? next(base) : next;
-    });
+    storeReadPlan({ ...currentReadPlan, blocks: typeof next === 'function' ? next(readPlanBlocks) : next });
   };
 
   const persistReadPlan = async (nextReadPlan: ModbusReadPlan) => {
     const saved = await onReadPlanSave(nextReadPlan);
-    if (saved) {
-      setActiveDraftSourceKey(draftSourceKey);
-      setDraftReadPlanMode(nextReadPlan.mode);
-      setDraftReadPlanBlocks(nextReadPlan.blocks.map((block) => ({ ...block })));
+    if (saved && draftKey && read(draftKey) === draft) {
+      clear(draftKey);
+      redrawDraft((revision) => revision + 1);
     }
   };
 
   const requestReadPlanApply = (nextReadPlan: ModbusReadPlan, title: string) => {
+    if (draftConflict) return;
     const apply = () => persistReadPlan(nextReadPlan);
     if (runtimeRunning) {
       console.info('Modbus RTU 请求确认应用读取策略并重启连接');
@@ -298,9 +269,8 @@ const PointTable: React.FC<Props> = ({
   };
 
   const openReadPlanPreview = () => {
-    setReadPlanBlocks(buildReadPlanBlocks(points));
-    setReadPlanMode(2);
-    updateDraftExpanded(true);
+    storeReadPlan({ mode: 2, blocks: buildReadPlanBlocks(points) });
+    setExpandedConn(selectedConn);
   };
 
   const restorePointReadPlan = () => {
@@ -712,6 +682,15 @@ const PointTable: React.FC<Props> = ({
       {showReadPlan ? <div className="protocol-read-plan-toolbar">
         <div className="protocol-read-plan-heading">
           <Text strong>读取策略</Text>
+          {draft && draftKey ? <>
+            <Text type={draftConflict ? 'danger' : 'warning'}>
+              {draftConflict ? '配置已变化 · 草稿已暂存' : '未保存 · 草稿已暂存'}
+            </Text>
+            <Button size="small" disabled={actionsDisabled} onClick={() => {
+              clear(draftKey);
+              redrawDraft((revision) => revision + 1);
+            }}>放弃草稿</Button>
+          </> : null}
           {readPlanMode === 1 ? (
             <>
               <Text type="secondary">逐点读取</Text>
@@ -732,7 +711,7 @@ const PointTable: React.FC<Props> = ({
               <Text type="secondary">按寄存器区间批量读取，适合地址连续的设备。</Text>
               <Button
                 size="small"
-                disabled={actionsDisabled}
+                disabled={actionsDisabled || draftConflict}
                 onClick={restorePointReadPlan}
               >
                 恢复逐点读取
@@ -741,7 +720,7 @@ const PointTable: React.FC<Props> = ({
                 <Button
                   type="primary"
                   size="small"
-                  disabled={actionsDisabled || readPlanBlocks.length === 0}
+                  disabled={actionsDisabled || draftConflict || readPlanBlocks.length === 0}
                   loading={readPlanSaving}
                   onClick={applyReadPlan}
                 >
@@ -772,7 +751,7 @@ const PointTable: React.FC<Props> = ({
                 icon={<DownOutlined rotate={readPlanEditorExpanded ? 180 : 0} />}
                 aria-expanded={readPlanEditorExpanded}
                 aria-controls="modbus-read-plan-blocks"
-                onClick={() => updateDraftExpanded((expanded) => !expanded)}
+                onClick={() => setExpandedConn(readPlanEditorExpanded ? null : selectedConn)}
               >
                 {readPlanEditorExpanded ? '收起区间编辑' : '展开区间编辑'}
               </Button>

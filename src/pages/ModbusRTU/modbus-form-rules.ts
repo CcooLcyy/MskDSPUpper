@@ -24,6 +24,8 @@ export type ModbusFunctionCode = typeof MODBUS_FUNCTION[keyof typeof MODBUS_FUNC
 export type ModbusDataType = typeof MODBUS_DATA_TYPE[keyof typeof MODBUS_DATA_TYPE];
 export type ModbusAddressBase = typeof MODBUS_ADDRESS_BASE[keyof typeof MODBUS_ADDRESS_BASE];
 
+export const readPlanDraftKey = (connName: string) => JSON.stringify(['读取方案', connName]);
+
 const EMPTY_NUMBERS: readonly number[] = Object.freeze([]);
 const BOOL_TYPES: readonly ModbusDataType[] = Object.freeze([
   MODBUS_DATA_TYPE.BOOL,

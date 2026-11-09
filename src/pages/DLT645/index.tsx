@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Switch } from 'antd';
+import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Space, Switch, Tag } from 'antd';
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
+import { useFormDraft } from '../../drafts/use-form-draft';
 import type { Dlt645LinkConfig, Dlt645LinkInfo, Dlt645Point, Dlt645Block, Dlt645BlockItem } from '../../adapters';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
 import ResizableSplit from '../../components/layout/ResizableSplit';
@@ -125,6 +126,12 @@ const DLT645: React.FC = () => {
   const [linkForm] = Form.useForm();
   const [pointForm] = Form.useForm();
   const [blockForm] = Form.useForm();
+  const linkDraft = useFormDraft('/protocol/dlt645', linkForm);
+  const pointDraft = useFormDraft('/protocol/dlt645', pointForm);
+  const { begin: beginLinkDraft, beginSubmit: submitLinkDraft, discard: discardLinkDraft, move: moveLinkDraft } = linkDraft;
+  const { begin: beginPointDraft, beginSubmit: submitPointDraft, discard: discardPointDraft } = pointDraft;
+  const pointEditorConn = useRef<string | null>(null);
+  const pointEditorTag = useRef<string | null>(null);
   const [searchParams] = useSearchParams();
   const pointLoadRequestRef = useRef(0);
 
@@ -283,8 +290,7 @@ const DLT645: React.FC = () => {
 
   const openCreateLink = useCallback(() => {
     setEditingLink(null);
-    linkForm.resetFields();
-    linkForm.setFieldsValue({
+    beginLinkDraft('link:new', null, {
       conn_name: '',
       protocol_variant: 1,
       meter_addr: '',
@@ -303,7 +309,7 @@ const DLT645: React.FC = () => {
       serial_est_size: 0,
     });
     setLinkModalOpen(true);
-  }, [linkForm]);
+  }, [beginLinkDraft]);
 
   const openEditLink = useCallback(() => {
     if (!selectedLink?.config) {
@@ -311,7 +317,7 @@ const DLT645: React.FC = () => {
     }
     const c = selectedLink.config;
     setEditingLink(c);
-    linkForm.setFieldsValue({
+    beginLinkDraft(JSON.stringify(['link', c.conn_name]), c, {
       conn_name: c.conn_name,
       protocol_variant: c.protocol_variant || 1,
       meter_addr: c.meter_addr,
@@ -330,9 +336,10 @@ const DLT645: React.FC = () => {
       serial_est_size: c.serial_est_size,
     });
     setLinkModalOpen(true);
-  }, [selectedLink, linkForm]);
+  }, [beginLinkDraft, selectedLink]);
 
   const handleLinkSubmit = useCallback(async () => {
+    if (linkDraft.stale) return;
     if (linkSubmitting) {
       return;
     }
@@ -347,6 +354,7 @@ const DLT645: React.FC = () => {
       return;
     }
 
+    const clearSubmittedDraft = submitLinkDraft();
     try {
       const isSerial = (values.comm_mode ?? 3) === 2;
       const config: Dlt645LinkConfig = {
@@ -399,11 +407,15 @@ const DLT645: React.FC = () => {
       } else {
         messageApi.success(createOnly ? '连接创建成功' : renamed ? '连接已改名并更新成功' : '连接更新成功');
       }
+      clearSubmittedDraft();
       setLinkModalOpen(false);
       await refreshLinks();
       setSelectedConn(config.conn_name);
     } catch (error) {
-      if (renameCompleted) {
+      if (renameCompleted && editingLink) {
+        const renamedLink = { ...editingLink, conn_name: values.conn_name };
+        moveLinkDraft(JSON.stringify(['link', renamedLink.conn_name]), renamedLink);
+        setEditingLink(renamedLink);
         try {
           await refreshLinks();
         } catch {
@@ -420,7 +432,7 @@ const DLT645: React.FC = () => {
     } finally {
       setLinkSubmitting(false);
     }
-  }, [editingLink, linkForm, linkSubmitting, messageApi, refreshLinks, runSelectedLinkStopped]);
+  }, [editingLink, linkDraft.stale, linkForm, linkSubmitting, messageApi, moveLinkDraft, refreshLinks, runSelectedLinkStopped, submitLinkDraft]);
 
   const handleDeleteLink = useCallback(async (connName: string) => {
     if (linkMutation !== null) {
@@ -547,9 +559,11 @@ const DLT645: React.FC = () => {
   // ── Point CRUD ──
 
   const openCreatePoint = useCallback(() => {
+    if (!selectedConn) return;
+    pointEditorConn.current = selectedConn;
+    pointEditorTag.current = null;
     setEditingPointIndex(null);
-    pointForm.resetFields();
-    pointForm.setFieldsValue({
+    beginPointDraft(JSON.stringify(['point:new', selectedLink?.conn_id || selectedConn]), selectedLink?.config?.protocol_variant ?? 1, {
       tag: '',
       di: '',
       data_len: 4,
@@ -562,12 +576,15 @@ const DLT645: React.FC = () => {
       bit_index: null,
     });
     setPointModalOpen(true);
-  }, [pointForm]);
+  }, [beginPointDraft, selectedConn, selectedLink?.config?.protocol_variant, selectedLink?.conn_id]);
 
   const openEditPoint = useCallback((index: number) => {
     const point = points[index];
+    if (!selectedConn || !point) return;
+    pointEditorConn.current = selectedConn;
+    pointEditorTag.current = point.tag;
     setEditingPointIndex(index);
-    pointForm.setFieldsValue({
+    beginPointDraft(JSON.stringify(['point:edit', selectedLink?.conn_id || selectedConn, point.tag]), { point, protocolVariant: selectedLink?.config?.protocol_variant ?? 1 }, {
       tag: point.tag,
       di: point.di,
       data_len: point.data_len,
@@ -580,17 +597,18 @@ const DLT645: React.FC = () => {
       bit_index: point.bit_index ?? null,
     });
     setPointModalOpen(true);
-  }, [pointForm, points]);
+  }, [beginPointDraft, points, selectedConn, selectedLink?.config?.protocol_variant, selectedLink?.conn_id]);
 
   const openCopyPoint = useCallback((index: number) => {
     const point = points[index];
-    if (!point) {
+    if (!selectedConn || !point) {
       return;
     }
 
+    pointEditorConn.current = selectedConn;
+    pointEditorTag.current = null;
     setEditingPointIndex(null);
-    pointForm.resetFields();
-    pointForm.setFieldsValue({
+    beginPointDraft(JSON.stringify(['point:copy', selectedLink?.conn_id || selectedConn, point.tag]), { point, protocolVariant: selectedLink?.config?.protocol_variant ?? 1 }, {
       tag: point.tag,
       di: point.di,
       data_len: point.data_len,
@@ -603,7 +621,7 @@ const DLT645: React.FC = () => {
       bit_index: point.bit_index ?? null,
     });
     setPointModalOpen(true);
-  }, [pointForm, points]);
+  }, [beginPointDraft, points, selectedConn, selectedLink?.config?.protocol_variant, selectedLink?.conn_id]);
 
   useEffect(() => {
     if (!pointModalOpen || editingPointIndex !== null) {
@@ -616,7 +634,11 @@ const DLT645: React.FC = () => {
   }, [editingPointIndex, pointForm, pointModalOpen, points]);
 
   const handlePointSubmit = useCallback(async () => {
-    if (!selectedConn || pointSubmitting) {
+    if (!selectedConn || pointEditorConn.current !== selectedConn || pointDraft.stale || pointSubmitting) {
+      return;
+    }
+    if (editingPointIndex !== null && points[editingPointIndex]?.tag !== pointEditorTag.current) {
+      messageApi.warning('原点位已变化，请关闭并重新选择点位');
       return;
     }
     let values: ReturnType<typeof pointForm.getFieldsValue>;
@@ -626,6 +648,7 @@ const DLT645: React.FC = () => {
       return;
     }
 
+    const clearSubmittedDraft = submitPointDraft();
     setPointSubmitting(true);
     try {
       const newPoint: Dlt645Point = {
@@ -663,6 +686,7 @@ const DLT645: React.FC = () => {
         ? points.map((point, index) => (index === editingPointIndex ? newPoint : point))
         : [...points, newPoint];
       const restartResult = await runSelectedLinkStopped(() => api.dlt645UpsertPointTable(selectedConn, newPoints, blocks, true));
+      clearSubmittedDraft();
       setPoints(newPoints);
       setPointModalOpen(false);
       messageApi.success(editingPointIndex !== null ? '点位已更新' : '点位已添加');
@@ -676,7 +700,7 @@ const DLT645: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [blocks, editingPointIndex, isPointBool, messageApi, pointForm, pointSubmitting, points, selectedConn, runSelectedLinkStopped]);
+  }, [blocks, editingPointIndex, isPointBool, messageApi, pointDraft.stale, pointForm, pointSubmitting, points, selectedConn, runSelectedLinkStopped, submitPointDraft]);
 
   const handleDeletePoint = useCallback(async (index: number) => {
     if (!selectedConn || pointSubmitting) {
@@ -856,20 +880,32 @@ const DLT645: React.FC = () => {
       title={editingLink ? '编辑连接' : '新增连接'}
       open={linkModalOpen}
       onCancel={() => {
-        if (!linkSubmitting) {
-          setLinkModalOpen(false);
-        }
+        if (linkSubmitting) return;
+        if (linkDraft.dirty) linkDraft.capture();
+        setLinkModalOpen(false);
       }}
       onOk={() => void handleLinkSubmit()}
       width={720}
       className="dlt645-config-modal"
+      cancelText={linkDraft.dirty ? '暂存并收起' : '取消'}
+      cancelButtonProps={{ disabled: linkSubmitting }}
+      okButtonProps={{ disabled: linkDraft.stale }}
       confirmLoading={linkSubmitting}
+      footer={(_, { CancelBtn, OkBtn }) => <Space wrap>
+        {linkDraft.dirty && <Button danger disabled={linkSubmitting} onClick={() => {
+          discardLinkDraft();
+          setLinkModalOpen(false);
+        }}>放弃草稿</Button>}
+        <CancelBtn /><OkBtn />
+      </Space>}
       maskClosable={!linkSubmitting}
       closable={!linkSubmitting}
       keyboard={!linkSubmitting}
       destroyOnClose
     >
-      <Form form={linkForm} layout="vertical" size="small" autoComplete="off">
+      {linkDraft.dirty ? <Tag color="warning">未保存 · 草稿已暂存</Tag> : editingLink ? <Tag color="success">已保存</Tag> : null}
+      {linkDraft.stale && <Alert type="warning" showIcon title="原配置已变化，请核对草稿并放弃后重新编辑。" />}
+      <Form form={linkForm} layout="vertical" onValuesChange={linkDraft.onValuesChange} disabled={linkSubmitting} size="small" autoComplete="off">
         <div className="dlt645-form-section">
           <div className="dlt645-form-section-title">基础信息</div>
           <Row gutter={[16, 0]}>
@@ -994,20 +1030,32 @@ const DLT645: React.FC = () => {
       title={editingPointIndex !== null ? '编辑点位' : '新增点位'}
       open={pointModalOpen}
       onCancel={() => {
-        if (!pointSubmitting) {
-          setPointModalOpen(false);
-        }
+        if (pointSubmitting) return;
+        if (pointDraft.dirty) pointDraft.capture();
+        setPointModalOpen(false);
       }}
       onOk={() => void handlePointSubmit()}
       width={640}
       className="dlt645-config-modal"
+      cancelText={pointDraft.dirty ? '暂存并收起' : '取消'}
+      cancelButtonProps={{ disabled: pointSubmitting }}
+      okButtonProps={{ disabled: pointDraft.stale }}
       confirmLoading={pointSubmitting}
+      footer={(_, { CancelBtn, OkBtn }) => <Space wrap>
+        {pointDraft.dirty && <Button danger disabled={pointSubmitting} onClick={() => {
+          discardPointDraft();
+          setPointModalOpen(false);
+        }}>放弃草稿</Button>}
+        <CancelBtn /><OkBtn />
+      </Space>}
       maskClosable={!pointSubmitting}
       closable={!pointSubmitting}
       keyboard={!pointSubmitting}
       destroyOnClose
     >
-      <Form form={pointForm} layout="vertical" size="small">
+      {pointDraft.dirty ? <Tag color="warning">未保存 · 草稿已暂存</Tag> : editingPointIndex !== null ? <Tag color="success">已保存</Tag> : null}
+      {pointDraft.stale && <Alert type="warning" showIcon title="原配置已变化，请核对草稿并放弃后重新编辑。" />}
+      <Form form={pointForm} layout="vertical" onValuesChange={pointDraft.onValuesChange} disabled={pointSubmitting} size="small">
         <div className="dlt645-form-section">
           <div className="dlt645-form-section-title">基础信息</div>
           <Row gutter={[16, 0]}>

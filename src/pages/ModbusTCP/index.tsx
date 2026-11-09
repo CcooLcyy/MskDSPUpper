@@ -1,9 +1,10 @@
 import type { ModbusTemplateContext, ModbusPointTableSaveOptions } from '../../adapters/types';
 import type { TemplateCommit } from '../../features/modbus-templates/bindings';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Typography } from 'antd';
+import { Alert, Button, Card, Col, Form, Input, InputNumber, message, Modal, Row, Select, Space, Tag, Typography } from 'antd';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../adapters';
+import { useFormDraft } from '../../drafts/use-form-draft';
 import type { ModbusPoint, ModbusTcpLinkConfig, ModbusTcpLinkInfo } from '../../adapters';
 import ResizableSplit from '../../components/layout/ResizableSplit';
 import ProtocolConnectionList from '../../components/protocol/ProtocolConnectionList';
@@ -132,6 +133,12 @@ const ModbusTCP: React.FC = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [linkForm] = Form.useForm<LinkFormValues>();
   const [pointForm] = Form.useForm<ModbusPointFormValues & { address_base: number }>();
+  const linkDraft = useFormDraft('/protocol/modbus-tcp', linkForm);
+  const pointDraft = useFormDraft('/protocol/modbus-tcp', pointForm);
+  const { begin: beginLinkDraft, beginSubmit: submitLinkDraft, discard: discardLinkDraft, move: moveLinkDraft } = linkDraft;
+  const { begin: beginPointDraft, beginSubmit: submitPointDraft, discard: discardPointDraft } = pointDraft;
+  const pointEditorConn = useRef<string | null>(null);
+  const pointEditorTag = useRef<string | null>(null);
   const [searchParams] = useSearchParams();
   const pointLoadRequestRef = useRef(0);
 
@@ -305,8 +312,7 @@ const ModbusTCP: React.FC = () => {
 
   const openCreateLink = useCallback(() => {
     setEditingLink(null);
-    linkForm.resetFields();
-    linkForm.setFieldsValue({
+    beginLinkDraft('link:new', null, {
       conn_name: '',
       host: '',
       port: 502,
@@ -317,7 +323,7 @@ const ModbusTCP: React.FC = () => {
       address_base: MODBUS_ADDRESS_BASE.ZERO,
     });
     setLinkModalOpen(true);
-  }, [linkForm]);
+  }, [beginLinkDraft]);
 
   const openEditLink = useCallback(() => {
     if (!selectedLink?.config) {
@@ -325,7 +331,7 @@ const ModbusTCP: React.FC = () => {
     }
     const config = selectedLink.config;
     setEditingLink(config);
-    linkForm.setFieldsValue({
+    beginLinkDraft(JSON.stringify(['link', config.conn_name]), config, {
       conn_name: config.conn_name,
       host: config.tcp?.host ?? '',
       port: config.tcp?.port ?? 502,
@@ -336,9 +342,10 @@ const ModbusTCP: React.FC = () => {
       address_base: config.address_base || MODBUS_ADDRESS_BASE.ZERO,
     });
     setLinkModalOpen(true);
-  }, [linkForm, selectedLink]);
+  }, [beginLinkDraft, selectedLink]);
 
   const handleLinkSubmit = useCallback(async () => {
+    if (linkDraft.stale) return;
     let values: LinkFormValues;
     try {
       values = await linkForm.validateFields();
@@ -369,6 +376,7 @@ const ModbusTCP: React.FC = () => {
     const renamed = !createOnly && oldConnName !== config.conn_name;
     let renameCompleted = false;
 
+    const clearSubmittedDraft = submitLinkDraft();
     setLinkSubmitting(true);
     try {
       const save = async () => {
@@ -390,6 +398,7 @@ const ModbusTCP: React.FC = () => {
           originalConnName: oldConnName,
           restartConnName: config.conn_name,
         });
+      clearSubmittedDraft();
       setLinkModalOpen(false);
       await refreshLinks();
       setSelectedConn(config.conn_name);
@@ -399,7 +408,10 @@ const ModbusTCP: React.FC = () => {
         messageApi.success(createOnly ? '连接创建成功' : renamed ? '连接已改名并更新成功' : '连接更新成功');
       }
     } catch (error) {
-      if (renameCompleted) {
+      if (renameCompleted && editingLink) {
+        const renamedLink = { ...editingLink, conn_name: config.conn_name };
+        moveLinkDraft(JSON.stringify(['link', config.conn_name]), renamedLink);
+        setEditingLink(renamedLink);
         setSelectedConn(config.conn_name);
         await refreshLinks({ silent: true });
         messageApi.error(`连接已改名，但保存其他配置失败: ${error}`);
@@ -409,7 +421,7 @@ const ModbusTCP: React.FC = () => {
     } finally {
       setLinkSubmitting(false);
     }
-  }, [editingLink, linkForm, messageApi, refreshLinks, runSelectedLinkStopped]);
+  }, [editingLink, linkDraft.stale, linkForm, messageApi, moveLinkDraft, refreshLinks, runSelectedLinkStopped, submitLinkDraft]);
 
   const handleDeleteLink = useCallback(async (connName: string) => {
     if (linkMutation !== null) {
@@ -540,21 +552,26 @@ const ModbusTCP: React.FC = () => {
   }, [messageApi, refreshLinks, runtimeAction, selectedConn, selectedLink?.state, waitForLinkState]);
 
   const openCreatePoint = useCallback(() => {
+    if (!selectedConn) return;
+    pointEditorConn.current = selectedConn;
+    pointEditorTag.current = null;
     setEditingPointIndex(null);
-    pointForm.resetFields();
-    pointForm.setFieldsValue({
+    beginPointDraft(JSON.stringify(['point:new', selectedLink?.conn_id || selectedConn]), selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO, {
       ...createDefaultModbusPoint(selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO),
       bool_mode: 'bit',
       enum_value: null,
       address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
     });
     setPointModalOpen(true);
-  }, [pointForm, selectedLink?.config?.address_base]);
+  }, [beginPointDraft, selectedConn, selectedLink?.config?.address_base, selectedLink?.conn_id]);
 
   const openEditPoint = useCallback((index: number) => {
     const point = points[index];
+    if (!selectedConn || !point) return;
+    pointEditorConn.current = selectedConn;
+    pointEditorTag.current = point.tag;
     setEditingPointIndex(index);
-    pointForm.setFieldsValue({
+    beginPointDraft(JSON.stringify(['point:edit', selectedLink?.conn_id || selectedConn, point.tag]), { point, addressMode: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO }, {
       ...point,
       function: point.function as ModbusPointFormValues['function'],
       data_type: point.data_type as ModbusPointFormValues['data_type'],
@@ -567,16 +584,17 @@ const ModbusTCP: React.FC = () => {
       address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
     });
     setPointModalOpen(true);
-  }, [pointForm, points, selectedLink?.config?.address_base]);
+  }, [beginPointDraft, points, selectedConn, selectedLink?.config?.address_base, selectedLink?.conn_id]);
 
   const openCopyPoint = useCallback((index: number) => {
     const point = points[index];
-    if (!point) {
+    if (!selectedConn || !point) {
       return;
     }
+    pointEditorConn.current = selectedConn;
+    pointEditorTag.current = null;
     setEditingPointIndex(null);
-    pointForm.resetFields();
-    pointForm.setFieldsValue({
+    beginPointDraft(JSON.stringify(['point:copy', selectedLink?.conn_id || selectedConn, point.tag]), { point, addressMode: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO }, {
       ...point,
       function: point.function as ModbusPointFormValues['function'],
       data_type: point.data_type as ModbusPointFormValues['data_type'],
@@ -590,7 +608,7 @@ const ModbusTCP: React.FC = () => {
       address_base: selectedLink?.config?.address_base ?? MODBUS_ADDRESS_BASE.ZERO,
     });
     setPointModalOpen(true);
-  }, [pointForm, points, selectedLink?.config?.address_base]);
+  }, [beginPointDraft, points, selectedConn, selectedLink?.config?.address_base, selectedLink?.conn_id]);
 
   useEffect(() => {
     if (!pointModalOpen || editingPointIndex !== null) {
@@ -603,7 +621,11 @@ const ModbusTCP: React.FC = () => {
   }, [editingPointIndex, pointForm, pointModalOpen, points]);
 
   const handlePointSubmit = useCallback(async () => {
-    if (!selectedConn) {
+    if (!selectedConn || pointEditorConn.current !== selectedConn || pointDraft.stale) {
+      return;
+    }
+    if (editingPointIndex !== null && points[editingPointIndex]?.tag !== pointEditorTag.current) {
+      messageApi.warning('原点位已变化，请关闭并重新选择点位');
       return;
     }
     let values: ModbusPointFormValues & { address_base: number };
@@ -648,6 +670,7 @@ const ModbusTCP: React.FC = () => {
       ? [...points, nextPoint]
       : points.map((point, index) => (index === editingPointIndex ? nextPoint : point));
 
+    const clearSubmittedDraft = submitPointDraft();
     setPointSubmitting(true);
     try {
       const renameContext = editingPointIndex !== null && points[editingPointIndex].tag !== nextPoint.tag
@@ -660,6 +683,7 @@ const ModbusTCP: React.FC = () => {
         ? await api.applyModbusTcpTemplate(selectedConn, nextPoints, metadata, renameContext.link.config, renameContext.runtime_generation)
           .then(saved => ({ restartError: saved.restart_error }))
         : await savePointTablePreservingRuntime(nextPoints);
+      clearSubmittedDraft();
       if (metadata && renameContext) {
         const current = await api.getModbusTcpTemplateContext(selectedConn).catch(() => null);
         if (current?.runtime_generation !== renameContext.runtime_generation || templateSelectedConn.current !== selectedConn) {
@@ -680,7 +704,7 @@ const ModbusTCP: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [editingPointIndex, messageApi, pointForm, points, refreshLinks, savePointTablePreservingRuntime, selectedConn]);
+  }, [editingPointIndex, messageApi, pointDraft.stale, pointForm, points, refreshLinks, savePointTablePreservingRuntime, selectedConn, submitPointDraft]);
 
   const handleDeletePoint = useCallback(async (index: number) => {
     if (!selectedConn || pointSubmitting) {
@@ -782,18 +806,33 @@ const ModbusTCP: React.FC = () => {
     <Modal
       title={editingLink ? '编辑 Modbus TCP 连接' : '新增 Modbus TCP 连接'}
       open={linkModalOpen}
-      onCancel={() => setLinkModalOpen(false)}
+      onCancel={() => {
+        if (linkSubmitting) return;
+        if (linkDraft.dirty) linkDraft.capture();
+        setLinkModalOpen(false);
+      }}
       onOk={() => void handleLinkSubmit()}
       okText={editingLink ? '保存修改' : '创建连接'}
-      cancelText="取消"
+      cancelText={linkDraft.dirty ? '暂存并收起' : '取消'}
+      cancelButtonProps={{ disabled: linkSubmitting }}
+      okButtonProps={{ disabled: linkDraft.stale }}
       confirmLoading={linkSubmitting}
+      footer={(_, { CancelBtn, OkBtn }) => <Space wrap>
+        {linkDraft.dirty && <Button danger disabled={linkSubmitting} onClick={() => {
+          discardLinkDraft();
+          setLinkModalOpen(false);
+        }}>放弃草稿</Button>}
+        <CancelBtn /><OkBtn />
+      </Space>}
       maskClosable={!linkSubmitting}
       closable={!linkSubmitting}
       width={760}
       className="modbus-config-modal"
       destroyOnClose
     >
-      <Form form={linkForm} layout="vertical" autoComplete="off">
+      {linkDraft.dirty ? <Tag color="warning">未保存 · 草稿已暂存</Tag> : editingLink ? <Tag color="success">已保存</Tag> : null}
+      {linkDraft.stale && <Alert type="warning" showIcon title="原配置已变化，请核对草稿并放弃后重新编辑。" />}
+      <Form form={linkForm} layout="vertical" onValuesChange={linkDraft.onValuesChange} disabled={linkSubmitting} autoComplete="off">
         <div className="modbus-form-section">
           <Text className="modbus-form-section-title">连接标识</Text>
           <Row gutter={16}>
@@ -928,18 +967,33 @@ const ModbusTCP: React.FC = () => {
     <Modal
       title={editingPointIndex === null ? '新增点位' : '编辑点位'}
       open={pointModalOpen}
-      onCancel={() => setPointModalOpen(false)}
+      onCancel={() => {
+        if (pointSubmitting) return;
+        if (pointDraft.dirty) pointDraft.capture();
+        setPointModalOpen(false);
+      }}
       onOk={() => void handlePointSubmit()}
       okText={editingPointIndex === null ? '添加点位' : '保存修改'}
-      cancelText="取消"
+      cancelText={pointDraft.dirty ? '暂存并收起' : '取消'}
+      cancelButtonProps={{ disabled: pointSubmitting }}
+      okButtonProps={{ disabled: pointDraft.stale }}
       confirmLoading={pointSubmitting}
+      footer={(_, { CancelBtn, OkBtn }) => <Space wrap>
+        {pointDraft.dirty && <Button danger disabled={pointSubmitting} onClick={() => {
+          discardPointDraft();
+          setPointModalOpen(false);
+        }}>放弃草稿</Button>}
+        <CancelBtn /><OkBtn />
+      </Space>}
       maskClosable={!pointSubmitting}
       closable={!pointSubmitting}
       width={720}
       className="modbus-config-modal"
       destroyOnClose
     >
-      <Form form={pointForm} layout="vertical">
+      {pointDraft.dirty ? <Tag color="warning">未保存 · 草稿已暂存</Tag> : editingPointIndex !== null ? <Tag color="success">已保存</Tag> : null}
+      {pointDraft.stale && <Alert type="warning" showIcon title="原配置已变化，请核对草稿并放弃后重新编辑。" />}
+      <Form form={pointForm} layout="vertical" onValuesChange={pointDraft.onValuesChange} disabled={pointSubmitting}>
         <Form.Item name="address_base" hidden><InputNumber /></Form.Item>
         <Form.Item
           name="deadband"
