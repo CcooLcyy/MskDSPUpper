@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Button, Card, Descriptions, Divider, Form, Input, InputNumber, Modal,
   Select, Space, Switch, Table, Tabs, Tag, Tooltip, Typography, message,
@@ -135,7 +135,7 @@ const IEC61850Page: React.FC = () => {
   const fileRef = useRef<HTMLInputElement>(null);
   const loadRevision = useRef(0);
   const selectedConnRef = useRef(selectedConn);
-  selectedConnRef.current = selectedConn;
+  useLayoutEffect(() => { selectedConnRef.current = selectedConn; }, [selectedConn]);
 
   const selectedIed = useMemo(() => ieds.find((item) => item.config?.conn_name === selectedConn) ?? null, [ieds, selectedConn]);
   const selectedModelCatalog = useMemo(
@@ -216,6 +216,7 @@ const IEC61850Page: React.FC = () => {
   }, [messageApi, selectedConn]);
 
   const loadSelected = useCallback(async (connName: string) => {
+    if (selectedConnRef.current !== connName) return;
     const revision = ++loadRevision.current;
     try {
       const [ied, table, runtime] = await Promise.all([api.iec61850GetIed(connName), api.iec61850GetPointMappings(connName), api.iec61850GetRuntimeStatistics(connName)]);
@@ -303,7 +304,7 @@ const IEC61850Page: React.FC = () => {
     setSaving(true);
     try {
       const result = await api.iec61850UpsertIed(config, false);
-      ++loadRevision.current;
+      if (selectedConnRef.current === selectedConn) ++loadRevision.current;
       if (readConfig(configKey) === configDraft) clearConfig(configKey);
       setLoaded((value) => value?.conn === selectedConn ? { ...value, config: result.config ?? config } : value);
       setIeds((current) => current.map((item) => item.config?.conn_name === selectedConn ? result : item));
@@ -427,7 +428,7 @@ const IEC61850Page: React.FC = () => {
     setSaving(true);
     try {
       await api.iec61850UpsertPointMappings(selectedConn, normalized, true);
-      ++loadRevision.current;
+      if (selectedConnRef.current === selectedConn) ++loadRevision.current;
       if (readMappings(mappingsKey) === mappingsDraft) clearMappings(mappingsKey);
       setLoaded((value) => value?.conn === selectedConn ? { ...value, mappings: normalized } : value);
       messageApi.success('点映射已保存');

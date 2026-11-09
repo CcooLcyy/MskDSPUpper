@@ -8,7 +8,7 @@ const pageSource = readFileSync(new URL('../../src/pages/IEC104/index.tsx', impo
 test('IEC104 添加点位下拉菜单提供单个、批量和数据总线入口', () => {
   assert.match(pageSource, /const pointAddMenuItems: MenuProps\['items'\] = \[/);
   assert.match(pageSource, /key: 'single',[\s\S]*label: '添加点位'/);
-  assert.match(pageSource, /key: 'batch',[\s\S]*label: '批量添加点位'/);
+  assert.match(pageSource, /key: 'batch',\s*label: batchPointConfigDraft \? '批量添加点位 · 有草稿' : '批量添加点位'/);
   assert.match(pageSource, /key: 'import',[\s\S]*label: '从数据总线导入'/);
   assert.match(pageSource, /menu=\{\{ items: pointAddMenuItems, onClick: handlePointAddMenuClick \}\}/);
   assert.match(pageSource, /const pointAddDisabled = !selectedConn \|\| actionsDisabled;/);

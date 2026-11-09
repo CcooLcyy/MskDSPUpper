@@ -142,14 +142,15 @@ const PointTable: React.FC<Props> = ({
   );
   const { read, write, clear } = useConfigDraft<ReadPlanDraft>('/protocol/modbus-rtu');
   const [, redrawDraft] = useState(0);
-  const [expandedConn, setExpandedConn] = useState<string | null>(null);
+  const [expandedReadPlan, setExpandedReadPlan] = useState<string | null>(null);
   const draftKey = showReadPlan && selectedConn ? readPlanDraftKey(selectedConn) : null;
   const savedReadPlanSignature = JSON.stringify([addressBase, savedReadPlan]);
+  const readPlanEditorKey = draftKey === null ? null : JSON.stringify([draftKey, savedReadPlanSignature]);
   const draft = draftKey ? read(draftKey) : undefined;
   const draftConflict = Boolean(draft && draft.base !== savedReadPlanSignature);
   const currentReadPlan = draft?.value ?? savedReadPlan;
   const { mode: readPlanMode, blocks: readPlanBlocks } = currentReadPlan;
-  const readPlanEditorExpanded = selectedConn !== null && expandedConn === selectedConn;
+  const readPlanEditorExpanded = readPlanEditorKey !== null && expandedReadPlan === readPlanEditorKey;
 
   const registerPoints = useMemo(
     () => points.filter((point) => isExplicitReadFunction(point.function)),
@@ -270,7 +271,7 @@ const PointTable: React.FC<Props> = ({
 
   const openReadPlanPreview = () => {
     storeReadPlan({ mode: 2, blocks: buildReadPlanBlocks(points) });
-    setExpandedConn(selectedConn);
+    setExpandedReadPlan(readPlanEditorKey);
   };
 
   const restorePointReadPlan = () => {
@@ -751,7 +752,7 @@ const PointTable: React.FC<Props> = ({
                 icon={<DownOutlined rotate={readPlanEditorExpanded ? 180 : 0} />}
                 aria-expanded={readPlanEditorExpanded}
                 aria-controls="modbus-read-plan-blocks"
-                onClick={() => setExpandedConn(readPlanEditorExpanded ? null : selectedConn)}
+                onClick={() => setExpandedReadPlan(readPlanEditorExpanded ? null : readPlanEditorKey)}
               >
                 {readPlanEditorExpanded ? '收起区间编辑' : '展开区间编辑'}
               </Button>

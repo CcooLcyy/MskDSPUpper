@@ -15,8 +15,11 @@ test('IEC61850 exposes SCL network candidates for A/B channel binding', () => {
   assert.match(types, /interface Iec61850SclConnectedApSummary/);
   assert.match(page, /getConnectedApCandidates/);
   assert.match(page, /选择 SCL 网段/);
-  assert.match(page, /currentNetworkCandidates\.length !== 1/);
-  assert.match(page, /currentNetworkCandidates\[0\]\.subnetwork_name/);
+  const normalizeBinding = page.match(/function normalizeNetworkBinding\([\s\S]+?\n\}/)?.[0];
+  assert.ok(normalizeBinding, '缺少通信配置的 SCL 网段处理');
+  assert.match(normalizeBinding, /if \(channel\.subnetwork_name \|\| !channel\.enabled \|\| candidates\.length !== 1\) return channel;/);
+  assert.match(normalizeBinding, /return \{ \.\.\.channel, subnetwork_name: candidates\[0\]\.subnetwork_name \};/);
+  assert.match(page, /normalizeNetworkBinding\(rawConfig, currentNetworkCandidates\)/);
   assert.match(page, /subnetwork_name: value \?\? ''/);
   assert.match(browser, /subnetwork_name: 'NETA'/);
   assert.match(browser, /subnetwork_name: 'NETB'/);

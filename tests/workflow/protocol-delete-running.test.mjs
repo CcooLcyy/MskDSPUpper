@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import ts from 'typescript';
+import { readPlanDraftKey } from '../../src/pages/ModbusRTU/modbus-form-rules.ts';
 
 const protocols = [
   ['ModbusRTU', 'modbusRtuDeleteLink'],
@@ -41,6 +42,8 @@ function createEnvironment(operation, state = 2, mutation = null) {
     linkMutation: mutation,
     setLinkMutation: (value) => calls.push(['mutation', value]),
     setSelectedConn: (value) => calls.push(['selection', value]),
+    readPlanDraftKey,
+    clearReadPlanDraft: (key) => calls.push(['clearReadPlanDraft', key]),
     refreshLinks: async () => calls.push(['refresh']),
     messageApi: Object.fromEntries(['success', 'warning', 'error'].map((kind) => [kind, (text) => calls.push([kind, text])])),
     api: { [operation]: async (name) => calls.push(['delete', name]) },
@@ -65,6 +68,9 @@ for (const [protocol, operation] of protocols) {
       complete();
       await pending;
       assert.equal(calls.filter(([kind]) => kind === 'delete').length, 1);
+      if (protocol === 'ModbusRTU') {
+        assert.deepEqual(calls[2], ['clearReadPlanDraft', readPlanDraftKey('连接一')]);
+      }
       assert.ok(calls.some(([kind, value]) => kind === 'selection' && value === null));
       assert.ok(calls.some(([kind]) => kind === 'success'));
       assert.ok(calls.some(([kind]) => kind === 'refresh'));
@@ -84,7 +90,7 @@ for (const [protocol, operation] of protocols) {
     assert.equal(calls.filter(([kind]) => kind === 'delete').length, 1);
     assert.ok(calls.some(([kind, text]) => kind === 'error' && text.includes('连接待删除')));
     assert.ok(calls.some(([kind]) => kind === 'refresh'));
-    assert.ok(!calls.some(([kind]) => kind === 'selection' || kind === 'success'));
+    assert.ok(!calls.some(([kind]) => kind === 'selection' || kind === 'success' || kind === 'clearReadPlanDraft'));
     assert.deepEqual(calls.at(-1), ['mutation', null]);
   });
 

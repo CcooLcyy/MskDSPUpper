@@ -56,16 +56,18 @@ test('ModbusRTU 批量读取区间支持折叠并限制列表高度', () => {
 });
 
 test('ModbusRTU 批量读取区间默认收起', () => {
-  assert.match(pointTableSource, /DEFAULT_READ_PLAN_EDITOR_EXPANDED\s*=\s*false/);
   assert.match(
     pointTableSource,
-    /useState\(\s*DEFAULT_READ_PLAN_EDITOR_EXPANDED\s*,?\s*\)/,
+    /\[expandedReadPlan,\s*setExpandedReadPlan\]\s*=\s*useState<string \| null>\(null\)/,
     '批量读取区间编辑器的初始状态应为收起',
   );
+  assert.match(pointTableSource, /draftKey\s*=\s*[^;]*readPlanDraftKey\(selectedConn\)/);
+  assert.match(pointTableSource, /savedReadPlanSignature\s*=\s*JSON\.stringify\(\[addressBase,\s*savedReadPlan\]\)/);
+  assert.match(pointTableSource, /readPlanEditorKey\s*=\s*[^;]*JSON\.stringify\(\[draftKey,\s*savedReadPlanSignature\]\)/);
   assert.match(
     pointTableSource,
-    /:\s*DEFAULT_READ_PLAN_EDITOR_EXPANDED/,
-    '读取方案来源变化时也应回到收起状态',
+    /readPlanEditorExpanded\s*=\s*readPlanEditorKey !== null && expandedReadPlan === readPlanEditorKey/,
+    '连接、地址基准或已保存方案变化时，不沿用原方案的展开状态',
   );
 });
 
@@ -96,10 +98,11 @@ test('ModbusRTU 生成批量方案只更新候选预览，不直接保存', () =
   assert.ok(handlerMatch, '生成批量方案按钮应绑定明确的本地预览动作');
 
   const previewSource = getArrowFunctionSource(handlerMatch[1]);
-  assert.match(previewSource, /buildReadPlanBlocks\(points\)/);
-  assert.match(previewSource, /set(?:ReadPlanBlocks|ReadPlanMode)\(/);
+  assert.match(previewSource, /storeReadPlan\(\{ mode: 2, blocks: buildReadPlanBlocks\(points\) \}\)/);
+  const storeSource = getArrowFunctionSource('storeReadPlan');
+  assert.match(storeSource, /write\(draftKey,/);
   assert.doesNotMatch(
-    previewSource,
+    previewSource + storeSource,
     /requestReadPlanApply|persistReadPlan|onReadPlanSave/,
     '生成批量方案只能更新候选状态，不得直接保存读取策略',
   );
