@@ -105,6 +105,62 @@ interface Props {
   onDeleteAll: () => void;
 }
 
+function validateReadPlanBlocks(readPlanBlocks: ModbusReadPlan['blocks'], addressBase: number): ReadPlanValidation {
+  const invalidIndexes = new Set<number>();
+  const overlapIndexes = new Set<number>();
+  const issuesByIndex = new Map<number, string[]>();
+  const minAddress = getMinimumAddress(addressBase);
+
+  const addIssue = (index: number, issue: string): void => {
+    const issues = issuesByIndex.get(index) ?? [];
+    issues.push(issue);
+    issuesByIndex.set(index, issues);
+  };
+
+  readPlanBlocks.forEach((block, index) => {
+    const start = Number(block.start);
+    const quantity = Number(block.quantity);
+    const end = start + quantity - 1;
+    const validRange = Number.isInteger(start)
+      && Number.isInteger(quantity)
+      && start >= minAddress
+      && start <= MODBUS_MAX_ADDRESS
+      && quantity >= 1
+      && quantity <= MODBUS_MAX_READ_QUANTITY
+      && end <= MODBUS_MAX_ADDRESS;
+
+    if (!validRange) {
+      invalidIndexes.add(index);
+      addIssue(index, `地址范围无效（${start} - ${end}）`);
+    }
+  });
+
+  for (let leftIndex = 0; leftIndex < readPlanBlocks.length; leftIndex += 1) {
+    const left = readPlanBlocks[leftIndex];
+    const leftStart = Number(left.start);
+    const leftEnd = leftStart + Number(left.quantity) - 1;
+    if (invalidIndexes.has(leftIndex)) {
+      continue;
+    }
+    for (let rightIndex = leftIndex + 1; rightIndex < readPlanBlocks.length; rightIndex += 1) {
+      const right = readPlanBlocks[rightIndex];
+      if (right.function !== left.function || invalidIndexes.has(rightIndex)) {
+        continue;
+      }
+      const rightStart = Number(right.start);
+      const rightEnd = rightStart + Number(right.quantity) - 1;
+      if (leftStart <= rightEnd && rightStart <= leftEnd) {
+        overlapIndexes.add(leftIndex);
+        overlapIndexes.add(rightIndex);
+        addIssue(leftIndex, `与第 ${rightIndex + 1} 个区间重叠`);
+        addIssue(rightIndex, `与第 ${leftIndex + 1} 个区间重叠`);
+      }
+    }
+  }
+
+  return { invalidIndexes, overlapIndexes, issuesByIndex };
+}
+
 const PointTable: React.FC<Props> = ({
   points,
   selectedConn,
@@ -156,67 +212,10 @@ const PointTable: React.FC<Props> = ({
     () => points.filter((point) => isExplicitReadFunction(point.function)),
     [points],
   );
-  const coveredTags = useMemo(
-    () => getCoveredReadPlanTags(registerPoints, readPlanBlocks),
-    [readPlanBlocks, registerPoints],
-  );
+  const coveredTags = getCoveredReadPlanTags(registerPoints, readPlanBlocks);
   const uncoveredPoints = registerPoints.filter((point) => !coveredTags.includes(point.tag));
   const nonRegisterPointCount = points.length - registerPoints.length;
-  const readPlanValidation = useMemo<ReadPlanValidation>(() => {
-    const invalidIndexes = new Set<number>();
-    const overlapIndexes = new Set<number>();
-    const issuesByIndex = new Map<number, string[]>();
-    const minAddress = getMinimumAddress(addressBase);
-
-    const addIssue = (index: number, issue: string): void => {
-      const issues = issuesByIndex.get(index) ?? [];
-      issues.push(issue);
-      issuesByIndex.set(index, issues);
-    };
-
-    readPlanBlocks.forEach((block, index) => {
-      const start = Number(block.start);
-      const quantity = Number(block.quantity);
-      const end = start + quantity - 1;
-      const validRange = Number.isInteger(start)
-        && Number.isInteger(quantity)
-        && start >= minAddress
-        && start <= MODBUS_MAX_ADDRESS
-        && quantity >= 1
-        && quantity <= MODBUS_MAX_READ_QUANTITY
-        && end <= MODBUS_MAX_ADDRESS;
-
-      if (!validRange) {
-        invalidIndexes.add(index);
-        addIssue(index, `地址范围无效（${start} - ${end}）`);
-      }
-    });
-
-    for (let leftIndex = 0; leftIndex < readPlanBlocks.length; leftIndex += 1) {
-      const left = readPlanBlocks[leftIndex];
-      const leftStart = Number(left.start);
-      const leftEnd = leftStart + Number(left.quantity) - 1;
-      if (invalidIndexes.has(leftIndex)) {
-        continue;
-      }
-      for (let rightIndex = leftIndex + 1; rightIndex < readPlanBlocks.length; rightIndex += 1) {
-        const right = readPlanBlocks[rightIndex];
-        if (right.function !== left.function || invalidIndexes.has(rightIndex)) {
-          continue;
-        }
-        const rightStart = Number(right.start);
-        const rightEnd = rightStart + Number(right.quantity) - 1;
-        if (leftStart <= rightEnd && rightStart <= leftEnd) {
-          overlapIndexes.add(leftIndex);
-          overlapIndexes.add(rightIndex);
-          addIssue(leftIndex, `与第 ${rightIndex + 1} 个区间重叠`);
-          addIssue(rightIndex, `与第 ${leftIndex + 1} 个区间重叠`);
-        }
-      }
-    }
-
-    return { invalidIndexes, overlapIndexes, issuesByIndex };
-  }, [addressBase, readPlanBlocks]);
+  const readPlanValidation = validateReadPlanBlocks(readPlanBlocks, addressBase);
   const readPlanStale = readPlanMode === 2 && uncoveredPoints.length > 0;
   const readPlanInvalid = readPlanMode === 2 && readPlanValidation.invalidIndexes.size > 0;
   const readPlanDirty = Boolean(draft) || readPlanStale || readPlanInvalid;
