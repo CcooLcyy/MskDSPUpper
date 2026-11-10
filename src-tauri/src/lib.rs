@@ -55,7 +55,7 @@ pub fn run() {
     let app_state = AppState::new("127.0.0.1:17000".to_string(), runtime_paths);
     let gate_auth = app_state.platform_auth.clone();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
@@ -279,12 +279,19 @@ pub fn run() {
             ],
             move || gate_auth.require_authenticated(),
         ))
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .map_err(|error| {
             tracing::error!(error = %error, "上位机运行失败");
             error
         })
         .expect("启动 MskDSP 上位机失败");
 
-    tracing::info!("上位机进程退出");
+    app.run(|handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            use tauri::Manager;
+            let state = handle.state::<AppState>();
+            tauri::async_runtime::block_on(state.platform_auth.shutdown());
+            tracing::info!("上位机进程退出");
+        }
+    });
 }

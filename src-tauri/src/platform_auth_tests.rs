@@ -40,6 +40,7 @@ impl CredentialStore for FakeCredentials {
 struct MockPlatform {
     mode: Arc<AtomicU8>,
     login_calls: Arc<AtomicU64>,
+    logout_calls: Arc<AtomicU64>,
     delay_ms: Arc<AtomicU64>,
     ttl: Arc<AtomicU64>,
     role: Arc<Mutex<String>>,
@@ -122,8 +123,13 @@ impl protocol::agent_service_server::AgentService for MockPlatform {
     }
     async fn logout(
         &self,
-        _: Request<protocol::SessionRequest>,
+        request: Request<protocol::SessionRequest>,
     ) -> Result<Response<protocol::LogoutResponse>, Status> {
+        assert_eq!(
+            request.metadata().get("authorization").unwrap(),
+            "Bearer private-session-token"
+        );
+        self.logout_calls.fetch_add(1, Ordering::Relaxed);
         Ok(Response::new(protocol::LogoutResponse {}))
     }
     type ConnectAgentStream = ReceiverStream<Result<protocol::ServerMessage, Status>>;
@@ -353,7 +359,7 @@ async fn delayed_session_role_cannot_restore_logged_out_identity() {
 
 #[tokio::test]
 async fn login_is_grpc_and_settings_never_contain_secrets_or_restore_session() {
-    let (manager, _, credentials, path, server) = fixture().await;
+    let (manager, service, credentials, path, server) = fixture().await;
     assert!(!manager.status().authenticated);
     let status = manager
         .login("alice".into(), "secret".into(), true, true)
@@ -367,10 +373,13 @@ async fn login_is_grpc_and_settings_never_contain_secrets_or_restore_session() {
     assert!(!json.contains("secret") && !json.contains("token"));
     let settings_json: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert!(settings_json.get("password").is_none());
+    manager.shutdown().await;
+    assert!(!manager.status().authenticated);
+    assert_eq!(service.logout_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), json);
     let restarted = PlatformAuthManager::with_store(path.clone(), credentials);
     assert!(restarted.require_authenticated().is_err());
     assert!(restarted.auto_login().await.unwrap().authenticated);
-    manager.logout().await.unwrap();
     restarted.logout().await.unwrap();
     server.abort();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -440,6 +449,31 @@ async fn logout_during_login_cannot_restore_session_and_duplicate_login_is_rejec
     assert!(pending.await.unwrap().is_err());
     assert!(!manager.status().authenticated);
     assert!(manager.auto_login().await.is_err());
+    server.abort();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[tokio::test]
+async fn shutdown_revokes_session_issued_by_pending_login() {
+    let (manager, service, _, path, server) = fixture().await;
+    service.delay_ms.store(150, Ordering::Relaxed);
+    let worker = manager.clone();
+    let pending = tokio::spawn(async move {
+        worker
+            .login("alice".into(), "secret".into(), false, false)
+            .await
+    });
+    while service.login_calls.load(Ordering::Relaxed) == 0 {
+        tokio::task::yield_now().await;
+    }
+    manager.shutdown().await;
+    pending.await.unwrap().unwrap();
+    assert_eq!(service.logout_calls.load(Ordering::Relaxed), 1);
+    assert!(!manager.status().authenticated);
+    assert!(manager
+        .login("alice".into(), "secret".into(), false, false)
+        .await
+        .is_err());
     server.abort();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }

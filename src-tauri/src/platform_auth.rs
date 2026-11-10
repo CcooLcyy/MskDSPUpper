@@ -73,6 +73,7 @@ struct Inner {
     connection_state: &'static str,
     message: Option<String>,
     auto_login_blocked: bool,
+    shutting_down: bool,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -80,6 +81,7 @@ struct Inner {
 pub struct PlatformAuthManager {
     inner: Arc<Mutex<Inner>>,
     operation: Arc<AsyncMutex<()>>,
+    logout_operation: Arc<AsyncMutex<()>>,
     settings_file: PathBuf,
     credentials: Arc<dyn CredentialStore>,
 }
@@ -145,9 +147,11 @@ impl PlatformAuthManager {
                 connection_state: "signed_out",
                 message: None,
                 auto_login_blocked: false,
+                shutting_down: false,
                 worker: None,
             })),
             operation: Arc::new(AsyncMutex::new(())),
+            logout_operation: Arc::new(AsyncMutex::new(())),
             settings_file,
             credentials,
         }
@@ -305,6 +309,9 @@ impl PlatformAuthManager {
         }
         let (generation, endpoint) = {
             let mut state = self.inner.lock();
+            if state.shutting_down {
+                return Err("上位机正在退出".into());
+            }
             if let Some(error) = &state.settings_error {
                 return Err(error.clone());
             }
@@ -412,6 +419,7 @@ impl PlatformAuthManager {
     }
 
     pub async fn logout(&self) -> Result<PlatformAuthStatus, String> {
+        let _logout = self.logout_operation.lock().await;
         let old = {
             let mut state = self.inner.lock();
             let old = state
@@ -424,13 +432,19 @@ impl PlatformAuthManager {
         };
         if let Some((endpoint, token)) = old {
             // 本地立即退出；服务端退出请求失败不恢复本地会话。
-            if let Ok(mut client) = client(&endpoint).await {
-                if let Ok(request) = authenticated_request(protocol::SessionRequest {}, &token) {
-                    let _ = client.logout(request).await;
-                }
+            match revoke_session(&endpoint, &token).await {
+                Ok(()) => tracing::info!("当前平台会话已注销"),
+                Err(error) => tracing::warn!(?error, "注销当前平台会话失败"),
             }
         }
         Ok(self.status())
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        self.inner.lock().shutting_down = true;
+        // 等待已发出的登录请求完成，避免退出时留下刚签发的会话。
+        let _login = self.operation.lock().await;
+        let _ = self.logout().await;
     }
 
     fn snapshot(&self, generation: u64) -> Option<(String, String, String)> {
@@ -727,6 +741,16 @@ fn timed_request<T>(body: T) -> Request<T> {
     request
 }
 
+async fn revoke_session(endpoint: &str, token: &str) -> Result<(), RpcFailure> {
+    let request = authenticated_request(protocol::SessionRequest {}, token)?;
+    let mut connection = client(endpoint).await?;
+    connection
+        .logout(request)
+        .await
+        .map_err(|status| RpcFailure::from_status(status, false))?;
+    Ok(())
+}
+
 fn revoke_issued_session(endpoint: String, token: String) {
     // 退出或修改设置后才完成的登录，应清理未使用的服务端会话。
     // 清理任务不触碰当前本地会话，避免覆盖新账号的状态。
@@ -734,12 +758,7 @@ fn revoke_issued_session(endpoint: String, token: String) {
         return;
     }
     tokio::spawn(async move {
-        let Ok(request) = authenticated_request(protocol::SessionRequest {}, &token) else {
-            return;
-        };
-        if let Ok(mut connection) = client(&endpoint).await {
-            let _ = connection.logout(request).await;
-        }
+        let _ = revoke_session(&endpoint, &token).await;
     });
 }
 fn authenticated_request<T>(body: T, token: &str) -> Result<Request<T>, RpcFailure> {
