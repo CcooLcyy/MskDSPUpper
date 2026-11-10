@@ -86,6 +86,52 @@ jobs:
       - name: 安装前端依赖
         run: npm ci
 
+      - name: 检查前端类型并构建
+        run: npm run build
+
+      - name: 运行完整 Rust 测试
+        run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET --timings
+
+      - name: 保存 Rust 验证编译计时
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upper-verify-cargo-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/cargo-timings/cargo-timing.html
+          if-no-files-found: ignore
+          retention-days: 14
+
+  checks:
+    name: 前端与发布工具检查
+    runs-on: windows-latest
+    timeout-minutes: 90
+    concurrency:
+      group: upper-checks-${{ github.ref }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 检出源码及设备协议
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: 配置 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 安装前端依赖
+        run: npm ci
+
       - name: 验证工作流脚本
         run: npm run test:workflow
 
@@ -95,18 +141,12 @@ jobs:
       - name: 检查前端代码
         run: npm run lint
 
-      - name: 检查前端类型并构建
-        run: npm run build
-
       - name: 验证 Python 发布工具
         run: python -B -m unittest discover -s tests/gitlab -v
 
-      - name: 运行完整 Rust 测试
-        run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET
-
   package:
     name: 签名打包
-    needs: verify
+    needs: [verify, checks]
     if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 90
@@ -194,6 +234,15 @@ jobs:
         with:
           name: upper-package-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: package/logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 保存 Rust 打包编译计时
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upper-package-cargo-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/cargo-timings/cargo-timing.html
           if-no-files-found: ignore
           retention-days: 14
 

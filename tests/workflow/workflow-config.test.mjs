@@ -17,9 +17,10 @@ function job(name) {
   return lines.slice(start, end === -1 ? undefined : end).join('\n');
 }
 
-function stepUsing(jobText, action) {
+function stepUsing(jobText, action, withPath) {
   const block = jobText.split(/(?=^      - name: )/m)
-    .find((step) => step.includes('uses: ' + action + '@'));
+    .find((step) => step.includes('uses: ' + action + '@') &&
+      (withPath === undefined || step.includes('path: ' + withPath)));
   assert.ok(block, '缺少步骤 ' + action);
   return block;
 }
@@ -39,29 +40,36 @@ test('主干、维护分支、正式标签和 PR 使用统一验证入口', () =
 });
 
 test('冻结安装包只能在验证通过后打包，PR 不进入签名环境', () => {
-  const verify = job('verify');
   const packageJob = job('package');
-  assert.match(packageJob, /^    needs: verify$/m);
+  assert.match(packageJob, /^    needs: \[verify, checks\]$/m);
   assert.match(packageJob, /^    if: github\.event_name != 'pull_request'$/m);
   assert.match(packageJob, /^    environment: upper-signing$/m);
   assert.match(packageJob, /TAURI_SIGNING_PRIVATE_KEY:.*secrets\.TAURI_SIGNING_PRIVATE_KEY\b/);
-  assert.doesNotMatch(verify, /TAURI_SIGNING_PRIVATE_KEY|PLATFORM_UPLOAD_TOKEN/);
+  for (const name of ['verify', 'checks']) {
+    const validation = job(name);
+    assert.doesNotMatch(validation, /^    (?:needs|if|environment):/m);
+    assert.doesNotMatch(validation, /TAURI_SIGNING_PRIVATE_KEY|PLATFORM_UPLOAD_TOKEN/);
+  }
 });
 
-test('验证作业覆盖原有测试、前端类型和完整 Rust 目标', () => {
+test('两个并行验证作业覆盖原有测试、前端类型和完整 Rust 目标', () => {
   const verify = job('verify');
+  const checks = job('checks');
   assert.match(workflow, /^  NODE_VERSION: '24\.22\.2'$/m);
-  assert.match(verify, /npm run test:workflow\b/);
-  assert.match(verify, /npm run test:offline\b/);
-  assert.match(verify, /npm run lint\b/);
-  assert.match(verify, /npm run build\b/);
-  assert.match(verify, /python -B -m unittest discover -s tests\/gitlab\b/);
-  assert.match(verify, /cargo test --release --locked --manifest-path src-tauri\/Cargo\.toml\b/);
+  assert.match(verify, /^    runs-on: windows-latest$/m);
+  assert.match(checks, /^    runs-on: windows-latest$/m);
+  assertOrder(verify, 'run: npm ci', 'run: npm run build');
+  assertOrder(verify, 'run: npm run build', 'run: cargo test');
+  assert.match(verify, /^        run: cargo test --release --locked --manifest-path src-tauri\/Cargo\.toml --target \$env:RUST_TARGET --timings$/m);
   assert.doesNotMatch(verify, /--lib\b/);
+  for (const command of ['test:workflow', 'test:offline', 'lint']) {
+    assertOrder(checks, 'run: npm ci', 'run: npm run ' + command);
+  }
+  assert.match(checks, /python -B -m unittest discover -s tests\/gitlab\b/);
 });
 
 test('验证与打包都检出设备协议，发布作业无需协议子模块', () => {
-  for (const name of ['verify', 'package']) {
+  for (const name of ['verify', 'checks', 'package']) {
     const checkout = stepUsing(job(name), 'actions/checkout');
     assert.match(checkout, /submodules:\s*(?:true|recursive)\b/);
     assert.match(checkout, /persist-credentials: false\b/);
@@ -85,9 +93,8 @@ test('发布依赖本次打包产物且仅接受主干或标签', () => {
   assert.match(publish, /^    if: github\.event_name != 'pull_request' && \(github\.ref == 'refs\/heads\/main' \|\| github\.ref_type == 'tag'\)$/m);
 
   const name = packageJob.match(/^      artifact_name:\s*(.+)$/m)?.[1];
-  const upload = packageJob.split(/(?=^      - name: )/m)
-    .find((step) => step.includes('uses: actions/upload-artifact@') && step.includes('path: package/platform/'));
-  assert.ok(name && upload, '缺少冻结安装包或产物名称');
+  const upload = stepUsing(packageJob, 'actions/upload-artifact', 'package/platform/');
+  assert.ok(name, '缺少冻结安装包的产物名称');
   assert.match(name, /steps\.build\.outputs\.artifact_base_name/);
   assert.ok(upload.includes('name: ' + name), '发布作业必须接收实际上传的产物名称');
   assert.match(upload, /if-no-files-found: error\b/);
@@ -107,7 +114,11 @@ test('平台发布按通道串行，新提交不能取消正在发布的作业',
   assert.match(publish, /^      group: upper-platform-.*github\.ref_type == 'tag' && 'stable' \|\| 'ci'/m);
   assert.match(publish, /^      cancel-in-progress: false$/m);
   assert.match(publish, /^      queue: max$/m);
-  assert.match(job('verify'), /^      cancel-in-progress: true$/m);
+  for (const name of ['verify', 'checks']) {
+    const validation = job(name);
+    assert.ok(validation.includes('group: upper-' + name + '-${{ github.ref }}'));
+    assert.match(validation, /^      cancel-in-progress: true$/m);
+  }
 });
 
 test('正式版在构建前检查远端标签及来源历史', () => {
@@ -128,8 +139,18 @@ test('验证和打包报告 Rust 缓存命中并允许在线解析', () => {
   }
 });
 
+test('验证和打包分别上传 Cargo 编译计时，报告缺失时保留原作业结果', () => {
+  assert.match(packager, /\$release\.config, '--', '--timings'\)/);
+  for (const name of ['verify', 'package']) {
+    const upload = stepUsing(job(name), 'actions/upload-artifact', 'src-tauri/target/cargo-timings/cargo-timing.html');
+    assert.ok(upload.includes('name: upper-' + name + '-cargo-timings-${{ github.run_id }}-${{ github.run_attempt }}'));
+    assert.match(upload, /^        if: always\(\)$/m);
+    assert.match(upload, /^          if-no-files-found: ignore$/m);
+  }
+});
+
 test('发布工作流使用 PowerShell 7，支持中文脚本与原生命令退出码', () => {
-  for (const name of ['verify', 'package', 'publish']) {
+  for (const name of ['verify', 'checks', 'package', 'publish']) {
     assert.match(job(name), /^    defaults:\n      run:\n        shell: pwsh$/m);
   }
   assert.doesNotMatch(workflow, /^\s*shell:\s*powershell\b/m);

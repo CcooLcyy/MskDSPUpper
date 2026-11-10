@@ -64,7 +64,7 @@ if (result.error) throw result.error;
 process.exit(result.status ?? 1);
 '@
     $buildLog = 'package/logs/tauri-release-build.log'
-    Invoke-Checked 'node' @('-e', $tauriBuild, 'build', '--bundles', 'nsis', '--target', $target, '--ci', '--config', $release.config) 2>&1 |
+    Invoke-Checked 'node' @('-e', $tauriBuild, 'build', '--bundles', 'nsis', '--target', $target, '--ci', '--config', $release.config, '--', '--timings') 2>&1 |
         Tee-Object -FilePath $buildLog
 
     Invoke-Checked 'node' @(
