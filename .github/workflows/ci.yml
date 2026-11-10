@@ -65,11 +65,10 @@ jobs:
             python -B scripts/gitlab/verify_stable_source.py --repository origin --tag $env:GITHUB_REF_NAME --sha $env:GITHUB_SHA
           }
 
-      - name: 配置 Node
+      - name: 配置 Node 以运行 Rust TLS 测试
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
 
       - name: 配置 Rust
         uses: dtolnay/rust-toolchain@1.97.1
@@ -95,12 +94,6 @@ jobs:
 
       - name: 恢复签名测试夹具的原始字节
         run: git restore --source=HEAD --worktree -- src-tauri/testdata/updater/fixture.bin
-
-      - name: 安装前端依赖
-        run: npm ci
-
-      - name: 检查前端类型并构建
-        run: npm run build
 
       - name: 运行完整 Rust 测试
         env:
@@ -161,6 +154,9 @@ jobs:
 
       - name: 检查前端代码
         run: npm run lint
+
+      - name: 检查前端类型并构建
+        run: npm run build
 
       - name: 验证 Python 发布工具
         run: python -B -m unittest discover -s tests/gitlab -v

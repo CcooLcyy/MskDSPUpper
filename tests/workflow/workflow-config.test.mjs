@@ -99,11 +99,13 @@ test('两个并行验证作业覆盖原有测试、前端类型和完整 Rust �
   assert.match(workflow, /^  NODE_VERSION: '24\.22\.2'$/m);
   assert.match(verify, /^    runs-on: windows-latest$/m);
   assert.match(checks, /^    runs-on: windows-latest$/m);
-  assertOrder(verify, 'run: npm ci', 'run: npm run build');
-  assertOrder(verify, 'run: npm run build', 'cargo test');
+  const verifyNode = stepUsing(verify, 'actions/setup-node');
+  assert.ok(verifyNode.includes('node-version: ${{ env.NODE_VERSION }}'));
+  assert.doesNotMatch(verifyNode, /cache: npm/);
+  assert.doesNotMatch(verify, /run: npm\b/);
   assert.match(verify, /^          cargo test --release --locked --manifest-path src-tauri\/Cargo\.toml --target \$env:RUST_TARGET --timings @profileArgs$/m);
   assert.doesNotMatch(verify, /--lib\b/);
-  for (const command of ['test:workflow', 'test:offline', 'lint']) {
+  for (const command of ['test:workflow', 'test:offline', 'lint', 'build']) {
     assertOrder(checks, 'run: npm ci', 'run: npm run ' + command);
   }
   assert.match(checks, /python -B -m unittest discover -s tests\/gitlab\b/);
