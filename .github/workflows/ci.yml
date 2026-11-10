@@ -167,9 +167,14 @@ jobs:
 
   prebuild:
     name: 编译正式 EXE
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.parallel_package && inputs.rust_test_mode == 'normal'
+    if: >-
+      github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' && inputs.parallel_package && inputs.rust_test_mode == 'normal')
     runs-on: windows-latest
     timeout-minutes: 90
+    concurrency:
+      group: upper-prebuild-${{ github.ref }}${{ inputs.parallel_package && '-parallel-package' || '' }}
+      cancel-in-progress: true
     defaults:
       run:
         shell: pwsh
@@ -209,7 +214,7 @@ jobs:
           workspaces: src-tauri -> target
           cache-targets: 'true'
           cache-bin: 'false'
-          save-if: 'false'
+          save-if: ${{ github.event_name == 'push' }}
 
       - name: 记录 Rust 缓存命中
         run: Write-Host "Rust 缓存命中=${{ steps.rust-cache.outputs.cache-hit }}"
@@ -245,7 +250,9 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.verify.result == 'success' && needs.checks.result == 'success'
         && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.rust_test_mode == 'normal')
-        && (inputs.parallel_package && needs.prebuild.result == 'success' || !inputs.parallel_package && needs.prebuild.result == 'skipped') }}
+        && (needs.prebuild.result == 'success'
+          || needs.prebuild.result == 'skipped' && !inputs.parallel_package
+            && (github.event_name != 'push' || github.ref != 'refs/heads/main')) }}
     runs-on: windows-latest
     timeout-minutes: 90
     environment: upper-signing
@@ -254,6 +261,7 @@ jobs:
       cancel-in-progress: true
     outputs:
       artifact_name: ${{ steps.build.outputs.artifact_base_name }}-${{ github.run_attempt }}
+      prebuilt: ${{ needs.prebuild.result == 'success' && 'true' || 'false' }}
     defaults:
       run:
         shell: pwsh
@@ -292,13 +300,13 @@ jobs:
           targets: ${{ env.RUST_TARGET }}
 
       - name: 配置 protoc
-        if: '!inputs.parallel_package'
+        if: needs.prebuild.result != 'success'
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ github.token }}
 
       - name: 缓存 Rust 依赖和产物
-        if: '!inputs.parallel_package'
+        if: needs.prebuild.result != 'success'
         id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -308,14 +316,14 @@ jobs:
           cache-bin: 'false'
 
       - name: 记录 Rust 缓存命中
-        if: '!inputs.parallel_package'
+        if: needs.prebuild.result != 'success'
         run: Write-Host "Rust 缓存命中=${{ steps.rust-cache.outputs.cache-hit }}"
 
       - name: 安装前端依赖
         run: npm ci
 
       - name: 下载本次正式 EXE
-        if: inputs.parallel_package
+        if: needs.prebuild.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: upper-prebuilt-exe-${{ github.run_id }}-${{ github.run_attempt }}
@@ -324,7 +332,7 @@ jobs:
       - name: 构建并冻结平台安装包
         id: build
         env:
-          BUNDLE_PREBUILT: ${{ inputs.parallel_package || false }}
+          BUNDLE_PREBUILT: ${{ needs.prebuild.result == 'success' && 'true' || 'false' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: ./scripts/workflow/build-platform-package.ps1 -BundlePrebuilt:($env:BUNDLE_PREBUILT -eq 'true')
@@ -347,7 +355,7 @@ jobs:
           retention-days: 14
 
       - name: 保存 Rust 打包编译计时
-        if: always() && !inputs.parallel_package
+        if: always() && needs.prebuild.result != 'success'
         uses: actions/upload-artifact@v4
         with:
           name: upper-package-cargo-timings-${{ github.run_id }}-${{ github.run_attempt }}
@@ -356,9 +364,9 @@ jobs:
           retention-days: 14
 
   verify_parallel_package:
-    name: 验证并行打包产物
+    name: 验证签名安装包
     needs: package
-    if: inputs.parallel_package
+    if: ${{ !cancelled() && needs.package.result == 'success' && needs.package.outputs.prebuilt == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -412,8 +420,13 @@ jobs:
 
   publish:
     name: 发布到平台
-    needs: package
-    if: github.event_name != 'pull_request' && !inputs.parallel_package && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')
+    needs: [package, verify_parallel_package]
+    if: >-
+      ${{ !cancelled() && needs.package.result == 'success'
+        && (needs.package.outputs.prebuilt == 'true' && needs.verify_parallel_package.result == 'success'
+          || needs.package.outputs.prebuilt == 'false' && needs.verify_parallel_package.result == 'skipped')
+        && github.event_name != 'pull_request' && !inputs.parallel_package
+        && (github.ref == 'refs/heads/main' || github.ref_type == 'tag') }}
     runs-on: ${{ fromJSON(vars.UPPER_PUBLISH_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     environment: ${{ github.ref_type == 'tag' && 'upper-stable' || 'upper-ci' }}

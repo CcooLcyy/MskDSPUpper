@@ -31,6 +31,12 @@ function assertOrder(text, before, after) {
   assert.ok(first >= 0 && second > first, before + ' 必须先于 ' + after);
 }
 
+function assertJobGate(jobText, ...expected) {
+  const gate = jobText.match(/^    if: >-\n((?: {6,}[^\n]+\n)+)/m)?.[1];
+  assert.ok(gate, '缺少作业门禁');
+  assert.equal(gate.trim().replaceAll(/\s+/g, ' '), expected.join(' '));
+}
+
 test('主干、维护分支、正式标签和 PR 使用统一验证入口', () => {
   const triggers = workflow.split(/^permissions:/m)[0];
   assert.match(triggers, /^  pull_request:$/m);
@@ -43,16 +49,15 @@ test('主干、维护分支、正式标签和 PR 使用统一验证入口', () =
   assert.doesNotMatch(triggers, /beta/);
 });
 
-test('签名打包依赖验证通过，试点还要求正式 EXE 编译成功', () => {
+test('签名打包依赖验证通过，并行路径还要求正式 EXE 编译成功', () => {
   const packageJob = job('package');
   assert.match(packageJob, /^    needs: \[verify, checks, prebuild\]$/m);
-  const gate = packageJob.match(/^    if: >-\n((?: {6,}[^\n]+\n)+)/m)?.[1];
-  assert.ok(gate, '缺少签名打包门禁');
-  assert.equal(gate.trim().replaceAll(/\s+/g, ' '), [
+  assertJobGate(packageJob,
     "${{ !cancelled() && needs.verify.result == 'success' && needs.checks.result == 'success'",
     "&& github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.rust_test_mode == 'normal')",
-    "&& (inputs.parallel_package && needs.prebuild.result == 'success' || !inputs.parallel_package && needs.prebuild.result == 'skipped') }}",
-  ].join(' '));
+    "&& (needs.prebuild.result == 'success' || needs.prebuild.result == 'skipped' && !inputs.parallel_package",
+    "&& (github.event_name != 'push' || github.ref != 'refs/heads/main')) }}",
+  );
   assert.match(packageJob, /^    environment: upper-signing$/m);
   assert.match(packageJob, /TAURI_SIGNING_PRIVATE_KEY:.*secrets\.TAURI_SIGNING_PRIVATE_KEY\b/);
   for (const name of ['verify', 'checks']) {
@@ -62,10 +67,13 @@ test('签名打包依赖验证通过，试点还要求正式 EXE 编译成功', 
   }
 });
 
-test('仅 main 的显式试点预编译正式 EXE，并把同次尝试的产物交给签名打包', () => {
+test('main 推送和显式试点预编译正式 EXE，并把同次尝试的产物交给签名打包', () => {
   const prebuild = job('prebuild');
   const packageJob = job('package');
-  assert.match(prebuild, /^    if: github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main' && inputs\.parallel_package && inputs\.rust_test_mode == 'normal'$/m);
+  assertJobGate(prebuild,
+    "github.ref == 'refs/heads/main'",
+    "&& (github.event_name == 'push' || github.event_name == 'workflow_dispatch' && inputs.parallel_package && inputs.rust_test_mode == 'normal')",
+  );
   assert.doesNotMatch(prebuild, /^    (?:needs|environment):|TAURI_SIGNING_PRIVATE_KEY|PLATFORM_UPLOAD_TOKEN/m);
   assertOrder(prebuild, 'run: npm ci', 'run: ./scripts/workflow/build-platform-package.ps1 -Prebuild');
   assertOrder(prebuild, 'run: ./scripts/workflow/build-platform-package.ps1 -Prebuild', 'actions/upload-artifact@');
@@ -77,8 +85,10 @@ test('仅 main 的显式试点预编译正式 EXE，并把同次尝试的产物�
   assert.ok(upload.split('\n').includes(artifact));
   assert.ok(download.split('\n').includes(artifact));
   assert.match(upload, /^          if-no-files-found: error$/m);
-  assert.match(download, /^        if: inputs\.parallel_package$/m);
-  assert.match(packageJob, /^          BUNDLE_PREBUILT: \$\{\{ inputs\.parallel_package \|\| false \}\}$/m);
+  assert.match(download, /^        if: needs\.prebuild\.result == 'success'$/m);
+  const prebuilt = "${{ needs.prebuild.result == 'success' && 'true' || 'false' }}";
+  assert.ok(packageJob.split('\n').includes('      prebuilt: ' + prebuilt));
+  assert.ok(packageJob.split('\n').includes('          BUNDLE_PREBUILT: ' + prebuilt));
   assertOrder(packageJob, 'actions/download-artifact@', 'run: ./scripts/workflow/build-platform-package.ps1 -BundlePrebuilt:');
   assert.match(packageJob, /^        run: \.\/scripts\/workflow\/build-platform-package\.ps1 -BundlePrebuilt:\(\$env:BUNDLE_PREBUILT -eq 'true'\)$/m);
 });
@@ -123,11 +133,17 @@ test('签名验证恢复夹具原始字节，打包保留 Tauri 更新签名', (
   assert.match(packager, /finally\s*\{\s*Invoke-Checked 'node' @\('scripts\/workflow\/restore-manifests\.mjs'/);
 });
 
-test('发布依赖本次打包产物且仅接受常规主干或标签运行', () => {
+test('发布仅接受常规主干或标签运行，并行打包产物须先验证签名', () => {
   const packageJob = job('package');
   const publish = job('publish');
-  assert.match(publish, /^    needs: package$/m);
-  assert.match(publish, /^    if: github\.event_name != 'pull_request' && !inputs\.parallel_package && \(github\.ref == 'refs\/heads\/main' \|\| github\.ref_type == 'tag'\)$/m);
+  assert.match(publish, /^    needs: \[package, verify_parallel_package\]$/m);
+  assertJobGate(publish,
+    "${{ !cancelled() && needs.package.result == 'success'",
+    "&& (needs.package.outputs.prebuilt == 'true' && needs.verify_parallel_package.result == 'success'",
+    "|| needs.package.outputs.prebuilt == 'false' && needs.verify_parallel_package.result == 'skipped')",
+    "&& github.event_name != 'pull_request' && !inputs.parallel_package",
+    "&& (github.ref == 'refs/heads/main' || github.ref_type == 'tag') }}",
+  );
 
   const name = packageJob.match(/^      artifact_name:\s*(.+)$/m)?.[1];
   const upload = stepUsing(packageJob, 'actions/upload-artifact', 'package/platform/');
@@ -144,10 +160,10 @@ test('发布依赖本次打包产物且仅接受常规主干或标签运行', ()
   assert.match(publish, /platform_client\.py --metadata package\/platform\/upload-metadata\.json/);
 });
 
-test('试点独立验证签名安装包的 SHA256 和更新签名', () => {
+test('并行打包独立验证安装包的 SHA256 和更新签名', () => {
   const validation = job('verify_parallel_package');
   assert.match(validation, /^    needs: package$/m);
-  assert.match(validation, /^    if: inputs\.parallel_package$/m);
+  assert.match(validation, /^    if: \$\{\{ !cancelled\(\) && needs\.package\.result == 'success' && needs\.package\.outputs\.prebuilt == 'true' \}\}$/m);
   assert.doesNotMatch(validation, /^    environment:|TAURI_SIGNING_PRIVATE_KEY|PLATFORM_UPLOAD_TOKEN/m);
   const download = stepUsing(validation, 'actions/download-artifact', 'package/platform/');
   assert.match(download, /^          name: \$\{\{ needs\.package\.outputs\.artifact_name \}\}$/m);
@@ -167,9 +183,9 @@ test('平台发布按通道串行，新提交不能取消正在发布的作业',
   assert.match(publish, /^      cancel-in-progress: false$/m);
   assert.match(publish, /^      queue: max$/m);
   const pilotSuffix = "${{ inputs.parallel_package && '-parallel-package' || '' }}";
-  for (const name of ['verify', 'checks', 'package']) {
+  for (const name of ['verify', 'checks', 'prebuild', 'package']) {
     const validation = job(name);
-    const mode = name === 'package' ? '' : "-${{ inputs.rust_test_mode || 'normal' }}";
+    const mode = ['verify', 'checks'].includes(name) ? "-${{ inputs.rust_test_mode || 'normal' }}" : '';
     assert.ok(validation.split('\n').includes('      group: upper-' + name + '-${{ github.ref }}' + mode + pilotSuffix));
     assert.match(validation, /^      cancel-in-progress: true$/m);
   }
@@ -193,7 +209,8 @@ test('验证和打包报告 Rust 缓存命中并允许在线解析', () => {
   }
   const prebuildCache = stepUsing(job('prebuild'), 'Swatinem/rust-cache');
   assert.ok(prebuildCache.includes('shared-key: upper-${{ env.RUST_TARGET }}-package'));
-  assert.match(prebuildCache, /^          save-if: 'false'$/m);
+  assert.match(prebuildCache, /^          save-if: \$\{\{ github\.event_name == 'push' \}\}$/m);
+  assert.match(stepUsing(job('package'), 'Swatinem/rust-cache'), /^        if: needs\.prebuild\.result != 'success'$/m);
 });
 
 test('验证和打包分别上传 Cargo 编译计时，报告缺失时保留原作业结果', () => {
@@ -201,7 +218,7 @@ test('验证和打包分别上传 Cargo 编译计时，报告缺失时保留原�
   for (const name of ['verify', 'prebuild', 'package']) {
     const upload = stepUsing(job(name), 'actions/upload-artifact', 'src-tauri/target/cargo-timings/cargo-timing.html');
     assert.ok(upload.includes('name: upper-' + name + '-cargo-timings-${{ github.run_id }}-${{ github.run_attempt }}'));
-    assert.match(upload, name === 'package' ? /^        if: always\(\) && !inputs\.parallel_package$/m : /^        if: always\(\)$/m);
+    assert.match(upload, name === 'package' ? /^        if: always\(\) && needs\.prebuild\.result != 'success'$/m : /^        if: always\(\)$/m);
     assert.match(upload, /^          if-no-files-found: ignore$/m);
   }
 });
