@@ -18,6 +18,10 @@ on:
           - normal
           - baseline
           - opt-level-1
+      parallel_package:
+        description: 并行编译正式 EXE 并生成签名安装包（仅 main，不发布）
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -35,7 +39,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     concurrency:
-      group: upper-verify-${{ github.ref }}-${{ inputs.rust_test_mode || 'normal' }}
+      group: upper-verify-${{ github.ref }}-${{ inputs.rust_test_mode || 'normal' }}${{ inputs.parallel_package && '-parallel-package' || '' }}
       cancel-in-progress: true
     defaults:
       run:
@@ -123,7 +127,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     concurrency:
-      group: upper-checks-${{ github.ref }}-${{ inputs.rust_test_mode || 'normal' }}
+      group: upper-checks-${{ github.ref }}-${{ inputs.rust_test_mode || 'normal' }}${{ inputs.parallel_package && '-parallel-package' || '' }}
       cancel-in-progress: true
     defaults:
       run:
@@ -161,15 +165,92 @@ jobs:
       - name: 验证 Python 发布工具
         run: python -B -m unittest discover -s tests/gitlab -v
 
+  prebuild:
+    name: 编译正式 EXE
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.parallel_package && inputs.rust_test_mode == 'normal'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 检出源码及设备协议
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: 配置 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 配置 Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: ${{ env.RUST_TARGET }}
+
+      - name: 配置 protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ github.token }}
+
+      - name: 恢复签名打包所用 Rust 缓存
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: upper-${{ env.RUST_TARGET }}-package
+          workspaces: src-tauri -> target
+          cache-targets: 'true'
+          cache-bin: 'false'
+          save-if: 'false'
+
+      - name: 记录 Rust 缓存命中
+        run: Write-Host "Rust 缓存命中=${{ steps.rust-cache.outputs.cache-hit }}"
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 编译并冻结正式 EXE
+        run: ./scripts/workflow/build-platform-package.ps1 -Prebuild
+
+      - name: 保存本次正式 EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: upper-prebuilt-exe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package/prebuilt/
+          compression-level: 0
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: 保存正式 EXE 编译计时
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upper-prebuild-cargo-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/cargo-timings/cargo-timing.html
+          if-no-files-found: ignore
+          retention-days: 14
+
   package:
     name: 签名打包
-    needs: [verify, checks]
-    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.rust_test_mode == 'normal')
+    needs: [verify, checks, prebuild]
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' && needs.checks.result == 'success'
+        && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.rust_test_mode == 'normal')
+        && (inputs.parallel_package && needs.prebuild.result == 'success' || !inputs.parallel_package && needs.prebuild.result == 'skipped') }}
     runs-on: windows-latest
     timeout-minutes: 90
     environment: upper-signing
     concurrency:
-      group: upper-package-${{ github.ref }}
+      group: upper-package-${{ github.ref }}${{ inputs.parallel_package && '-parallel-package' || '' }}
       cancel-in-progress: true
     outputs:
       artifact_name: ${{ steps.build.outputs.artifact_base_name }}-${{ github.run_attempt }}
@@ -211,11 +292,13 @@ jobs:
           targets: ${{ env.RUST_TARGET }}
 
       - name: 配置 protoc
+        if: '!inputs.parallel_package'
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ github.token }}
 
       - name: 缓存 Rust 依赖和产物
+        if: '!inputs.parallel_package'
         id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -225,17 +308,26 @@ jobs:
           cache-bin: 'false'
 
       - name: 记录 Rust 缓存命中
+        if: '!inputs.parallel_package'
         run: Write-Host "Rust 缓存命中=${{ steps.rust-cache.outputs.cache-hit }}"
 
       - name: 安装前端依赖
         run: npm ci
 
+      - name: 下载本次正式 EXE
+        if: inputs.parallel_package
+        uses: actions/download-artifact@v4
+        with:
+          name: upper-prebuilt-exe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package/prebuilt/
+
       - name: 构建并冻结平台安装包
         id: build
         env:
+          BUNDLE_PREBUILT: ${{ inputs.parallel_package || false }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: ./scripts/workflow/build-platform-package.ps1
+        run: ./scripts/workflow/build-platform-package.ps1 -BundlePrebuilt:($env:BUNDLE_PREBUILT -eq 'true')
 
       - name: 保存冻结安装包
         uses: actions/upload-artifact@v4
@@ -255,7 +347,7 @@ jobs:
           retention-days: 14
 
       - name: 保存 Rust 打包编译计时
-        if: always()
+        if: always() && !inputs.parallel_package
         uses: actions/upload-artifact@v4
         with:
           name: upper-package-cargo-timings-${{ github.run_id }}-${{ github.run_attempt }}
@@ -263,10 +355,65 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  verify_parallel_package:
+    name: 验证并行打包产物
+    needs: package
+    if: inputs.parallel_package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: 检出更新公钥
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 下载本次签名安装包
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.package.outputs.artifact_name }}
+          path: package/platform/
+
+      - name: 校验 SHA256 和更新签名
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y minisign
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          from tempfile import TemporaryDirectory
+
+          package = Path("package/platform")
+          metadata = json.loads((package / "upload-metadata.json").read_text(encoding="utf-8"))
+          name = metadata["file_name"]
+          if (Path(name).name != name or not name.endswith(".exe")
+              or metadata["source_sha"] != os.environ["GITHUB_SHA"]
+              or metadata["pipeline_id"] != os.environ["GITHUB_RUN_ID"]):
+              raise SystemExit("安装包来源与本次流水线不一致")
+          installer = package / name
+          with installer.open("rb") as contents:
+              if hashlib.file_digest(contents, "sha256").hexdigest() != metadata["sha256"]:
+                  raise SystemExit("安装包 SHA256 与发布元数据不一致")
+          config = json.loads(Path("src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+          signature = installer.with_name(installer.name + ".sig").read_text(encoding="utf-8").strip()
+          if signature != metadata["signature"]:
+              raise SystemExit("更新签名与发布元数据不一致")
+          with TemporaryDirectory() as tmp:
+              key = Path(tmp) / "updater.pub"
+              sig = Path(tmp) / "installer.minisig"
+              key.write_bytes(base64.b64decode(config["plugins"]["updater"]["pubkey"], validate=True))
+              sig.write_bytes(base64.b64decode(signature, validate=True))
+              subprocess.run(["minisign", "-Vm", str(installer), "-p", str(key), "-x", str(sig)], check=True)
+          print(f"安装包版本：{metadata['version']}")
+          PY
+
   publish:
     name: 发布到平台
     needs: package
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')
+    if: github.event_name != 'pull_request' && !inputs.parallel_package && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')
     runs-on: ${{ fromJSON(vars.UPPER_PUBLISH_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     environment: ${{ github.ref_type == 'tag' && 'upper-stable' || 'upper-ci' }}
