@@ -9,6 +9,15 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      rust_test_mode:
+        description: Rust 测试模式（baseline 和 opt-level-1 仅验证）
+        type: choice
+        default: normal
+        options:
+          - normal
+          - baseline
+          - opt-level-1
 
 permissions:
   contents: read
@@ -26,7 +35,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     concurrency:
-      group: upper-verify-${{ github.ref }}
+      group: upper-verify-${{ github.ref }}-${{ inputs.rust_test_mode || 'normal' }}
       cancel-in-progress: true
     defaults:
       run:
@@ -90,7 +99,15 @@ jobs:
         run: npm run build
 
       - name: 运行完整 Rust 测试
-        run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET --timings
+        env:
+          RUST_TEST_MODE: ${{ inputs.rust_test_mode }}
+        run: |
+          $profileArgs = @()
+          if ($env:RUST_TEST_MODE -eq 'opt-level-1') {
+            $profileArgs = @('--config', 'profile.release.package.mskdsp-upper.opt-level=1')
+          }
+          Write-Host "Rust 测试模式：$($env:RUST_TEST_MODE)"
+          cargo test --release --locked --manifest-path src-tauri/Cargo.toml --target $env:RUST_TARGET --timings @profileArgs
 
       - name: 保存 Rust 验证编译计时
         if: always()
@@ -106,7 +123,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     concurrency:
-      group: upper-checks-${{ github.ref }}
+      group: upper-checks-${{ github.ref }}-${{ inputs.rust_test_mode || 'normal' }}
       cancel-in-progress: true
     defaults:
       run:
@@ -147,7 +164,7 @@ jobs:
   package:
     name: 签名打包
     needs: [verify, checks]
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.rust_test_mode == 'normal')
     runs-on: windows-latest
     timeout-minutes: 90
     environment: upper-signing

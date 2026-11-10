@@ -36,13 +36,16 @@ test('主干、维护分支、正式标签和 PR 使用统一验证入口', () =
   assert.match(triggers, /^  pull_request:$/m);
   assert.match(triggers, /^  push:\n    branches:\n      - main\n      - 'release\/\*'\n    tags:\n      - 'v\*'$/m);
   assert.match(triggers, /^  workflow_dispatch:$/m);
+  const rustTestMode = triggers.split(/^      rust_test_mode:\n/m)[1];
+  assert.ok(rustTestMode, '缺少手动触发的 Rust 测试模式');
+  assert.match(rustTestMode, /^        type: choice\n        default: normal\n        options:\n          - normal\n          - baseline\n          - opt-level-1$/m);
   assert.doesNotMatch(triggers, /beta/);
 });
 
-test('冻结安装包只能在验证通过后打包，PR 不进入签名环境', () => {
+test('冻结安装包只能在验证通过后打包，PR 和实验模式不进入签名环境', () => {
   const packageJob = job('package');
   assert.match(packageJob, /^    needs: \[verify, checks\]$/m);
-  assert.match(packageJob, /^    if: github\.event_name != 'pull_request'$/m);
+  assert.match(packageJob, /^    if: github\.event_name != 'pull_request' && \(github\.event_name != 'workflow_dispatch' \|\| inputs\.rust_test_mode == 'normal'\)$/m);
   assert.match(packageJob, /^    environment: upper-signing$/m);
   assert.match(packageJob, /TAURI_SIGNING_PRIVATE_KEY:.*secrets\.TAURI_SIGNING_PRIVATE_KEY\b/);
   for (const name of ['verify', 'checks']) {
@@ -59,13 +62,19 @@ test('两个并行验证作业覆盖原有测试、前端类型和完整 Rust �
   assert.match(verify, /^    runs-on: windows-latest$/m);
   assert.match(checks, /^    runs-on: windows-latest$/m);
   assertOrder(verify, 'run: npm ci', 'run: npm run build');
-  assertOrder(verify, 'run: npm run build', 'run: cargo test');
-  assert.match(verify, /^        run: cargo test --release --locked --manifest-path src-tauri\/Cargo\.toml --target \$env:RUST_TARGET --timings$/m);
+  assertOrder(verify, 'run: npm run build', 'cargo test');
+  assert.match(verify, /^          cargo test --release --locked --manifest-path src-tauri\/Cargo\.toml --target \$env:RUST_TARGET --timings @profileArgs$/m);
   assert.doesNotMatch(verify, /--lib\b/);
   for (const command of ['test:workflow', 'test:offline', 'lint']) {
     assertOrder(checks, 'run: npm ci', 'run: npm run ' + command);
   }
   assert.match(checks, /python -B -m unittest discover -s tests\/gitlab\b/);
+});
+
+test('Rust 对照实验只在 opt-level-1 模式覆盖应用包的 Release 优化等级', () => {
+  const verify = job('verify');
+  assert.match(verify, /^          RUST_TEST_MODE: \$\{\{ inputs\.rust_test_mode \}\}$/m);
+  assert.match(verify, /^          \$profileArgs = @\(\)\n          if \(\$env:RUST_TEST_MODE -eq 'opt-level-1'\) \{\n            \$profileArgs = @\('--config', 'profile\.release\.package\.mskdsp-upper\.opt-level=1'\)\n          \}$/m);
 });
 
 test('验证与打包都检出设备协议，发布作业无需协议子模块', () => {
@@ -116,7 +125,7 @@ test('平台发布按通道串行，新提交不能取消正在发布的作业',
   assert.match(publish, /^      queue: max$/m);
   for (const name of ['verify', 'checks']) {
     const validation = job(name);
-    assert.ok(validation.includes('group: upper-' + name + '-${{ github.ref }}'));
+    assert.ok(validation.split('\n').includes("      group: upper-" + name + "-${{ github.ref }}-${{ inputs.rust_test_mode || 'normal' }}"));
     assert.match(validation, /^      cancel-in-progress: true$/m);
   }
 });
