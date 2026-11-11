@@ -104,6 +104,8 @@ const ConnectionConfig: React.FC<Props> = ({
                 <Popconfirm
                   title="确认停止轮询？"
                   description="停止后将不再采集或处理该连接的写点。"
+                  okText="确定"
+                  cancelText="取消"
                   disabled={!isRunning || busy}
                   onConfirm={onStop}
                 >
