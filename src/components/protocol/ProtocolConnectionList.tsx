@@ -162,6 +162,8 @@ function ProtocolConnectionList<T extends ProtocolConnectionListItemBase>({
                     ) : null}
                     <Popconfirm
                       title={getDeleteTitle(connName)}
+                      okText="确定"
+                      cancelText="取消"
                       onConfirm={() => onDelete(connName)}
                     >
                       <Tooltip title="删除连接">
