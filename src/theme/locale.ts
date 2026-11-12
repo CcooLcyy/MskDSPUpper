@@ -5,6 +5,6 @@ const confirmationText = { okText: '确认', cancelText: '取消' };
 
 export const appLocale = {
   ...zhCN,
-  Modal: { ...zhCN.Modal, ...confirmationText },
+  Modal: { ...zhCN.Modal, ...confirmationText, justOkText: '知道了' },
   Popconfirm: { ...zhCN.Popconfirm, ...confirmationText },
 };
