@@ -1,8 +1,8 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App, ConfigProvider } from 'antd';
-import zhCN from 'antd/locale/zh_CN';
 import { darkTheme } from '../../theme/dark';
+import { appLocale } from '../../theme/locale';
 import TemplatePreview from './TemplatePreview';
 import { initializeAppSettings } from '../../utils/app-settings';
 import '../../index.css';
@@ -13,7 +13,7 @@ if (!root) throw new Error('未找到模板预览容器');
 await initializeAppSettings();
 createRoot(root).render(
   <StrictMode>
-    <ConfigProvider theme={darkTheme} locale={zhCN}>
+    <ConfigProvider theme={darkTheme} locale={appLocale}>
       <App><TemplatePreview /></App>
     </ConfigProvider>
   </StrictMode>,
