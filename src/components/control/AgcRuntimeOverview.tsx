@@ -141,7 +141,7 @@ export default function AgcRuntimeOverview(props: AgcRuntimeOverviewProps) {
       {pointDetails('总控输入', config.p_cmd?.signal)}
       <div className="agc-runtime-point-details">{pointDetails('总有功目标', config.outputs?.p_total_target)}{pointDetails('总有功实测', config.outputs?.p_total_meas)}{pointDetails('总有功偏差', config.outputs?.p_total_error)}</div>
       <Space wrap><CapabilityGate need="runtime.control"><Tooltip title={props.tuningDisabled ? group.state === 3 ? '待删除的控制组不能开始自动调试。' : '运行中的控制组须先停止后才能开始新的自动调试；已有调试任务可继续查看。' : '查看或启动自动调试任务'}><span><Button onClick={props.onTuning} disabled={props.tuningDisabled}>自动调试参数</Button></span></Tooltip></CapabilityGate>
-        <Popconfirm title={`确认删除 ${config.group_name}？${group.state === 2 ? ' 删除前会停止正在运行的控制组。' : ''}`} onConfirm={props.onDelete}><Button danger icon={<DeleteOutlined />} loading={props.runtimeAction === 'delete'} disabled={props.runtimeAction !== null || props.pendingRouteError}>{group.state === 3 ? '重试删除' : '删除'}</Button></Popconfirm>
+        <Popconfirm title={`确认删除 ${config.group_name}？${group.state === 2 ? ' 删除前会停止正在运行的控制组。' : ''}`} okText="确定" cancelText="取消" onConfirm={props.onDelete}><Button danger icon={<DeleteOutlined />} loading={props.runtimeAction === 'delete'} disabled={props.runtimeAction !== null || props.pendingRouteError}>{group.state === 3 ? '重试删除' : '删除'}</Button></Popconfirm>
       </Space>
     </> }]} onChange={keys => console.info('AGC 配置详情切换', { 展开项: keys })} />
   </section>;
