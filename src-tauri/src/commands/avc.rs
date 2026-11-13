@@ -461,9 +461,6 @@ fn validate_group_config(config: &GroupConfigDto) -> Result<(), String> {
         {
             return Err("AVC 周期直分配模式的命令控制周期必须在 4～30 秒范围内".into());
         }
-        if config.q_total_cmd.is_none() {
-            return Err("AVC 周期直分配模式必须使用总无功命令，目标电压模式仍使用 PI 事件触发".into());
-        }
     }
 
     match (&config.voltage_cmd, &config.q_total_cmd) {
@@ -714,4 +711,51 @@ pub async fn avc_stop_group(state: State<'_, AppState>, group_name: String) -> R
         })?;
     tracing::info!(control = "AVC", group_name = %group_name, "停止控制组请求完成");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_group_config, GroupConfigDto};
+
+    #[test]
+    fn voltage_command_supports_cyclic_control() {
+        let config: GroupConfigDto = serde_json::from_value(serde_json::json!({
+            "group_name": "avc_voltage",
+            "control_mode": 2,
+            "calculation_execution_period_seconds": 1.0,
+            "command_control_period_seconds": 4.0,
+            "voltage_meas": { "tag": "bus_voltage", "unit": "V", "scale": 1.0, "offset": 0.0 },
+            "voltage_cmd": { "tag": "voltage_target", "unit": "V", "scale": 1.0, "offset": 0.0 },
+            "voltage_control": { "kp": 2.0, "deadband": 0.5 },
+            "members": [{
+                "member_name": "inverter",
+                "controllable": true,
+                "weight": 1.0,
+                "q_min_kvar": 0.0,
+                "q_max_kvar": 100.0,
+                "q_set": {
+                    "signal": { "tag": "inverter_q_target", "unit": "kVar", "scale": 1.0, "offset": 0.0 },
+                    "mode": 1,
+                    "delta_base": 0,
+                    "base_tag": ""
+                }
+            }]
+        }))
+        .expect("定压周期控制配置应能反序列化");
+
+        validate_group_config(&config).expect("定压命令应允许使用周期直分配");
+
+        let restored = GroupConfigDto::from(config.to_proto());
+        assert_eq!(restored.control_mode, 2);
+        assert_eq!(restored.calculation_execution_period_seconds, 1.0);
+        assert_eq!(restored.command_control_period_seconds, 4.0);
+        assert!(restored.q_total_cmd.is_none());
+        assert_eq!(
+            restored.voltage_cmd.expect("应保留目标电压命令").tag,
+            "voltage_target"
+        );
+        let voltage_control = restored.voltage_control.expect("应保留电压控制参数");
+        assert_eq!(voltage_control.kp, 2.0);
+        assert_eq!(voltage_control.deadband, 0.5);
+    }
 }

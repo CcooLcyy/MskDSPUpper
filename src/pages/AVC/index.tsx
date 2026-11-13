@@ -527,9 +527,6 @@ const validateGroupConfig = (config: AvcGroupConfig) => {
       || config.command_control_period_seconds > 30) {
       throw new Error('命令控制周期必须在 4～30 秒范围内');
     }
-    if (!config.q_total_cmd?.signal?.tag) {
-      throw new Error('周期直分配模式必须使用总无功命令，目标电压模式仍使用 PI 事件触发');
-    }
   }
 
   if (!config.voltage_meas?.tag) {
@@ -2012,12 +2009,7 @@ const AVC: React.FC = () => {
             </div>
             <div style={{ width: 220 }}>
               <Form.Item name="command_mode" label="命令模式" tooltip={PARAMETER_HELP.control.avcCommandMode}>
-                <Select
-                  onChange={(value: AvcCommandMode) => {
-                    if (value === 'voltage' && controlMode === CONTROL_MODE_DIRECT_CYCLIC) {
-                      groupForm.setFieldValue('control_mode', CONTROL_MODE_PI_EVENT);
-                    }
-                  }}
+                <Select<AvcCommandMode>
                   options={[
                     { value: 'voltage', label: '目标电压模式' },
                     { value: 'q_total', label: '总无功模式' },
@@ -2030,7 +2022,7 @@ const AVC: React.FC = () => {
                 <Select<AvcControlMode>
                   options={[
                     { value: CONTROL_MODE_PI_EVENT, label: 'PI 事件触发' },
-                    { value: CONTROL_MODE_DIRECT_CYCLIC, label: '周期直分配', disabled: commandMode !== 'q_total' },
+                    { value: CONTROL_MODE_DIRECT_CYCLIC, label: CONTROL_MODE_LABELS[CONTROL_MODE_DIRECT_CYCLIC] },
                   ]}
                 />
               </Form.Item>
