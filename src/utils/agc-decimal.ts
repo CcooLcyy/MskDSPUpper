@@ -153,6 +153,7 @@ export const normalizeAgcMemberDecimalFields = (member: AgcMemberConfig): AgcMem
     p_set: normalizeValueSpec(member.p_set),
     communication_state: member.communication_state ? { ...member.communication_state } : null,
     communication_timeout_ms: member.communication_timeout_ms ?? 0,
+    measurement_validity_ms: member.controllable ? (member.measurement_validity_ms ?? 0) : 0,
   };
 };
 

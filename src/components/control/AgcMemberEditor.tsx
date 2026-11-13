@@ -122,6 +122,16 @@ export default function AgcMemberEditor({
       {controllable && <details className="agc-member-editor__advanced" open={mode === 2}>
         <summary>更多控制参数</summary>
         <div className="agc-member-editor__identity">
+          <Form.Item name="measurement_validity_ms" label="量测有效期（毫秒）"
+            tooltip="可控成员有功量测过期后退出分配，收到新的有效量测后恢复。0 表示关闭。"
+            rules={[{ validator: async (_rule, value: number | null | undefined) => {
+              const validity = value ?? 0;
+              if (validity !== 0 && (!Number.isInteger(validity) || validity < 1000 || validity > 3600000)) {
+                throw new Error('量测有效期须为 0 或 1000～3600000 毫秒的整数');
+              }
+            } }]}>
+            <InputNumber min={0} max={3600000} step={1000} style={{ width: '100%' }} />
+          </Form.Item>
           <Form.Item name={['p_set', 'mode']} label="指令模式" tooltip={PARAMETER_HELP.control.commandMode}>
             <Select options={[{ value: 1, label: '绝对值' }, { value: 2, label: '增量值' }]} />
           </Form.Item>

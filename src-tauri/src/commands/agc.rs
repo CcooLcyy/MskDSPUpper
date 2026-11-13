@@ -58,6 +58,8 @@ pub struct MemberConfigDto {
     pub communication_state: Option<SignalSpecDto>,
     #[serde(default)]
     pub communication_timeout_ms: u32,
+    #[serde(default)]
+    pub measurement_validity_ms: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -236,6 +238,7 @@ impl From<MemberConfig> for MemberConfigDto {
             p_set: member.p_set.map(|value| value.into()),
             communication_state: member.communication_state.map(Into::into),
             communication_timeout_ms: member.communication_timeout_ms,
+            measurement_validity_ms: member.measurement_validity_ms,
         }
     }
 }
@@ -470,6 +473,7 @@ impl MemberConfigDto {
                 .as_ref()
                 .map(|signal| signal.to_proto()),
             communication_timeout_ms: self.communication_timeout_ms,
+            measurement_validity_ms: self.measurement_validity_ms,
         }
     }
 }
@@ -655,6 +659,17 @@ pub async fn agc_upsert_group(
 ) -> Result<GroupInfoDto, String> {
     validate_control_timing(&config)?;
     validate_group_tag_uniqueness(&config)?;
+    for member in &config.members {
+        if member.measurement_validity_ms != 0
+            && (!member.controllable
+                || !(1000..=3600000).contains(&member.measurement_validity_ms))
+        {
+            return Err(format!(
+                "{} 的量测有效期仅支持可控成员，须为 0 或 1000～3600000 毫秒",
+                member.member_name
+            ));
+        }
+    }
     let group_name = config.group_name.clone();
     tracing::info!(
         control = "AGC",
@@ -854,18 +869,21 @@ mod communication_tests {
         })).unwrap()
     }
 
-    // 验证旧配置缺少新字段时不启用关联，新增字段经协议往返完整保留。
+    // 验证旧成员配置默认关闭通信关联和量测有效期检查，配置值经协议往返完整保留。
     #[test]
-    fn communication_config_round_trip_and_legacy_default() {
+    fn member_config_round_trip_and_legacy_default() {
         let mut dto = member();
         assert!(dto.communication_state.is_none());
         assert_eq!(dto.communication_timeout_ms, 0);
+        assert_eq!(dto.measurement_validity_ms, 0);
         dto.communication_state = Some(SignalSpec::default().into());
         dto.communication_state.as_mut().unwrap().tag = "通信输入".into();
         dto.communication_timeout_ms = 30000;
+        dto.measurement_validity_ms = 10000;
         let decoded: MemberConfigDto = dto.to_proto().into();
         assert_eq!(decoded.communication_state.unwrap().tag, "通信输入");
         assert_eq!(decoded.communication_timeout_ms, 30000);
+        assert_eq!(decoded.measurement_validity_ms, 10000);
     }
 
     // 验证超时默认值与上下界，并拒绝已启用但标签为空的通信输入。

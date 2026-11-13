@@ -1228,6 +1228,7 @@ export interface AgcStrategyConfig {
 export interface AgcMemberConfig {
   communication_state?: AgcSignalSpec | null;
   communication_timeout_ms?: number;
+  measurement_validity_ms?: number;
   member_name: string;
   controllable: boolean;
   capacity_kw: number;

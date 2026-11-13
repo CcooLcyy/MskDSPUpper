@@ -37,6 +37,14 @@ test('通信状态配置通过离线标签与归一化保留', () => {
   assert.equal(memberCommunicationState({ controllable: true }, undefined, 101000, false).label, '未关联');
 });
 
+// 量测有效期独立于通信绑定；旧配置以及仅测量成员均关闭该检查。
+test('有功量测有效期经成员归一化保留', () => {
+  const configured = { ...member, communication_state: null, measurement_validity_ms: 10000 };
+  assert.equal(normalizeAgcMemberDecimalFields(configured).measurement_validity_ms, 10000);
+  assert.equal(normalizeAgcMemberDecimalFields(member).measurement_validity_ms, 0);
+  assert.equal(normalizeAgcMemberDecimalFields({ ...configured, controllable: false }).measurement_validity_ms, 0);
+});
+
 // 验证仅新鲜且质量有效的状态值 1 允许参与，异常、停止、缺失和超时均明确退出。
 test('通信状态显示不将缓存正常或未知状态判为可参与', () => {
   for (const [value, label] of [[0, '未知'], [1, '通信正常'], [2, '通信异常'], [3, '已停止'], [4, '状态值无效']]) {
