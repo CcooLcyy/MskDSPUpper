@@ -229,19 +229,19 @@
   text-align: left;
 }
 
-/* AGC 页签共享表单与草稿，成员点名在纵向条目内完整换行。 */
-.agc-group-modal .agc-group-tabs {
+/* 控制组页签共享表单与草稿，成员点名在纵向条目内完整换行。 */
+.control-group-modal .control-group-tabs {
   overflow: visible;
 }
 
-.agc-group-modal .agc-group-tabs > .ant-tabs-nav {
+.control-group-modal .control-group-tabs > .ant-tabs-nav {
   position: sticky;
   top: -16px;
   z-index: 2;
   background: #333333;
 }
 
-.agc-group-modal .agc-group-tabs .ant-tabs-tabpane {
+.control-group-modal .control-group-tabs .ant-tabs-tabpane {
   min-width: 0;
 }
 
@@ -249,9 +249,9 @@
   grid-column: 1 / -1;
 }
 
-.agc-group-modal .control-mappings-inline__heading,
-.agc-group-modal .agc-group-members__heading,
-.agc-group-modal .agc-group-member__heading {
+.control-group-modal .control-mappings-inline__heading,
+.control-group-modal .control-group-members__heading,
+.control-group-modal .control-group-member__heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -260,13 +260,13 @@
   margin-bottom: 12px;
 }
 
-.agc-group-modal .agc-group-member {
+.control-group-modal .control-group-member {
   padding: 16px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   min-width: 0;
 }
 
-.agc-group-modal .agc-group-member__summary {
+.control-group-modal .control-group-member__summary {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -275,38 +275,57 @@
   color: #aaaaaa;
 }
 
-.agc-group-modal .agc-group-member__weight {
+.control-group-modal .control-group-member__weight {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.agc-group-modal .agc-group-member__weight .ant-input-number {
+.control-group-modal .control-group-member__weight .ant-input-number {
   width: 120px;
 }
 
-.agc-group-modal .agc-group-member__point {
+.control-group-modal .control-group-member__point {
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
   gap: 8px;
   margin-top: 8px;
 }
 
-.agc-group-modal .agc-group-member__point > *,
-.agc-group-modal .agc-group-member__heading .ant-typography {
+.control-group-modal .control-group-member__point > *,
+.control-group-modal .control-group-member__heading .ant-typography {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.agc-group-modal .agc-group-member__heading > .ant-space,
-.agc-group-modal .agc-group-member__heading > .ant-space > .ant-space-item {
+.control-group-modal .control-group-member__heading > .ant-space,
+.control-group-modal .control-group-member__heading > .ant-space > .ant-space-item {
   min-width: 0;
   max-width: 100%;
 }
 
+.avc-signal-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.avc-signal-fields__row,
+.agc-group-modal :is(.ant-collapse-content-box, .ant-collapse-body) > div {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
+}
+
+.avc-signal-fields__row {
+  gap: 12px;
+}
+
+.avc-signal-fields__row .ant-form-item {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
 .agc-group-modal :is(.ant-collapse-content-box, .ant-collapse-body) > div {
   display: grid !important;
-  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
 }
 
 .agc-group-modal :is(.ant-collapse-content-box, .ant-collapse-body) > div > div {
@@ -315,10 +334,11 @@
 }
 
 @media (max-width: 760px) {
-  .agc-group-modal .agc-group-tabs > .ant-tabs-nav {
+  .control-group-modal .control-group-tabs > .ant-tabs-nav {
     top: -14px;
   }
 
+  .avc-signal-fields__row,
   .agc-group-modal :is(.ant-collapse-content-box, .ant-collapse-body) > div {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -364,11 +384,12 @@
 }
 
 @media (max-width: 520px) {
+  .avc-signal-fields__row,
   .agc-group-modal :is(.ant-collapse-content-box, .ant-collapse-body) > div {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .agc-group-modal .agc-group-member__point {
+  .control-group-modal .control-group-member__point {
     grid-template-columns: minmax(0, 1fr);
     gap: 2px;
   }

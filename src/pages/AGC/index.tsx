@@ -1815,7 +1815,7 @@ const AGC: React.FC = () => {
           {pendingRouteError ? (
             <Alert type="warning" showIcon message="上次配置已保存，请先完成页面上的映射重试，再保存新的配置。" style={{ marginBottom: 12 }} />
           ) : null}
-          <Tabs className="agc-group-tabs" activeKey={groupEditorTab}
+          <Tabs className="agc-group-tabs control-group-tabs" activeKey={groupEditorTab}
             onChange={(key) => {
               setGroupEditorTab(key);
               console.info('AGC 控制组编辑页签已切换', { 页签: key });
@@ -2002,7 +2002,7 @@ const AGC: React.FC = () => {
               </>) },
               { key: 'members', label: `成员设备 · ${membersDraft.length}`, forceRender: true, children: (
           <div className="agc-group-members">
-            <div className="agc-group-members__heading">
+            <div className="agc-group-members__heading control-group-members__heading">
               <Text strong>成员设备（{membersDraft.length}）</Text>
               <Button size="small" aria-label="添加成员" icon={<PlusOutlined />}
                 disabled={groupSubmitting || mappings.loading || !!mappings.error} onClick={openCreateMember}>添加成员</Button>
@@ -2014,14 +2014,14 @@ const AGC: React.FC = () => {
               const setpoint = mappings.getEndpoints({ label: '', tag: member.p_set?.signal?.tag ?? '', direction: 'output' });
               const share = allocationShares[index] ?? 0;
               const weight = resolveAgcDecimalText(member, 'weight', 'weight_decimal', '1');
-              const bindings = (label: string, endpoints: DcEndpoint[]) => <div className="agc-group-member__point">
+              const bindings = (label: string, endpoints: DcEndpoint[]) => <div className="agc-group-member__point control-group-member__point">
                 <Text type="secondary">{label}</Text>
                 <div>{endpoints.length > 0 ? endpoints.map((endpoint) => <div key={controlEndpointKey(endpoint)}>
                   {endpoint.module_name} / {endpoint.conn_name} / {endpoint.tag}
                 </div>) : <Text type="warning">未绑定</Text>}</div>
               </div>;
-              return <article className="agc-group-member" key={`${member.member_name}-${index}`} aria-label={`成员 ${member.member_name}`}>
-                <div className="agc-group-member__heading">
+              return <article className="agc-group-member control-group-member" key={`${member.member_name}-${index}`} aria-label={`成员 ${member.member_name}`}>
+                <div className="agc-group-member__heading control-group-member__heading">
                   <Space wrap><Text strong>{member.member_name}</Text><Tag color={member.controllable ? 'green' : 'default'}>{member.controllable ? '可控' : '仅测量'}</Tag></Space>
                   <Space>
                     <Button size="small" icon={<EditOutlined />} aria-label={`编辑成员 ${member.member_name}`}
@@ -2032,11 +2032,11 @@ const AGC: React.FC = () => {
                     </Popconfirm>
                   </Space>
                 </div>
-                <div className="agc-group-member__summary">
+                <div className="agc-group-member__summary control-group-member__summary">
                   <span>额定容量 {formatDecimalDisplay(resolveAgcDecimalText(member, 'capacity_kw', 'capacity_kw_decimal'))} kW</span>
                   <span>调节范围 {formatDecimalDisplay(resolveAgcDecimalText(member, 'min_kw', 'min_kw_decimal'))}～{formatDecimalDisplay(resolveAgcDecimalText(member, 'max_kw', 'max_kw_decimal'))} kW</span>
                   {member.controllable && <span>理论占比 {share > 0 ? `${(share * 100).toFixed(1)}%` : '待设置'}</span>}
-                  {member.controllable && allocationMode === 'custom' && <label className="agc-group-member__weight">调节权重
+                  {member.controllable && allocationMode === 'custom' && <label className="agc-group-member__weight control-group-member__weight">调节权重
                     <InputNumber<string> aria-label={`${member.member_name} 调节权重`} value={weight} stringMode step="0.1"
                       status={compareAgcDecimalTexts(weight, '0') > 0 ? undefined : 'error'}
                       onChange={(nextValue) => handleMemberWeightChange(index, nextValue)} />
@@ -2044,7 +2044,7 @@ const AGC: React.FC = () => {
                 </div>
                 {bindings('测量点', measurement)}
                 {member.communication_state?.tag && bindings('通信状态', communication)}
-                {member.controllable ? bindings('设定点', setpoint) : <div className="agc-group-member__point"><Text type="secondary">设定点</Text><Text type="secondary">仅测量</Text></div>}
+                {member.controllable ? bindings('设定点', setpoint) : <div className="agc-group-member__point control-group-member__point"><Text type="secondary">设定点</Text><Text type="secondary">仅测量</Text></div>}
               </article>;
             })}
           </div>

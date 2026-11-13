@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Collapse,
   Descriptions,
   Form,
   Input,
@@ -13,6 +14,7 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -77,7 +79,7 @@ import {
 import type { ControlAllocationMode } from '../../utils/control-allocation';
 import '../../components/control/control-modal.css';
 
-const { Paragraph, Text } = Typography;
+const { Text } = Typography;
 
 const AVC_MODULE_NAME = 'AVC';
 
@@ -169,6 +171,13 @@ const DEFAULT_POINT_KIND_LABELS: Record<number, string> = {
   12: 'AVC远方操作',
 };
 
+// 上送使用下位机发布的固定默认点，切换命令模式时继续保留这些路由。
+const AVC_REPORT_FIELDS = ['总无功实测', '总无功目标', '总无功偏差'].map((tag): ControlMappingField => ({
+  label: tag,
+  tag,
+  direction: 'output',
+}));
+
 const AVC_RESERVED_DEFAULT_TAGS = new Set([
   '理论可调无功下限',
   '理论可调无功上限',
@@ -224,24 +233,6 @@ const DEFAULT_MEMBER: AvcMemberConfig = {
     base_tag: '',
   },
 };
-
-const AvcCreateGroupNotice: React.FC = () => (
-  <div style={{ marginTop: 8 }}>
-    <Paragraph style={{ marginBottom: 8 }}>
-      AVC 按目标电压与实测电压的偏差计算需要调节的总无功，kp 没有一个确定的固定值，必须根据现场实际进行整定。
-    </Paragraph>
-    <Paragraph style={{ marginBottom: 8 }}>计算逻辑为：</Paragraph>
-    <ul style={{ margin: '0 0 12px 20px', padding: 0 }}>
-      <li>电压偏差 = 目标电压 - 实测电压；</li>
-      <li>当电压偏差绝对值小于等于电压控制死区时，AVC 保持当前总无功实测值，不继续调节；</li>
-      <li>当电压偏差超出死区时，目标总无功 = 当前总无功实测 + 电压-无功比例系数 × 电压偏差。</li>
-    </ul>
-    <Paragraph style={{ marginBottom: 0 }}>
-      因此，电压-无功比例系数用于描述“每偏差 1 个电压单位，需要调整多少 kVar 无功”，是目标电压模式下必须配置的现场整定参数。
-      系数过小会导致调节偏慢，系数过大可能导致过冲或震荡。
-    </Paragraph>
-  </div>
-);
 
 const buildEmptyGroupForm = (): AvcGroupFormValues => ({
   group_name: '控制组1',
@@ -554,14 +545,19 @@ const validateGroupConfig = (config: AvcGroupConfig) => {
   } else if (hasQTotalCommand) {
     validateValueSpecForSubmit(config.q_total_cmd, 'q_total_cmd');
   }
+};
 
-  if (config.members.length === 0) {
+const validateMembers = (members: AvcMemberConfig[], allocationMode: AllocationMode) => {
+  if (members.length === 0) {
     throw new Error('至少添加一个成员');
   }
 
   const memberNames = new Set<string>();
-  config.members.forEach((member, index) => {
+  members.forEach((member, index) => {
     const memberLabel = member.member_name.trim() || `member #${index + 1}`;
+    if (allocationMode === 'proportional' && member.controllable && member.q_max_kvar <= member.q_min_kvar) {
+      throw new Error(`${member.member_name || '可控成员'} 的无功上限必须大于下限`);
+    }
     if (!member.member_name.trim()) {
       throw new Error(`成员 #${index + 1} 缺少 member_name`);
     }
@@ -588,11 +584,6 @@ const validateGroupConfig = (config: AvcGroupConfig) => {
       validateValueSpecForSubmit(member.q_set, `${memberLabel}.q_set`);
     }
   });
-
-  const duplicateTags = findDuplicateGroupEndpointTags(config);
-  if (duplicateTags.length > 0) {
-    throw new Error(`同一 AVC 控制组内 DataBus tag 不能重复: ${duplicateTags.join('；')}`);
-  }
 };
 
 // 映射字段只包含当前命令模式和增量基准实际使用的本地点位。
@@ -644,7 +635,11 @@ const findDefaultPointByKind = (
   kind: number,
 ): AvcDefaultPointInfo | null => points.find((point) => point.kind === kind) ?? null;
 
-type GroupDraft = ControlGroupDraft<AvcGroupConfig, AvcGroupFormValues, AvcMemberConfig, AvcMemberEndpoints> & { baseline: string };
+type GroupDraft = ControlGroupDraft<AvcGroupConfig, AvcGroupFormValues, AvcMemberConfig, AvcMemberEndpoints> & {
+  baseline: string;
+  editorTab?: string;
+  advancedSignalKeys?: string[];
+};
 
 const AVC: React.FC = () => {
   const { read: readGroupDraft, write: writeGroupDraft, clear: clearGroupDraft } = useConfigDraft<GroupDraft>('/control');
@@ -657,6 +652,8 @@ const AVC: React.FC = () => {
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeMonitorStatus>(EMPTY_RUNTIME_STATUS);
   const [groupOperation, setGroupOperation] = useState<GroupOperation | null>(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [groupEditorTab, setGroupEditorTab] = useState('basic');
+  const [advancedSignalKeys, setAdvancedSignalKeys] = useState<string[]>([]);
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
   const [groupSubmitting, setGroupSubmitting] = useState(false);
@@ -691,6 +688,12 @@ const AVC: React.FC = () => {
   const memberPointOptions = mappings.options.filter((option) =>
     option.endpoint.module_name !== AVC_MODULE_NAME || option.endpoint.conn_name !== currentGroupName);
   const commandMode = Form.useWatch('command_mode', groupForm) ?? 'voltage';
+  const signalFields = [
+    { path: ['voltage_meas'], label: '电压量测点 tag', placeholder: 'bus_voltage_meas', unit: 'kV' },
+    commandMode === 'voltage'
+      ? { path: ['voltage_cmd'], label: '目标电压命令 tag', placeholder: 'bus_voltage_cmd', unit: 'kV' }
+      : { path: ['q_total_cmd', 'signal'], label: '总无功命令 tag', placeholder: 'q_total_cmd', unit: 'kVar' },
+  ];
   const mappingFields = buildAvcMappingFields({
     voltage_meas: groupValues?.voltage_meas ?? null,
     voltage_cmd: commandMode === 'voltage' ? groupValues?.voltage_cmd ?? null : null,
@@ -907,11 +910,13 @@ const AVC: React.FC = () => {
     }
   };
 
-  const openCreateGroupForm = useCallback(() => {
+  const openCreateGroup = useCallback(() => {
     if (readGroupDraft('avc')) { messageApi.info('请先继续编辑或放弃现有草稿'); return; }
     if (pendingRouteError) { messageApi.warning('请先完成待处理映射的重试，再修改控制组配置'); return; }
     setDraftOriginal(null);
     setEditingGroup(null);
+    setGroupEditorTab('basic');
+    setAdvancedSignalKeys([]);
     setAllocationMode('equal');
     setMembersDraft([]);
     setRemovedMemberFields([]);
@@ -924,19 +929,6 @@ const AVC: React.FC = () => {
     setGroupModalOpen(true);
   }, [groupForm, mappings, messageApi, pendingRouteError, readGroupDraft]);
 
-  const openCreateGroup = useCallback(() => {
-    if (readGroupDraft('avc')) { messageApi.info('请先继续编辑或放弃现有草稿'); return; }
-    if (pendingRouteError) { messageApi.warning('请先完成待处理映射的重试，再修改控制组配置'); return; }
-    modalApi.confirm({
-      title: '新增 AVC 控制组前请确认',
-      width: 760,
-      content: <AvcCreateGroupNotice />,
-      okText: '我已了解，继续新增',
-      cancelText: '取消',
-      onOk: openCreateGroupForm,
-    });
-  }, [modalApi, openCreateGroupForm, messageApi, pendingRouteError, readGroupDraft]);
-
   const openEditGroup = useCallback(() => {
     if (readGroupDraft('avc')) { messageApi.info('请先继续编辑或放弃现有草稿'); return; }
     if (pendingRouteError) { messageApi.warning('请先完成待处理映射的重试，再修改控制组配置'); return; }
@@ -946,6 +938,8 @@ const AVC: React.FC = () => {
 
     setDraftOriginal({ connId: selectedGroup?.conn_id ?? 0, fingerprint: controlDraftFingerprint(selectedConfig) });
     setEditingGroup(selectedConfig);
+    setGroupEditorTab('basic');
+    setAdvancedSignalKeys([]);
     setAllocationMode(inferAllocationMode(selectedConfig.members));
     setMembersDraft(selectedConfig.members.map((member) => cloneMember(member)));
     setRemovedMemberFields([]);
@@ -1085,6 +1079,8 @@ const AVC: React.FC = () => {
       members: membersDraft,
       removedMemberFields,
       baseline: groupDraftBaseline,
+      editorTab: groupEditorTab,
+      advancedSignalKeys,
       mapping: mappingsLoading || mappingsError ? existingMapping : { routes: mappingRoutes, edited: editedMappings },
       member: memberModalOpen && memberDirty ? {
         index: editingMemberIndex,
@@ -1095,7 +1091,7 @@ const AVC: React.FC = () => {
       } : undefined,
     });
   }, [
-    groupDraftBaseline, allocationMode, clearGroupDraft, draftOriginal, editedMappings, editingGroup,
+    advancedSignalKeys, groupDraftBaseline, groupEditorTab, allocationMode, clearGroupDraft, draftOriginal, editedMappings, editingGroup,
     editingMemberIndex, groupForm, groupModalOpen, mappingRoutes, mappingsChanged, mappingsError, mappingsLoading,
     memberDirty, memberModalOpen, memberEndpointChanges, memberEndpoints, memberForm, memberInitialEndpoints,
     membersDraft, readGroupDraft, removedMemberFields, groupValues, watchedMember, writeGroupDraft,
@@ -1122,6 +1118,8 @@ const AVC: React.FC = () => {
     setMembersDraft(draft.members);
     setRemovedMemberFields(draft.removedMemberFields);
     setGroupDraftBaseline(draft.baseline);
+    setGroupEditorTab(draft.member ? 'members' : draft.editorTab ?? 'basic');
+    setAdvancedSignalKeys(draft.advancedSignalKeys ?? []);
     groupForm.resetFields();
     groupForm.setFieldsValue(structuredClone(draft.values));
     setMemberModalOpen(Boolean(draft.member));
@@ -1153,7 +1151,17 @@ const AVC: React.FC = () => {
           throw new Error('控制组已被其他操作修改，请核对当前配置后重新编辑');
         }
       }
-      const values = await groupForm.validateFields();
+      const values = await groupForm.validateFields().catch((error: unknown) => {
+        const first = (error as { errorFields?: Array<{ name: Array<string | number> }> }).errorFields?.[0];
+        if (!first) throw error;
+        setGroupEditorTab('basic');
+        if (first.name[0] === 'voltage_meas' || first.name[0] === 'voltage_cmd' || first.name[1] === 'signal') {
+          setAdvancedSignalKeys(['signals']);
+        }
+        console.info('AVC 保存校验未通过，已定位到基础与总控页', { 字段: first.name });
+        requestAnimationFrame(() => requestAnimationFrame(() => groupForm.scrollToField(first.name, { block: 'center', focus: true })));
+        throw new Error('请检查基础与总控页中标记的配置项');
+      });
       const config: AvcGroupConfig = {
         group_name: values.group_name.trim(),
         control_mode: effectiveControlMode(values.control_mode),
@@ -1185,20 +1193,29 @@ const AVC: React.FC = () => {
         }, member, ['weight', 'q_min_kvar', 'q_max_kvar'])),
       };
 
-      if (allocationMode === 'proportional') {
-        const invalidRangeMember = config.members.find(
-          (member) => member.controllable && member.q_max_kvar <= member.q_min_kvar,
-        );
-        if (invalidRangeMember) {
-          throw new Error(`${invalidRangeMember.member_name || '可控成员'} 的无功上限必须大于下限`);
-        }
+      try {
+        validateGroupConfig(config);
+      } catch (error) {
+        setGroupEditorTab('basic');
+        throw error;
       }
-      validateGroupConfig(config);
+      try {
+        validateMembers(config.members, allocationMode);
+      } catch (error) {
+        setGroupEditorTab('members');
+        console.info('AVC 保存校验未通过，已定位到成员设备页');
+        throw error;
+      }
+      const duplicateTags = findDuplicateGroupEndpointTags(config);
+      if (duplicateTags.length > 0) {
+        throw new Error(`同一 AVC 控制组内 DataBus tag 不能重复: ${duplicateTags.join('；')}`);
+      }
       savedGroupName = config.group_name;
 
       // 原成员及已确认草稿的旧字段参与计划，确保删除/换点只清理对应路由。
       const planFields = [
         ...buildAvcMappingFields(config),
+        ...AVC_REPORT_FIELDS,
         ...collectAvcMemberMappingFields(editingGroup?.members ?? []),
         ...removedMemberFields,
       ];
@@ -1545,93 +1562,6 @@ const AVC: React.FC = () => {
         <Tag color={record.controllable ? 'green' : 'default'}>
           {record.controllable ? '是' : '否'}
         </Tag>
-      ),
-    },
-  ];
-
-  const modalMemberColumns: ColumnsType<AvcMemberConfig> = [
-    {
-      title: '成员',
-      dataIndex: 'member_name',
-      key: 'member_name',
-      width: 170,
-      ellipsis: true,
-      render: (value: string) => <Text strong title={value}>{value}</Text>,
-    },
-    {
-      title: '调节范围 (kVar)',
-      key: 'range',
-      width: 150,
-      render: (_, record) => `${formatAutoRealtimeNumber(record.q_min_kvar)} ~ ${formatAutoRealtimeNumber(record.q_max_kvar)}`,
-    },
-    {
-      title: '测量点',
-      key: 'q_meas_binding',
-      width: 200,
-      render: (_, record) => mappings.getEndpoints({ label: '', tag: record.q_meas?.tag ?? '', direction: 'input' })
-        .map((endpoint) => `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag}`).join('；') || '未绑定',
-    },
-    {
-      title: '设定点',
-      key: 'q_set_binding',
-      width: 200,
-      render: (_, record) => record.controllable ? mappings.getEndpoints({ label: '', tag: record.q_set?.signal?.tag ?? '', direction: 'output' })
-        .map((endpoint) => `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag}`).join('；') || '未绑定' : '仅测量',
-    },
-    {
-      title: '权重',
-      dataIndex: 'weight',
-      key: 'weight',
-      width: 120,
-      render: (value: number, record, index) => {
-        if (!record.controllable) return <Text type="secondary">—</Text>;
-        if (allocationMode !== 'custom') return formatAutoRealtimeNumber(value);
-        return (
-          <InputNumber
-            aria-label={`${record.member_name} 调节权重`}
-            value={value}
-            min={0}
-            step={0.1}
-            status={value > 0 ? undefined : 'error'}
-            style={{ width: 96 }}
-            onChange={(nextValue) => handleMemberWeightChange(index, nextValue)}
-          />
-        );
-      },
-    },
-    {
-      title: '理论占比（未触限）',
-      key: 'allocation_share',
-      width: 135,
-      render: (_, record, index) => {
-        if (!record.controllable) return <Text type="secondary">未参与</Text>;
-        const share = allocationShares[index] ?? 0;
-        return share > 0
-          ? `${(share * 100).toFixed(1)}%`
-          : <Text type="danger">待设置</Text>;
-      },
-    },
-    {
-      title: '可控',
-      key: 'controllable',
-      width: 80,
-      render: (_, record) => (
-        <Tag color={record.controllable ? 'green' : 'default'}>
-          {record.controllable ? '是' : '否'}
-        </Tag>
-      ),
-    },
-    {
-      title: '操作',
-      key: 'action',
-      width: 96,
-      render: (_, __, index) => (
-        <Space>
-          <Button type="link" size="small" icon={<EditOutlined />} aria-label={`编辑 ${membersDraft[index]?.member_name}`} disabled={groupSubmitting || memberModalOpen || mappings.loading || !!mappings.error} onClick={() => openEditMember(index)} />
-          <Popconfirm title="确认删除该成员？" disabled={groupSubmitting || memberModalOpen || mappings.loading || !!mappings.error} onConfirm={() => handleDeleteMember(index)}>
-            <Button type="link" size="small" danger aria-label={`删除 ${membersDraft[index]?.member_name}`} disabled={groupSubmitting || memberModalOpen || mappings.loading || !!mappings.error} icon={<DeleteOutlined />} />
-          </Popconfirm>
-        </Space>
       ),
     },
   ];
@@ -1986,15 +1916,19 @@ const AVC: React.FC = () => {
         className="control-config-modal control-group-modal"
         destroyOnClose
         footer={(_origin, { OkBtn, CancelBtn }) => <div className="agc-member-modal__footer">
-          <Text type="secondary">{draftChanged ? '未保存 · 草稿已暂存' : '配置在保存后统一生效'}</Text>
+          <Text type="secondary">{draftChanged ? '未保存 · 草稿已暂存' : '全部页签共用草稿，保存后统一生效'}</Text>
           <Space><Button disabled={!draftChanged || groupSubmitting || memberSubmitting} onClick={minimizeGroupDraft}>暂存并收起</Button><CancelBtn /><OkBtn /></Space>
         </div>}
       >
         <Form form={groupForm} component="div" layout="vertical" size="small" disabled={groupSubmitting}>
-          <div className="control-config-intro">
-            <span className="control-config-intro__mark">AVC</span>
-            <span className="control-config-intro__text">控制组配置</span>
-          </div>
+          {pendingRouteError ? <Alert type="warning" showIcon title="已有控制组配置保存成功、映射尚未完成，请先重试映射，再保存新的配置。" style={{ marginBottom: 12 }} /> : null}
+          <Tabs className="control-group-tabs" activeKey={groupEditorTab}
+            onChange={(key) => {
+              setGroupEditorTab(key);
+              console.info('AVC 控制组编辑页签已切换', { 页签: key });
+            }}
+            items={[
+              { key: 'basic', label: '基础与总控', forceRender: true, children: (<>
           <div className="control-config-section control-config-section--overview">
             <div className="control-config-section__heading">基础信息</div>
             <div className="control-config-grid control-config-grid--overview control-config-grid--overview-triple">
@@ -2002,7 +1936,7 @@ const AVC: React.FC = () => {
               <Form.Item
                 name="group_name"
                 label="控制组名称"
-                rules={[{ required: true, message: '请输入控制组名称' }]}
+                rules={[{ required: true, whitespace: true, message: '请输入控制组名称' }]}
               >
                 <Input disabled={!!editingGroup} placeholder="avc_group_1" />
               </Form.Item>
@@ -2072,147 +2006,20 @@ const AVC: React.FC = () => {
               理论占比按可控成员权重归一化；达到无功上下限后，剩余指令会重新分配。
             </Text>
           </div>
-
-          {pendingRouteError ? <Alert type="warning" showIcon title="已有控制组配置保存成功、映射尚未完成，请先重试映射，再保存新的配置。" style={{ marginBottom: 12 }} /> : null}
-          <Card className="control-config-section control-config-section--command" title="电压测量（voltage_meas）" size="small" bordered>
-            <div style={{ display: 'flex', gap: 16 }}>
-              <div style={{ flex: 1 }}>
-                <Form.Item
-                  name={['voltage_meas', 'tag']}
-                  label="测量点 tag"
-                  tooltip={PARAMETER_HELP.control.signalTag}
-                  rules={requiredTagRules('voltage_meas.tag')}
-                >
-                  <Input placeholder="bus_voltage_meas" />
-                </Form.Item>
-              </div>
-              <div style={{ width: 140 }}>
-                <Form.Item name={['voltage_meas', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
-                  <Input placeholder="kV" />
-                </Form.Item>
-              </div>
-              <div style={{ width: 140 }}>
-                <Form.Item name={['voltage_meas', 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
-                </Form.Item>
-              </div>
-              <div style={{ width: 140 }}>
-                <Form.Item name={['voltage_meas', 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
-                  <InputNumber step={0.01} style={{ width: '100%' }} />
-                </Form.Item>
-              </div>
-            </div>
-          </Card>
-
-          {commandMode === 'voltage' ? (
-            <>
-              <Card className="control-config-section control-config-section--command" title="目标电压命令（voltage_cmd）" size="small" bordered>
-                <div style={{ display: 'flex', gap: 16 }}>
-                  <div style={{ flex: 1 }}>
-                    <Form.Item
-                      name={['voltage_cmd', 'tag']}
-                      label="命令点 tag"
-                      tooltip={PARAMETER_HELP.control.signalTag}
-                      rules={requiredTagRules('voltage_cmd.tag')}
-                    >
-                      <Input placeholder="bus_voltage_cmd" />
-                    </Form.Item>
-                  </div>
-                  <div style={{ width: 140 }}>
-                    <Form.Item name={['voltage_cmd', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
-                      <Input placeholder="kV" />
-                    </Form.Item>
-                  </div>
-                  <div style={{ width: 140 }}>
-                    <Form.Item name={['voltage_cmd', 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
-                      <InputNumber step={0.01} style={{ width: '100%' }} />
-                    </Form.Item>
-                  </div>
-                  <div style={{ width: 140 }}>
-                    <Form.Item name={['voltage_cmd', 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
-                      <InputNumber step={0.01} style={{ width: '100%' }} />
-                    </Form.Item>
-                  </div>
-                </div>
-              </Card>
-
-              <Card className="control-config-section control-config-section--parameters" title="电压控制参数" size="small" bordered>
-                <div style={{ display: 'flex', gap: 16 }}>
-                  <div style={{ flex: 1 }}>
-                    <Form.Item
-                      name={['voltage_control', 'kp']}
-                      label="比例系数 kp"
-                      tooltip={PARAMETER_HELP.control.voltageKp}
-                      rules={[{
-                        validator: async (_rule, value: number | null) => {
-                          if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-                            throw new Error('kp 必须大于 0');
-                          }
-                        },
-                      }]}
-                    >
-                      <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
-                    </Form.Item>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <Form.Item
-                      name={['voltage_control', 'deadband']}
-                      label="电压死区 deadband"
-                      tooltip={PARAMETER_HELP.control.voltageDeadband}
-                      rules={[{
-                        validator: async (_rule, value: number | null) => {
-                          if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-                            throw new Error('deadband 不能小于 0');
-                          }
-                        },
-                      }]}
-                    >
-                      <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
-                    </Form.Item>
-                  </div>
-                </div>
-              </Card>
-            </>
-          ) : (
-            <Card className="control-config-section control-config-section--command" title="总无功命令（q_total_cmd）" size="small" bordered>
-              <div style={{ display: 'flex', gap: 16 }}>
-                <div style={{ flex: 1 }}>
-                  <Form.Item
-                    name={['q_total_cmd', 'signal', 'tag']}
-                    label="命令点 tag"
-                    tooltip={PARAMETER_HELP.control.signalTag}
-                    rules={requiredTagRules('q_total_cmd.signal.tag')}
-                  >
-                    <Input placeholder="q_total_cmd" />
-                  </Form.Item>
-                </div>
-                <div style={{ width: 140 }}>
-                  <Form.Item name={['q_total_cmd', 'signal', 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
-                    <Input placeholder="kVar" />
-                  </Form.Item>
-                </div>
-                <div style={{ width: 140 }}>
-                  <Form.Item name={['q_total_cmd', 'signal', 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
-                    <InputNumber step={0.01} style={{ width: '100%' }} />
-                  </Form.Item>
-                </div>
-                <div style={{ width: 140 }}>
-                  <Form.Item name={['q_total_cmd', 'signal', 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
-                    <InputNumber step={0.01} style={{ width: '100%' }} />
-                  </Form.Item>
-                </div>
-              </div>
+          <Card className="control-config-section control-config-section--command" title="总控指令" size="small" bordered>
+            <ControlMappingsEditor mapping={mappings} fields={mappingFields} groupName={currentGroupName}
+              title="指令与量测来源" embedded showLocalTags={false}
+              description="选择电压量测和当前命令模式的外部来源。修改在保存控制组时生效。" />
+            {commandMode === 'q_total' && (
               <div style={{ display: 'flex', gap: 16 }}>
                 <div style={{ width: 260 }}>
-                    <Form.Item
-                      name={['q_total_cmd', 'mode']}
-                      label="指令模式"
-                      tooltip={PARAMETER_HELP.control.commandMode}
-                      rules={valueModeRules('q_total_cmd.mode')}
-                    >
-                      <Select
-                        options={VALUE_MODE_OPTIONS}
-                    />
+                  <Form.Item
+                    name={['q_total_cmd', 'mode']}
+                    label="指令模式"
+                    tooltip={PARAMETER_HELP.control.commandMode}
+                    rules={valueModeRules('q_total_cmd.mode')}
+                  >
+                    <Select options={VALUE_MODE_OPTIONS} />
                   </Form.Item>
                 </div>
                 {qTotalMode === 2 ? (
@@ -2251,31 +2058,139 @@ const AVC: React.FC = () => {
                   </>
                 ) : null}
               </div>
-            </Card>
-          )}
-
-          <Card
-            className="control-config-section control-config-section--members"
-            title={`成员配置${membersDraft.length ? `（${membersDraft.length}）` : ''}`}
-            size="small"
-            bordered
-            extra={
-              <Button size="small" aria-label="添加成员" icon={<PlusOutlined />} disabled={groupSubmitting || mappings.loading || !!mappings.error} onClick={openCreateMember}>
-                添加成员
-              </Button>
-            }
-          >
-            <Table
-              rowKey={(record, index) => `${record.member_name}-${index}`}
-              columns={modalMemberColumns}
-              dataSource={membersDraft}
-              pagination={false}
-              size="small"
-              scroll={{ x: 1115, y: 280 }}
-              locale={{ emptyText: '暂无成员，请添加' }}
-            />
+            )}
+            <Collapse ghost activeKey={advancedSignalKeys}
+              onChange={(keys) => setAdvancedSignalKeys(Array.isArray(keys) ? keys : [keys])}
+              items={[{ key: 'signals', label: '高级：内部点名与工程量换算', forceRender: true, children: (
+                <div className="avc-signal-fields">
+                  {signalFields.map(({ path, label, placeholder, unit }) => (
+                    <div key={path.join('.')} className="avc-signal-fields__row">
+                      <Form.Item name={[...path, 'tag']} label={label} tooltip={PARAMETER_HELP.control.signalTag}
+                        rules={requiredTagRules([...path, 'tag'].join('.'))}>
+                        <Input placeholder={placeholder} />
+                      </Form.Item>
+                      <Form.Item name={[...path, 'unit']} label="单位" tooltip={PARAMETER_HELP.control.unit}>
+                        <Input placeholder={unit} />
+                      </Form.Item>
+                      <Form.Item name={[...path, 'scale']} label="缩放系数" tooltip={PARAMETER_HELP.common.scale}>
+                        <InputNumber step={0.01} style={{ width: '100%' }} />
+                      </Form.Item>
+                      <Form.Item name={[...path, 'offset']} label="偏移量" tooltip={PARAMETER_HELP.common.offset}>
+                        <InputNumber step={0.01} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </div>
+                  ))}
+                </div>
+              ) }]} />
           </Card>
-          <ControlMappingsEditor mapping={mappings} fields={mappingFields} groupName={currentGroupName} />
+          {commandMode === 'voltage' && (
+              <Card className="control-config-section control-config-section--parameters" title="电压控制参数" size="small" bordered>
+                <Alert type="info" showIcon title="电压-无功比例系数需根据现场整定"
+                  description="偏差超过死区时，目标总无功等于当前总无功实测加上比例系数乘以电压偏差。比例系数过小会使调节变慢，过大可能造成过冲或振荡。" style={{ marginBottom: 12 }} />
+                <div style={{ display: 'flex', gap: 16 }}>
+                  <div style={{ flex: 1 }}>
+                    <Form.Item
+                      name={['voltage_control', 'kp']}
+                      label="比例系数 kp"
+                      tooltip={PARAMETER_HELP.control.voltageKp}
+                      rules={[{
+                        validator: async (_rule, value: number | null) => {
+                          if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+                            throw new Error('kp 必须大于 0');
+                          }
+                        },
+                      }]}
+                    >
+                      <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <Form.Item
+                      name={['voltage_control', 'deadband']}
+                      label="电压死区 deadband"
+                      tooltip={PARAMETER_HELP.control.voltageDeadband}
+                      rules={[{
+                        validator: async (_rule, value: number | null) => {
+                          if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+                            throw new Error('deadband 不能小于 0');
+                          }
+                        },
+                      }]}
+                    >
+                      <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </div>
+                </div>
+              </Card>
+          )}
+              </>) },
+              { key: 'members', label: `成员设备 · ${membersDraft.length}`, forceRender: true, children: (
+                <div>
+                  <div className="control-group-members__heading">
+                    <Text strong>成员设备（{membersDraft.length}）</Text>
+                    <Button size="small" aria-label="添加成员" icon={<PlusOutlined />}
+                      disabled={groupSubmitting || memberModalOpen || mappings.loading || !!mappings.error} onClick={openCreateMember}>添加成员</Button>
+                  </div>
+                  {membersDraft.length === 0 && <Text type="secondary">暂无成员，请添加</Text>}
+                  {membersDraft.map((member, index) => {
+                    const share = allocationShares[index] ?? 0;
+                    const memberFields: ControlMappingField[] = [
+                      { label: '测量点', tag: member.q_meas?.tag ?? '', direction: 'input' },
+                    ];
+                    if (member.controllable) {
+                      memberFields.push({ label: '设定点', tag: member.q_set?.signal?.tag ?? '', direction: 'output' });
+                      if (member.q_set?.mode === 2 && member.q_set.delta_base === 3) {
+                        memberFields.push({ label: '增量基准', tag: member.q_set.base_tag, direction: 'input' });
+                      }
+                    }
+                    const actionsDisabled = groupSubmitting || memberModalOpen || mappings.loading || !!mappings.error;
+                    return (
+                      <article className="control-group-member" key={`${member.member_name}-${index}`} aria-label={`成员 ${member.member_name}`}>
+                        <div className="control-group-member__heading">
+                          <Space wrap><Text strong>{member.member_name}</Text><Tag color={member.controllable ? 'green' : 'default'}>{member.controllable ? '可控' : '仅测量'}</Tag></Space>
+                          <Space>
+                            <Button size="small" icon={<EditOutlined />} aria-label={`编辑成员 ${member.member_name}`}
+                              disabled={actionsDisabled} onClick={() => openEditMember(index)}>编辑</Button>
+                            <Popconfirm title="确认删除该成员？" okText="删除成员" cancelText="取消"
+                              disabled={actionsDisabled} onConfirm={() => handleDeleteMember(index)}>
+                              <Button size="small" danger icon={<DeleteOutlined />} aria-label={`删除成员 ${member.member_name}`} disabled={actionsDisabled}>删除</Button>
+                            </Popconfirm>
+                          </Space>
+                        </div>
+                        <div className="control-group-member__summary">
+                          <span>调节范围 {formatAutoRealtimeNumber(member.q_min_kvar)}～{formatAutoRealtimeNumber(member.q_max_kvar)} kVar</span>
+                          {member.controllable && <span>理论占比 {share > 0 ? `${(share * 100).toFixed(1)}%` : '待设置'}</span>}
+                          {member.controllable && allocationMode !== 'custom' && <span>调节权重 {formatAutoRealtimeNumber(member.weight)}</span>}
+                          {member.controllable && allocationMode === 'custom' && (
+                            <label className="control-group-member__weight">调节权重
+                              <InputNumber aria-label={`${member.member_name} 调节权重`} value={member.weight}
+                                min={0} step={0.1} status={member.weight > 0 ? undefined : 'error'}
+                                disabled={actionsDisabled} onChange={(value) => handleMemberWeightChange(index, value)} />
+                            </label>
+                          )}
+                        </div>
+                        {memberFields.map((field) => {
+                          const endpoints = field.tag ? mappings.getEndpoints(field) : [];
+                          return <div className="control-group-member__point" key={controlMappingFieldKey(field)}>
+                            <Text type="secondary">{field.label}</Text>
+                            <div>{endpoints.length ? endpoints.map((endpoint) => <div key={controlEndpointKey(endpoint)}>
+                              {endpoint.module_name} / {endpoint.conn_name} / {endpoint.tag}
+                            </div>) : <Text type="warning">未绑定</Text>}</div>
+                          </div>;
+                        })}
+                        {!member.controllable && <div className="control-group-member__point"><Text type="secondary">设定点</Text><Text type="secondary">仅测量</Text></div>}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) },
+              { key: 'report', label: '数据上送', forceRender: true, children: (
+                <ControlMappingsEditor mapping={mappings} fields={AVC_REPORT_FIELDS} groupName={currentGroupName}
+                  title="上送点位" embedded showLocalTags={false}
+                  description="选择总无功实测、目标和偏差的外部发送目标。保存时只同步明确修改的映射，其他路由保留。" />
+              ) },
+            ]}
+          />
         </Form>
       </Modal>
 

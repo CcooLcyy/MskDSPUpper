@@ -20,6 +20,23 @@ test('AVC integrates mapping baseline, staged save and retained retry', () => {
   assert.match(source, /groupSubmitting \|\| mappings\.loading \|\| mappings\.error/);
 });
 
+// 跨页保存仍校验基础字段，恢复草稿时回到原页签。
+test('AVC keeps all three editor tabs mounted and restores the draft tab', () => {
+  assert.match(source, /key: 'basic', label: '基础与总控', forceRender: true/);
+  assert.match(source, /key: 'members', label: `成员设备[^,]*, forceRender: true/);
+  assert.match(source, /key: 'report', label: '数据上送', forceRender: true/);
+  assert.match(source, /editorTab: groupEditorTab/);
+  assert.match(source, /setGroupEditorTab\(draft\.member \? 'members' : draft\.editorTab \?\? 'basic'\)/);
+  assert.match(source, /groupForm\.validateFields\(\)\.catch[\s\S]*?setGroupEditorTab\('basic'\)[\s\S]*?groupForm\.scrollToField/);
+});
+
+// AVC 固定无功输出与成员路由共用控制组保存计划。
+test('AVC reports the three default reactive power points through output mappings', () => {
+  assert.match(source, /const AVC_REPORT_FIELDS = \['总无功实测', '总无功目标', '总无功偏差'\][\s\S]*?direction: 'output'/);
+  assert.match(source, /key: 'report'[\s\S]*?fields=\{AVC_REPORT_FIELDS\}/);
+  assert.match(source, /const planFields = \[\s*\.\.\.buildAvcMappingFields\(config\),\s*\.\.\.AVC_REPORT_FIELDS,/);
+});
+
 // 验证成员只暂存、关闭草稿需确认、运行中编辑有原因提示。
 test('AVC protects group and member drafts and explains stopped editing', () => {
   assert.match(source, /okText="确认成员"/);

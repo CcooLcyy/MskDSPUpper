@@ -28,7 +28,6 @@ test('核心协议配置页接入参数提示', () => {
     ['../../src/pages/IEC104/index.tsx', 12],
     ['../../src/pages/ModbusRTU/components/MqttConfigPanel.tsx', 3],
     ['../../src/pages/DLT645/components/MqttConfigPanel.tsx', 3],
-    ['../../src/pages/AVC/index.tsx', 20],
   ];
 
   for (const [path, minimumCount] of sourceExpectations) {
@@ -38,6 +37,19 @@ test('核心协议配置页接入参数提示', () => {
       (source.match(/tooltip=\{PARAMETER_HELP\./g) ?? []).length >= minimumCount,
       `${path} 的参数提示数量不足`,
     );
+  }
+});
+
+// 验证 AVC 基础与总控页复用点位字段后，各项参数仍有说明。
+test('AVC 基础与总控页保留各项参数提示', () => {
+  const page = read('../../src/pages/AVC/index.tsx');
+  for (const key of [
+    'control.avcCommandMode', 'control.controlMode', 'control.allocationMode',
+    'control.calculationPeriod', 'control.commandPeriod', 'control.commandMode',
+    'control.deltaBase', 'control.baseTag', 'control.signalTag', 'control.unit',
+    'common.scale', 'common.offset', 'control.voltageKp', 'control.voltageDeadband',
+  ]) {
+    assert.ok(page.includes(`tooltip={PARAMETER_HELP.${key}}`), `AVC 缺少 ${key} 提示`);
   }
 });
 
