@@ -57,7 +57,7 @@ try {
       { id: 8, state: 77, hot_state: 88, local_ip: '192.0.2.8', peer_ip: '198.51.100.8', encrypt_count: '2', decrypt_count: '3', encrypt_errors: '0', decrypt_errors: '0', error_info: '测试错误', algorithm: null },
     ] };
     let callback = 0;
-    const response = action => ({ message: action === 'reset_tunnel' ? '重置命令已受理，请刷新核对隧道状态。' : '装置应答：操作完成', status: action === 'status' ? 'initialized' : null, certificates: action === 'list_certificates' ? [{ name: 'master.cer', certificate_type: 5 }] : [], tunnels: action === 'list_tunnels' ? mock.tunnels : [], data: [65, 66] });
+    const response = action => ({ message: action === 'reset_tunnel' ? '重置命令已受理，隧道状态将自动刷新。' : '装置应答：操作完成', status: action === 'status' ? 'initialized' : null, certificates: action === 'list_certificates' ? [{ name: 'master.cer', certificate_type: 5 }] : [], tunnels: action === 'list_tunnels' ? mock.tunnels : [], data: [65, 66] });
     window.__TAURI_INTERNALS__ = { transformCallback: () => ++callback, unregisterCallback: () => {}, invoke: async (command, args) => {
       mock.calls.push({ command, args });
       if (command === 'remote_list_devices') return [];
@@ -120,41 +120,105 @@ try {
   await page.waitForFunction(() => window.__admin.calls.some(call => call.args?.request?.action === 'delete_certificate'));
   results.push('主站5/4分类导入，移除内容查看并保留导出与删除确认');
 
-  // 同一状态源切换列表/图示；真实表格选择与确认不能重复发送重置。
+  // 手动推进 1 秒轮询，保留 Ant Design 和浏览器交互使用的原生定时器。
+  await page.evaluate(() => {
+    const setInterval = window.setInterval.bind(window);
+    const clearInterval = window.clearInterval.bind(window);
+    const timers = window.__admin.tunnelRefreshTimers = new Map();
+    let timerId = 0;
+    window.setInterval = (callback, delay, ...args) => {
+      if (delay !== 1000) return setInterval(callback, delay, ...args);
+      const id = --timerId;
+      timers.set(id, () => callback(...args));
+      return id;
+    };
+    window.clearInterval = id => { if (!timers.delete(id)) clearInterval(id); };
+  });
+  const tunnelCalls = async () => (await calls()).filter(call => call.action === 'list_tunnels');
+  const tickTunnelRefresh = () => page.evaluate(() => {
+    for (const callback of window.__admin.tunnelRefreshTimers.values()) callback();
+  });
   await page.getByRole('tab', { name: '隧道管理', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).count(), 0);
-  assert.equal((await calls()).some(call => call.action === 'list_tunnels'), false);
-  assert.equal(await page.getByRole('button', { name: '重置选中隧道', exact: true }).isDisabled(), true);
-  await page.getByRole('button', { name: '刷新隧道', exact: true }).click();
   await page.getByText('9007199254740993', { exact: true }).waitFor();
   await page.getByText('未知状态（77）', { exact: true }).waitFor();
   await page.getByText('未知（88）', { exact: true }).waitFor();
-  const refreshCount = (await calls()).filter(call => call.action === 'list_tunnels').length;
+  assert.deepEqual(await tunnelCalls(), [{ session_id: 'fixture-a', action: 'list_tunnels' }]);
+  assert.equal(await page.evaluate(() => window.__admin.tunnelRefreshTimers.size), 1);
+  const reset = page.getByRole('button', { name: '重置选中隧道', exact: true });
+  assert.equal(await reset.isDisabled(), true);
+
   await page.getByText('图示', { exact: true }).click();
-  await page.getByRole('button', { name: '隧道 7 图示', exact: true }).waitFor();
-  assert.equal((await calls()).filter(call => call.action === 'list_tunnels').length, refreshCount);
-  await page.getByRole('button', { name: '隧道 7 图示', exact: true }).click();
-  await page.getByRole('button', { name: '重置选中隧道', exact: true }).click();
-  await page.getByRole('tooltip').getByRole('button', { name: /^取\s*消$/ }).click();
+  const diagramTunnel = page.getByRole('button', { name: '隧道 7 图示', exact: true });
+  await diagramTunnel.click();
+  assert.equal((await tunnelCalls()).length, 1);
+  await page.evaluate(() => {
+    window.__admin.tunnels = window.__admin.tunnels.map(tunnel => tunnel.id === 7 ? { ...tunnel, state: 0 } : tunnel);
+  });
+  await tickTunnelRefresh();
+  await diagramTunnel.getByText('未连接', { exact: true }).waitFor();
+  assert.equal((await tunnelCalls()).length, 2);
+  assert.equal(await diagramTunnel.getAttribute('aria-pressed'), 'true');
+
+  await reset.click();
+  const cancelReset = page.getByRole('tooltip').getByRole('button', { name: /^取\s*消$/ });
+  await cancelReset.waitFor();
+  await tickTunnelRefresh();
+  assert.equal((await tunnelCalls()).length, 2, '重置确认打开时暂停查询');
+  await cancelReset.click();
   assert.equal((await calls()).some(call => call.action === 'reset_tunnel'), false);
+
+  await page.getByRole('button', { name: '重启设备', exact: true }).click();
+  const rebootConfirmation = page.getByRole('tooltip').filter({ hasText: '重启纵密设备？' });
+  await rebootConfirmation.waitFor();
+  await tickTunnelRefresh();
+  assert.equal((await tunnelCalls()).length, 2, '重启确认打开时暂停查询');
+  await rebootConfirmation.getByRole('button', { name: /^取\s*消$/ }).click();
+
   await page.getByText('列表', { exact: true }).click();
-  await page.getByRole('row').filter({ hasText: '192.0.2.7' }).getByRole('radio').check();
-  await page.getByRole('button', { name: '重置选中隧道', exact: true }).click();
+  const tunnelRadio = page.getByRole('row').filter({ hasText: '192.0.2.7' }).getByRole('radio');
+  await tunnelRadio.check();
+  await reset.click();
   await page.getByRole('tooltip').getByRole('button', { name: /^重\s*置$/ }).click();
-  await page.getByText('重置命令已受理，请刷新核对隧道状态。', { exact: true }).waitFor();
+  await page.getByText('重置命令已受理，隧道状态将自动刷新。', { exact: true }).waitFor();
   assert.deepEqual((await calls()).filter(call => call.action === 'reset_tunnel'), [{ session_id: 'fixture-a', action: 'reset_tunnel', tunnel_id: 7 }]);
-  assert.equal((await calls()).filter(call => call.action === 'list_tunnels').length, refreshCount, '重置不自动查询或重试');
+  assert.equal((await tunnelCalls()).length, 2, '重置不额外发送查询');
+
+  await tunnelRadio.check();
+  const manualRefresh = page.getByRole('button', { name: '刷新隧道', exact: true });
+  await page.evaluate(() => { window.__admin.defer = true; });
+  await manualRefresh.click();
+  await page.waitForFunction(() => window.__admin.pending.length === 1);
+  await tickTunnelRefresh();
+  assert.equal((await tunnelCalls()).length, 3, '已有请求执行时跳过本轮查询');
+  await page.evaluate(() => {
+    window.__admin.defer = false;
+    window.__admin.pending.shift().resolve({ tunnels: window.__admin.tunnels });
+  });
+  await page.waitForFunction(() => document.querySelector('.security-admin').getAttribute('aria-busy') === 'false');
+  assert.equal(await tunnelRadio.isChecked(), false);
+
   await page.evaluate(() => { window.__admin.fail = true; });
-  await page.getByRole('button', { name: '刷新隧道', exact: true }).click();
+  await tickTunnelRefresh();
   await page.getByText('装置拒绝请求（测试）', { exact: true }).waitFor();
   await page.getByText('刷新失败，以下为上次读取的快照，当前状态未确认。', { exact: true }).waitFor();
-  assert.equal(await page.getByRole('button', { name: '重置选中隧道', exact: true }).isDisabled(), true);
+  assert.equal((await tunnelCalls()).length, 4);
+  assert.equal(await reset.isDisabled(), true);
   await page.evaluate(() => { window.__admin.fail = false; window.__admin.tunnels = []; });
-  await page.getByRole('button', { name: '刷新隧道', exact: true }).click();
+  await tickTunnelRefresh();
   await page.getByText('装置当前没有隧道', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, 'security-tunnels-empty.png'), fullPage: true });
-  results.push('分页只显示当前业务，列表图示同源、大计数和未知码保留、重置确认仅一次、错误快照与空列表区分');
+  await page.evaluate(() => { window.__admin.fail = true; });
+  await tickTunnelRefresh();
+  await page.getByText('隧道读取失败，请重新刷新', { exact: true }).waitFor();
+  await page.evaluate(() => { window.__admin.fail = false; });
   await page.getByRole('tab', { name: '初始化与证书', exact: true }).click();
+  await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.__admin.tunnelRefreshTimers.size), 0);
+  await tickTunnelRefresh();
+  assert.equal((await tunnelCalls()).length, 6);
+  results.push('隧道进入即读，每秒更新保留选中项，确认中及会话占用时跳过，离开停止，手动刷新清除选择');
+  results.push('列表图示同源，大计数和未知码保留，重置确认仅发一次，错误快照与空列表区分');
 
   await page.getByRole('button', { name: '测试：退出中', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '导出 SM2 CSR', exact: true }).isDisabled(), true);
@@ -214,7 +278,6 @@ try {
   await page.getByLabel('纵密系统管理员工作台', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, 'security-admin.png'), fullPage: true });
   await page.getByRole('tab', { name: '隧道管理', exact: true }).click();
-  await page.getByRole('button', { name: '刷新隧道', exact: true }).click();
   await page.getByText('9007199254740993', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, 'security-tunnels.png'), fullPage: true });
   await page.getByText('图示', { exact: true }).click();

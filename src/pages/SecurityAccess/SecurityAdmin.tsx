@@ -8,13 +8,19 @@ const CERTIFICATE_TYPES = ['一级 CA 证书', '二级 CA 证书', '主操作员
 type Certificate = { name: string; certificate_type: number };
 type AdminRequest = Parameters<typeof api.runVerticalSecurityAdmin>[0];
 
+function operationErrorMessage(reason: unknown) {
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === 'string' && reason.trim()) return reason;
+  return '纵密管理员操作失败，请核实装置状态后重试。';
+}
+
 export default function SecurityAdmin({ sessionId, disabled = false, onBusyChange, onRebootDevice }: {
   sessionId: string;
   disabled?: boolean;
   onBusyChange?: (busy: boolean) => void;
   onRebootDevice?: () => Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'foreground' | 'background' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -26,13 +32,15 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
   const [view, setView] = useState<string>('list');
   const [tunnels, setTunnels] = useState<VerticalSecurityTunnelStatus[]>([]);
   const [tunnelRead, setTunnelRead] = useState<'pending' | 'ready' | 'failed'>('pending');
+  const [tunnelError, setTunnelError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [selectedTunnel, setSelectedTunnel] = useState<number | null>(null);
+  const [confirmation, setConfirmation] = useState<'reset' | 'reboot' | null>(null);
   const active = useRef(false);
   const generation = useRef(0);
   const mounted = useRef(false);
   const initialListStarted = useRef(false);
-  const blocked = busy || disabled;
+  const blocked = busy !== null || disabled;
   const notifyBusy = useEffectEvent((value: boolean) => onBusyChange?.(value));
 
   useEffect(() => {
@@ -43,27 +51,27 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
     generation.current += 1;
     active.current = false;
     initialListStarted.current = false;
-    setBusy(false); setError(null); setNotice(null); setWarning(null);
+    setBusy(null); setError(null); setNotice(null); setWarning(null); setConfirmation(null);
     setCertificates([]); setListed(false); setImportOpen(false); setCertificateType(5);
-    setTunnels([]); setTunnelRead('pending'); setUpdatedAt(null); setSelectedTunnel(null); setPage('certificates'); setView('list');
+    setTunnels([]); setTunnelRead('pending'); setTunnelError(null); setUpdatedAt(null); setSelectedTunnel(null); setPage('certificates'); setView('list');
     notifyBusy(false);
     return () => { generation.current += 1; notifyBusy(false); };
   }, [sessionId]);
 
-  const run = async (work: (current: () => boolean) => Promise<void>) => {
+  const run = async (work: (current: () => boolean) => Promise<void>, background = false) => {
     if (!mounted.current || disabled || active.current || !sessionId) return;
     const token = generation.current;
     const current = () => mounted.current && token === generation.current;
-    active.current = true; setBusy(true); onBusyChange?.(true);
-    setError(null); setNotice(null); setWarning(null);
+    active.current = true; setBusy(background ? 'background' : 'foreground'); onBusyChange?.(true);
+    if (!background) { setError(null); setNotice(null); setWarning(null); }
     try { await work(current); }
     catch (reason) {
       if (current()) {
-        setError(reason instanceof Error ? reason.message : typeof reason === 'string' && reason.trim() ? reason : '纵密管理员操作失败，请核实装置状态后重试。');
+        setError(operationErrorMessage(reason));
         console.warn('[纵密管理员] 操作失败，请核实装置应答');
       }
     } finally {
-      if (current()) { active.current = false; setBusy(false); onBusyChange?.(false); }
+      if (current()) { active.current = false; setBusy(null); onBusyChange?.(false); }
     }
   };
   const request = async (value: Omit<AdminRequest, 'session_id'>) => {
@@ -125,20 +133,43 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
     await refresh(current);
   });
 
-  const refreshTunnels = () => run(async current => {
-    setSelectedTunnel(null);
+  const refreshTunnels = (automatic = false) => run(async current => {
+    if (!automatic) setSelectedTunnel(null);
     try {
       const value = await request({ action: 'list_tunnels' });
-      if (current()) { setTunnels(value.tunnels); setTunnelRead('ready'); setUpdatedAt(new Date().toLocaleString()); }
+      if (!current()) return;
+      setTunnels(value.tunnels);
+      setTunnelRead('ready');
+      setTunnelError(null);
+      setUpdatedAt(new Date().toLocaleString());
+      setSelectedTunnel(id => value.tunnels.some(item => item.id === id) ? id : null);
     } catch (reason) {
-      if (current()) setTunnelRead('failed');
-      throw reason;
+      if (current()) {
+        setTunnelRead('failed');
+        setTunnelError(operationErrorMessage(reason));
+      }
     }
+  }, automatic);
+  const pollTunnels = useEffectEvent(() => {
+    if (page === 'tunnels' && confirmation === null) void refreshTunnels(true);
   });
+  useEffect(() => {
+    if (page !== 'tunnels' || disabled || !sessionId) return;
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) pollTunnels(); });
+    const timer = setInterval(() => pollTunnels(), 1000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [page, disabled, sessionId]);
+  const setConfirmationOpen = (action: 'reset' | 'reboot', open: boolean) => {
+    setConfirmation(current => {
+      if (open) return action;
+      return current === action ? null : current;
+    });
+  };
   const resetTunnel = () => run(async current => {
     if (selectedTunnel === null || tunnelRead !== 'ready' || !tunnels.some(item => item.id === selectedTunnel)) return;
     await request({ action: 'reset_tunnel', tunnel_id: selectedTunnel });
-    if (current()) { setNotice('重置命令已受理，请刷新核对隧道状态。'); setSelectedTunnel(null); }
+    if (current()) { setNotice('重置命令已受理，隧道状态将自动刷新。'); setSelectedTunnel(null); }
   });
   const rebootDevice = () => run(async current => {
     if (onRebootDevice) { await onRebootDevice(); return; }
@@ -150,9 +181,16 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
   const hotState = (state: number) => state === 1 ? '主用' : state === 0 ? '备用' : `未知（${state}）`;
   const stateTag = (state: number) => <Tag color={state === 3 ? 'success' : state === 1 || state === 2 ? 'processing' : 'default'}>{tunnelState(state)}</Tag>;
 
-  return <section className="security-admin" aria-label="纵密系统管理员工作台" aria-busy={busy}>
-    <div className="security-admin-toolbar"><div><h3>设备维护</h3><p>重启当前登录的纵密装置。</p></div><Popconfirm title="重启纵密设备？" description="纵密业务和当前登录连接将中断，请等待装置恢复后重新登录。" okText="重启设备" cancelText="取消" disabled={blocked} onConfirm={rebootDevice}><Button danger disabled={blocked}>重启设备</Button></Popconfirm></div>
-    <Tabs activeKey={page} onChange={next => { setPage(next); setImportOpen(false); setSelectedTunnel(null); }} items={[{ key: 'certificates', label: '初始化与证书' }, { key: 'tunnels', label: '隧道管理' }]} />
+  return <section className="security-admin" aria-label="纵密系统管理员工作台" aria-busy={busy !== null}>
+    <div className="security-admin-toolbar">
+      <div><h3>设备维护</h3><p>重启当前登录的纵密装置。</p></div>
+      <Popconfirm title="重启纵密设备？" description="纵密业务和当前登录连接将中断，请等待装置恢复后重新登录。"
+        okText="重启设备" cancelText="取消" disabled={blocked} open={confirmation === 'reboot'}
+        onOpenChange={open => setConfirmationOpen('reboot', open)} onConfirm={rebootDevice}>
+        <Button danger disabled={blocked}>重启设备</Button>
+      </Popconfirm>
+    </div>
+    <Tabs activeKey={page} onChange={next => { setPage(next); setImportOpen(false); setSelectedTunnel(null); setConfirmation(null); }} items={[{ key: 'certificates', label: '初始化与证书' }, { key: 'tunnels', label: '隧道管理' }]} />
     {page === 'certificates' && <Card className="security-admin-panel">
       <div className="security-admin-initialize"><div><h3>初始化网关</h3><p>导出证书申请文件时准备 SM2 密钥；已有密钥继续使用。</p></div><Button type="primary" disabled={blocked} onClick={exportCsr}>导出 SM2 CSR</Button></div>
       <div className="security-admin-toolbar"><h3>证书管理</h3><Space wrap><Button disabled={blocked} onClick={() => run(refresh)}>刷新证书列表</Button><Button type="primary" disabled={blocked} onClick={() => setImportOpen(true)}>导入证书</Button></Space></div>
@@ -162,12 +200,23 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
         { title: '操作', width: 140, render: (_, certificate) => <Space size="small"><Button size="small" disabled={blocked} onClick={() => exportCertificate(certificate)}>导出</Button><Popconfirm title={`删除证书 ${certificate.name}？`} description="删除会影响装置使用该证书的业务。" okText="删除" cancelText="取消" disabled={blocked} onConfirm={() => deleteCertificate(certificate)}><Button size="small" danger disabled={blocked}>删除</Button></Popconfirm></Space> },
       ]} />
     </Card>}
-    {importOpen && <Modal title="导入证书" open onCancel={() => { if (!blocked) setImportOpen(false); }} closable={!blocked} mask={{ closable: !blocked }} okText="选择文件并导入" cancelText="取消" confirmLoading={busy} okButtonProps={{ disabled: blocked }} cancelButtonProps={{ disabled: blocked }} onOk={() => importCertificate(certificateType)}>
+    {importOpen && <Modal title="导入证书" open onCancel={() => { if (!blocked) setImportOpen(false); }} closable={!blocked} mask={{ closable: !blocked }} okText="选择文件并导入" cancelText="取消" confirmLoading={busy === 'foreground'} okButtonProps={{ disabled: blocked }} cancelButtonProps={{ disabled: blocked }} onOk={() => importCertificate(certificateType)}>
       <label className="security-admin-import">证书用途<Select aria-label="证书用途" value={certificateType} options={CERTIFICATE_TYPES.map(item => item.value === 5 ? { ...item, label: '加密网关证书（隧道对端）' } : item)} onChange={setCertificateType} disabled={blocked} /></label>
       <p>主站隧道对端通常使用加密网关证书，请按证书用途选择类别。</p>
     </Modal>}
     {page === 'tunnels' && <Card className="security-admin-panel">
-      <div className="security-admin-toolbar"><div><h3>隧道管理</h3><span className="security-admin-update">{updatedAt ? `最后刷新：${updatedAt}` : '尚未读取装置隧道状态'}</span></div><Space wrap><Segmented aria-label="隧道展示方式" value={view} options={[{ label: '列表', value: 'list' }, { label: '图示', value: 'diagram' }]} onChange={setView} /><Button disabled={blocked} onClick={refreshTunnels}>刷新隧道</Button><Popconfirm title={`重置隧道 ${selectedTunnel ?? ''}？`} description="可能短暂中断该隧道业务；命令受理后请刷新核对状态。" okText="重置" cancelText="取消" disabled={blocked || selectedTunnel === null || tunnelRead !== 'ready'} onConfirm={resetTunnel}><Button danger disabled={blocked || selectedTunnel === null || tunnelRead !== 'ready'}>重置选中隧道</Button></Popconfirm></Space></div>
+      <div className="security-admin-toolbar">
+        <div><h3>隧道管理</h3><span className="security-admin-update">{updatedAt ? `最后刷新：${updatedAt}` : '尚未读取装置隧道状态'}</span></div>
+        <Space wrap>
+          <Segmented aria-label="隧道展示方式" value={view} options={[{ label: '列表', value: 'list' }, { label: '图示', value: 'diagram' }]} onChange={setView} />
+          <Button disabled={blocked || confirmation !== null} onClick={() => refreshTunnels()}>刷新隧道</Button>
+          <Popconfirm title={`重置隧道 ${selectedTunnel ?? ''}？`} description="可能短暂中断该隧道业务；命令受理后会自动刷新状态。"
+            okText="重置" cancelText="取消" disabled={blocked || selectedTunnel === null || tunnelRead !== 'ready'} open={confirmation === 'reset'}
+            onOpenChange={open => setConfirmationOpen('reset', open)} onConfirm={resetTunnel}>
+            <Button danger disabled={blocked || selectedTunnel === null || tunnelRead !== 'ready'}>重置选中隧道</Button>
+          </Popconfirm>
+        </Space>
+      </div>
       {tunnelRead === 'failed' && tunnels.length > 0 && <Alert type="warning" showIcon title="刷新失败，以下为上次读取的快照，当前状态未确认。" />}
       {view === 'list' ? <Table<VerticalSecurityTunnelStatus> size="small" rowKey="id" dataSource={tunnels} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 1320 }} locale={{ emptyText: tunnelEmpty }} rowSelection={{ type: 'radio', selectedRowKeys: selectedTunnel === null ? [] : [selectedTunnel], onChange: keys => setSelectedTunnel(keys.length ? Number(keys[0]) : null), getCheckboxProps: () => ({ disabled: blocked || tunnelRead !== 'ready' }) }} columns={[
         { title: 'ID', dataIndex: 'id', width: 65 },
@@ -182,8 +231,9 @@ export default function SecurityAdmin({ sessionId, disabled = false, onBusyChang
         { title: '算法', dataIndex: 'algorithm', width: 100, render: value => value || '未提供' },
         { title: '错误信息', dataIndex: 'error_info', width: 180, render: value => value || '未提供' },
       ]} /> : tunnels.length === 0 ? <Empty description={tunnelEmpty} /> : <div className="security-tunnel-diagram">{tunnels.map(tunnel => <button key={tunnel.id} type="button" className={`security-tunnel-link${selectedTunnel === tunnel.id ? ' is-selected' : ''}`} aria-label={`隧道 ${tunnel.id} 图示`} aria-pressed={selectedTunnel === tunnel.id} disabled={blocked || tunnelRead !== 'ready'} onClick={() => setSelectedTunnel(tunnel.id)}><span className="security-tunnel-endpoint"><strong>本端</strong><span>{tunnel.local_ip}</span></span><span className="security-tunnel-connection"><strong>隧道 {tunnel.id}</strong>{stateTag(tunnel.state)}<span>{hotState(tunnel.hot_state)} →</span></span><span className="security-tunnel-endpoint"><strong>对端</strong><span>{tunnel.peer_ip}</span></span></button>)}</div>}
+      {tunnelError && <Alert type="error" showIcon title={tunnelError} />}
     </Card>}
-    {busy && <p role="status">正在处理管理员操作，请等待装置应答…</p>}
+    {busy === 'foreground' && <p role="status">正在处理管理员操作，请等待装置应答…</p>}
     {error && <Alert type="error" showIcon title={error} />}
     {warning && <Alert type="warning" showIcon title={warning} />}
     {notice && <Alert type="info" showIcon title={notice} />}

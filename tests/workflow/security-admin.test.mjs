@@ -16,6 +16,15 @@ function fixture(overrides = {}, options = {}) {
   let props = { sessionId: 'session-a', disabled: false, ...options.props };
   let initialSetup = Boolean(options.initialSetup);
   const calls = [];
+  const intervals = new Map();
+  const timers = {
+    setInterval(callback, delay) {
+      const id = Symbol();
+      intervals.set(id, { callback, delay });
+      return id;
+    },
+    clearInterval(id) { intervals.delete(id); },
+  };
   const api = {
     runVerticalSecurityAdmin: async request => { calls.push(request); return { message: '装置操作成功', status: 'initialized', certificates: [{ name: 'master.cer', certificate_type: 5 }], tunnels: [], data: [65, 66] }; },
     getVerticalSecuritySimIp: async () => '192.0.2.10',
@@ -41,8 +50,9 @@ function fixture(overrides = {}, options = {}) {
   const widgets = Object.fromEntries(['Alert', 'Button', 'Card', 'Select', 'Space', 'Table', 'Tag', 'Popconfirm', 'Tabs', 'Modal', 'Segmented', 'Empty'].map(name => [name, name]));
   widgets.Input = { TextArea: 'TextArea' };
   const loaded = new Module(filename);
-  loaded.require = name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx: element, jsxs: element, Fragment: 'Fragment' } : name === 'antd' ? widgets : name === '../../adapters' ? { api } : name.endsWith('.css') ? {} : require(name);
-  loaded._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
+  loaded.require = name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx: element, jsxs: element, Fragment: 'Fragment' } : name === 'antd' ? widgets : name === '../../adapters' ? { api } : name === 'fixture-timers' ? timers : name.endsWith('.css') ? {} : require(name);
+  const source = ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
+  loaded._compile(`${source}\nconst { setInterval, clearInterval } = require('fixture-timers');`, filename);
   let tree;
   const render = next => { props = { ...props, ...next }; cursor = 0; tree = loaded.exports.default(props); return tree; };
   const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === 'object' ? [node, ...walk(node.props?.children), ...walk(node.props?.extra)] : [];
@@ -50,7 +60,11 @@ function fixture(overrides = {}, options = {}) {
   const button = label => nodes().find(node => node.type === 'Button' && node.props.children === label);
   render();
   const settle = async () => { await new Promise(setImmediate); render(); };
-  return { api, calls, render, nodes, button, settle, finishSetup: () => { initialSetup = false; }, strictReplay: () => { effects.forEach(id => slots[id]?.cleanup?.()); effects.forEach(id => { slots[id].cleanup = slots[id].effect(); }); render(); }, unmount: () => effects.forEach(id => slots[id]?.cleanup?.()) };
+  const tick = async () => {
+    for (const { callback } of intervals.values()) callback();
+    await settle();
+  };
+  return { api, calls, intervals, render, nodes, button, settle, tick, finishSetup: () => { initialSetup = false; }, strictReplay: () => { effects.forEach(id => slots[id]?.cleanup?.()); effects.forEach(id => { slots[id].cleanup = slots[id].effect(); }); render(); }, unmount: () => effects.forEach(id => slots[id]?.cleanup?.()) };
 }
 
 // 每个原有业务用例先明确验证并完成新的初刷，再清空计数，保留各操作的精确断言。
@@ -203,46 +217,69 @@ test('Tauri字符串拒绝保留装置详细原因', async () => {
 const tunnel = { id: 7, state: 3, hot_state: 1, local_ip: '192.0.2.1', peer_ip: '192.0.2.2', encrypt_count: '9007199254740993', decrypt_count: '2', encrypt_errors: '0', decrypt_errors: '0', error_info: null, algorithm: 'SM4' };
 function switchPage(f, page) { f.nodes().find(node => node.type === 'Tabs').props.onChange(page); f.render(); }
 
-test('管理员分页隔离功能，进入隧道页不自动查询，刷新与图示共享同一数据', async () => {
+test('进入隧道页立即查询，停留期间每秒刷新，切走停止，列表与图示共享同一数据', async () => {
   const f = await settledFixture({ runVerticalSecurityAdmin: async request => { f.calls.push(request); return { message: '已读取', certificates: [], tunnels: [tunnel] }; } });
   switchPage(f, 'tunnels');
+  await f.settle();
   assert.equal(f.button('导出 SM2 CSR'), undefined);
-  assert.equal(f.calls.length, 0);
-  await f.button('刷新隧道').props.onClick(); f.render();
   assert.deepEqual(f.calls, [{ session_id: 'session-a', action: 'list_tunnels' }]);
+  assert.deepEqual([...f.intervals.values()].map(timer => timer.delay), [1000]);
   const table = f.nodes().find(node => node.type === 'Table');
   assert.equal(table.props.dataSource[0].encrypt_count, '9007199254740993');
+  table.props.rowSelection.onChange([7]); f.render();
   f.nodes().find(node => node.type === 'Segmented').props.onChange('diagram'); f.render();
-  assert.ok(f.nodes().some(node => node.props['aria-label'] === '隧道 7 图示'));
   assert.equal(f.calls.length, 1);
+  await f.tick();
+  assert.equal(f.calls.length, 2);
+  const diagram = () => f.nodes().find(node => node.props['aria-label'] === '隧道 7 图示');
+  assert.equal(diagram().props['aria-pressed'], true);
+  await f.button('刷新隧道').props.onClick(); f.render();
+  assert.equal(f.calls.length, 3);
+  assert.equal(diagram().props['aria-pressed'], false);
+  switchPage(f, 'certificates');
+  assert.equal(f.intervals.size, 0);
+  await f.tick(); assert.equal(f.calls.length, 3);
+  switchPage(f, 'tunnels'); await f.settle();
+  assert.equal(f.calls.length, 4);
+  assert.equal(f.intervals.size, 1);
+  f.unmount();
+  assert.equal(f.intervals.size, 0);
 });
 
-test('单隧道重置须选择与确认，仅声明受理，不自动重试或刷新', async () => {
+test('单隧道重置须选择与确认，确认期间暂停查状态，受理后恢复定时刷新', async () => {
   const f = await settledFixture({ runVerticalSecurityAdmin: async request => { f.calls.push(request); return { message: '命令已受理，请刷新核对隧道状态。', certificates: [], tunnels: [tunnel] }; } });
   switchPage(f, 'tunnels');
   assert.equal(f.button('重置选中隧道').props.disabled, true);
-  await f.button('刷新隧道').props.onClick(); f.render();
+  await f.settle();
   f.nodes().find(node => node.type === 'Table').props.rowSelection.onChange([7]); f.render();
+  const confirm = f.nodes().find(node => node.type === 'Popconfirm' && String(node.props.title).startsWith('重置隧道'));
+  confirm.props.onOpenChange(true); f.render(); await f.tick();
   assert.equal(f.calls.length, 1);
-  await f.nodes().find(node => node.type === 'Popconfirm' && String(node.props.title).startsWith('重置隧道')).props.onConfirm(); f.render();
+  await confirm.props.onConfirm();
+  confirm.props.onOpenChange(false); f.render();
   assert.deepEqual(f.calls[1], { session_id: 'session-a', action: 'reset_tunnel', tunnel_id: 7 });
   assert.equal(f.calls.length, 2);
-  assert.ok(f.nodes().some(node => String(node.props.title).includes('命令已受理')));
+  await f.tick();
+  assert.deepEqual(f.calls[2], { session_id: 'session-a', action: 'list_tunnels' });
+  assert.equal(f.calls.length, 3);
+  assert.ok(f.nodes().some(node => node.props.title === '重置命令已受理，隧道状态将自动刷新。'));
 });
 
 test('隧道空列表、失败及旧快照清楚区分，切换会话丢弃迟到结果', async () => {
   let reject = false;
   const f = await settledFixture({ runVerticalSecurityAdmin: async () => { if (reject) throw new Error('读取失败'); return { tunnels: [], certificates: [] }; } });
-  switchPage(f, 'tunnels');
-  await f.button('刷新隧道').props.onClick(); f.render();
+  switchPage(f, 'tunnels'); await f.settle();
   assert.equal(f.nodes().find(node => node.type === 'Table').props.locale.emptyText, '装置当前没有隧道');
-  reject = true; await f.button('刷新隧道').props.onClick(); f.render();
+  reject = true; await f.tick();
   assert.ok(f.nodes().some(node => node.props.title === '读取失败'));
   assert.equal(f.nodes().find(node => node.type === 'Table').props.locale.emptyText, '隧道读取失败，请重新刷新');
+  reject = false; await f.tick();
+  assert.ok(!f.nodes().some(node => node.props.title === '读取失败'));
   let resolve;
   const late = await settledFixture({ runVerticalSecurityAdmin: () => new Promise(done => { resolve = done; }) });
-  switchPage(late, 'tunnels'); const task = late.button('刷新隧道').props.onClick();
-  late.render({ sessionId: 'session-b' }); resolve({ tunnels: [tunnel], certificates: [] }); await task;
+  switchPage(late, 'tunnels'); await late.settle();
+  late.render({ sessionId: 'session-b' }); late.render();
+  resolve({ tunnels: [tunnel], certificates: [] }); await late.settle();
   switchPage(late, 'tunnels');
   assert.equal(late.nodes().find(node => node.type === 'Table').props.dataSource.length, 0);
 });
@@ -250,17 +287,18 @@ test('隧道空列表、失败及旧快照清楚区分，切换会话丢弃迟�
 test('切换分页保持共享忙状态并拒绝并发设备操作', async () => {
   let resolve;
   const f = await settledFixture({ runVerticalSecurityAdmin: request => { f.calls.push(request); return new Promise(done => { resolve = done; }); } });
-  switchPage(f, 'tunnels'); const task = f.button('刷新隧道').props.onClick();
+  switchPage(f, 'tunnels'); await f.settle(); await f.tick();
+  assert.equal(f.calls.length, 1);
   switchPage(f, 'certificates'); await f.button('导出 SM2 CSR').props.onClick();
   assert.equal(f.calls.length, 1);
-  resolve({ tunnels: [tunnel], certificates: [] }); await task;
+  resolve({ tunnels: [tunnel], certificates: [] }); await f.settle();
   switchPage(f, 'tunnels'); assert.equal(f.nodes().find(node => node.type === 'Table').props.dataSource.length, 1);
 });
 
 
 test('未知隧道状态保留原码，缺失算法与错误信息明确显示未提供', async () => {
   const f = await settledFixture({ runVerticalSecurityAdmin: async () => ({ tunnels: [{ ...tunnel, state: 88, hot_state: 9, algorithm: null }], certificates: [] }) });
-  switchPage(f, 'tunnels'); await f.button('刷新隧道').props.onClick(); f.render();
+  switchPage(f, 'tunnels'); await f.settle();
   const table = f.nodes().find(node => node.type === 'Table');
   const column = key => table.props.columns.find(item => item.dataIndex === key);
   assert.equal(column('state').render(88).props.children, '未知状态（88）');
@@ -278,7 +316,7 @@ test('重置失败不显示已受理且不自动重试；卸载后的迟到应�
       if (fail) throw new Error('重置应答超时，结果未确认');
       return new Promise(done => { resolve = done; });
     } });
-    switchPage(f, 'tunnels'); await f.button('刷新隧道').props.onClick(); f.render();
+    switchPage(f, 'tunnels'); await f.settle();
     f.nodes().find(node => node.type === 'Table').props.rowSelection.onChange([7]); f.render();
     const task = f.nodes().find(node => node.type === 'Popconfirm' && String(node.props.title).startsWith('重置隧道')).props.onConfirm();
     if (!fail) { f.unmount(); resolve({ message: '命令已受理' }); }
