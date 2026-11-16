@@ -104,7 +104,7 @@ const CONTROL_MODE_DIRECT_CYCLIC = 2;
 const CONTROL_MODE_LABELS: Record<number, string> = {
   0: 'PI 事件触发（兼容）',
   [CONTROL_MODE_PI_EVENT]: 'PI 事件触发',
-  [CONTROL_MODE_DIRECT_CYCLIC]: '周期直分配',
+  [CONTROL_MODE_DIRECT_CYCLIC]: '周期分配',
 };
 
 const effectiveControlMode = (mode: number | null | undefined): AgcControlMode => (
@@ -1839,7 +1839,7 @@ const AGC: React.FC = () => {
                 <Select<AgcControlMode>
                   options={[
                     { value: CONTROL_MODE_PI_EVENT, label: 'PI 事件触发' },
-                    { value: CONTROL_MODE_DIRECT_CYCLIC, label: '周期直分配' },
+                    { value: CONTROL_MODE_DIRECT_CYCLIC, label: CONTROL_MODE_LABELS[CONTROL_MODE_DIRECT_CYCLIC] },
                   ]}
                 />
               </Form.Item>

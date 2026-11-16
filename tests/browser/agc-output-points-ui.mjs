@@ -119,7 +119,7 @@ try {
     await page.getByRole('button', { name: /新增控制组/ }).click();
     await dialog().getByPlaceholder('agc_group_1', { exact: true }).fill('跨页签验收组');
     await dialog().locator('#control_mode').click();
-    await page.locator('.ant-select-item-option-content').getByText('周期直分配', { exact: true }).click();
+    await page.locator('.ant-select-item-option-content').getByText('周期分配', { exact: true }).click();
     await dialog().locator('#command_control_period_seconds').fill('9');
     const before = await values();
     await tab('成员设备');

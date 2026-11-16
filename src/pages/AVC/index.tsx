@@ -92,7 +92,7 @@ const CONTROL_MODE_DIRECT_CYCLIC = 2;
 const CONTROL_MODE_LABELS: Record<number, string> = {
   0: 'PI 事件触发（兼容）',
   [CONTROL_MODE_PI_EVENT]: 'PI 事件触发',
-  [CONTROL_MODE_DIRECT_CYCLIC]: '周期直分配',
+  [CONTROL_MODE_DIRECT_CYCLIC]: '周期分配',
 };
 
 const effectiveControlMode = (mode: number | null | undefined): AvcControlMode => (

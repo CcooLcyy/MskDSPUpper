@@ -435,7 +435,7 @@ fn validate_group_config(config: &GroupConfigDto) -> Result<(), String> {
     validate_non_empty_name(&config.group_name, "组名")?;
 
     if !matches!(config.control_mode, 0 | 1 | 2) {
-        return Err("AVC 控制模式无效，必须选择 PI 事件触发或周期直分配".into());
+        return Err("AVC 控制模式无效，必须选择 PI 事件触发或周期分配".into());
     }
     if config.calculation_execution_period_seconds != 0.0
         && (!config.calculation_execution_period_seconds.is_finite()
@@ -454,12 +454,12 @@ fn validate_group_config(config: &GroupConfigDto) -> Result<(), String> {
         if !config.calculation_execution_period_seconds.is_finite()
             || !(1.0..=15.0).contains(&config.calculation_execution_period_seconds)
         {
-            return Err("AVC 周期直分配模式的计算执行周期必须在 1～15 秒范围内".into());
+            return Err("AVC 周期分配模式的计算执行周期必须在 1～15 秒范围内".into());
         }
         if !config.command_control_period_seconds.is_finite()
             || !(4.0..=30.0).contains(&config.command_control_period_seconds)
         {
-            return Err("AVC 周期直分配模式的命令控制周期必须在 4～30 秒范围内".into());
+            return Err("AVC 周期分配模式的命令控制周期必须在 4～30 秒范围内".into());
         }
     }
 
