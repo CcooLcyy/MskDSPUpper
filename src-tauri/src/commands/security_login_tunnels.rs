@@ -40,10 +40,11 @@ pub(super) fn parse(data: &[u8]) -> Result<Vec<TunnelStatus>, &'static str> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        // 保留中间空字段，避免缺失错误信息时把算法向前移动。
+        // 保留空字段的位置，避免缺失算法时把错误信息向前移动。
         let line = line.strip_suffix(',').unwrap_or(line);
         let fields: Vec<_> = line.split(',').map(str::trim).collect();
-        if !(14..=16).contains(&fields.len())
+        // NetKeeper 现场装置在前 16 列之后附带两个字段，原厂界面不使用它们。
+        if !matches!(fields.len(), 14..=16 | 18)
             || line.chars().any(char::is_control)
             || fields.iter().any(|field| field.len() > 4096)
         {
@@ -78,8 +79,8 @@ pub(super) fn parse(data: &[u8]) -> Result<Vec<TunnelStatus>, &'static str> {
             decrypt_count: fields[6].into(),
             encrypt_errors: fields[7].into(),
             decrypt_errors: fields[8].into(),
-            error_info: optional(14),
-            algorithm: optional(15),
+            error_info: optional(15),
+            algorithm: optional(14),
         });
     }
     Ok(rows)
@@ -103,16 +104,17 @@ mod tests {
     // 中间空字段不得移位，中文错误同时支持UTF-8与严格GBK。
     #[test]
     fn security_tunnels_optional_fields_and_encoding() {
-        let row = parse(format!("{BASE},,SM2,\n").as_bytes())
+        let row = parse(format!("{BASE},SM2,\n").as_bytes())
             .unwrap()
             .remove(0);
         assert_eq!(row.error_info, None);
         assert_eq!(row.algorithm.as_deref(), Some("SM2"));
-        let text = format!("{BASE},连接失败,SM2,\r\n");
+        let text = format!("{BASE},,连接失败,\r\n");
         let (gbk, _, errors) = encoding_rs::GBK.encode(&text);
         assert!(!errors);
         for bytes in [text.as_bytes(), gbk.as_ref()] {
             let row = parse(bytes).unwrap().remove(0);
+            assert_eq!(row.algorithm, None);
             assert_eq!(row.error_info.as_deref(), Some("连接失败"));
         }
         assert!(parse(&[0x81]).is_err());
@@ -135,7 +137,7 @@ mod tests {
             format!("{BASE}\nbroken"),
             BASE.replace("22,0,0", "-1,0,0"),
             BASE.replace("10.0.0.1", ""),
-            format!("{BASE},error,algorithm,extra,"),
+            format!("{BASE},algorithm,error,extra,"),
         ] {
             assert!(parse(text.as_bytes()).is_err(), "{text}");
         }

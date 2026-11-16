@@ -465,7 +465,7 @@ mod tests {
         req.data = Some(vec![1]);
         assert!(req.validate().is_err());
     }
-    // 新增隧道查询必须被白名单接受，且固定读取运行状态文件而非配置文件。
+    // 隧道查询固定读取运行状态文件，覆盖现场装置的 18 列格式。
     #[tokio::test]
     async fn security_admin_tunnel_download_fixture() {
         let req = request("list_tunnels");
@@ -476,15 +476,15 @@ mod tests {
                 &mut peer,
                 "tunnel",
                 "tunnel",
-                b"1,3,1,10.0.0.1,10.0.0.2,9007199254740993,22,0,0,a,b,c,d,e,,SM2,\n",
+                b"# tunnel\n1,3,1,10.0.0.1,10.0.0.2,9007199254740993,22,0,0,1,2,3,4,5,sm2,no error,0,1,\n\n",
             )
             .await;
         });
         let result = execute(&mut client, &req, &mut vec![]).await.unwrap();
         assert!(result.message.contains("刷新"));
         assert_eq!(result.tunnels[0].encrypt_count, "9007199254740993");
-        assert_eq!(result.tunnels[0].error_info, None);
-        assert_eq!(result.tunnels[0].algorithm.as_deref(), Some("SM2"));
+        assert_eq!(result.tunnels[0].algorithm.as_deref(), Some("sm2"));
+        assert_eq!(result.tunnels[0].error_info.as_deref(), Some("no error"));
         task.await.unwrap();
     }
     // 成功空列表与坏数据必须区分；完整下载后的格式错误不需要关闭已同步连接。
