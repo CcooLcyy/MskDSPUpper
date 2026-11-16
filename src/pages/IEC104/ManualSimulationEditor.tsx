@@ -50,7 +50,7 @@ export default function ManualSimulationEditor({ connName, points, snapshot, loa
     >
       <Alert type="info" showIcon style={{ marginBottom: 12 }}
         message="临时模拟与点表中的“固定上报值”分别管理"
-        description="只模拟勾选的点，其余点继续原有数据路径；保存会替换当前模拟快照，取消勾选即退出该点模拟。遥测填写工程量，发送时沿用点表倍率与偏移；不修改固定上报配置。保存后可用“应用并发送”主动发送，全部退出请用“清除模拟值”。"
+        description="只模拟勾选的点，其余点继续原有数据路径；保存会替换当前模拟快照，取消勾选即退出该点模拟。填写的遥测值直接上送，不应用点表倍率和偏移。保存后可用“应用并发送”主动发送，全部退出请用“清除模拟值”。"
       />
       <Space style={{ marginBottom: 12 }} wrap>
         <Input.Search aria-label="搜索模拟点" placeholder="搜索 Tag、IOA（十进制或 0x 十六进制）" allowClear
@@ -79,7 +79,7 @@ export default function ManualSimulationEditor({ connName, points, snapshot, loa
               value={typeof row.value === 'boolean' ? Number(row.value) : undefined} disabled={loading}
               options={[{ value: 0, label: '0' }, { value: 1, label: '1' }]}
               onChange={(value: number | undefined) => updateValue(row.tag, value === undefined ? undefined : value === 1)} />
-            : <InputNumber aria-label={`${row.tag} 模拟值`} placeholder="填写工程量" style={{ width: '100%' }}
+            : <InputNumber aria-label={`${row.tag} 模拟值`} placeholder="填写上送值" style={{ width: '100%' }}
               value={typeof row.value === 'number' ? row.value : null} disabled={loading}
               onChange={(value) => updateValue(row.tag, value ?? undefined)} /> },
         ]}

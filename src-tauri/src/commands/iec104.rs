@@ -455,7 +455,7 @@ pub struct SimulationPointDto {
     pub ts_ms: i64,
 }
 
-/// 手动模拟值只传工程量；品质和时间统一由下位机生成。
+/// 手动模拟直接指定报文值；品质和时间统一由下位机生成。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ManualSimulationPointDto {

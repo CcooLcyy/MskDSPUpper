@@ -773,7 +773,7 @@ export interface Iec61850RuntimeStatistics {
   mms_queue_bytes_high_watermark: number;
 }
 
-/** 临时模拟输入为工程量；品质和时间由下位机生成，不写入点表。 */
+/** 临时模拟直接指定报文值；品质和时间由下位机生成，不写入点表。 */
 export interface Iec104ManualSimulationPoint {
   tag: string;
   point_type: number;

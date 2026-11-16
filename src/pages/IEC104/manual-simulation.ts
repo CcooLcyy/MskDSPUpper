@@ -42,12 +42,8 @@ function validateValue(point: Iec104Point, value: Iec104ManualSimulationPoint): 
   if (typeof value.double_value !== 'number' || !Number.isFinite(value.double_value) || value.bool_value != null) {
     throw new Error(`${point.tag} 的遥测模拟值必须填写有限数值`);
   }
-  const configuredScale = Number(point.scale_decimal?.trim() || point.scale);
-  const offset = Number(point.offset_decimal?.trim() || point.offset);
-  if (!Number.isFinite(configuredScale) || !Number.isFinite(offset)) throw new Error(`${point.tag} 的倍率或偏移无效`);
-  const raw = (value.double_value - offset) / (configuredScale || 1);
-  if (!Number.isFinite(raw) || Math.abs(raw) > 3.4028234663852886e38 || !Number.isFinite(Math.fround(raw))) {
-    throw new Error(`${point.tag} 换算后的模拟值超出 IEC104 有限单精度浮点范围`);
+  if (Math.abs(value.double_value) > 3.4028234663852886e38) {
+    throw new Error(`${point.tag} 的模拟值超出 IEC104 有限单精度浮点范围`);
   }
   return { tag: point.tag, point_type: 1, double_value: value.double_value };
 }

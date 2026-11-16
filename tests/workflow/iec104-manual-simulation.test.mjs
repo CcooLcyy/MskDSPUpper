@@ -60,12 +60,15 @@ test('完整验证通过后才构造新快照，拒绝固定点、主站、缺�
   assert.deepEqual(before, buildManualSimulationSnapshot('从站', slave, table, request, 123));
 });
 
-test('遥测按工程量与十进制倍率偏移校验报文范围，倍率0按1处理', () => {
+test('遥测模拟值直接校验报文范围，不应用点表倍率和偏移', () => {
   const scaled = { ...analog, scale: 1, scale_decimal: '100', offset_decimal: '10' };
-  assert.doesNotThrow(() => buildManualSimulationSnapshot('从站', slave, [scaled], [{ ...request[0], double_value: 1e40 }], 1));
-  assert.throws(() => buildManualSimulationSnapshot('从站', slave, [{ ...scaled, scale_decimal: '0.0001' }], [{ ...request[0], double_value: 1e38 }], 1), /浮点/);
-  assert.doesNotThrow(() => buildManualSimulationSnapshot('从站', slave, [{ ...analog, scale: 0 }], request.slice(0, 1), 1));
-  assert.throws(() => buildManualSimulationSnapshot('从站', slave, [{ ...analog, scale_decimal: 'abc' }], request.slice(0, 1), 1), /倍率/);
+  assert.throws(() => buildManualSimulationSnapshot('从站', slave, [scaled], [{ ...request[0], double_value: 1e40 }], 1), /浮点/);
+
+  const point = { ...scaled, scale_decimal: '0.0001' };
+  const values = buildManualSimulationPoints([{ ...point, selected: true, value: 1e38 }]);
+  assert.deepEqual(values, [{ ...request[0], double_value: 1e38 }]);
+  assert.equal(buildManualSimulationSnapshot('从站', slave, [point], values, 1).points[0].double_value, 1e38);
+
   const max = 3.4028234663852886e38;
   assert.doesNotThrow(() => buildManualSimulationSnapshot('从站', slave, [analog], [{ ...request[0], double_value: max }], 1));
   assert.throws(() => buildManualSimulationSnapshot('从站', slave, [analog], [{ ...request[0], double_value: max * (1 + 1e-9) }], 1), /浮点/);
