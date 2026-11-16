@@ -35,6 +35,9 @@ export const AGC_DEFAULT_POINT_TAGS: readonly string[] = [
   'AGC远方操作',
 ];
 
+/** 部分旧版现场快照不包含这两个 AVC 默认点。 */
+export const AVC_DIRECTION_BLOCK_TAGS: readonly string[] = ['AVC增闭锁', 'AVC减闭锁'];
+
 /** AVC 固定默认点（模块内硬编码，组名不参与命名）。 */
 export const AVC_DEFAULT_POINT_TAGS: readonly string[] = [
   '理论可调无功下限',
@@ -49,6 +52,7 @@ export const AVC_DEFAULT_POINT_TAGS: readonly string[] = [
   '电压偏差',
   'AVC功能投入',
   'AVC远方操作',
+  ...AVC_DIRECTION_BLOCK_TAGS,
 ];
 
 export const DEVICE_INFO_RUNTIME_CONNECTION = 'device-runtime';

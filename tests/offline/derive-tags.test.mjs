@@ -97,15 +97,17 @@ test('agc ignores base_tag when the value mode is absolute', () => {
   assert.ok(!tags.includes('unexpected'));
 });
 
-// AVC 必须始终注册 12 个固定默认点。
-test('avc always registers the twelve fixed default points', () => {
+// AVC 默认点须包含两路可选转发的闭锁输出。
+test('avc always registers the fourteen fixed default points', () => {
   const tags = deriveConnTags({
     module: 'AVC',
     config: { group_name: 'g', members: [] },
   });
 
   assert.deepEqual(tags, [...AVC_DEFAULT_POINT_TAGS].sort());
-  assert.equal(AVC_DEFAULT_POINT_TAGS.length, 12);
+  assert.equal(tags.length, 14);
+  assert.ok(tags.includes('AVC增闭锁'));
+  assert.ok(tags.includes('AVC减闭锁'));
 });
 
 // AVC 必须叠加电压量测、命令分支与成员标签。

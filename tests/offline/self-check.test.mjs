@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { selfCheckSnapshot } from '../../src/offline/workspace/self-check.ts';
+import { AVC_DEFAULT_POINT_TAGS, AVC_DIRECTION_BLOCK_TAGS } from '../../src/offline/workspace/derive-tags.ts';
 
 const NOW = '2026-05-20T10:00:00.000Z';
 
@@ -20,6 +21,7 @@ function makeSnapshot({
   connTags = [],
   routes = [],
   agcGroups = [],
+  avcGroups = [],
 } = {}) {
   return {
     schema_version: 1,
@@ -32,7 +34,7 @@ function makeSnapshot({
       modbus_tcp: { links: [] },
       dlt645: { mqtt: null, links: [] },
       agc: { groups: agcGroups },
-      avc: { groups: [] },
+      avc: { groups: avcGroups },
       calc: { groups: [] },
       data_bus: { connections, conn_tags: connTags, routes: { replace: true, items: routes } },
     },
@@ -213,4 +215,28 @@ test('agc connections missing default points are errors', () => {
   const issues = selfCheckSnapshot(snapshot);
 
   assert.ok(issues.some((issue) => issue.level === 'error' && issue.code === 'tags-missing'));
+});
+
+// 旧版 AVC 快照继续可导出，但实际新增闭锁转发时必须登记对应标签。
+test('legacy AVC snapshots can omit direction block tags until a route refers to one', () => {
+  const avc = { module_name: 'AVC', conn_name: '控制组1' };
+  const oldAvcTags = AVC_DEFAULT_POINT_TAGS.filter((tag) => !AVC_DIRECTION_BLOCK_TAGS.includes(tag));
+  const snapshot = makeSnapshot({
+    iec104Links: [iec104Link('main', [{ tag: 'A', ioa: 1 }])],
+    connections: [avc, MAIN_CONNECTION],
+    connTags: [
+      { ...avc, tags: oldAvcTags },
+      { ...MAIN_CONNECTION, tags: ['A', '__time_sync__'] },
+    ],
+    avcGroups: [{ upsert: { config: { group_name: avc.conn_name, members: [] } } }],
+  });
+
+  assert.deepEqual(selfCheckSnapshot(snapshot), []);
+  snapshot.config.data_bus.routes.items.push({
+    src: { ...avc, tag: 'AVC增闭锁' },
+    dst: { ...MAIN_CONNECTION, tag: 'A' },
+  });
+  assert.ok(selfCheckSnapshot(snapshot).some((issue) => issue.level === 'error' && issue.code === 'route-tag-missing'));
+  snapshot.config.data_bus.conn_tags[0].tags.push('AVC增闭锁');
+  assert.deepEqual(selfCheckSnapshot(snapshot), []);
 });

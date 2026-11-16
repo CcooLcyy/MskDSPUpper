@@ -78,6 +78,7 @@ import {
 import {
   AGC_DEFAULT_POINT_TAGS,
   AVC_DEFAULT_POINT_TAGS,
+  AVC_DIRECTION_BLOCK_TAGS,
   deriveConnTags,
   sortTags,
   type DeriveTagsInput,
@@ -1313,6 +1314,26 @@ function registerRouteConnections(workspace: OfflineWorkspace, routes: DcRoute[]
 
       ensureConnection(workspace, endpoint.module_name, endpoint.conn_name);
       ensureConnectionEntry(workspace, endpoint.module_name, endpoint.conn_name);
+    }
+
+    const source = route.src;
+    if (source.module_name !== MODULE_AVC || !AVC_DIRECTION_BLOCK_TAGS.includes(source.tag)) {
+      continue;
+    }
+
+    const group = workspace.config.avc.groups.find((item) => item.upsert.config.group_name === source.conn_name);
+    if (!group) {
+      continue;
+    }
+
+    // 从旧版快照创建转发时，仅补登记本次选择的闭锁遥信。
+    const entry = workspace.config.data_bus.conn_tags.find(
+      (item) => item.module_name === MODULE_AVC && item.conn_name === source.conn_name,
+    );
+    if (entry) {
+      entry.tags = sortTags([...entry.tags, source.tag]);
+    } else {
+      syncConnTags(workspace, MODULE_AVC, source.conn_name, { module: 'AVC', config: group.upsert.config });
     }
   }
 }

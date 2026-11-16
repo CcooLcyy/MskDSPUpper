@@ -550,6 +550,11 @@ function makePointValue(seed: number): DcPointValue {
   };
 }
 
+function isAvcDirectionBlock(connId: number, tag: string): boolean {
+  return (tag === 'AVC增闭锁' || tag === 'AVC减闭锁')
+    && [...avcGroups.values()].some((group) => group.conn_id === connId);
+}
+
 function getLatestUpdates(connId: number, tags: string[]): Promise<DcPointUpdate[]> {
   const activeTags = tags.length > 0 ? tags : tagsForConnection(connId);
   const ts = Date.now();
@@ -562,6 +567,8 @@ function getLatestUpdates(connId: number, tags: string[]): Promise<DcPointUpdate
       ? { type: 'Double', value: Number((45 + Math.sin(ts / 10000 + index) * 12).toFixed(2)) } satisfies DcPointValue
       : connId === boardDiConnId || connId === boardDoConnId
       ? { type: 'Bool', value: index % 2 === 0 } satisfies DcPointValue
+      : isAvcDirectionBlock(connId, tag)
+      ? { type: 'Bool', value: false } satisfies DcPointValue
       : makePointValue(ts / 1000 + index),
     ts_ms: ts,
     quality: connId === deviceRuntimeConnId ? 1 : 0,
@@ -578,6 +585,8 @@ function getSourceLatestUpdates(connId: number, tags: string[]): Promise<DcSourc
       ? { type: 'Double', value: Number(((index === 0 ? 45 : 58) + Math.sin(ts / 10000 + index) * 12).toFixed(2)) } satisfies DcPointValue
       : connId === boardDiConnId || connId === boardDoConnId
       ? { type: 'Bool', value: index % 2 === 0 } satisfies DcPointValue
+      : isAvcDirectionBlock(connId, tag)
+      ? { type: 'Bool', value: false } satisfies DcPointValue
       : makePointValue(ts / 1000 + index),
     ts_ms: ts,
     quality: connId === deviceRuntimeConnId ? 1 : 0,
@@ -658,6 +667,8 @@ function makeDefaultAvcPoints(): AvcDefaultPointInfo[] {
     { kind: 10, tag: '电压偏差', name: '电压偏差', description: '浏览器开发模式 mock 点' },
     { kind: 11, tag: 'AVC功能投入', name: 'AVC功能投入', description: '浏览器开发模式 mock 点' },
     { kind: 12, tag: 'AVC远方操作', name: 'AVC远方操作', description: '浏览器开发模式 mock 点' },
+    { kind: 13, tag: 'AVC增闭锁', name: 'AVC增闭锁', description: '浏览器开发模式 mock 点' },
+    { kind: 14, tag: 'AVC减闭锁', name: 'AVC减闭锁', description: '浏览器开发模式 mock 点' },
   ];
 }
 

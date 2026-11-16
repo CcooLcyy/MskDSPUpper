@@ -7,7 +7,7 @@
  */
 
 import type { FullConfigExportSnapshot, StableDataBusConnTags } from '../../adapters/types.ts';
-import { deriveConnTags } from './derive-tags.ts';
+import { AVC_DIRECTION_BLOCK_TAGS, deriveConnTags } from './derive-tags.ts';
 import { connectionKey } from './registry.ts';
 
 export type SelfCheckLevel = 'error' | 'warning';
@@ -39,6 +39,7 @@ interface DerivedEntry {
   /** 需要做重复地址检查的键；分组对象与 DLT645 不参与。 */
   addressKeys: string[];
   pointChecks: boolean;
+  legacyOptionalTags?: readonly string[];
 }
 
 export function selfCheckSnapshot(
@@ -115,7 +116,9 @@ export function selfCheckSnapshot(
       continue;
     }
 
-    const missing = entry.tags.filter((tag) => !declared.includes(tag));
+    // 旧版现场快照可能未声明 AVC 新增的遥信。若实际路由引用其端点，下面仍会检查标签。
+    const missing = entry.tags.filter((tag) => !declared.includes(tag)
+      && !entry.legacyOptionalTags?.includes(tag));
 
     if (missing.length > 0) {
       issues.push({
@@ -282,7 +285,10 @@ function collectDerivedEntries(snapshot: FullConfigExportSnapshot): DerivedEntry
   for (const task of config.avc?.groups ?? []) {
     const groupName = task.upsert?.config?.group_name ?? '';
 
-    entries.push(groupEntry(MODULE_AVC, groupName, () => safeDerive({ module: 'AVC', config: task.upsert.config })));
+    entries.push({
+      ...groupEntry(MODULE_AVC, groupName, () => safeDerive({ module: 'AVC', config: task.upsert.config })),
+      legacyOptionalTags: AVC_DIRECTION_BLOCK_TAGS,
+    });
   }
 
   for (const task of config.calc?.groups ?? []) {

@@ -169,6 +169,8 @@ const DEFAULT_POINT_KIND_LABELS: Record<number, string> = {
   10: '电压偏差',
   11: 'AVC功能投入',
   12: 'AVC远方操作',
+  13: 'AVC增闭锁',
+  14: 'AVC减闭锁',
 };
 
 // 上送使用下位机发布的固定默认点，切换命令模式时继续保留这些路由。
@@ -191,6 +193,8 @@ const AVC_RESERVED_DEFAULT_TAGS = new Set([
   '电压偏差',
   'AVC功能投入',
   'AVC远方操作',
+  'AVC增闭锁',
+  'AVC减闭锁',
 ]);
 
 const VALUE_MODE_OPTIONS = Object.entries(VALUE_MODE_LABELS)
