@@ -99,16 +99,16 @@ const AGC_MODULE_NAME = 'AGC';
 type AllocationMode = ControlAllocationMode;
 type AgcControlMode = 1 | 2;
 
-const CONTROL_MODE_PI_EVENT = 1;
-const CONTROL_MODE_DIRECT_CYCLIC = 2;
+const CONTROL_MODE_EVENT_TRIGGERED = 1;
+const CONTROL_MODE_PERIODIC_ALLOCATION = 2;
 const CONTROL_MODE_LABELS: Record<number, string> = {
-  0: 'PI 事件触发（兼容）',
-  [CONTROL_MODE_PI_EVENT]: 'PI 事件触发',
-  [CONTROL_MODE_DIRECT_CYCLIC]: '周期分配',
+  0: '事件触发（兼容）',
+  [CONTROL_MODE_EVENT_TRIGGERED]: '事件触发',
+  [CONTROL_MODE_PERIODIC_ALLOCATION]: '周期分配',
 };
 
 const effectiveControlMode = (mode: number | null | undefined): AgcControlMode => (
-  mode === CONTROL_MODE_DIRECT_CYCLIC ? CONTROL_MODE_DIRECT_CYCLIC : CONTROL_MODE_PI_EVENT
+  mode === CONTROL_MODE_PERIODIC_ALLOCATION ? CONTROL_MODE_PERIODIC_ALLOCATION : CONTROL_MODE_EVENT_TRIGGERED
 );
 
 const STATE_MAP: Record<number, { label: string; color: string }> = {
@@ -218,7 +218,7 @@ const buildEmptyConfig = (): AgcGroupConfig => ({
     delta_base: 0,
     base_tag: '',
   },
-  control_mode: CONTROL_MODE_PI_EVENT,
+  control_mode: CONTROL_MODE_EVENT_TRIGGERED,
   calculation_execution_period_seconds: 1,
   command_control_period_seconds: 4,
   strategy: { strategy_type: 'weighted' },
@@ -1574,7 +1574,7 @@ const AGC: React.FC = () => {
             offline={runtimeOffline}
             loading={runtimeLoading}
             maxAgeMs={Math.max(30000, (selectedConfig?.calculation_execution_period_seconds || 1) * 3000, (selectedConfig?.command_control_period_seconds || 4) * 3000)}
-            controlModeLabel={CONTROL_MODE_LABELS[selectedConfig?.control_mode ?? 0] ?? 'PI 事件触发（兼容）'}
+            controlModeLabel={CONTROL_MODE_LABELS[selectedConfig?.control_mode ?? 0] ?? '事件触发（兼容）'}
             allocationLabel={allocationModeLabel(selectedGroup.config.members)}
             commandModeLabel={VALUE_MODE_LABELS[selectedConfig?.p_cmd?.mode ?? 0] ?? '未指定'}
             runtimeAction={runtimeAction}
@@ -1860,8 +1860,8 @@ const AGC: React.FC = () => {
               <Form.Item name="control_mode" label="控制方式" tooltip={PARAMETER_HELP.control.controlMode}>
                 <Select<AgcControlMode>
                   options={[
-                    { value: CONTROL_MODE_PI_EVENT, label: 'PI 事件触发' },
-                    { value: CONTROL_MODE_DIRECT_CYCLIC, label: CONTROL_MODE_LABELS[CONTROL_MODE_DIRECT_CYCLIC] },
+                    { value: CONTROL_MODE_EVENT_TRIGGERED, label: CONTROL_MODE_LABELS[CONTROL_MODE_EVENT_TRIGGERED] },
+                    { value: CONTROL_MODE_PERIODIC_ALLOCATION, label: CONTROL_MODE_LABELS[CONTROL_MODE_PERIODIC_ALLOCATION] },
                   ]}
                 />
               </Form.Item>
@@ -1883,7 +1883,7 @@ const AGC: React.FC = () => {
               </Form.Item>
             </div>
             </div>
-            {controlMode === CONTROL_MODE_DIRECT_CYCLIC ? (
+            {controlMode === CONTROL_MODE_PERIODIC_ALLOCATION ? (
               <div className="control-config-grid control-config-grid--overview">
                 <div style={{ width: 220 }}>
                   <Form.Item

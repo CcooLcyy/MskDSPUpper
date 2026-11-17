@@ -1254,11 +1254,11 @@ export interface AgcDerivedOutputs {
 export interface AgcGroupConfig {
   group_name: string;
   p_cmd: AgcValueSpec | null;
-  /** 0: 未指定（按 PI_EVENT 兼容），1: PI_EVENT，2: DIRECT_CYCLIC。 */
+  /** 0: 未指定（兼容事件触发），1: 事件触发，2: 周期分配。 */
   control_mode: number;
-  /** 计算执行周期，单位秒；仅 DIRECT_CYCLIC 生效。 */
+  /** 计算执行周期，单位秒；仅周期分配生效。 */
   calculation_execution_period_seconds: number;
-  /** 命令控制最小间隔，单位秒；仅 DIRECT_CYCLIC 生效。 */
+  /** 命令控制最小间隔，单位秒；仅周期分配生效。 */
   command_control_period_seconds: number;
   strategy: AgcStrategyConfig | null;
   members: AgcMemberConfig[];
@@ -1381,11 +1381,11 @@ export interface AvcMemberConfig {
 
 export interface AvcGroupConfig {
   group_name: string;
-  /** 0: 未指定（按 PI_EVENT 兼容），1: PI_EVENT，2: DIRECT_CYCLIC。 */
+  /** 0: 未指定（兼容事件触发），1: 事件触发，2: 周期分配。 */
   control_mode: number;
-  /** 计算执行周期，单位秒；仅 DIRECT_CYCLIC 生效。 */
+  /** 计算执行周期，单位秒；仅周期分配生效。 */
   calculation_execution_period_seconds: number;
-  /** 命令控制最小间隔，单位秒；仅 DIRECT_CYCLIC 生效。 */
+  /** 命令控制最小间隔，单位秒；仅周期分配生效。 */
   command_control_period_seconds: number;
   voltage_meas: AvcSignalSpec | null;
   voltage_cmd: AvcSignalSpec | null;

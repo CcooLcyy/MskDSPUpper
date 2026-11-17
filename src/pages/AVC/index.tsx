@@ -87,16 +87,16 @@ type AvcCommandMode = 'voltage' | 'q_total';
 type AllocationMode = ControlAllocationMode;
 type AvcControlMode = 1 | 2;
 
-const CONTROL_MODE_PI_EVENT = 1;
-const CONTROL_MODE_DIRECT_CYCLIC = 2;
+const CONTROL_MODE_EVENT_TRIGGERED = 1;
+const CONTROL_MODE_PERIODIC_ALLOCATION = 2;
 const CONTROL_MODE_LABELS: Record<number, string> = {
-  0: 'PI 事件触发（兼容）',
-  [CONTROL_MODE_PI_EVENT]: 'PI 事件触发',
-  [CONTROL_MODE_DIRECT_CYCLIC]: '周期分配',
+  0: '事件触发（兼容）',
+  [CONTROL_MODE_EVENT_TRIGGERED]: '事件触发',
+  [CONTROL_MODE_PERIODIC_ALLOCATION]: '周期分配',
 };
 
 const effectiveControlMode = (mode: number | null | undefined): AvcControlMode => (
-  mode === CONTROL_MODE_DIRECT_CYCLIC ? CONTROL_MODE_DIRECT_CYCLIC : CONTROL_MODE_PI_EVENT
+  mode === CONTROL_MODE_PERIODIC_ALLOCATION ? CONTROL_MODE_PERIODIC_ALLOCATION : CONTROL_MODE_EVENT_TRIGGERED
 );
 
 type AvcGroupFormValues = {
@@ -240,7 +240,7 @@ const DEFAULT_MEMBER: AvcMemberConfig = {
 
 const buildEmptyGroupForm = (): AvcGroupFormValues => ({
   group_name: '控制组1',
-  control_mode: CONTROL_MODE_PI_EVENT,
+  control_mode: CONTROL_MODE_EVENT_TRIGGERED,
   calculation_execution_period_seconds: 1,
   command_control_period_seconds: 4,
   command_mode: 'voltage',
@@ -511,7 +511,7 @@ const validateGroupConfig = (config: AvcGroupConfig) => {
     throw new Error('请输入控制组名称');
   }
 
-  if (effectiveControlMode(config.control_mode) === CONTROL_MODE_DIRECT_CYCLIC) {
+  if (effectiveControlMode(config.control_mode) === CONTROL_MODE_PERIODIC_ALLOCATION) {
     if (!Number.isFinite(config.calculation_execution_period_seconds)
       || config.calculation_execution_period_seconds < 1
       || config.calculation_execution_period_seconds > 15) {
@@ -1700,7 +1700,7 @@ const AVC: React.FC = () => {
                         {allocationModeLabel(selectedConfig.members)}
                       </Descriptions.Item>
                       <Descriptions.Item label="控制方式">
-                        {CONTROL_MODE_LABELS[selectedConfig.control_mode ?? 0] ?? 'PI 事件触发（兼容）'}
+                        {CONTROL_MODE_LABELS[selectedConfig.control_mode ?? 0] ?? '事件触发（兼容）'}
                       </Descriptions.Item>
                       <Descriptions.Item label="命令模式">
                         {selectedConfig.voltage_cmd ? '目标电压模式' : '总无功模式'}
@@ -1708,7 +1708,7 @@ const AVC: React.FC = () => {
                       <Descriptions.Item label="成员数量">
                         {selectedConfig.members.length}
                       </Descriptions.Item>
-                      {effectiveControlMode(selectedConfig.control_mode) === CONTROL_MODE_DIRECT_CYCLIC ? (
+                      {effectiveControlMode(selectedConfig.control_mode) === CONTROL_MODE_PERIODIC_ALLOCATION ? (
                         <Descriptions.Item label="控制周期" span={2}>
                           计算 {selectedConfig.calculation_execution_period_seconds} 秒 / 命令 {selectedConfig.command_control_period_seconds} 秒
                         </Descriptions.Item>
@@ -1959,8 +1959,8 @@ const AVC: React.FC = () => {
               <Form.Item name="control_mode" label="控制方式" tooltip={PARAMETER_HELP.control.controlMode}>
                 <Select<AvcControlMode>
                   options={[
-                    { value: CONTROL_MODE_PI_EVENT, label: 'PI 事件触发' },
-                    { value: CONTROL_MODE_DIRECT_CYCLIC, label: CONTROL_MODE_LABELS[CONTROL_MODE_DIRECT_CYCLIC] },
+                    { value: CONTROL_MODE_EVENT_TRIGGERED, label: CONTROL_MODE_LABELS[CONTROL_MODE_EVENT_TRIGGERED] },
+                    { value: CONTROL_MODE_PERIODIC_ALLOCATION, label: CONTROL_MODE_LABELS[CONTROL_MODE_PERIODIC_ALLOCATION] },
                   ]}
                 />
               </Form.Item>
@@ -1982,7 +1982,7 @@ const AVC: React.FC = () => {
               </Form.Item>
             </div>
             </div>
-            {controlMode === CONTROL_MODE_DIRECT_CYCLIC ? (
+            {controlMode === CONTROL_MODE_PERIODIC_ALLOCATION ? (
               <div className="control-config-grid control-config-grid--overview">
                 <div style={{ width: 220 }}>
                   <Form.Item

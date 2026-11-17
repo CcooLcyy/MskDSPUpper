@@ -11,8 +11,9 @@ test('AGC 与 AVC 控制周期协议字段保持一致', () => {
   const avcProto = read('proto/AVC.proto');
 
   for (const source of [agcProto, avcProto]) {
-    assert.match(source, /CONTROL_MODE_PI_EVENT\s*=\s*1/);
-    assert.match(source, /CONTROL_MODE_DIRECT_CYCLIC\s*=\s*2/);
+    const modes = source.match(/enum ControlMode\s*\{([^}]+)\}/)?.[1] ?? '';
+    assert.match(modes, /^\s*CONTROL_MODE_\w+\s*=\s*1;/m);
+    assert.match(modes, /^\s*CONTROL_MODE_\w+\s*=\s*2;/m);
     assert.match(source, /calculation_execution_period_seconds/);
     assert.match(source, /command_control_period_seconds/);
   }
@@ -32,11 +33,11 @@ test('周期分配表单仅允许标准规定的周期范围', () => {
     assert.match(source, /command_control_period_seconds/);
     assert.match(source, /min: 1, max: 15/);
     assert.match(source, /min: 4, max: 30/);
-    assert.match(source, /CONTROL_MODE_DIRECT_CYCLIC/);
+    assert.match(source, /CONTROL_MODE_PERIODIC_ALLOCATION/);
   }
 });
 
-test('旧控制组配置默认按 PI 事件触发兼容', () => {
+test('旧控制组配置默认按事件触发兼容', () => {
   const agcCommand = read('src-tauri/src/commands/agc.rs');
   const avcCommand = read('src-tauri/src/commands/avc.rs');
   const browserAdapter = read('src/adapters/browser.ts');

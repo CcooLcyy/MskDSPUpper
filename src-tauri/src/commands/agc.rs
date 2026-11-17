@@ -77,7 +77,7 @@ pub struct DerivedOutputsDto {
 pub struct GroupConfigDto {
     pub group_name: String,
     pub p_cmd: Option<ValueSpecDto>,
-    /// 控制模式：0 未指定/兼容事件模式，1 PI_EVENT，2 DIRECT_CYCLIC。
+    /// 控制模式：0 未指定（兼容事件触发），1 事件触发，2 周期分配。
     #[serde(default)]
     pub control_mode: i32,
     /// 周期分配模式的计算执行周期，单位秒。
@@ -708,7 +708,7 @@ fn validate_member_direction_block(
 
 fn validate_control_timing(config: &GroupConfigDto) -> Result<(), String> {
     if !matches!(config.control_mode, 0 | 1 | 2) {
-        return Err("AGC 控制模式无效，必须选择 PI 事件触发或周期分配".into());
+        return Err("AGC 控制模式无效，必须选择事件触发或周期分配".into());
     }
     if config.calculation_execution_period_seconds != 0.0
         && (!config.calculation_execution_period_seconds.is_finite()

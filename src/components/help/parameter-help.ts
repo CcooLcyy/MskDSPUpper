@@ -81,7 +81,7 @@ export const PARAMETER_HELP = Object.freeze({
   }),
   control: Object.freeze({
     avcCommandMode: '目标电压模式根据电压偏差计算总无功目标；总无功模式直接接收总无功命令进行成员分配。',
-    controlMode: 'PI 事件触发在相关输入点更新时计算。周期分配按计算执行周期重算，成员指令下发遵守命令控制周期规定的最小间隔。',
+    controlMode: '事件触发在相关输入点更新时计算。周期分配按计算执行周期重算，成员指令下发遵守命令控制周期规定的最小间隔。',
     allocationMode: '平均分配使用相同权重；比例分配按容量或可调范围计算；自定义模式使用成员的调节权重。',
     calculationPeriod: '周期分配模式下重新读取测量值并计算分配结果的周期，范围为 1～15 秒。',
     commandPeriod: '周期分配模式下相邻两次成员指令下发的最小间隔，范围为 4～30 秒。',
