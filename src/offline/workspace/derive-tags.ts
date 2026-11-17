@@ -179,6 +179,8 @@ function collectAgcTags(config: AgcGroupConfig | null | undefined): string[] {
   for (const member of config?.members ?? []) {
     pushSignalTag(tags, member?.p_meas);
     pushSignalTag(tags, member?.communication_state);
+    pushSignalTag(tags, member?.increase_block_input);
+    pushSignalTag(tags, member?.decrease_block_input);
     pushValueSpecTags(tags, member?.p_set);
   }
 

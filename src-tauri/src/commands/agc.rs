@@ -1,13 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::grpc::agc::AgcClient;
 use crate::proto::agc_proto::{
-    strategy_config, DefaultPointInfo, DerivedOutputs, GroupConfig,
-    GroupControlProfile, GroupInfo, MemberConfig, MemberControlProfile, SignalSpec, StrategyConfig,
-    TuningConfig, TuningStatus, ValueSpec, WeightedStrategyConfig,
+    strategy_config, DefaultPointInfo, DeltaBase, DerivedOutputs, GroupConfig, GroupControlProfile,
+    GroupInfo, MemberConfig, MemberControlProfile, SignalSpec, StrategyConfig, TuningConfig,
+    TuningStatus, ValueMode, ValueSpec, WeightedStrategyConfig,
 };
 use crate::state::AppState;
 
@@ -60,6 +60,10 @@ pub struct MemberConfigDto {
     pub communication_timeout_ms: u32,
     #[serde(default)]
     pub measurement_validity_ms: u32,
+    #[serde(default)]
+    pub increase_block_input: Option<SignalSpecDto>,
+    #[serde(default)]
+    pub decrease_block_input: Option<SignalSpecDto>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -239,6 +243,8 @@ impl From<MemberConfig> for MemberConfigDto {
             communication_state: member.communication_state.map(Into::into),
             communication_timeout_ms: member.communication_timeout_ms,
             measurement_validity_ms: member.measurement_validity_ms,
+            increase_block_input: member.increase_block_input.map(Into::into),
+            decrease_block_input: member.decrease_block_input.map(Into::into),
         }
     }
 }
@@ -430,6 +436,11 @@ impl SignalSpecDto {
 }
 
 impl ValueSpecDto {
+    fn active_base_tag(&self) -> Option<&str> {
+        (self.mode == ValueMode::Delta as i32 && self.delta_base == DeltaBase::BaseTag as i32)
+            .then_some(self.base_tag.as_str())
+    }
+
     pub(crate) fn to_proto(&self) -> ValueSpec {
         ValueSpec {
             signal: self.signal.as_ref().map(|signal| signal.to_proto()),
@@ -474,6 +485,14 @@ impl MemberConfigDto {
                 .map(|signal| signal.to_proto()),
             communication_timeout_ms: self.communication_timeout_ms,
             measurement_validity_ms: self.measurement_validity_ms,
+            increase_block_input: self
+                .increase_block_input
+                .as_ref()
+                .map(SignalSpecDto::to_proto),
+            decrease_block_input: self
+                .decrease_block_input
+                .as_ref()
+                .map(SignalSpecDto::to_proto),
         }
     }
 }
@@ -523,6 +542,18 @@ fn collect_group_tag_owner(
 
 fn validate_group_tag_uniqueness(config: &GroupConfigDto) -> Result<(), String> {
     let mut tag_owners = BTreeMap::<String, Vec<String>>::new();
+    let base_tags = config
+        .p_cmd
+        .iter()
+        .chain(
+            config
+                .members
+                .iter()
+                .filter_map(|member| member.p_set.as_ref()),
+        )
+        .filter_map(ValueSpecDto::active_base_tag)
+        .map(str::trim)
+        .collect::<BTreeSet<_>>();
 
     collect_group_tag_owner(
         &mut tag_owners,
@@ -546,6 +577,30 @@ fn validate_group_tag_uniqueness(config: &GroupConfigDto) -> Result<(), String> 
         } else {
             member.member_name.trim().to_string()
         };
+        for (field, label, signal) in [
+            (
+                "increase_block_input",
+                "禁止增出力",
+                &member.increase_block_input,
+            ),
+            (
+                "decrease_block_input",
+                "禁止减出力",
+                &member.decrease_block_input,
+            ),
+        ] {
+            if let Some(signal) = signal {
+                validate_member_direction_block(member, label, signal)?;
+                if base_tags.contains(signal.tag.trim()) {
+                    return Err(format!("{member_label} 的{label}标签不能与增量基准共用"));
+                }
+                collect_group_tag_owner(
+                    &mut tag_owners,
+                    Some(signal.tag.as_str()),
+                    format!("{member_label}.{field}"),
+                );
+            }
+        }
         collect_group_tag_owner(
             &mut tag_owners,
             member.p_meas.as_ref().map(|signal| signal.tag.as_str()),
@@ -615,6 +670,38 @@ fn validate_member_communication(member: &MemberConfigDto) -> Result<(), String>
         {
             return Err(format!("{} 的通信状态超时必须为 1000～3600000 毫秒，或 0 使用默认值", member.member_name));
         }
+    }
+    Ok(())
+}
+
+fn validate_member_direction_block(
+    member: &MemberConfigDto,
+    label: &str,
+    signal: &SignalSpecDto,
+) -> Result<(), String> {
+    if !member.controllable {
+        return Err(format!(
+            "{} 的{label}遥信仅支持可控成员",
+            member.member_name
+        ));
+    }
+    if signal.tag.trim().is_empty() {
+        return Err(format!("{} 的{label}标签不能为空", member.member_name));
+    }
+    let configured = |decimal: &str, legacy: f64| {
+        if decimal.is_empty() {
+            Some(legacy)
+        } else {
+            decimal.parse::<f64>().ok()
+        }
+    };
+    let scale = configured(&signal.scale_decimal, signal.scale);
+    let offset = configured(&signal.offset_decimal, signal.offset);
+    if (scale != Some(0.0) && scale != Some(1.0)) || offset != Some(0.0) {
+        return Err(format!(
+            "{} 的{label}遥信必须按原值读取，不能配置缩放或偏移",
+            member.member_name
+        ));
     }
     Ok(())
 }
@@ -859,7 +946,7 @@ pub async fn agc_confirm_control_profile(
 }
 
 #[cfg(test)]
-mod communication_tests {
+mod member_config_tests {
     use super::*;
 
     fn member() -> MemberConfigDto {
@@ -869,21 +956,53 @@ mod communication_tests {
         })).unwrap()
     }
 
-    // 验证旧成员配置默认关闭通信关联和量测有效期检查，配置值经协议往返完整保留。
+    fn signal(tag: &str) -> SignalSpecDto {
+        SignalSpec {
+            tag: tag.into(),
+            ..Default::default()
+        }
+        .into()
+    }
+
+    // 验证旧成员配置不绑定可选输入，配置值经协议往返完整保留。
     #[test]
     fn member_config_round_trip_and_legacy_default() {
         let mut dto = member();
         assert!(dto.communication_state.is_none());
         assert_eq!(dto.communication_timeout_ms, 0);
         assert_eq!(dto.measurement_validity_ms, 0);
-        dto.communication_state = Some(SignalSpec::default().into());
-        dto.communication_state.as_mut().unwrap().tag = "通信输入".into();
+        assert!(dto.increase_block_input.is_none());
+        assert!(dto.decrease_block_input.is_none());
+        let legacy = MemberConfigDto::from(MemberConfig::default());
+        assert!(legacy.increase_block_input.is_none());
+        assert!(legacy.decrease_block_input.is_none());
+        dto.communication_state = Some(signal("通信输入"));
         dto.communication_timeout_ms = 30000;
         dto.measurement_validity_ms = 10000;
+        dto.increase_block_input = Some(signal("增闭锁"));
+        dto.decrease_block_input = Some(signal("减闭锁"));
         let decoded: MemberConfigDto = dto.to_proto().into();
-        assert_eq!(decoded.communication_state.unwrap().tag, "通信输入");
+        assert_eq!(
+            decoded.communication_state.as_ref().unwrap().tag,
+            "通信输入"
+        );
         assert_eq!(decoded.communication_timeout_ms, 30000);
         assert_eq!(decoded.measurement_validity_ms, 10000);
+        assert_eq!(decoded.increase_block_input.as_ref().unwrap().tag, "增闭锁");
+        assert_eq!(decoded.decrease_block_input.as_ref().unwrap().tag, "减闭锁");
+
+        let encoded = serde_json::to_value(&decoded).unwrap();
+        for (cleared, retained) in [
+            ("increase_block_input", "decrease_block_input"),
+            ("decrease_block_input", "increase_block_input"),
+        ] {
+            let mut json = encoded.clone();
+            json[cleared] = serde_json::Value::Null;
+            let edited: MemberConfigDto = serde_json::from_value(json).unwrap();
+            let saved = serde_json::to_value(MemberConfigDto::from(edited.to_proto())).unwrap();
+            assert!(saved[cleared].is_null());
+            assert_eq!(saved[retained], encoded[retained]);
+        }
     }
 
     // 验证超时默认值与上下界，并拒绝已启用但标签为空的通信输入。
@@ -902,5 +1021,71 @@ mod communication_tests {
             dto.communication_timeout_ms = timeout;
             assert!(validate_member_communication(&dto).is_err());
         }
+    }
+
+    #[test]
+    fn direction_block_input_requires_a_controllable_member_and_identity_values() {
+        let mut dto = member();
+        let mut block = signal("增闭锁");
+        assert!(validate_member_direction_block(&dto, "禁止增出力", &block).is_ok());
+        block.scale = 2.0;
+        assert!(validate_member_direction_block(&dto, "禁止增出力", &block).is_err());
+        block.scale_decimal = "1.0".into();
+        assert!(validate_member_direction_block(&dto, "禁止增出力", &block).is_ok());
+        block.offset_decimal = "0.1".into();
+        assert!(validate_member_direction_block(&dto, "禁止增出力", &block).is_err());
+        block.offset_decimal = "0".into();
+        block.tag = " ".into();
+        assert!(validate_member_direction_block(&dto, "禁止增出力", &block).is_err());
+        block.tag = "增闭锁".into();
+        dto.controllable = false;
+        assert!(validate_member_direction_block(&dto, "禁止增出力", &block).is_err());
+    }
+
+    #[test]
+    fn direction_block_bindings_cannot_reuse_group_tags() {
+        let mut dto = member();
+        dto.increase_block_input = Some(signal("增闭锁"));
+        dto.decrease_block_input = Some(signal("减闭锁"));
+        dto.p_meas = Some(signal("有功量测"));
+        dto.p_set = Some(ValueSpecDto {
+            signal: Some(signal("有功设定")),
+            mode: ValueMode::Absolute as i32,
+            delta_base: DeltaBase::Unspecified as i32,
+            base_tag: String::new(),
+        });
+        let mut group = GroupConfigDto::from(GroupConfig {
+            group_name: "测试控制组".into(),
+            p_cmd: Some(ValueSpec {
+                signal: Some(signal("总命令").to_proto()),
+                mode: ValueMode::Absolute as i32,
+                ..Default::default()
+            }),
+            members: vec![dto.to_proto()],
+            ..Default::default()
+        });
+        assert!(validate_group_tag_uniqueness(&group).is_ok());
+
+        group.members[0].decrease_block_input = Some(signal(" 增闭锁 "));
+        let err = validate_group_tag_uniqueness(&group).unwrap_err();
+        assert!(err.contains("increase_block_input"));
+        assert!(err.contains("decrease_block_input"));
+        group.members[0].decrease_block_input = Some(signal("减闭锁"));
+
+        group.members[0].communication_state = Some(signal("减闭锁"));
+        assert!(validate_group_tag_uniqueness(&group)
+            .unwrap_err()
+            .contains("communication_state"));
+        group.members[0].communication_state = None;
+
+        group.p_cmd = Some(ValueSpecDto {
+            signal: Some(signal("总命令")),
+            mode: ValueMode::Delta as i32,
+            delta_base: DeltaBase::BaseTag as i32,
+            base_tag: "增闭锁".into(),
+        });
+        assert!(validate_group_tag_uniqueness(&group)
+            .unwrap_err()
+            .contains("增量基准"));
     }
 }

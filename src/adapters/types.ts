@@ -1227,6 +1227,8 @@ export interface AgcStrategyConfig {
 
 export interface AgcMemberConfig {
   communication_state?: AgcSignalSpec | null;
+  increase_block_input?: AgcSignalSpec | null;
+  decrease_block_input?: AgcSignalSpec | null;
   communication_timeout_ms?: number;
   measurement_validity_ms?: number;
   member_name: string;

@@ -36,6 +36,49 @@ const normalizedSignal = (next) => {
   assert.equal(next.offset_decimal, '0');
 };
 
+test('AGC 成员两路闭锁独立绑定，清除增闭锁只移除该路入向映射', () => {
+  const original = legacyMember();
+  const changedSignals = { p_meas: false, p_set: false };
+  const unbound = buildAgcMemberSignals({ memberName: original.member_name, existingMembers: [], originalMember: original, changedSignals });
+  assert.equal(unbound.increase_block_input, null);
+  assert.equal(unbound.decrease_block_input, null);
+
+  const increase = endpoint('禁止增出力');
+  const decrease = endpoint('禁止减出力');
+  const bound = { ...original, ...buildAgcMemberSignals({
+    memberName: original.member_name, existingMembers: [], originalMember: original, changedSignals,
+    directionBlocksEnabled: { increase_block_input: true, decrease_block_input: true },
+  }) };
+  assert.notEqual(bound.increase_block_input.tag, bound.decrease_block_input.tag);
+  const increaseKey = controlMappingFieldKey(field(bound.increase_block_input.tag, 'input'));
+  const decreaseKey = controlMappingFieldKey(field(bound.decrease_block_input.tag, 'input'));
+  assert.deepEqual(buildAgcMemberBindingEdits({
+    member: bound, originalMember: original, selected: { increase_block_input: [increase], decrease_block_input: [decrease] },
+  }), { [increaseKey]: [increase], [decreaseKey]: [decrease] });
+
+  const cleared = { ...bound, ...buildAgcMemberSignals({
+    memberName: original.member_name, existingMembers: [], originalMember: bound, changedSignals,
+    directionBlocksEnabled: { increase_block_input: false },
+  }) };
+  assert.equal(cleared.increase_block_input, null);
+  assert.deepEqual(cleared.decrease_block_input, bound.decrease_block_input);
+  assert.deepEqual(buildAgcMemberBindingEdits({
+    member: cleared, originalMember: bound, selected: { increase_block_input: [] },
+  }), { [increaseKey]: [] });
+
+  const replacement = endpoint('新禁止增出力');
+  const rebound = { ...bound, ...buildAgcMemberSignals({
+    memberName: original.member_name, existingMembers: [], originalMember: bound,
+    changedSignals: { ...changedSignals, increase_block_input: true },
+  }) };
+  assert.notEqual(rebound.increase_block_input.tag, bound.increase_block_input.tag);
+  assert.deepEqual(rebound.decrease_block_input, bound.decrease_block_input);
+  const reboundKey = controlMappingFieldKey(field(rebound.increase_block_input.tag, 'input'));
+  assert.deepEqual(buildAgcMemberBindingEdits({
+    member: rebound, originalMember: bound, selected: { increase_block_input: [replacement] },
+  }), { [increaseKey]: [], [reboundKey]: [replacement] });
+});
+
 // 验证新成员内部点名不会复用外部点名，且避免与组输入输出、成员信号和增量基准冲突。
 test('AGC 新成员信号采用恒等工程量并生成同组唯一 tag', () => {
   const original = buildAgcMemberSignals({ memberName: ' PCS / #1 ', existingMembers: [], changedSignals: { p_meas: true, p_set: true } });

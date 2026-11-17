@@ -4,6 +4,7 @@ import type { AgcMemberConfig, DcEndpoint } from '../../adapters';
 import { PARAMETER_HELP } from '../help/parameter-help';
 import { controlEndpointKey } from '../../utils/control-mapping-editor';
 import type { AgcMemberEndpoints, AgcMemberPointKind } from '../../utils/agc-member-bindings';
+import { AGC_MEMBER_DIRECTION_BLOCKS } from '../../utils/agc-member-bindings';
 import type { ControlAllocationMode } from '../../utils/control-allocation';
 import { compareAgcDecimalTexts } from '../../utils/agc-decimal';
 import { getDecimalTextError, toDecimalInputText } from '../../utils/decimal-input';
@@ -35,6 +36,9 @@ export default function AgcMemberEditor({
   const mode = Form.useWatch(['p_set', 'mode'], form) ?? 1;
   const deltaBase = Form.useWatch(['p_set', 'delta_base'], form) ?? 0;
   const communicationTag = Form.useWatch(['communication_state', 'tag'], { form, preserve: true });
+  const increaseBlockTag = Form.useWatch(['increase_block_input', 'tag'], { form, preserve: true });
+  const decreaseBlockTag = Form.useWatch(['decrease_block_input', 'tag'], { form, preserve: true });
+  const configuredBlockTags = { increase_block_input: increaseBlockTag, decrease_block_input: decreaseBlockTag };
   const communicationBound = Boolean(endpoints.communication_state?.length) || Boolean(communicationTag);
   const capacity = Form.useWatch('capacity_kw_decimal', form);
   const handleValuesChange = (changed: Partial<AgcMemberConfig>) => {
@@ -55,7 +59,8 @@ export default function AgcMemberEditor({
     const choices = kind === 'communication_state'
       ? options.filter(option => option.endpoint.tag === '__communication_state' || selected.some(endpoint => controlEndpointKey(endpoint) === option.value))
       : options.filter(option => option.endpoint.tag !== '__communication_state' || selected.some(endpoint => controlEndpointKey(endpoint) === option.value));
-    return <Form.Item label={label} required={kind !== 'communication_state'}>
+    const directionBlock = AGC_MEMBER_DIRECTION_BLOCKS.some(([key]) => key === kind);
+    return <Form.Item label={label} required={kind !== 'communication_state' && !directionBlock}>
       <ConnectionPointSelect label={label} options={choices} selected={selected}
         loading={loading} disabled={loading || Boolean(error) || submitting}
         onChange={(values) => onSelect(kind, values)} />
@@ -64,7 +69,7 @@ export default function AgcMemberEditor({
   };
   const routeLine = (kind: AgcMemberPointKind, input: boolean) => (endpoints[kind] ?? []).map((endpoint) => (
     <div key={`${kind}-${controlEndpointKey(endpoint)}`}>
-      {input ? `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag} → ${name} ${kind === 'base_tag' ? '增量基准' : kind === 'communication_state' ? '通信状态' : '测量输入'}`
+      {input ? `${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag} → ${name} ${AGC_MEMBER_DIRECTION_BLOCKS.find(([key]) => key === kind)?.[2] ?? (kind === 'base_tag' ? '增量基准' : kind === 'communication_state' ? '通信状态' : '测量输入')}`
         : `${name} 控制输出 → ${endpoint.module_name} / ${endpoint.conn_name} / ${endpoint.tag}`}
     </div>
   ));
@@ -143,11 +148,20 @@ export default function AgcMemberEditor({
           </Form.Item>}
         </div>
         {mode === 2 && deltaBase === 3 && pointPicker('base_tag', '增量基准点')}
+        {AGC_MEMBER_DIRECTION_BLOCKS.map(([kind, label, shortLabel]) => <div key={kind}>
+          {pointPicker(kind, label)}
+          {configuredBlockTags[kind] && !endpoints[kind]?.length &&
+            <Button type="link" size="small" onClick={() => onSelect(kind, [])}>清除{shortLabel}关联</Button>}
+        </div>)}
+        <Typography.Text type="secondary" className="agc-member-editor__note">
+          请选择产生布尔值的遥信点。置位时只禁止对应调节方向；不使用的方向留空。
+        </Typography.Text>
       </details>}
       <div className="agc-member-editor__routes" aria-live="polite">
         <Typography.Text type="secondary">保存控制组时自动建立点位绑定</Typography.Text>
         {routeLine('p_meas', true)}
         {routeLine('communication_state', true)}
+        {controllable && AGC_MEMBER_DIRECTION_BLOCKS.map(([kind]) => routeLine(kind, true))}
         {controllable && routeLine('p_set', false)}
         {controllable && mode === 2 && deltaBase === 3 && routeLine('base_tag', true)}
       </div>

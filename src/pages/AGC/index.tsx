@@ -60,8 +60,8 @@ import {
   saveControlGroupWithOptionalRoutes,
 } from '../../utils/control-auto-routing';
 import AgcMemberEditor from '../../components/control/AgcMemberEditor';
-import { buildAgcMemberSignals, buildAgcMemberBindingEdits, collectAgcMemberMappingFields } from '../../utils/agc-member-bindings';
-import type { AgcMemberEndpoints, AgcMemberPointKind } from '../../utils/agc-member-bindings';
+import { AGC_MEMBER_DIRECTION_BLOCKS, buildAgcMemberSignals, buildAgcMemberBindingEdits, collectAgcMemberMappingFields } from '../../utils/agc-member-bindings';
+import type { AgcDirectionBlockInput, AgcMemberEndpoints, AgcMemberPointKind } from '../../utils/agc-member-bindings';
 import { controlEndpointKey, controlMappingFieldKey } from '../../utils/control-mapping-editor';
 import { RuntimeRestartError, formatErrorText, runWithRuntimeRestart } from '../../utils/runtime-restart';
 import { formatAutoRealtimeNumber, formatDecimalDisplay } from '../../utils/realtime-value';
@@ -198,6 +198,8 @@ const DEFAULT_MEMBER: AgcMemberConfig = {
   min_kw_decimal: '0',
   max_kw_decimal: '0',
   communication_state: null,
+  increase_block_input: null,
+  decrease_block_input: null,
   communication_timeout_ms: 30000,
   p_meas: { ...DEFAULT_SIGNAL },
   p_set: {
@@ -257,6 +259,8 @@ const cloneMember = (member: AgcMemberConfig | null | undefined): AgcMemberConfi
     min_kw_decimal: member?.min_kw_decimal ?? '',
     max_kw_decimal: member?.max_kw_decimal ?? '',
     communication_state: member?.communication_state ? { ...member.communication_state } : null,
+    increase_block_input: member?.increase_block_input ? { ...member.increase_block_input } : null,
+    decrease_block_input: member?.decrease_block_input ? { ...member.decrease_block_input } : null,
     communication_timeout_ms: member?.communication_timeout_ms || 30000,
     p_meas: cloneSignal(member?.p_meas),
     p_set: cloneValueSpec(member?.p_set),
@@ -336,6 +340,7 @@ const findDuplicateGroupEndpointTags = (config: AgcGroupConfig): string[] => {
   config.members.forEach((member, index) => {
     const memberLabel = member.member_name.trim() || `member #${index + 1}`;
     collectTag(member.communication_state?.tag, `${memberLabel}.communication_state`);
+    for (const [kind] of AGC_MEMBER_DIRECTION_BLOCKS) collectTag(member[kind]?.tag, `${memberLabel}.${kind}`);
     collectTag(member.p_meas?.tag, `${memberLabel}.p_meas`);
     collectTag(member.p_set?.signal?.tag, `${memberLabel}.p_set`);
     if (member.p_set?.mode === 2 && member.p_set.delta_base === 3) {
@@ -370,6 +375,7 @@ const findReservedGroupEndpointTags = (config: AgcGroupConfig): string[] => {
   config.members.forEach((member, index) => {
     const memberLabel = member.member_name.trim() || `member #${index + 1}`;
     collectTag(member.communication_state?.tag, `${memberLabel}.communication_state`);
+    for (const [kind] of AGC_MEMBER_DIRECTION_BLOCKS) collectTag(member[kind]?.tag, `${memberLabel}.${kind}`);
     collectTag(member.p_meas?.tag, `${memberLabel}.p_meas`);
     collectTag(member.p_set?.signal?.tag, `${memberLabel}.p_set`);
     if (member.p_set?.mode === 2 && member.p_set.delta_base === 3) {
@@ -398,6 +404,7 @@ const collectObservedTags = (group: AgcGroupInfo | null): string[] => {
   collectTag(group.config.outputs?.p_total_error?.tag);
   group.config.members.forEach((member) => {
     collectTag(member.communication_state?.tag);
+    for (const [kind] of AGC_MEMBER_DIRECTION_BLOCKS) collectTag(member[kind]?.tag);
     collectTag(member.p_meas?.tag);
     collectTag(member.p_set?.signal?.tag);
     if (member.p_set?.mode === 2 && member.p_set.delta_base === 3) {
@@ -442,15 +449,7 @@ const collectMappingFields = (config: Partial<AgcGroupConfig>): ControlMappingFi
   add('总有功测量输出', config.outputs?.p_total_meas?.tag, 'output');
   add('总有功目标输出', config.outputs?.p_total_target?.tag, 'output');
   add('总有功偏差输出', config.outputs?.p_total_error?.tag, 'output');
-  config.members?.forEach((member) => {
-    add(`${member.member_name} 通信状态`, member.communication_state?.tag, 'input');
-    add(`${member.member_name} 有功测量`, member.p_meas?.tag, 'input');
-    if (!member.controllable) return;
-    add(`${member.member_name} 有功设定`, member.p_set?.signal?.tag, 'output');
-    if (member.p_set?.mode === 2 && member.p_set.delta_base === 3) {
-      add(`${member.member_name} 增量基准`, member.p_set.base_tag, 'input');
-    }
-  });
+  for (const field of collectAgcMemberMappingFields(config.members ?? [])) add(field.label, field.tag, field.direction);
   return fields;
 };
 
@@ -689,11 +688,19 @@ const AGC: React.FC = () => {
       if (!endpoints.length) memberForm.setFieldValue('communication_state', null);
       console.info('AGC 成员通信状态绑定草稿已更新', { 绑定数量: endpoints.length });
     }
+    const blockKind = AGC_MEMBER_DIRECTION_BLOCKS.find(([key]) => key === kind)?.[0];
+    const clearingUnroutedBlock = blockKind !== undefined && !endpoints.length && Boolean(
+      memberForm.getFieldValue([blockKind, 'tag']) && !memberInitialEndpoints[blockKind]?.length,
+    );
+    if (blockKind) {
+      if (!endpoints.length) memberForm.setFieldValue(blockKind, null);
+      console.info('AGC 成员外部闭锁绑定草稿已更新', { 方向: kind, 绑定数量: endpoints.length });
+    }
     const initial = (memberInitialEndpoints[kind] ?? []).map(controlEndpointKey).sort();
     const selected = endpoints.map(controlEndpointKey).sort();
     setMemberEndpointChanges((previous) => {
       const next = { ...previous };
-      if (JSON.stringify(initial) === JSON.stringify(selected)) delete next[kind];
+      if (!clearingUnroutedBlock && JSON.stringify(initial) === JSON.stringify(selected)) delete next[kind];
       else next[kind] = endpoints;
       return next;
     });
@@ -1155,7 +1162,8 @@ const AGC: React.FC = () => {
     for (const field of fields) {
       const kind: AgcMemberPointKind = field.direction === 'output' ? 'p_set'
         : field.tag === member.communication_state?.tag ? 'communication_state'
-          : field.tag === member.p_meas?.tag ? 'p_meas' : 'base_tag';
+          : field.tag === member.p_meas?.tag ? 'p_meas'
+            : AGC_MEMBER_DIRECTION_BLOCKS.find(([key]) => field.tag === member[key]?.tag)?.[0] ?? 'base_tag';
       endpoints[kind] = mappings.getEndpoints(field);
     }
     setMemberDirty(false);
@@ -1207,8 +1215,16 @@ const AGC: React.FC = () => {
       if (communicationEnabled && (!Number.isInteger(communicationTimeout) || communicationTimeout < 1000 || communicationTimeout > 3600000)) {
         throw new Error('通信心跳超时须为 1000～3600000 毫秒');
       }
+      const blockEnabled = (kind: AgcDirectionBlockInput) => controllable && (
+        memberEndpointChanges[kind] !== undefined ? Boolean(memberEndpoints[kind]?.length)
+          : Boolean(originalMember?.[kind]?.tag || memberEndpoints[kind]?.length)
+      );
       const signals = buildAgcMemberSignals({
         communicationEnabled,
+        directionBlocksEnabled: {
+          increase_block_input: blockEnabled('increase_block_input'),
+          decrease_block_input: blockEnabled('decrease_block_input'),
+        },
         memberName: name, existingMembers: others, groupTags,
         originalMember: originalMember ? { ...originalMember, p_set: {
           ...valueSpec, signal: originalMember.p_set?.signal ?? null,
@@ -1218,6 +1234,8 @@ const AGC: React.FC = () => {
           p_set: !originalMember || memberEndpointChanges.p_set !== undefined,
           base_tag: memberEndpointChanges.base_tag !== undefined,
           communication_state: memberEndpointChanges.communication_state !== undefined,
+          increase_block_input: memberEndpointChanges.increase_block_input !== undefined,
+          decrease_block_input: memberEndpointChanges.decrease_block_input !== undefined,
         },
       });
       const weight = allocationMode === 'equal' ? '1' : allocationMode === 'proportional'
@@ -1227,6 +1245,8 @@ const AGC: React.FC = () => {
         ...values, member_name: name, controllable,
         ...createAgcDecimalFields(weight, 'weight', 'weight_decimal'),
         communication_state: signals.communication_state,
+        increase_block_input: signals.increase_block_input,
+        decrease_block_input: signals.decrease_block_input,
         communication_timeout_ms: communicationTimeout,
         p_meas: signals.p_meas,
         p_set: controllable ? normalizeValueSpec(signals.p_set) : null,
@@ -1328,6 +1348,8 @@ const AGC: React.FC = () => {
             ...createAgcDecimalFields(weight, 'weight', 'weight_decimal'),
             member_name: member.member_name.trim(),
             communication_state: member.communication_state?.tag ? { ...member.communication_state, tag: member.communication_state.tag.trim() } : null,
+            increase_block_input: member.controllable ? normalizeSignal(member.increase_block_input) : null,
+            decrease_block_input: member.controllable ? normalizeSignal(member.decrease_block_input) : null,
             communication_timeout_ms: member.communication_state?.tag ? (member.communication_timeout_ms ?? 0) : 0,
             p_meas: normalizeSignal(member.p_meas),
             p_set: member.controllable ? normalizeValueSpec(member.p_set) : null,
@@ -2044,6 +2066,10 @@ const AGC: React.FC = () => {
                 </div>
                 {bindings('测量点', measurement)}
                 {member.communication_state?.tag && bindings('通信状态', communication)}
+                {member.controllable && AGC_MEMBER_DIRECTION_BLOCKS.map(([kind, , label]) => {
+                  const tag = member[kind]?.tag;
+                  return tag ? <div key={kind}>{bindings(label, mappings.getEndpoints({ label, tag, direction: 'input' }))}</div> : null;
+                })}
                 {member.controllable ? bindings('设定点', setpoint) : <div className="agc-group-member__point control-group-member__point"><Text type="secondary">设定点</Text><Text type="secondary">仅测量</Text></div>}
               </article>;
             })}

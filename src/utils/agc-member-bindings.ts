@@ -2,8 +2,18 @@ import type { AgcMemberConfig, AgcSignalSpec, AgcValueSpec, DcEndpoint } from '.
 import { controlMappingFieldKey } from './control-mapping-editor.ts';
 import type { ControlMappingField } from './control-mapping-editor.ts';
 
-export type AgcMemberPointKind = 'p_meas' | 'p_set' | 'base_tag' | 'communication_state';
+export const AGC_MEMBER_DIRECTION_BLOCKS = [
+  ['increase_block_input', '禁止增出力遥信（可选）', '禁止增出力'],
+  ['decrease_block_input', '禁止减出力遥信（可选）', '禁止减出力'],
+] as const;
+export type AgcDirectionBlockInput = typeof AGC_MEMBER_DIRECTION_BLOCKS[number][0];
+export type AgcMemberPointKind = 'p_meas' | 'p_set' | 'base_tag' | 'communication_state' | AgcDirectionBlockInput;
 export type AgcMemberEndpoints = Partial<Record<AgcMemberPointKind, DcEndpoint[]>>;
+
+const memberSignalTags = (member?: AgcMemberConfig) => [
+  member?.p_meas?.tag, member?.p_set?.signal?.tag, member?.p_set?.base_tag, member?.communication_state?.tag,
+  ...AGC_MEMBER_DIRECTION_BLOCKS.map(([kind]) => member?.[kind]?.tag),
+];
 
 /** 成员只使用协议点表已经换算好的工程量，未换点的历史参数保持原样。 */
 export function buildAgcMemberSignals(options: {
@@ -12,11 +22,12 @@ export function buildAgcMemberSignals(options: {
   originalMember?: AgcMemberConfig;
   groupTags?: string[];
   communicationEnabled?: boolean;
-  changedSignals: { p_meas: boolean; p_set: boolean; base_tag?: boolean; communication_state?: boolean };
-}): { p_meas: AgcSignalSpec; p_set: AgcValueSpec; communication_state: AgcSignalSpec | null } {
+  directionBlocksEnabled?: Partial<Record<AgcDirectionBlockInput, boolean>>;
+  changedSignals: { p_meas: boolean; p_set: boolean; base_tag?: boolean; communication_state?: boolean } & Partial<Record<AgcDirectionBlockInput, boolean>>;
+}): { p_meas: AgcSignalSpec; p_set: AgcValueSpec; communication_state: AgcSignalSpec | null } & Record<AgcDirectionBlockInput, AgcSignalSpec | null> {
   const occupied = new Set(options.groupTags?.map((tag) => tag.trim()) ?? []);
   for (const member of options.existingMembers) {
-    for (const tag of [member.p_meas?.tag, member.p_set?.signal?.tag, member.p_set?.base_tag, member.communication_state?.tag]) {
+    for (const tag of memberSignalTags(member)) {
       if (tag?.trim()) occupied.add(tag.trim());
     }
   }
@@ -39,7 +50,7 @@ export function buildAgcMemberSignals(options: {
     return { tag, unit: 'kW', scale: 1, offset: 0, scale_decimal: '1', offset_decimal: '0' };
   };
   // 先保留原有标签，防止为缺失信号生成的名称占用另一个历史信号。
-  for (const tag of [options.originalMember?.p_meas?.tag, options.originalMember?.p_set?.signal?.tag, options.originalMember?.p_set?.base_tag, options.originalMember?.communication_state?.tag]) {
+  for (const tag of memberSignalTags(options.originalMember)) {
     if (tag?.trim()) occupied.add(tag.trim());
   }
   const originalSet = options.originalMember?.p_set;
@@ -57,13 +68,23 @@ export function buildAgcMemberSignals(options: {
   if (p_set.mode === 2 && p_set.delta_base === 3) {
     p_set.base_tag = tagFor(p_set.base_tag, '有功增量基准');
   }
-  const communicationEnabled = options.communicationEnabled ?? Boolean(options.originalMember?.communication_state?.tag);
-  const communication = communicationEnabled ? {
-    tag: tagFor(options.originalMember?.communication_state?.tag, '通信状态'),
+  const rawInput = (original: AgcSignalSpec | null | undefined, suffix: string, enabled?: boolean) => (enabled ?? Boolean(original?.tag)) ? {
+    tag: tagFor(original?.tag, suffix),
     unit: '', scale: 1, offset: 0, scale_decimal: '1', offset_decimal: '0',
   } : null;
+  const directionInput = (kind: AgcDirectionBlockInput, label: string) => {
+    const original = options.originalMember?.[kind];
+    const enabled = options.directionBlocksEnabled?.[kind] ?? Boolean(original?.tag);
+    if (!enabled) return null;
+    // 新建或换绑使用新的目标标签，避免读取到旧路由保留在 DataCenter 的最后值。
+    return options.changedSignals[kind]
+      ? rawInput(null, `${label}_${crypto.randomUUID()}`, true)
+      : rawInput(original, label, true);
+  };
   return {
-    communication_state: communication,
+    communication_state: rawInput(options.originalMember?.communication_state, '通信状态', options.communicationEnabled),
+    increase_block_input: directionInput('increase_block_input', '禁止增出力'),
+    decrease_block_input: directionInput('decrease_block_input', '禁止减出力'),
     p_meas: signalFor(options.originalMember?.p_meas, options.changedSignals.p_meas, '有功功率测量'),
     p_set,
   };
@@ -76,6 +97,10 @@ export function collectAgcMemberMappingFields(members: AgcMemberConfig[]): Contr
     if (member.p_meas?.tag) fields.push({ label: `${member.member_name} 有功测量`, tag: member.p_meas.tag, direction: 'input' });
     if (member.communication_state?.tag) fields.push({ label: `${member.member_name} 通信状态`, tag: member.communication_state.tag, direction: 'input' });
     if (!member.controllable) continue;
+    for (const [kind, , label] of AGC_MEMBER_DIRECTION_BLOCKS) {
+      const tag = member[kind]?.tag;
+      if (tag) fields.push({ label: `${member.member_name} ${label}`, tag, direction: 'input' });
+    }
     if (member.p_set?.signal?.tag) fields.push({ label: `${member.member_name} 有功设定`, tag: member.p_set.signal.tag, direction: 'output' });
     if (member.p_set?.mode === 2 && member.p_set.delta_base === 3 && member.p_set.base_tag) {
       fields.push({ label: `${member.member_name} 增量基准`, tag: member.p_set.base_tag, direction: 'input' });
@@ -105,6 +130,7 @@ export function buildAgcMemberBindingEdits(options: {
   put('p_meas', options.member.p_meas?.tag, 'input');
   put('communication_state', options.member.communication_state?.tag, 'input');
   if (options.member.controllable) {
+    for (const [kind] of AGC_MEMBER_DIRECTION_BLOCKS) put(kind, options.member[kind]?.tag, 'input');
     put('p_set', options.member.p_set?.signal?.tag, 'output');
     if (options.member.p_set?.mode === 2 && options.member.p_set.delta_base === 3) {
       put('base_tag', options.member.p_set.base_tag, 'input');
