@@ -43,6 +43,7 @@ import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import Iec104PointTable from './PointTable';
+import BatchEditFields from './BatchEditFields';
 import ManualSimulationEditor from './ManualSimulationEditor';
 import SimulationPeriodicControl from './SimulationPeriodicControl';
 import { api } from '../../adapters';
@@ -110,6 +111,7 @@ import {
   generateBatchPoints,
   type BatchPointDraft,
 } from './batch-point';
+import { POINT_TYPE_FLOAT, POINT_TYPE_LABELS, POINT_TYPE_SINGLE, planIec104BatchEdit, type Iec104BatchEdit } from './batch-edit';
 import {
   buildIec104SimulationUpdates,
   resolveIec104RuntimeDisplay,
@@ -192,14 +194,6 @@ const CONNECTION_STATE_LABEL_MAP: Record<number, string> = {
   1: 'TCP 已断开',
   0: 'TCP 状态未知',
 };
-
-const POINT_TYPE_LABELS: Record<number, string> = {
-  1: 'FLOAT (短浮点值)',
-  2: 'SINGLE (单点值)',
-};
-
-const POINT_TYPE_FLOAT = 1;
-const POINT_TYPE_SINGLE = 2;
 
 const DEFAULT_POINT_FORM_VALUES = DEFAULT_IEC104_ENGINEERING_DECIMALS;
 const DEFAULT_POINT_ENGINEERING_FIELDS = createIec104EngineeringFields(DEFAULT_POINT_FORM_VALUES);
@@ -299,12 +293,9 @@ type IoaConfigDraft = {
   skipOccupied: boolean;
 };
 
-type BatchEditConfigDraft = {
+type BatchEditConfigDraft = Iec104BatchEdit & {
   targets: Iec104Point[];
   slaveStation: boolean;
-  pointType?: number;
-  remoteControlType?: number;
-  commandExecutionMode?: number;
 };
 
 const getIec104DraftKey = (form: string, conn: string | null) => JSON.stringify([form, conn]);
@@ -606,10 +597,8 @@ const IEC104: React.FC = () => {
   const [selectedPointTags, setSelectedPointTags] = useState<string[]>([]);
   const [pointDeleteConfirmMode, setPointDeleteConfirmMode] = useState<PointDeleteMode | null>(null);
   const [ioaAdjustModalOpen, setIoaAdjustModalOpen] = useState(false);
-  const [pointTypeBatchModalOpen, setPointTypeBatchModalOpen] = useState(false);
-  const [pointTypeBatchValue, setPointTypeBatchValue] = useState<number>();
-  const [pointRemoteControlTypeBatchValue, setPointRemoteControlTypeBatchValue] = useState<number>();
-  const [pointCommandExecutionModeBatchValue, setPointCommandExecutionModeBatchValue] = useState<number>();
+  const [batchEditModalOpen, setBatchEditModalOpen] = useState(false);
+  const [batchEditPatch, setBatchEditPatch] = useState<Iec104BatchEdit>({});
   const [batchPointModalOpen, setBatchPointModalOpen] = useState(false);
   const [batchPointText, setBatchPointText] = useState('');
   const [batchPointCategory, setBatchPointCategory] = useState<IoaCategoryKey>('custom');
@@ -640,9 +629,7 @@ const IEC104: React.FC = () => {
   const batchPointConfigDraft = batchPointDraft.read(batchPointDraftKey);
   const ioaConfigDraft = ioaDraft.read(ioaDraftKey);
   const batchEditConfigDraft = batchEditDraft.read(batchEditDraftKey);
-  const batchEditHasChanges = pointTypeBatchValue !== undefined
-    || pointRemoteControlTypeBatchValue !== undefined
-    || pointCommandExecutionModeBatchValue !== undefined;
+  const batchEditHasChanges = Object.values(batchEditPatch).some((value) => value !== undefined);
   const batchPointSnapshot: BatchPointConfigDraft = {
     text: batchPointText,
     category: batchPointCategory,
@@ -676,14 +663,12 @@ const IEC104: React.FC = () => {
       if (ioaHasChanges && JSON.stringify(ioaDraft.read(ioaDraftKey)) !== JSON.stringify(ioaSnapshot)) ioaDraft.write(ioaDraftKey, ioaSnapshot);
       if (!ioaHasChanges) ioaDraft.clear(ioaDraftKey);
     }
-    if (pointTypeBatchModalOpen && batchEditDraftSession?.key === batchEditDraftKey) {
+    if (batchEditModalOpen && batchEditDraftSession?.key === batchEditDraftKey) {
       if (batchEditHasChanges) {
         const next: BatchEditConfigDraft = {
           targets: batchEditDraftSession.targets,
           slaveStation: batchEditDraftSession.slaveStation,
-          pointType: pointTypeBatchValue,
-          remoteControlType: pointRemoteControlTypeBatchValue,
-          commandExecutionMode: pointCommandExecutionModeBatchValue,
+          ...batchEditPatch,
         };
         if (JSON.stringify(batchEditDraft.read(batchEditDraftKey)) !== JSON.stringify(next)) batchEditDraft.write(batchEditDraftKey, next);
       } else batchEditDraft.clear(batchEditDraftKey);
@@ -828,7 +813,7 @@ const IEC104: React.FC = () => {
     || runtimeAction !== null
     || linkModalOpen
     || pointModalOpen
-    || pointTypeBatchModalOpen
+    || batchEditModalOpen
     || batchPointModalOpen
     || importPointModalOpen
     || ioaAdjustModalOpen;
@@ -884,7 +869,6 @@ const IEC104: React.FC = () => {
   const importStationRole = isSlaveStationConfig(selectedLink?.config) ? 'slave' : 'master';
   const hasRemoteControlImportDrafts = importPointDrafts.some((draft) =>
     isRemoteControlBusinessType(draft.business_type));
-  const selectedRemoteControlPointCount = batchEditDraftSession?.targets.filter((point) => isRemoteControlBusinessType(point.business_type)).length ?? 0;
   const importValidation = useMemo(() => {
     const cellIssues = new Map<string, string[]>();
     const rowIssues = new Map<string, string[]>();
@@ -1894,14 +1878,13 @@ const IEC104: React.FC = () => {
     setIoaAdjustModalOpen(true);
   }, [ioaDraft, ioaDraftKey, messageApi, points, selectedPointTags]);
 
-  const openPointTypeBatchModal = useCallback(() => {
+  const openBatchEditModal = useCallback(() => {
     const restored = batchEditDraft.read(batchEditDraftKey);
     if (restored) {
-      setBatchEditDraftSession({ key: batchEditDraftKey, targets: restored.targets, slaveStation: restored.slaveStation });
-      setPointTypeBatchValue(restored.pointType);
-      setPointRemoteControlTypeBatchValue(restored.remoteControlType);
-      setPointCommandExecutionModeBatchValue(restored.commandExecutionMode);
-      setPointTypeBatchModalOpen(true);
+      const { targets, slaveStation, ...patch } = restored;
+      setBatchEditDraftSession({ key: batchEditDraftKey, targets, slaveStation });
+      setBatchEditPatch(patch);
+      setBatchEditModalOpen(true);
       return;
     }
     if (selectedPointTags.length === 0) {
@@ -1914,76 +1897,39 @@ const IEC104: React.FC = () => {
       setSelectedPointTags([]);
       return;
     }
-    setPointTypeBatchValue(undefined);
-    setPointRemoteControlTypeBatchValue(undefined);
-    setPointCommandExecutionModeBatchValue(undefined);
+    setBatchEditPatch({});
     setBatchEditDraftSession({ key: batchEditDraftKey, targets: selected, slaveStation: selectedSlaveStation });
-    setPointTypeBatchModalOpen(true);
+    setBatchEditModalOpen(true);
   }, [batchEditDraft, batchEditDraftKey, messageApi, points, selectedPointTags, selectedSlaveStation]);
 
-  const batchEditConflict = Boolean(pointTypeBatchModalOpen && batchEditDraftSession && (
-    batchEditDraftSession.slaveStation !== selectedSlaveStation
-    || batchEditDraftSession.targets.some((target) => !points.some((point) => point.tag === target.tag && JSON.stringify(point) === JSON.stringify(target)))
-  ));
+  const batchEditConflict = useMemo(() => {
+    if (!batchEditModalOpen || !batchEditDraftSession) return false;
+    const pointsByTag = new Map(points.map((point) => [point.tag, point]));
+    return batchEditDraftSession.key !== batchEditDraftKey
+      || batchEditDraftSession.slaveStation !== selectedSlaveStation
+      || batchEditDraftSession.targets.some((target) => JSON.stringify(pointsByTag.get(target.tag)) !== JSON.stringify(target));
+  }, [batchEditDraftKey, batchEditDraftSession, batchEditModalOpen, points, selectedSlaveStation]);
+  const batchEditPlan = useMemo(() => {
+    if (!batchEditModalOpen || !batchEditDraftSession || batchEditConflict) return null;
+    return planIec104BatchEdit(points, new Set(batchEditDraftSession.targets.map((point) => point.tag)), batchEditPatch, selectedSlaveStation);
+  }, [batchEditConflict, batchEditDraftSession, batchEditModalOpen, batchEditPatch, points, selectedSlaveStation]);
 
-  const handlePointTypeBatchSubmit = useCallback(async () => {
+  const handleBatchEditSubmit = useCallback(async () => {
     if (
       !selectedConn
       || pointSubmitting
       || batchEditDraftSession?.key !== batchEditDraftKey
       || batchEditConflict
       || !batchEditHasChanges
+      || !batchEditPlan
+      || batchEditPlan.issues.length > 0
     ) return;
 
-    const selectedTags = new Set(batchEditDraftSession.targets.map((point) => point.tag));
-    const selectedPoints = points.filter((point) => selectedTags.has(point.tag));
-    if (selectedPoints.length === 0) {
-      messageApi.info('当前没有可编辑的已选点位');
-      setPointTypeBatchModalOpen(false);
-      setSelectedPointTags([]);
-      return;
-    }
-
-    const newPoints = points.map((point) => {
-      if (!selectedTags.has(point.tag)) {
-        return point;
-      }
-      let nextPoint = point;
-      if (pointTypeBatchValue === POINT_TYPE_SINGLE && point.point_type !== POINT_TYPE_SINGLE) {
-        nextPoint = {
-          ...point,
-          point_type: POINT_TYPE_SINGLE,
-          ...DEFAULT_POINT_ENGINEERING_FIELDS,
-        };
-      }
-      if (pointTypeBatchValue === POINT_TYPE_FLOAT && point.point_type !== POINT_TYPE_FLOAT) {
-        nextPoint = {
-          ...nextPoint,
-          point_type: POINT_TYPE_FLOAT,
-          ...DEFAULT_POINT_ENGINEERING_FIELDS,
-        };
-      }
-      if (isRemoteControlBusinessType(point.business_type)) {
-        if (
-          pointRemoteControlTypeBatchValue !== undefined
-          && point.remote_control_type !== pointRemoteControlTypeBatchValue
-        ) {
-          nextPoint = { ...nextPoint, remote_control_type: pointRemoteControlTypeBatchValue };
-        }
-        if (
-          pointCommandExecutionModeBatchValue !== undefined
-          && point.command_execution_mode !== pointCommandExecutionModeBatchValue
-        ) {
-          nextPoint = { ...nextPoint, command_execution_mode: pointCommandExecutionModeBatchValue };
-        }
-      }
-      return nextPoint === point ? point : normalizeIec104FixedValueFields(nextPoint, selectedSlaveStation);
-    });
-    const changedCount = newPoints.filter((point, index) => point !== points[index]).length;
+    const { newPoints, changedCount, ioaChanges } = batchEditPlan;
     if (changedCount === 0) {
       messageApi.info('所选点位已经符合目标配置');
       batchEditDraft.clear(batchEditDraftKey);
-      setPointTypeBatchModalOpen(false);
+      setBatchEditModalOpen(false);
       return;
     }
 
@@ -1994,14 +1940,13 @@ const IEC104: React.FC = () => {
       setPoints(newPoints);
       setSimulationSnapshot(null);
       if (batchEditDraft.read(batchEditDraftKey) === submittedDraft) batchEditDraft.clear(batchEditDraftKey);
-      setPointTypeBatchModalOpen(false);
+      setBatchEditModalOpen(false);
       setSelectedPointTags([]);
       console.info('IEC104 已批量更新点位配置', {
         connName: selectedConn,
         pointCount: changedCount,
-        pointType: pointTypeBatchValue,
-        remoteControlType: pointRemoteControlTypeBatchValue,
-        commandExecutionMode: pointCommandExecutionModeBatchValue,
+        ioaChangedCount: ioaChanges.length,
+        fields: Object.keys(batchEditPatch).filter((key) => batchEditPatch[key as keyof Iec104BatchEdit] !== undefined),
       });
       messageApi.success(`已更新 ${changedCount} 个点位的批量配置`);
       messageApi.info('点表已更新，当前模拟值已清除');
@@ -2015,7 +1960,7 @@ const IEC104: React.FC = () => {
     } finally {
       setPointSubmitting(false);
     }
-  }, [batchEditConflict, batchEditDraft, batchEditDraftKey, batchEditDraftSession, batchEditHasChanges, messageApi, pointCommandExecutionModeBatchValue, pointRemoteControlTypeBatchValue, pointSubmitting, pointTypeBatchValue, points, runSelectedLinkStopped, selectedConn, selectedSlaveStation]);
+  }, [batchEditConflict, batchEditDraft, batchEditDraftKey, batchEditDraftSession, batchEditHasChanges, batchEditPatch, batchEditPlan, messageApi, pointSubmitting, runSelectedLinkStopped, selectedConn]);
 
   const reorderIoaAdjustDrafts = useCallback((fromKey: string, toKey: string) => {
     if (fromKey === toKey) return;
@@ -3476,9 +3421,9 @@ const IEC104: React.FC = () => {
                   size="small"
                   icon={<EditOutlined />}
                   disabled={!selectedConn || pointTableView !== 'config' || (!batchEditConfigDraft && selectedPointTags.length === 0) || actionsDisabled}
-                  onClick={openPointTypeBatchModal}
+                  onClick={openBatchEditModal}
                 >
-                  批量编辑类型{batchEditConfigDraft ? ' · 有草稿' : selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}
+                  批量编辑{batchEditConfigDraft ? ' · 有草稿' : selectedPointTags.length > 0 ? ` (${selectedPointTags.length})` : ''}
                 </Button>
                 <Dropdown
                   menu={{ items: pointAddMenuItems, onClick: handlePointAddMenuClick }}
@@ -4175,72 +4120,42 @@ const IEC104: React.FC = () => {
           <Button size="small" disabled={pointSubmitting} onClick={() => {
             setBatchEditDraftSession(null);
             batchEditDraft.clear(batchEditDraftKey);
-            setPointTypeBatchModalOpen(false);
+            setBatchEditModalOpen(false);
           }}>放弃草稿</Button>
         </> : null}</Space>}
-        open={pointTypeBatchModalOpen}
-        onOk={() => void handlePointTypeBatchSubmit()}
+        open={batchEditModalOpen}
+        onOk={() => void handleBatchEditSubmit()}
         onCancel={() => {
           if (!pointSubmitting) {
-            setPointTypeBatchModalOpen(false);
+            setBatchEditModalOpen(false);
           }
         }}
-        width={620}
+        width={820}
         className="iec104-config-modal"
         okText="保存批量修改"
         cancelText={batchEditHasChanges ? '关闭并保留草稿' : '取消'}
         confirmLoading={pointSubmitting}
         okButtonProps={{
-          disabled: pointSubmitting || batchEditConflict || !batchEditHasChanges,
+          disabled: pointSubmitting || batchEditConflict || !batchEditHasChanges || !batchEditPlan || batchEditPlan.issues.length > 0,
         }}
         maskClosable={!pointSubmitting}
         closable={!pointSubmitting}
         keyboard={!pointSubmitting}
         destroyOnClose
       >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          {batchEditConflict ? <Alert type="error" showIcon message="点表已变化，请核对草稿后放弃并重新选择点位。" /> : null}
-          <Alert
-            type="warning"
-            showIcon
-            message={`当前选中 ${batchEditDraftSession?.targets.length ?? 0} 个点位`}
-            description={`只会应用已选择的配置项；SINGLE 不使用 Scale、Offset、Deadband，这三个参数会重置为 1、0、0。遥控配置仅作用于其中 ${selectedRemoteControlPointCount} 个遥控业务点。`}
-          />
-          <Select<number>
-            allowClear
-            value={pointTypeBatchValue}
-            onChange={setPointTypeBatchValue}
-            options={[
-              { value: POINT_TYPE_FLOAT, label: POINT_TYPE_LABELS[POINT_TYPE_FLOAT] },
-              { value: POINT_TYPE_SINGLE, label: POINT_TYPE_LABELS[POINT_TYPE_SINGLE] },
-            ]}
-            placeholder="选择统一点位类型"
-            style={{ width: '100%' }}
+        {batchEditConflict ? (
+          <Alert type="error" showIcon message="点表已变化，请核对草稿后放弃并重新选择点位。" />
+        ) : batchEditPlan && batchEditDraftSession ? (
+          <BatchEditFields
+            patch={batchEditPatch}
+            plan={batchEditPlan}
+            selectedCount={batchEditDraftSession.targets.length}
+            slaveStation={selectedSlaveStation}
             disabled={pointSubmitting}
+            formatIoa={formatIoaDual}
+            onChange={setBatchEditPatch}
           />
-          {selectedRemoteControlPointCount > 0 ? (
-            <>
-              <Select<number>
-                allowClear
-                value={pointRemoteControlTypeBatchValue}
-                onChange={setPointRemoteControlTypeBatchValue}
-                options={REMOTE_CONTROL_TYPE_OPTIONS}
-                placeholder="选择统一遥控类型（可选）"
-                style={{ width: '100%' }}
-                disabled={pointSubmitting}
-              />
-              <Select<number>
-                allowClear
-                value={pointCommandExecutionModeBatchValue}
-                onChange={setPointCommandExecutionModeBatchValue}
-                options={COMMAND_EXECUTION_MODE_OPTIONS}
-                placeholder="选择统一执行方式（可选）"
-                style={{ width: '100%' }}
-                disabled={pointSubmitting}
-              />
-            </>
-          ) : null}
-        </Space>
+        ) : null}
       </Modal>
 
       {/* 批量添加点位弹窗 */}
