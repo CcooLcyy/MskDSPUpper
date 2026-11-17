@@ -24,7 +24,7 @@ test('AGC 与 AVC 控制周期协议字段保持一致', () => {
   assert.match(avcProto, /command_control_period_seconds\s*=\s*10/);
 });
 
-test('周期直分配表单仅允许标准规定的周期范围', () => {
+test('周期分配表单仅允许标准规定的周期范围', () => {
   const agcPage = read('src/pages/AGC/index.tsx');
   const avcPage = read('src/pages/AVC/index.tsx');
   for (const source of [agcPage, avcPage]) {

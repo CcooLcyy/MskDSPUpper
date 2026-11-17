@@ -76,10 +76,10 @@ pub struct GroupConfigDto {
     /// 控制模式：0 未指定/兼容事件模式，1 PI_EVENT，2 DIRECT_CYCLIC。
     #[serde(default)]
     pub control_mode: i32,
-    /// 周期直分配模式的计算执行周期，单位秒。
+    /// 周期分配模式的计算执行周期，单位秒。
     #[serde(default)]
     pub calculation_execution_period_seconds: f64,
-    /// 周期直分配模式的命令控制最小间隔，单位秒。
+    /// 周期分配模式的命令控制最小间隔，单位秒。
     #[serde(default)]
     pub command_control_period_seconds: f64,
     pub strategy: Option<StrategyConfigDto>,
